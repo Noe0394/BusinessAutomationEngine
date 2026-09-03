@@ -131,17 +131,8 @@
 <body>
   <div id="login-screen">
     <h1>Connexion</h1>
-    <div class="mode-toggle" id="login-mode-toggle">
-      <button type="button" class="mode-btn active" data-login-mode="admin">🔑 Administrateur</button>
-      <button type="button" class="mode-btn" data-login-mode="license">🎫 Clé de licence</button>
-    </div>
 
-    <form id="login-form-admin">
-      <input type="password" id="login-password" placeholder="Mot de passe administrateur" required />
-      <button type="submit">Se connecter</button>
-    </form>
-
-    <form id="login-form-license" hidden>
+    <form id="login-form-license">
       <input type="text" id="login-license-key" placeholder="Clé de licence (ex: KEY-XXXX-2026)" required />
       <button type="submit">Débloquer le tableau de bord</button>
     </form>
@@ -458,10 +449,12 @@
         localStorage.removeItem(AUTH_VALUE_KEY);
       } catch (err) { /* stockage indisponible */ }
     }
+    // Interface publique : uniquement l'authentification par clé de licence.
+    // Le mot de passe administrateur n'a jamais de chemin d'accès ici — il
+    // n'existe que sur le portail admin séparé (/admin-secret-portal).
     function authHeaders() {
-      const { type, value } = getStoredAuth();
-      if (!value) return {};
-      return type === 'admin' ? { 'x-admin-password': value } : { 'x-license-key': value };
+      const { value } = getStoredAuth();
+      return value ? { 'x-license-key': value } : {};
     }
     async function apiFetch(url, options) {
       options = options || {};
@@ -529,43 +522,6 @@
       }
     }
 
-    document.querySelectorAll('#login-mode-toggle .mode-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('#login-mode-toggle .mode-btn').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        const mode = btn.dataset.loginMode;
-        document.getElementById('login-form-admin').hidden = mode !== 'admin';
-        document.getElementById('login-form-license').hidden = mode !== 'license';
-        document.getElementById('login-error').hidden = true;
-      });
-    });
-
-    document.getElementById('login-form-admin').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const password = document.getElementById('login-password').value;
-      try {
-        const res = await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          document.getElementById('login-error').textContent = data.error || 'Mot de passe incorrect.';
-          document.getElementById('login-error').hidden = false;
-          return;
-        }
-        setStoredAuth('admin', password);
-        authRole = 'admin';
-        currentAllowedModules = data.allowedModules ?? null;
-        showApp();
-        init();
-      } catch (err) {
-        document.getElementById('login-error').textContent = 'Erreur de connexion au serveur.';
-        document.getElementById('login-error').hidden = false;
-      }
-    });
-
     document.getElementById('login-form-license').addEventListener('submit', async (e) => {
       e.preventDefault();
       const key = document.getElementById('login-license-key').value.trim();
@@ -598,36 +554,21 @@
     });
 
     async function tryAutoLogin() {
-      const { type, value } = getStoredAuth();
+      const { value } = getStoredAuth();
       if (!value) { showLogin(); return false; }
 
       try {
-        if (type === 'admin') {
-          const res = await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: value }),
-          });
-          const data = await res.json();
-          if (res.ok) {
-            authRole = 'admin';
-            currentAllowedModules = data.allowedModules ?? null;
-            showApp();
-            return true;
-          }
-        } else {
-          const res = await fetch('/api/auth/verify-key', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: value }),
-          });
-          const data = await res.json();
-          if (res.ok) {
-            authRole = 'license';
-            currentAllowedModules = Array.isArray(data.allowedModules) ? data.allowedModules : null;
-            showApp();
-            return true;
-          }
+        const res = await fetch('/api/auth/verify-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: value }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          authRole = 'license';
+          currentAllowedModules = Array.isArray(data.allowedModules) ? data.allowedModules : null;
+          showApp();
+          return true;
         }
       } catch (err) { /* réseau indisponible */ }
 

@@ -32,11 +32,12 @@ function generateKeyString() {
   return `KEY-${random}-${year}`;
 }
 
-// Modules disponibles à la vente/à l'attribution. "studio_video" regroupe
-// YouTube Shorts, Instagram Reels et TikTok (ce ne sont pas des modules
-// séparés : une seule case "Studio Auto-Publication" les couvre tous les
-// trois côté formulaire admin, comme demandé).
-const ALL_MODULES = ['whatsapp', 'facebook', 'telegram', 'studio_video'];
+// Modules disponibles à la vente/à l'attribution. Facebook/Instagram/YouTube/
+// TikTok (ex-module "studio_video") ont été retirés du système de licences —
+// seuls WhatsApp et Telegram restent proposables. Toute clé existante qui
+// portait encore "facebook"/"studio_video" perd silencieusement ces modules
+// dès la prochaine vérification (normalizeModules filtre sur ALL_MODULES).
+const ALL_MODULES = ['whatsapp', 'telegram'];
 
 function normalizeModules(allowedModules) {
   if (!Array.isArray(allowedModules)) {

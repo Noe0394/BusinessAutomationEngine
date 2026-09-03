@@ -49,13 +49,6 @@
 
     .primary-btn { background: #1a1a2e; color: #fff; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: bold; }
 
-    .oauth-config-block { border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem; }
-    .oauth-config-block h3 { margin-top: 0; }
-    .oauth-config-block details { background: #f7f7fb; border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
-    .oauth-config-block summary { cursor: pointer; font-weight: bold; }
-    .oauth-config-block ol { margin: 0.5rem 0 0; padding-left: 1.25rem; }
-    .oauth-config-block code { background: #eee; padding: 0.1rem 0.35rem; border-radius: 4px; word-break: break-all; }
-
     @media (max-width: 640px) {
       header { flex-direction: column; align-items: stretch; text-align: center; }
     }
@@ -91,40 +84,45 @@
       <section>
         <h2>Générer une nouvelle clé</h2>
 
+        <div class="field">
+          <label>Durée de validité</label>
+          <div class="row">
+            <div class="field">
+              <input type="number" id="new-license-duration-value" value="30" min="0" />
+            </div>
+            <div class="field">
+              <select id="new-license-duration-unit">
+                <option value="hours">Heure(s)</option>
+                <option value="days" selected>Jour(s)</option>
+                <option value="months">Mois</option>
+                <option value="years">Année(s)</option>
+                <option value="unlimited">Illimitée</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
         <div class="row">
           <div class="field">
-            <label for="new-license-duration">Durée</label>
-            <select id="new-license-duration">
-              <option value="7">7 jours</option>
-              <option value="30" selected>30 jours</option>
-              <option value="90">90 jours</option>
-              <option value="365">1 an</option>
-              <option value="0">Illimitée</option>
-              <option value="custom">Personnalisée...</option>
-            </select>
-          </div>
-          <div class="field" id="new-license-custom-date-field" hidden>
-            <label for="new-license-custom-date">Date d'expiration</label>
-            <input type="date" id="new-license-custom-date" />
+            <label for="new-license-quantity">Nombre de clés à générer</label>
+            <input type="number" id="new-license-quantity" value="1" min="1" max="100" />
           </div>
           <div class="field">
-            <label for="new-license-note">Note (optionnel)</label>
+            <label for="new-license-note">Note (optionnel, appliquée à toutes les clés du lot)</label>
             <input type="text" id="new-license-note" placeholder="Ex: client Dupont" />
           </div>
         </div>
 
         <div class="field">
-          <label>Modules inclus</label>
+          <label>Modules inclus (une même clé peut couvrir plusieurs fonctionnalités)</label>
           <label><input type="checkbox" class="new-license-module" value="whatsapp" /> WhatsApp Automation</label>
-          <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="facebook" /> Facebook Messenger</label>
           <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="telegram" /> Telegram Engine</label>
-          <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="studio_video" /> Studio Auto-Publication (YouTube, TikTok, Instagram)</label>
           <br />
           <button type="button" id="select-all-modules-btn" style="margin-top: 0.5rem;">Tout sélectionner</button>
           <button type="button" id="deselect-all-modules-btn">Tout désélectionner</button>
         </div>
 
-        <button type="button" id="generate-license-btn" class="primary-btn">➕ Générer une nouvelle clé</button>
+        <button type="button" id="generate-license-btn" class="primary-btn">➕ Générer</button>
         <p id="generate-feedback" hidden></p>
       </section>
 
@@ -145,70 +143,6 @@
         </div>
       </section>
 
-      <section>
-        <h2>Connexions des réseaux (Google / Facebook / TikTok)</h2>
-        <p class="empty">
-          Réglage fait une seule fois ici, jamais vu par vos utilisateurs de licence : ils cliquent juste sur
-          "Se connecter" dans le dashboard. Pas besoin de toucher aux variables d'environnement Render.
-        </p>
-
-        <div class="oauth-config-block">
-          <h3>Google (YouTube) <span id="oauth-status-google" class="badge disconnected">Vérification...</span></h3>
-          <details>
-            <summary>Comment obtenir ces identifiants en ~5 minutes</summary>
-            <ol>
-              <li>Allez sur <code>console.cloud.google.com</code>, créez un projet (gratuit).</li>
-              <li>"API et services" → "Identifiants" → "Créer des identifiants" → "ID client OAuth" → type "Application Web".</li>
-              <li>URI de redirection autorisé : <code id="google-redirect-uri">...</code></li>
-              <li>Activez l'API "YouTube Data API v3" (menu "Bibliothèque").</li>
-              <li>Pas besoin de validation Google pour un usage avec votre propre compte (mode "Test").</li>
-            </ol>
-          </details>
-          <div class="row">
-            <div class="field"><label for="google-client-id">Client ID</label><input type="text" id="google-client-id" /></div>
-            <div class="field"><label for="google-client-secret">Client Secret</label><input type="text" id="google-client-secret" /></div>
-          </div>
-          <button type="button" id="save-google-btn">Enregistrer</button>
-        </div>
-
-        <div class="oauth-config-block">
-          <h3>Facebook / Instagram <span id="oauth-status-facebook" class="badge disconnected">Vérification...</span></h3>
-          <details>
-            <summary>Comment obtenir ces identifiants en ~5 minutes</summary>
-            <ol>
-              <li>Allez sur <code>developers.facebook.com</code> → "Mes Apps" → "Créer une app" → type "Entreprise".</li>
-              <li>Ajoutez le produit "Facebook Login" → Paramètres → URI de redirection OAuth valides : <code id="fb-redirect-uri">...</code></li>
-              <li>Récupérez l'App ID et l'App Secret dans "Paramètres" → "Général".</li>
-              <li>Pas besoin de revue d'app ("App Review") tant que vous connectez votre propre Page (ajoutez-vous comme administrateur de l'app).</li>
-            </ol>
-          </details>
-          <div class="row">
-            <div class="field"><label for="fb-app-id">App ID</label><input type="text" id="fb-app-id" /></div>
-            <div class="field"><label for="fb-app-secret">App Secret</label><input type="text" id="fb-app-secret" /></div>
-          </div>
-          <button type="button" id="save-facebook-btn">Enregistrer</button>
-        </div>
-
-        <div class="oauth-config-block">
-          <h3>TikTok <span id="oauth-status-tiktok" class="badge disconnected">Vérification...</span></h3>
-          <details>
-            <summary>Comment obtenir ces identifiants en ~5 minutes</summary>
-            <ol>
-              <li>Allez sur <code>developers.tiktok.com</code> → "Manage apps" → "Create an app".</li>
-              <li>Ajoutez le produit "Login Kit", scope <code>video.publish</code>.</li>
-              <li>Redirect URI : <code id="tiktok-redirect-uri">...</code></li>
-              <li>Récupérez Client Key et Client Secret dans les infos de l'app. Fonctionne immédiatement avec votre propre compte, sans audit.</li>
-            </ol>
-          </details>
-          <div class="row">
-            <div class="field"><label for="tiktok-client-key">Client Key</label><input type="text" id="tiktok-client-key" /></div>
-            <div class="field"><label for="tiktok-client-secret">Client Secret</label><input type="text" id="tiktok-client-secret" /></div>
-          </div>
-          <button type="button" id="save-tiktok-btn">Enregistrer</button>
-        </div>
-
-        <p id="oauth-config-feedback" hidden></p>
-      </section>
     </main>
   </div>
 
@@ -216,9 +150,7 @@
     const STORAGE_KEY = 'admin_portal_password';
     const MODULE_LABELS = {
       whatsapp: 'WhatsApp',
-      facebook: 'Facebook',
       telegram: 'Telegram',
-      studio_video: 'Studio',
     };
     let pollInterval = null;
 
@@ -386,10 +318,6 @@
       }
     }
 
-    document.getElementById('new-license-duration').addEventListener('change', (e) => {
-      document.getElementById('new-license-custom-date-field').hidden = e.target.value !== 'custom';
-    });
-
     document.getElementById('select-all-modules-btn').addEventListener('click', () => {
       document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = true; });
     });
@@ -397,16 +325,21 @@
       document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = false; });
     });
 
+    // Durée composée librement (heures/jours/mois/années) plutôt que des
+    // préréglages fixes — un admin peut viser une expiration précise à
+    // l'heure près, ou sur plusieurs années, sans valeur imposée.
     function computeExpiresAt() {
-      const duration = document.getElementById('new-license-duration').value;
-      if (duration === '0') return null;
-      if (duration === 'custom') {
-        const raw = document.getElementById('new-license-custom-date').value;
-        return raw ? new Date(raw).toISOString() : null;
-      }
-      const days = parseInt(duration, 10);
+      const unit = document.getElementById('new-license-duration-unit').value;
+      if (unit === 'unlimited') return null;
+
+      const amount = parseInt(document.getElementById('new-license-duration-value').value, 10) || 0;
       const date = new Date();
-      date.setDate(date.getDate() + days);
+
+      if (unit === 'hours') date.setHours(date.getHours() + amount);
+      else if (unit === 'days') date.setDate(date.getDate() + amount);
+      else if (unit === 'months') date.setMonth(date.getMonth() + amount);
+      else if (unit === 'years') date.setFullYear(date.getFullYear() + amount);
+
       return date.toISOString();
     }
 
@@ -417,126 +350,68 @@
       el.style.color = isError ? '#c0392b' : '#1a7a3c';
     }
 
+    async function createOneLicense(expiresAt, note, allowedModules) {
+      const res = await apiFetch('/api/admin/licenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expiresAt, note, allowedModules }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Échec de la génération.');
+      return data;
+    }
+
+    // Génère N clés d'un coup (même durée, mêmes modules, même note) — pour
+    // distribuer rapidement des accès à plusieurs utilisateurs en une seule
+    // action plutôt que de répéter le formulaire.
     document.getElementById('generate-license-btn').addEventListener('click', async () => {
       const note = document.getElementById('new-license-note').value.trim();
       const allowedModules = Array.from(document.querySelectorAll('.new-license-module:checked')).map((cb) => cb.value);
       const expiresAt = computeExpiresAt();
+      const quantity = Math.min(100, Math.max(1, parseInt(document.getElementById('new-license-quantity').value, 10) || 1));
 
+      if (allowedModules.length === 0) {
+        showGenerateFeedback('Sélectionnez au moins un module (WhatsApp et/ou Telegram).', true);
+        return;
+      }
+
+      const btn = document.getElementById('generate-license-btn');
+      btn.disabled = true;
+      showGenerateFeedback(`Génération de ${quantity} clé(s) en cours...`, false);
+
+      const createdKeys = [];
       try {
-        const res = await apiFetch('/api/admin/licenses', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ expiresAt, note, allowedModules }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          showGenerateFeedback(data.error || 'Échec de la génération.', true);
-          return;
+        for (let i = 0; i < quantity; i += 1) {
+          const license = await createOneLicense(expiresAt, note, allowedModules);
+          createdKeys.push(license.key);
         }
-        showGenerateFeedback('Clé générée : ' + data.key, false);
+        showGenerateFeedback(
+          quantity === 1
+            ? 'Clé générée : ' + createdKeys[0]
+            : quantity + ' clés générées : ' + createdKeys.join(', '),
+          false,
+        );
         document.getElementById('new-license-note').value = '';
         document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = false; });
         loadLicenses();
         loadOverview();
       } catch (err) {
-        showGenerateFeedback('Erreur réseau lors de la génération.', true);
-      }
-    });
-
-    // ---------- Connexions des réseaux (OAuth) ----------
-    function fillRedirectUris() {
-      const origin = window.location.origin;
-      document.getElementById('google-redirect-uri').textContent = origin + '/api/media/youtube/callback';
-      document.getElementById('fb-redirect-uri').textContent = origin + '/api/facebook/callback';
-      document.getElementById('tiktok-redirect-uri').textContent = origin + '/api/media/tiktok/callback';
-    }
-
-    async function loadOAuthConfigStatus() {
-      try {
-        const res = await apiFetch('/api/admin/oauth-config');
-        const data = await res.json();
-        ['google', 'facebook', 'tiktok'].forEach((platform) => {
-          const badge = document.getElementById('oauth-status-' + platform);
-          badge.textContent = data[platform] ? 'Configuré' : 'Non configuré';
-          badge.className = 'badge ' + (data[platform] ? 'connected' : 'disconnected');
-        });
-      } catch (err) {
-        // apiFetch gère déjà la redirection vers le login en cas de 401
-      }
-    }
-
-    function showOAuthConfigFeedback(message, isError) {
-      const el = document.getElementById('oauth-config-feedback');
-      el.hidden = false;
-      el.textContent = message;
-      el.style.color = isError ? '#c0392b' : '#1a7a3c';
-    }
-
-    document.getElementById('save-google-btn').addEventListener('click', async () => {
-      const clientId = document.getElementById('google-client-id').value.trim();
-      const clientSecret = document.getElementById('google-client-secret').value.trim();
-      if (!clientId || !clientSecret) { showOAuthConfigFeedback('Renseignez le Client ID et le Client Secret.', true); return; }
-      try {
-        const res = await apiFetch('/api/admin/oauth-config/google', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clientId, clientSecret }),
-        });
-        const data = await res.json();
-        if (!res.ok) { showOAuthConfigFeedback(data.error || 'Échec de l\'enregistrement.', true); return; }
-        showOAuthConfigFeedback('Google enregistré.', false);
-        document.getElementById('google-client-id').value = '';
-        document.getElementById('google-client-secret').value = '';
-        loadOAuthConfigStatus();
-      } catch (err) {
-        showOAuthConfigFeedback('Erreur réseau.', true);
-      }
-    });
-
-    document.getElementById('save-facebook-btn').addEventListener('click', async () => {
-      const appId = document.getElementById('fb-app-id').value.trim();
-      const appSecret = document.getElementById('fb-app-secret').value.trim();
-      if (!appId || !appSecret) { showOAuthConfigFeedback('Renseignez l\'App ID et l\'App Secret.', true); return; }
-      try {
-        const res = await apiFetch('/api/admin/oauth-config/facebook', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ appId, appSecret }),
-        });
-        const data = await res.json();
-        if (!res.ok) { showOAuthConfigFeedback(data.error || 'Échec de l\'enregistrement.', true); return; }
-        showOAuthConfigFeedback('Facebook enregistré.', false);
-        document.getElementById('fb-app-id').value = '';
-        document.getElementById('fb-app-secret').value = '';
-        loadOAuthConfigStatus();
-      } catch (err) {
-        showOAuthConfigFeedback('Erreur réseau.', true);
-      }
-    });
-
-    document.getElementById('save-tiktok-btn').addEventListener('click', async () => {
-      const clientKey = document.getElementById('tiktok-client-key').value.trim();
-      const clientSecret = document.getElementById('tiktok-client-secret').value.trim();
-      if (!clientKey || !clientSecret) { showOAuthConfigFeedback('Renseignez le Client Key et le Client Secret.', true); return; }
-      try {
-        const res = await apiFetch('/api/admin/oauth-config/tiktok', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clientKey, clientSecret }),
-        });
-        const data = await res.json();
-        if (!res.ok) { showOAuthConfigFeedback(data.error || 'Échec de l\'enregistrement.', true); return; }
-        showOAuthConfigFeedback('TikTok enregistré.', false);
-        document.getElementById('tiktok-client-key').value = '';
-        document.getElementById('tiktok-client-secret').value = '';
-        loadOAuthConfigStatus();
-      } catch (err) {
-        showOAuthConfigFeedback('Erreur réseau.', true);
+        showGenerateFeedback(
+          createdKeys.length > 0
+            ? `${createdKeys.length}/${quantity} clé(s) générée(s) avant l'erreur : ${err.message}`
+            : err.message,
+          true,
+        );
+        loadLicenses();
+        loadOverview();
+      } finally {
+        btn.disabled = false;
       }
     });
 
     function init() {
       loadOverview();
       loadLicenses();
-      fillRedirectUris();
-      loadOAuthConfigStatus();
       if (pollInterval) clearInterval(pollInterval);
       pollInterval = setInterval(() => { loadOverview(); loadLicenses(); }, 8000);
     }
