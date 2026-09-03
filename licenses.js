@@ -232,6 +232,17 @@ function unbindDevice(key) {
   return license;
 }
 
+// Permet au panneau admin de vérifier que la persistance GitHub fonctionne
+// réellement (repo/branche configurés, dernier push/lecture réussis) au lieu
+// de le découvrir seulement après un redéploiement qui a effacé des clés
+// jamais synchronisées.
+function getStorageStatus() {
+  return {
+    localPath: LICENSES_PATH,
+    ...githubStore.getStatus(),
+  };
+}
+
 module.exports = {
   ALL_MODULES,
   initFromRemote,
@@ -244,4 +255,5 @@ module.exports = {
   recordUsage,
   getUsageForKey,
   getOverview,
+  getStorageStatus,
 };

@@ -581,6 +581,10 @@ app.get('/api/admin/licenses', requireAdmin, (req, res) => {
   res.status(200).json(licenses.listLicensesWithUsage());
 });
 
+app.get('/api/admin/storage-status', requireAdmin, (req, res) => {
+  res.status(200).json(licenses.getStorageStatus());
+});
+
 app.get('/api/admin/overview', requireAdmin, (req, res) => {
   res.status(200).json(licenses.getOverview());
 });
