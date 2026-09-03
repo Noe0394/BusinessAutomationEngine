@@ -104,6 +104,125 @@ app.get('/qr', async (req, res) => {
   }
 });
 
+app.get('/dashboard', (req, res) => {
+  res.status(200).send(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Groupes WhatsApp</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; color: #222; }
+    table { border-collapse: collapse; width: 100%; max-width: 800px; }
+    th, td { border: 1px solid #ccc; padding: 0.5rem 0.75rem; text-align: left; }
+    th { background: #f5f5f5; }
+    button { cursor: pointer; padding: 0.3rem 0.6rem; }
+    #participants { margin-top: 2rem; max-width: 800px; }
+    #participants-list { list-style: none; padding: 0; }
+    #participants-list li { padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
+    .empty { color: #777; }
+  </style>
+</head>
+<body>
+  <h1>Groupes WhatsApp</h1>
+  <table>
+    <thead>
+      <tr><th>Nom du groupe</th><th>ID du groupe</th><th>Action</th></tr>
+    </thead>
+    <tbody id="groups-body">
+      <tr><td colspan="3" class="empty">Chargement...</td></tr>
+    </tbody>
+  </table>
+
+  <div id="participants">
+    <h2 id="participants-title"></h2>
+    <ul id="participants-list"></ul>
+  </div>
+
+  <script>
+    async function loadGroups() {
+      const tbody = document.getElementById('groups-body');
+      try {
+        const res = await fetch('/api/groups');
+        const groups = await res.json();
+
+        tbody.innerHTML = '';
+
+        if (!Array.isArray(groups) || groups.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 3;
+          td.className = 'empty';
+          td.textContent = 'Aucun groupe trouvé.';
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
+
+        groups.forEach((group) => {
+          const tr = document.createElement('tr');
+
+          const nameTd = document.createElement('td');
+          nameTd.textContent = group.subject || '(sans nom)';
+
+          const idTd = document.createElement('td');
+          idTd.textContent = group.id;
+
+          const actionTd = document.createElement('td');
+          const btn = document.createElement('button');
+          btn.textContent = 'Voir les participants';
+          btn.addEventListener('click', () => loadParticipants(group.id, group.subject));
+          actionTd.appendChild(btn);
+
+          tr.appendChild(nameTd);
+          tr.appendChild(idTd);
+          tr.appendChild(actionTd);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        tbody.innerHTML = '';
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 3;
+        td.className = 'empty';
+        td.textContent = 'Erreur lors du chargement des groupes.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function loadParticipants(groupId, groupName) {
+      const title = document.getElementById('participants-title');
+      const list = document.getElementById('participants-list');
+      title.textContent = 'Chargement des participants...';
+      list.innerHTML = '';
+
+      try {
+        const res = await fetch('/api/groups/' + encodeURIComponent(groupId) + '/participants');
+        const participants = await res.json();
+
+        if (!Array.isArray(participants) || participants.length === 0) {
+          title.textContent = 'Aucun participant trouvé pour "' + (groupName || groupId) + '".';
+          return;
+        }
+
+        title.textContent = 'Membres de "' + (groupName || groupId) + '" (' + participants.length + ')';
+
+        participants.forEach((p) => {
+          const li = document.createElement('li');
+          li.textContent = (p.id || '').split('@')[0];
+          list.appendChild(li);
+        });
+      } catch (err) {
+        title.textContent = 'Erreur lors du chargement des participants.';
+      }
+    }
+
+    loadGroups();
+  </script>
+</body>
+</html>`);
+});
+
 app.post('/api/messages', async (req, res) => {
   const { to, message } = req.body;
 
