@@ -53,7 +53,11 @@ const FACEBOOK_TOKEN_PATH = process.env.FB_TOKEN_PATH || path.join(__dirname, '.
  */
 class MediaPublisherAdapter {
   constructor() {
-    this.publicBaseUrl = process.env.PUBLIC_BASE_URL || null;
+    // Même valeur de repli que PUBLIC_BASE_URL dans index.js (pas un secret,
+    // juste l'URL publique du déploiement) — sans ça, ce module ignorait le
+    // repli défini côté index.js et bloquait à tort isYoutubeConnectAvailable/
+    // isTikTokConnectAvailable même quand les identifiants étaient présents.
+    this.publicBaseUrl = process.env.PUBLIC_BASE_URL || 'https://business-automation-engine.onrender.com';
     this.tempVideos = new Map();
 
     if (!this.getGoogleClientId() || !this.getGoogleClientSecret()) {
