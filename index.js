@@ -45,7 +45,11 @@ if (!process.env.ADMIN_PASSWORD) {
 }
 
 // ---------- Portail admin : instructions d'accès (console + fichier) ----------
-const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+// Pas un secret (juste l'URL publique de ce déploiement) : valeur de repli
+// sûre à coder en dur, contrairement aux identifiants OAuth (voir
+// oauth_config.js). Reste prioritairement piloté par la variable
+// d'environnement PUBLIC_BASE_URL si elle est définie sur Render.
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://business-automation-engine.onrender.com').replace(/\/$/, '');
 const ADMIN_PORTAL_URL = `${PUBLIC_BASE_URL}/admin-secret-portal`;
 
 function printAndWriteAdminAccessInstructions() {
