@@ -15,6 +15,7 @@
     "xlsx": "^0.18.5",
     "multer": "^1.4.5-lts.1",
     "form-data": "^4.0.0",
-    "telegram": "^2.26.22"
+    "telegram": "^2.26.22",
+    "googleapis": "^178.0.0"
   }
 }

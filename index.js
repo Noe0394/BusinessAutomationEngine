@@ -11,15 +11,31 @@ const QRCode = require('qrcode');
 const whatsapp = require('./adapters/whatsapp');
 const FacebookMessengerAdapter = require('./adapters/facebook');
 const TelegramAdapter = require('./adapters/telegram');
+const MediaPublisherAdapter = require('./adapters/media_publisher');
 const licenses = require('./licenses');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '@CYRUS2026';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
+// Les vidéos (YouTube/Instagram/TikTok) sont bien plus lourdes que les
+// médias WhatsApp/Telegram/Messenger : instance multer dédiée, limite plus
+// large. Reste en mémoire (multer.memoryStorage) comme le reste de l'app :
+// à surveiller sur une instance Render à faible RAM avec de grosses vidéos.
+const videoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 200 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (/^video\/(mp4|quicktime)$/.test(file.mimetype)) {
+      return cb(null, true);
+    }
+    return cb(new Error('INVALID_VIDEO_TYPE'));
+  },
+});
 const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
 const facebook = new FacebookMessengerAdapter();
 const telegram = new TelegramAdapter();
+const mediaPublisher = new MediaPublisherAdapter();
 
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('ADMIN_PASSWORD non défini : utilisation du mot de passe par défaut codé en dur. Définissez cette variable d\'environnement avant tout déploiement public.');
@@ -322,6 +338,67 @@ async function runCampaign(contacts, minDelayMs, maxDelayMs) {
   }
 
   console.log('Campagne: terminée.');
+}
+
+let currentPublishJob = null;
+
+function createPublishJob(platforms) {
+  currentPublishJob = {
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    platforms: platforms.reduce((acc, p) => {
+      acc[p] = { status: 'pending', message: 'En attente...', result: null, error: null };
+      return acc;
+    }, {}),
+  };
+  return currentPublishJob;
+}
+
+function isPublishJobActive(job) {
+  return Boolean(job) && Object.values(job.platforms).some((p) => p.status === 'pending' || p.status === 'in_progress');
+}
+
+async function runPublishTask(job, platform, taskFn) {
+  const track = job.platforms[platform];
+  try {
+    const result = await taskFn((message) => {
+      track.status = 'in_progress';
+      track.message = message;
+    });
+    track.status = 'done';
+    track.result = result;
+  } catch (err) {
+    track.status = 'error';
+    track.message = `Échec : ${err.message || err}`;
+    track.error = err.message || String(err);
+    console.error(`Publication ${platform}: échec:`, err?.response?.data || err.message || err);
+  }
+}
+
+async function runPublishJob(job, { buffer, mimetype, title, caption, scheduleAt }, platforms) {
+  const tasks = [];
+
+  if (platforms.includes('youtube')) {
+    tasks.push(runPublishTask(job, 'youtube', (onStatus) => (
+      mediaPublisher.publishYouTubeShort({ buffer, title, description: caption, scheduleAt }, onStatus)
+    )));
+  }
+
+  if (platforms.includes('instagram')) {
+    tasks.push(runPublishTask(job, 'instagram', (onStatus) => {
+      const token = mediaPublisher.registerTempVideo(buffer, mimetype);
+      return mediaPublisher.publishInstagramReel({ token, caption, scheduleAt }, onStatus);
+    }));
+  }
+
+  if (platforms.includes('tiktok')) {
+    tasks.push(runPublishTask(job, 'tiktok', (onStatus) => (
+      mediaPublisher.publishTikTokVideo({ buffer, title, scheduleAt }, onStatus)
+    )));
+  }
+
+  await Promise.allSettled(tasks);
+  job.finishedAt = new Date().toISOString();
 }
 
 app.get('/health', (req, res) => {
@@ -827,9 +904,87 @@ app.post('/api/telegram/queue', requireAccess, upload.single('media'), async (re
   });
 });
 
+// Doit rester PUBLIQUE et sans authentification : c'est Meta (Instagram) qui
+// télécharge la vidéo depuis ce serveur pendant la création du conteneur
+// media_type=REELS, et ses serveurs ne peuvent pas envoyer notre en-tête
+// x-admin-password / x-license-key. Le jeton (32 caractères hex) fait office
+// de protection : personne ne peut deviner l'URL sans l'avoir reçue, et elle
+// expire après 30 minutes (voir MediaPublisherAdapter.registerTempVideo).
+app.get('/api/media/temp/:token', (req, res) => {
+  const entry = mediaPublisher.getTempVideo(req.params.token);
+
+  if (!entry) {
+    return res.status(404).send('Vidéo introuvable ou expirée.');
+  }
+
+  res.set('Content-Type', entry.mimetype || 'video/mp4');
+  res.send(entry.buffer);
+});
+
+app.post('/api/media/publish-all', requireAccess, videoUpload.single('video'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Fichier vidéo requis (champ "video", MP4 ou MOV).' });
+  }
+
+  const { title, caption, scheduleAt } = req.body;
+  let { platforms } = req.body;
+
+  if (typeof platforms === 'string') {
+    try {
+      platforms = JSON.parse(platforms);
+    } catch (err) {
+      platforms = platforms.split(',').map((p) => p.trim()).filter(Boolean);
+    }
+  }
+
+  const validPlatforms = ['youtube', 'instagram', 'tiktok'];
+  platforms = Array.isArray(platforms) ? platforms.filter((p) => validPlatforms.includes(p)) : [];
+
+  if (platforms.length === 0) {
+    return res.status(400).json({
+      error: 'Sélectionnez au moins un réseau cible valide ("platforms": youtube, instagram, tiktok).',
+    });
+  }
+
+  if (isPublishJobActive(currentPublishJob)) {
+    return res.status(409).json({
+      error: 'Une publication est déjà en cours. Attendez sa fin avant d\'en lancer une nouvelle.',
+    });
+  }
+
+  if (scheduleAt && Number.isNaN(new Date(scheduleAt).getTime())) {
+    return res.status(400).json({ error: 'Date de programmation invalide.' });
+  }
+
+  const job = createPublishJob(platforms);
+
+  res.status(202).json({ status: 'publish_started', platforms: job.platforms });
+
+  runPublishJob(job, {
+    buffer: req.file.buffer,
+    mimetype: req.file.mimetype,
+    title: title || '',
+    caption: caption || '',
+    scheduleAt: scheduleAt || null,
+  }, platforms).catch((err) => {
+    console.error('Erreur pendant la publication multi-plateformes:', err);
+  });
+});
+
+app.get('/api/media/publish-status', requireAccess, (req, res) => {
+  if (!currentPublishJob) {
+    return res.status(200).json({ exists: false });
+  }
+
+  res.status(200).json({ exists: true, ...currentPublishJob });
+});
+
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ error: `Erreur de téléversement : ${err.message}` });
+  }
+  if (err && err.message === 'INVALID_VIDEO_TYPE') {
+    return res.status(400).json({ error: 'Format vidéo invalide : seuls les fichiers MP4 ou MOV sont acceptés.' });
   }
   if (err) {
     console.error('Erreur non gérée:', err);

@@ -155,6 +155,7 @@
       <button type="button" class="tab-btn" data-tab="campaign">Centre d'Envoi</button>
       <button type="button" class="tab-btn" data-tab="facebook">Facebook Messenger</button>
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
+      <button type="button" class="tab-btn" data-tab="studio">🎬 Studio Auto-Publication</button>
       <button type="button" class="tab-btn" data-tab="admin" id="admin-tab-btn" hidden>🛡️ Administration</button>
     </nav>
 
@@ -433,6 +434,73 @@
 
         <button type="button" id="send-tg-campaign-btn" class="send-button">🚀 Lancer l'envoi Telegram</button>
         <div id="tg-feedback" hidden></div>
+      </div>
+    </section>
+
+    <!-- Section : Studio Auto-Publication (YouTube Shorts, Instagram Reels, TikTok) -->
+    <section class="panel" id="panel-studio">
+      <h2>🎬 Studio Auto-Publication</h2>
+      <p class="empty">
+        Publication via les API officielles de chaque plateforme (YouTube Data API, Instagram Graph API, TikTok
+        Content Posting API). Nécessite des jetons d'autorisation déjà émis côté serveur — voir la configuration
+        <code>GOOGLE_CLIENT_ID</code>/<code>GOOGLE_CLIENT_SECRET</code>/<code>YOUTUBE_REFRESH_TOKEN</code>,
+        <code>IG_ACCESS_TOKEN</code>/<code>IG_USER_ID</code>, <code>TIKTOK_ACCESS_TOKEN</code>.
+      </p>
+
+      <div class="warning-box">
+        ⚠️ Tant que l'app TikTok n'est pas auditée par TikTok, les publications sont forcées en privé (visibles
+        uniquement par le compte développeur connecté). Le format Shorts YouTube (9:16, &lt; 60s) reste sous votre
+        responsabilité : ce module ne vérifie pas automatiquement la durée ni le ratio de la vidéo.
+      </div>
+
+      <div class="field">
+        <label>Vidéo (MP4 ou MOV)</label>
+        <div id="studio-drop-zone">Glissez-déposez votre vidéo ici, ou touchez pour parcourir</div>
+        <input type="file" id="studio-file" accept=".mp4,.mov,video/mp4,video/quicktime" hidden />
+        <p id="studio-file-name" class="empty">Aucune vidéo sélectionnée.</p>
+      </div>
+
+      <div class="field">
+        <label for="studio-title">Titre de la publication</label>
+        <input type="text" id="studio-title" placeholder="Ex: Mon nouveau Short 🚀" />
+      </div>
+
+      <div class="field">
+        <label for="studio-caption">Légende / Description (emojis, hashtags)</label>
+        <textarea id="studio-caption" placeholder="Décrivez votre vidéo... 😀 #shorts #reels #fyp"></textarea>
+      </div>
+
+      <div class="field">
+        <label>Réseaux cibles</label>
+        <label><input type="checkbox" id="studio-platform-youtube" value="youtube" /> YouTube Shorts</label>
+        <label style="margin-left: 1.5rem;"><input type="checkbox" id="studio-platform-instagram" value="instagram" /> Instagram Reels</label>
+        <label style="margin-left: 1.5rem;"><input type="checkbox" id="studio-platform-tiktok" value="tiktok" /> TikTok</label>
+      </div>
+
+      <div class="field">
+        <label>Programmation</label>
+        <label><input type="radio" name="studio-schedule-mode" value="now" checked /> Publier maintenant</label>
+        <label style="margin-left: 1.5rem;"><input type="radio" name="studio-schedule-mode" value="later" /> Programmer</label>
+      </div>
+
+      <div class="field" id="studio-schedule-field" hidden>
+        <label for="studio-schedule-at">Date et heure de publication</label>
+        <input type="datetime-local" id="studio-schedule-at" />
+      </div>
+
+      <button type="button" id="studio-publish-btn" class="send-button">🚀 Publier</button>
+      <div id="studio-feedback" hidden></div>
+
+      <div id="studio-status-board" style="margin-top: 1.5rem;">
+        <div class="field" id="studio-status-youtube-row" hidden>
+          <strong>YouTube :</strong> <span id="studio-status-youtube">-</span>
+        </div>
+        <div class="field" id="studio-status-instagram-row" hidden>
+          <strong>Instagram :</strong> <span id="studio-status-instagram">-</span>
+        </div>
+        <div class="field" id="studio-status-tiktok-row" hidden>
+          <strong>TikTok :</strong> <span id="studio-status-tiktok">-</span>
+        </div>
       </div>
     </section>
 
@@ -1635,6 +1703,139 @@
       }
     });
 
+    // ---------- Studio Auto-Publication ----------
+    let selectedStudioFile = null;
+    let studioPollInterval = null;
+
+    const studioDropZone = document.getElementById('studio-drop-zone');
+    const studioFileInput = document.getElementById('studio-file');
+    studioDropZone.addEventListener('click', () => studioFileInput.click());
+    studioDropZone.addEventListener('dragover', (e) => { e.preventDefault(); studioDropZone.classList.add('dragover'); });
+    studioDropZone.addEventListener('dragleave', () => studioDropZone.classList.remove('dragover'));
+    studioDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      studioDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) studioSetSelectedFile(e.dataTransfer.files[0]);
+    });
+    studioFileInput.addEventListener('change', () => {
+      if (studioFileInput.files && studioFileInput.files[0]) studioSetSelectedFile(studioFileInput.files[0]);
+    });
+    function studioSetSelectedFile(file) {
+      selectedStudioFile = file;
+      document.getElementById('studio-file-name').textContent = 'Vidéo sélectionnée : ' + file.name;
+    }
+
+    document.querySelectorAll('input[name="studio-schedule-mode"]').forEach((radio) => {
+      radio.addEventListener('change', () => {
+        const mode = document.querySelector('input[name="studio-schedule-mode"]:checked').value;
+        document.getElementById('studio-schedule-field').hidden = mode !== 'later';
+      });
+    });
+
+    function studioShowFeedback(message, isError) {
+      const el = document.getElementById('studio-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    function studioStatusLabel(status) {
+      if (status === 'pending') return 'En attente...';
+      if (status === 'in_progress') return 'En cours...';
+      if (status === 'done') return 'Publié !';
+      if (status === 'error') return 'Échec.';
+      return status;
+    }
+
+    function studioUpdatePlatformRow(platform, track) {
+      const row = document.getElementById('studio-status-' + platform + '-row');
+      const span = document.getElementById('studio-status-' + platform);
+      if (!track) { row.hidden = true; return; }
+      row.hidden = false;
+      span.textContent = track.message || studioStatusLabel(track.status);
+      span.className = track.status === 'done' ? 'status-delivered' : (track.status === 'error' ? 'status-failed' : '');
+    }
+
+    async function studioPollStatus() {
+      try {
+        const res = await apiFetch('/api/media/publish-status');
+        const data = await res.json();
+
+        if (!data.exists) return;
+
+        ['youtube', 'instagram', 'tiktok'].forEach((platform) => {
+          studioUpdatePlatformRow(platform, data.platforms[platform] || null);
+        });
+
+        const stillActive = Object.values(data.platforms).some((p) => p.status === 'pending' || p.status === 'in_progress');
+        const publishBtn = document.getElementById('studio-publish-btn');
+
+        if (stillActive) {
+          publishBtn.disabled = true;
+          if (!studioPollInterval) {
+            studioPollInterval = setInterval(studioPollStatus, 4000);
+          }
+        } else {
+          publishBtn.disabled = false;
+          if (studioPollInterval) { clearInterval(studioPollInterval); studioPollInterval = null; }
+
+          const successCount = Object.values(data.platforms).filter((p) => p.status === 'done').length;
+          const errorCount = Object.values(data.platforms).filter((p) => p.status === 'error').length;
+          studioShowFeedback(
+            `Publication terminée : ${successCount} réussite(s), ${errorCount} échec(s).`,
+            errorCount > 0 && successCount === 0,
+          );
+        }
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    document.getElementById('studio-publish-btn').addEventListener('click', async () => {
+      const title = document.getElementById('studio-title').value.trim();
+      const caption = document.getElementById('studio-caption').value.trim();
+      const scheduleMode = document.querySelector('input[name="studio-schedule-mode"]:checked').value;
+      const scheduleAtRaw = document.getElementById('studio-schedule-at').value;
+
+      const platforms = ['youtube', 'instagram', 'tiktok'].filter((p) => document.getElementById('studio-platform-' + p).checked);
+
+      if (!selectedStudioFile) { studioShowFeedback('Sélectionnez une vidéo (MP4 ou MOV).', true); return; }
+      if (platforms.length === 0) { studioShowFeedback('Sélectionnez au moins un réseau cible.', true); return; }
+      if (scheduleMode === 'later' && !scheduleAtRaw) { studioShowFeedback('Renseignez une date/heure de programmation.', true); return; }
+
+      const formData = new FormData();
+      formData.append('video', selectedStudioFile);
+      formData.append('title', title);
+      formData.append('caption', caption);
+      formData.append('platforms', JSON.stringify(platforms));
+      if (scheduleMode === 'later') {
+        formData.append('scheduleAt', new Date(scheduleAtRaw).toISOString());
+      }
+
+      const publishBtn = document.getElementById('studio-publish-btn');
+      publishBtn.disabled = true;
+
+      ['youtube', 'instagram', 'tiktok'].forEach((platform) => {
+        studioUpdatePlatformRow(platform, platforms.includes(platform) ? { status: 'pending', message: 'En attente...' } : null);
+      });
+
+      try {
+        const res = await apiFetch('/api/media/publish-all', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          studioShowFeedback(data.error || 'Échec du lancement de la publication.', true);
+          publishBtn.disabled = false;
+          return;
+        }
+        studioShowFeedback('Publication lancée sur ' + platforms.length + ' réseau(x)...', false);
+        if (studioPollInterval) { clearInterval(studioPollInterval); studioPollInterval = null; }
+        studioPollStatus();
+      } catch (err) {
+        studioShowFeedback('Erreur réseau lors du lancement de la publication.', true);
+        publishBtn.disabled = false;
+      }
+    });
+
     // ---------- Init ----------
     function init() {
       toggleTargetMode();
@@ -1645,6 +1846,7 @@
       if (statusInterval) clearInterval(statusInterval);
       statusInterval = setInterval(pollStatus, 4000);
       pollCampaignStatus();
+      studioPollStatus();
       if (authRole === 'admin') loadLicenses();
     }
 
