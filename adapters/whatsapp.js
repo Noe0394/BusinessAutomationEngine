@@ -39,6 +39,32 @@ let connected = false;
 let authState = null;
 let reconnectTimer = null;
 let syncStarted = false;
+let heartbeatTimer = null;
+
+// Signal de présence périodique : sans trafic, certains réseaux/proxies
+// intermédiaires (et parfois WhatsApp lui-même) peuvent considérer la
+// connexion inactive et la couper. sendPresenceUpdate('available') est un
+// appel très léger, sans impact sur les quotas d'envoi de messages.
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    if (!sock || !connected) return;
+    sock.sendPresenceUpdate('available').catch((err) => {
+      console.warn('Heartbeat WhatsApp: échec de l\'envoi de présence —', err.message);
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+  // Ne bloque jamais l'arrêt propre du process.
+  if (heartbeatTimer.unref) heartbeatTimer.unref();
+}
 
 function getQRCode() {
   return latestQR;
@@ -99,6 +125,7 @@ async function connect() {
 
     if (connection === 'close') {
       connected = false;
+      stopHeartbeat();
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
 
@@ -120,6 +147,7 @@ async function connect() {
       }
       console.log('Connexion WhatsApp établie.');
       whatsappAuthStore.pushSnapshot(AUTH_DIR);
+      startHeartbeat();
     }
   });
 

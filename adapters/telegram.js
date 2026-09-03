@@ -47,6 +47,7 @@ class TelegramAdapter {
     this._codeResolver = null;
     this._passwordResolver = null;
     this._loginError = null;
+    this._heartbeatTimer = null;
 
     if (!this.apiId || !this.apiHash) {
       console.warn(
@@ -62,6 +63,34 @@ class TelegramAdapter {
 
   isConnected() {
     return this.connected;
+  }
+
+  // Vérification de session légère et périodique : GramJS gère déjà la
+  // reconnexion réseau bas niveau (connectionRetries), mais rien ne
+  // confirme que la session MTProto reste réellement autorisée côté
+  // serveurs Telegram sur la durée. getMe() est un appel minimal, sans
+  // aucun effet de bord.
+  startHeartbeat() {
+    this.stopHeartbeat();
+    const HEARTBEAT_INTERVAL_MS = 10 * 60 * 1000;
+    this._heartbeatTimer = setInterval(async () => {
+      if (!this.client) return;
+      try {
+        await this.client.getMe();
+      } catch (err) {
+        console.warn('Heartbeat Telegram: vérification de session échouée —', err.message);
+        this.connected = false;
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+    // Ne bloque jamais l'arrêt propre du process.
+    if (this._heartbeatTimer.unref) this._heartbeatTimer.unref();
+  }
+
+  stopHeartbeat() {
+    if (this._heartbeatTimer) {
+      clearInterval(this._heartbeatTimer);
+      this._heartbeatTimer = null;
+    }
   }
 
   loadSessionString() {
@@ -90,6 +119,7 @@ class TelegramAdapter {
 
     if (this.connected) {
       console.log('Telegram: session restaurée, connecté.');
+      this.startHeartbeat();
     } else {
       console.log('Telegram: aucune session valide — connexion requise via POST /api/telegram/login/start.');
     }
@@ -107,6 +137,8 @@ class TelegramAdapter {
     if (!this.isConfigured()) {
       throw new Error('TELEGRAM_NOT_CONFIGURED');
     }
+
+    this.stopHeartbeat();
 
     if (this.client) {
       try {
@@ -136,6 +168,7 @@ class TelegramAdapter {
     }).then(() => {
       this.saveSessionString(this.client.session.save());
       this.connected = true;
+      this.startHeartbeat();
       console.log('Telegram: connexion établie et session sauvegardée.');
     }).catch((err) => {
       this._loginError = err;

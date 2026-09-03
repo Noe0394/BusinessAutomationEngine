@@ -9,6 +9,7 @@ const express = require('express');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const QRCode = require('qrcode');
+const axios = require('axios');
 const whatsapp = require('./adapters/whatsapp');
 const FacebookMessengerAdapter = require('./adapters/facebook');
 const TelegramAdapter = require('./adapters/telegram');
@@ -374,21 +375,49 @@ function clampTelegramDmDelayMs(ms) {
   return Math.min(Math.max(ms, TELEGRAM_DM_MIN_DELAY_MS), TELEGRAM_DM_MAX_DELAY_MS);
 }
 
-async function waitForTelegramConnection(campaign) {
-  if (telegram.isConnected()) {
+// Gère à la fois la pause volontaire (boutons Pause/Reprendre) et la perte
+// de connexion (auto-pause le temps que Telegram se reconnecte) — les deux
+// cas se traduisent de la même façon pour la file d'attente : on attend
+// avant de continuer, sans marquer les destinataires restants comme échoués.
+async function waitWhileTelegramCampaignBlocked(campaign) {
+  if (!campaign.userPaused && telegram.isConnected()) {
     return;
   }
 
   campaign.paused = true;
-  console.log('Campagne Telegram: mise en pause — connexion perdue, en attente de reconnexion...');
+  if (campaign.userPaused) {
+    console.log('Campagne Telegram: en pause (demandée par l\'utilisateur).');
+  } else {
+    console.log('Campagne Telegram: mise en pause — connexion perdue, en attente de reconnexion...');
+  }
 
-  while (!telegram.isConnected() && !campaign.stopRequested) {
+  while (!campaign.stopRequested && (campaign.userPaused || !telegram.isConnected())) {
     await sleep(1000);
   }
 
   campaign.paused = false;
   if (!campaign.stopRequested) {
-    console.log('Campagne Telegram: reprise après reconnexion.');
+    console.log('Campagne Telegram: reprise.');
+  }
+}
+
+// Comme interruptibleSleep (WhatsApp), mais réagit aussi à une pause
+// utilisateur déclenchée en pleine attente entre deux envois : le délai ne
+// continue pas à s'écouler pendant la pause.
+async function telegramDmInterruptibleSleep(ms, campaign) {
+  const tickMs = 300;
+  let elapsed = 0;
+  while (elapsed < ms) {
+    if (campaign.stopRequested) return;
+    if (campaign.userPaused) {
+      campaign.paused = true;
+      await sleep(tickMs);
+      continue;
+    }
+    campaign.paused = false;
+    const step = Math.min(tickMs, ms - elapsed);
+    await sleep(step);
+    elapsed += step;
   }
 }
 
@@ -411,7 +440,7 @@ async function runTelegramDmQueue(campaign, recipients, message, options = {}) {
       return;
     }
 
-    await waitForTelegramConnection(campaign);
+    await waitWhileTelegramCampaignBlocked(campaign);
 
     if (campaign.stopRequested) {
       markTelegramDmRemainingInterrupted(campaign, recipients, i);
@@ -444,7 +473,7 @@ async function runTelegramDmQueue(campaign, recipients, message, options = {}) {
 
     if (i < recipients.length - 1 && !campaign.stopRequested) {
       const delayMs = randomDelay(minDelayMs, maxDelayMs);
-      await interruptibleSleep(delayMs, () => campaign.stopRequested);
+      await telegramDmInterruptibleSleep(delayMs, campaign);
     }
   }
 
@@ -477,6 +506,7 @@ function startTelegramDmCampaign(recipients, message, options = {}) {
     failed: 0,
     status: 'running',
     paused: false,
+    userPaused: false,
     stopRequested: false,
     startedAt: new Date().toISOString(),
     finishedAt: null,
@@ -657,6 +687,14 @@ async function runPublishJob(job, { buffer, mimetype, title, caption, scheduleAt
 
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
+});
+
+// Route ultra-légère dédiée au keep-alive (auto-ping interne + surveillance
+// externe) : aucune lecture disque/réseau, aucune authentification, réponse
+// immédiate — ne doit jamais devenir un goulot d'étranglement même appelée
+// très fréquemment.
+app.get('/ping', (req, res) => {
+  res.status(200).json({ status: 'active', timestamp: Date.now() });
 });
 
 app.get(['/', '/dashboard'], (req, res) => {
@@ -1358,7 +1396,7 @@ app.post('/api/telegram/contacts/import', requireAccess, requireModule('telegram
   res.status(200).json({ contacts, total: contacts.length });
 });
 
-app.post('/api/telegram/dm/queue', requireAccess, requireModule('telegram'), upload.single('media'), async (req, res) => {
+app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram'), upload.single('media'), async (req, res) => {
   if (!telegram.isConnected()) {
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
   }
@@ -1402,22 +1440,41 @@ app.post('/api/telegram/dm/queue', requireAccess, requireModule('telegram'), upl
   }
 
   res.status(202).json({
-    status: 'tg_dm_campaign_started',
+    status: 'tg_campaign_started',
     total: campaign.total,
     truncated: campaign.truncated,
   });
 });
 
-app.post('/api/telegram/dm/stop', requireAccess, requireModule('telegram'), (req, res) => {
+app.post('/api/telegram/campaign/pause', requireAccess, requireModule('telegram'), (req, res) => {
+  if (!currentTelegramDmCampaign || currentTelegramDmCampaign.status !== 'running') {
+    return res.status(400).json({ error: 'Aucune campagne Telegram en cours à mettre en pause.' });
+  }
+
+  currentTelegramDmCampaign.userPaused = true;
+  res.status(200).json({ status: 'pause_requested' });
+});
+
+app.post('/api/telegram/campaign/resume', requireAccess, requireModule('telegram'), (req, res) => {
+  if (!currentTelegramDmCampaign || currentTelegramDmCampaign.status !== 'running') {
+    return res.status(400).json({ error: 'Aucune campagne Telegram en cours à reprendre.' });
+  }
+
+  currentTelegramDmCampaign.userPaused = false;
+  res.status(200).json({ status: 'resume_requested' });
+});
+
+app.post('/api/telegram/campaign/stop', requireAccess, requireModule('telegram'), (req, res) => {
   if (!currentTelegramDmCampaign || currentTelegramDmCampaign.status !== 'running') {
     return res.status(400).json({ error: 'Aucune campagne Telegram en cours à interrompre.' });
   }
 
   currentTelegramDmCampaign.stopRequested = true;
+  currentTelegramDmCampaign.userPaused = false;
   res.status(200).json({ status: 'stop_requested' });
 });
 
-app.get('/api/telegram/dm/status', requireAccess, requireModule('telegram'), (req, res) => {
+app.get('/api/telegram/campaign/status', requireAccess, requireModule('telegram'), (req, res) => {
   if (!currentTelegramDmCampaign) {
     return res.status(200).json({ exists: false });
   }
@@ -1604,3 +1661,23 @@ whatsapp
 telegram.init().catch((err) => {
   console.error('Erreur lors de l\'initialisation de l\'adaptateur Telegram:', err);
 });
+
+// Auto-ping interne : sur le plan gratuit Render, le service se met en
+// veille après ~15 min sans requête entrante, ce qui coupe aussi les
+// connexions WhatsApp/Telegram actives. Un ping périodique vers sa propre
+// URL publique (donc une vraie requête HTTP entrante du point de vue de
+// Render, pas un appel interne) maintient le service éveillé. Écrit pour ne
+// jamais faire planter le process : erreur réseau ignorée, juste journalisée.
+const PING_INTERVAL_MS = 10 * 60 * 1000;
+
+function startKeepAliveHeartbeat() {
+  const pingTimer = setInterval(() => {
+    axios.get(`${PUBLIC_BASE_URL}/ping`, { timeout: 15000 }).catch((err) => {
+      console.warn('Auto-ping keep-alive: échec (probablement sans conséquence) —', err.message);
+    });
+  }, PING_INTERVAL_MS);
+  // Ne bloque jamais l'arrêt propre du process (redéploiement, etc.).
+  if (pingTimer.unref) pingTimer.unref();
+}
+
+startKeepAliveHeartbeat();

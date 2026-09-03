@@ -85,6 +85,10 @@
     .send-button:disabled { background: #a9d9bc; cursor: not-allowed; }
     .stop-button { background: #c0392b; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; margin-top: 0.75rem; }
     .stop-button:disabled { background: #e6a8a1; cursor: not-allowed; }
+    .pause-button { background: #e6a100; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; margin-top: 0.75rem; }
+    .pause-button:disabled { background: #f0d491; cursor: not-allowed; }
+    .resume-button { background: #1a7a3c; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; margin-top: 0.75rem; }
+    .resume-button:disabled { background: #a3d1b3; cursor: not-allowed; }
 
     #campaign-feedback, #tg-feedback, #tg-dm-feedback { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
     #campaign-feedback.ok, #tg-feedback.ok, #tg-dm-feedback.ok { background: #d4f5dd; color: #1a7a3c; }
@@ -377,10 +381,10 @@
         <div id="tg-feedback" hidden></div>
 
         <div class="subsection" id="tg-dm-section">
-          <h3>Gestion des Campagnes — Messages directs (liste de contacts)</h3>
+          <h3>Gestionnaire de Contacts et Campagnes</h3>
           <p class="empty">
-            Importez une liste de destinataires autorisés (usernames Telegram ou numéros de téléphone) pour leur
-            envoyer un message individuel, avec un intervalle de sécurité automatique entre chaque envoi.
+            Importez une liste de destinataires autorisés (Téléphone, Username, Nom) pour leur envoyer un message
+            individuel, avec un intervalle de sécurité automatique entre chaque envoi.
           </p>
 
           <div id="tg-dm-drop-zone">Glissez-déposez un fichier .csv/.xlsx ici, ou touchez pour parcourir</div>
@@ -388,6 +392,15 @@
           <p id="tg-dm-import-file-name" class="empty">Aucun fichier sélectionné.</p>
           <button type="button" id="tg-dm-import-btn">Importer</button>
           <p id="tg-dm-import-count" class="empty">Aucun contact importé.</p>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Identifiant</th><th>Nom</th></tr></thead>
+              <tbody id="tg-dm-contacts-body">
+                <tr><td colspan="2" class="empty">Aucun contact importé.</td></tr>
+              </tbody>
+            </table>
+          </div>
 
           <div class="field">
             <label for="tg-dm-message">Message individuel (emojis supportés)</label>
@@ -415,8 +428,10 @@
             <input type="number" id="tg-dm-max-per-cycle" value="20" min="1" />
           </div>
 
-          <button type="button" id="tg-dm-send-btn" class="send-button">🚀 Lancer la campagne de messages directs</button>
-          <button type="button" id="tg-dm-stop-btn" class="stop-button" hidden>⛔ Pause / Arrêt</button>
+          <button type="button" id="tg-dm-send-btn" class="send-button">🚀 Lancer la diffusion</button>
+          <button type="button" id="tg-dm-pause-btn" class="pause-button" hidden>⏸️ Pause</button>
+          <button type="button" id="tg-dm-resume-btn" class="resume-button" hidden>▶️ Reprendre</button>
+          <button type="button" id="tg-dm-stop-btn" class="stop-button" hidden>⛔ Arrêter</button>
           <div id="tg-dm-feedback" hidden></div>
 
           <div id="tg-dm-progress-area" hidden>
@@ -1313,6 +1328,27 @@
       el.className = isError ? 'error' : 'ok';
     }
 
+    function tgDmRenderContactsPreview() {
+      const tbody = document.getElementById('tg-dm-contacts-body');
+      tbody.innerHTML = '';
+
+      if (tgDmImportedContacts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="2" class="empty">Aucun contact importé.</td></tr>';
+        return;
+      }
+
+      tgDmImportedContacts.forEach((c) => {
+        const tr = document.createElement('tr');
+        const idTd = document.createElement('td');
+        idTd.textContent = c.identifier;
+        const nameTd = document.createElement('td');
+        nameTd.textContent = c.name || '-';
+        tr.appendChild(idTd);
+        tr.appendChild(nameTd);
+        tbody.appendChild(tr);
+      });
+    }
+
     document.getElementById('tg-dm-import-btn').addEventListener('click', async () => {
       if (!selectedTgDmFile) { tgDmShowFeedback('Sélectionnez d\'abord un fichier .csv ou .xlsx.', true); return; }
 
@@ -1329,7 +1365,8 @@
         tgDmImportedContacts = data.contacts || [];
         document.getElementById('tg-dm-import-count').textContent = tgDmImportedContacts.length > 0
           ? tgDmImportedContacts.length + ' contact(s) importé(s) et prêt(s) à être contactés.'
-          : 'Aucun contact valide trouvé dans le fichier (colonne "username" ou "telephone" attendue).';
+          : 'Aucun contact valide trouvé dans le fichier (colonnes Téléphone, Username, Nom attendues).';
+        tgDmRenderContactsPreview();
         tgDmShowFeedback(tgDmImportedContacts.length + ' contact(s) importé(s).', false);
       } catch (err) {
         tgDmShowFeedback('Erreur réseau lors de l\'import.', true);
@@ -1355,11 +1392,13 @@
 
     async function tgDmPollStatus() {
       try {
-        const res = await apiFetch('/api/telegram/dm/status');
+        const res = await apiFetch('/api/telegram/campaign/status');
         const data = await res.json();
         if (!data.exists) return;
 
         const sendBtn = document.getElementById('tg-dm-send-btn');
+        const pauseBtn = document.getElementById('tg-dm-pause-btn');
+        const resumeBtn = document.getElementById('tg-dm-resume-btn');
         const stopBtn = document.getElementById('tg-dm-stop-btn');
 
         if (data.status === 'running') {
@@ -1367,9 +1406,13 @@
           sendBtn.disabled = true;
           stopBtn.hidden = false;
           stopBtn.disabled = false;
+          pauseBtn.hidden = Boolean(data.userPaused);
+          resumeBtn.hidden = !data.userPaused;
           tgDmUpdateProgressUI(data);
         } else {
           sendBtn.disabled = false;
+          pauseBtn.hidden = true;
+          resumeBtn.hidden = true;
           stopBtn.hidden = true;
           tgDmUpdateProgressUI(data);
 
@@ -1411,7 +1454,7 @@
       sendBtn.disabled = true;
 
       try {
-        const res = await apiFetch('/api/telegram/dm/queue', { method: 'POST', body: formData });
+        const res = await apiFetch('/api/telegram/campaign/send', { method: 'POST', body: formData });
         const data = await res.json();
         if (!res.ok) {
           tgDmShowFeedback(data.error || 'Échec du lancement de la campagne.', true);
@@ -1430,9 +1473,25 @@
       }
     });
 
+    document.getElementById('tg-dm-pause-btn').addEventListener('click', async () => {
+      try {
+        await apiFetch('/api/telegram/campaign/pause', { method: 'POST' });
+      } catch (err) {
+        // le prochain poll reflétera l'état réel
+      }
+    });
+
+    document.getElementById('tg-dm-resume-btn').addEventListener('click', async () => {
+      try {
+        await apiFetch('/api/telegram/campaign/resume', { method: 'POST' });
+      } catch (err) {
+        // le prochain poll reflétera l'état réel
+      }
+    });
+
     document.getElementById('tg-dm-stop-btn').addEventListener('click', async () => {
       try {
-        await apiFetch('/api/telegram/dm/stop', { method: 'POST' });
+        await apiFetch('/api/telegram/campaign/stop', { method: 'POST' });
       } catch (err) {
         // le prochain poll reflétera l'état réel
       }
