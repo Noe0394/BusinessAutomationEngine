@@ -13,6 +13,7 @@ const qrcode = require('qrcode-terminal');
 let sock = null;
 let latestQR = null;
 let connected = false;
+let authState = null;
 
 function getQRCode() {
   return latestQR;
@@ -24,6 +25,7 @@ function isConnected() {
 
 async function connect() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+  authState = state;
 
   sock = makeWASocket({
     auth: state,
@@ -97,6 +99,24 @@ async function sendMedia(to, { buffer, mimetype, filename, caption }) {
   });
 }
 
+async function requestPairingCode(phoneNumber) {
+  if (!sock) {
+    throw new Error('Adaptateur WhatsApp non initialisé.');
+  }
+
+  if (authState?.creds?.registered) {
+    throw new Error('ALREADY_REGISTERED');
+  }
+
+  const digits = String(phoneNumber).replace(/\D/g, '');
+  if (!digits) {
+    throw new Error('INVALID_PHONE_NUMBER');
+  }
+
+  const rawCode = await sock.requestPairingCode(digits);
+  return rawCode.replace(/-/g, '').match(/.{1,4}/g).join('-');
+}
+
 async function getGroupMetadata(groupId) {
   if (!sock) {
     throw new Error('Adaptateur WhatsApp non initialisé.');
@@ -129,6 +149,7 @@ module.exports = {
   sendMedia,
   getQRCode,
   isConnected,
+  requestPairingCode,
   getGroupMetadata,
   getGroups,
   getGroupParticipants,

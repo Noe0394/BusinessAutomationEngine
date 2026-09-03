@@ -2,52 +2,66 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
   <title>Orchestrateur WhatsApp</title>
   <style>
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     body { font-family: sans-serif; margin: 0; background: #f2f2f3; color: #1a1a1a; }
-    header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; background: #075E54; color: #fff; }
-    header h1 { margin: 0; font-size: 1.25rem; }
-    header button { background: #fff; color: #075E54; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; }
+    button, input, select, textarea { font-family: inherit; font-size: 1rem; }
 
-    #login-screen { max-width: 320px; margin: 4rem auto; padding: 2rem; background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); text-align: center; }
-    #login-screen input { width: 100%; padding: 0.5rem; margin-bottom: 1rem; }
-    #login-screen button { width: 100%; padding: 0.5rem; background: #075E54; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    header { display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: #075E54; color: #fff; flex-wrap: wrap; gap: 0.5rem; }
+    header h1 { margin: 0; font-size: 1.15rem; }
+    header button { background: #fff; color: #075E54; border: none; padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer; min-height: 44px; }
+
+    #login-screen { max-width: 340px; margin: 3rem auto; padding: 2rem 1.5rem; background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); text-align: center; }
+    #login-screen input { width: 100%; padding: 0.75rem; margin-bottom: 1rem; min-height: 44px; border: 1px solid #ccc; border-radius: 6px; }
+    #login-screen button { width: 100%; padding: 0.75rem; background: #075E54; color: #fff; border: none; border-radius: 6px; cursor: pointer; min-height: 44px; }
     .error { color: #c0392b; }
 
-    nav#tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 1rem 2rem 0; background: #f2f2f3; position: sticky; top: 0; z-index: 5; }
-    nav#tabs button { padding: 0.6rem 1rem; border: none; border-radius: 6px 6px 0 0; background: #ddd; cursor: pointer; font-weight: bold; }
+    nav#tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.75rem 1rem 0; background: #f2f2f3; position: sticky; top: 0; z-index: 5; }
+    nav#tabs button { padding: 0.7rem 1rem; border: none; border-radius: 8px 8px 0 0; background: #ddd; cursor: pointer; font-weight: bold; min-height: 44px; flex: 1 1 auto; }
     nav#tabs button.active { background: #fff; color: #075E54; }
 
-    .panel { display: none; margin: 0 2rem 2rem; background: #fff; padding: 1.5rem; border-radius: 0 8px 8px 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    .panel { display: none; margin: 0 1rem 1.5rem; background: #fff; padding: 1.25rem; border-radius: 0 8px 8px 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
     .panel.active { display: block; }
 
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #e0e0e0; padding: 0.5rem 0.75rem; text-align: left; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; min-width: 420px; }
+    th, td { border: 1px solid #e0e0e0; padding: 0.6rem 0.75rem; text-align: left; }
     th { background: #f5f5f5; }
-    button { cursor: pointer; }
+    button { cursor: pointer; min-height: 40px; }
     .empty { color: #777; }
 
-    .badge { display: inline-block; padding: 0.3rem 0.9rem; border-radius: 999px; font-weight: bold; }
+    .badge { display: inline-block; padding: 0.4rem 1rem; border-radius: 999px; font-weight: bold; }
     .badge.connected { background: #d4f5dd; color: #1a7a3c; }
     .badge.disconnected { background: #fbdada; color: #c0392b; }
 
+    .mode-toggle { display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap; }
+    .mode-toggle button { flex: 1; padding: 0.75rem; border: 2px solid #075E54; background: #fff; color: #075E54; border-radius: 6px; font-weight: bold; min-height: 48px; }
+    .mode-toggle button.active { background: #075E54; color: #fff; }
+
     #qr-container { text-align: center; margin-top: 1.5rem; }
-    #qr-image { width: 260px; height: 260px; }
+    #qr-image { width: 100%; max-width: 260px; height: auto; }
 
-    #search-groups { width: 100%; max-width: 400px; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; margin: 1rem 0; }
+    #pairing-code-display {
+      font-size: 2rem; font-weight: bold; letter-spacing: 0.15em; text-align: center;
+      background: #f5f5f5; border-radius: 8px; padding: 1rem; margin: 1rem 0;
+    }
+    .open-whatsapp-btn { display: inline-block; background: #25D366; color: #fff; text-decoration: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: bold; min-height: 48px; text-align: center; }
 
-    #participants-list { list-style: none; padding: 0; }
-    #participants-list li { padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
+    #search-groups { width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 6px; margin: 1rem 0; min-height: 44px; }
+    .group-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+    .group-actions button { padding: 0.6rem 1rem; border: 1px solid #075E54; background: #fff; color: #075E54; border-radius: 6px; }
+    #selected-groups-count { font-weight: bold; margin-left: 0.5rem; }
 
     .field { margin-bottom: 1rem; }
     .field label { display: block; font-weight: bold; margin-bottom: 0.3rem; }
-    .field input[type="text"], .field input[type="number"], .field select, .field textarea {
-      width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;
+    .field input[type="text"], .field input[type="tel"], .field input[type="number"], .field select, .field textarea {
+      width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 6px; min-height: 44px;
     }
-    .field textarea { min-height: 90px; resize: vertical; }
+    .field textarea { min-height: 100px; resize: vertical; }
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
-    .row .field { flex: 1; min-width: 220px; }
+    .row .field { flex: 1; min-width: 200px; }
 
     #drop-zone, #import-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
@@ -60,9 +74,9 @@
       padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; font-weight: bold;
     }
 
-    .send-button { background: #25D366; color: #fff; border: none; padding: 0.7rem 1.5rem; border-radius: 6px; font-weight: bold; font-size: 1rem; }
+    .send-button { background: #25D366; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; }
     .send-button:disabled { background: #a9d9bc; cursor: not-allowed; }
-    .stop-button { background: #c0392b; color: #fff; border: none; padding: 0.7rem 1.5rem; border-radius: 6px; font-weight: bold; font-size: 1rem; margin-left: 0.75rem; }
+    .stop-button { background: #c0392b; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; margin-top: 0.75rem; }
     .stop-button:disabled { background: #e6a8a1; cursor: not-allowed; }
 
     #campaign-feedback { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
@@ -70,7 +84,7 @@
     #campaign-feedback.error { background: #fbdada; color: #c0392b; }
 
     #progress-area { margin-top: 1.5rem; }
-    #progress-bar-outer { width: 100%; background: #eee; border-radius: 999px; height: 22px; overflow: hidden; }
+    #progress-bar-outer { width: 100%; background: #eee; border-radius: 999px; height: 24px; overflow: hidden; }
     #progress-bar-inner { height: 100%; width: 0%; background: #25D366; transition: width 0.3s; }
     #progress-text { margin-top: 0.5rem; font-weight: bold; }
     #progress-counters span { display: inline-block; margin-right: 1.5rem; }
@@ -83,18 +97,26 @@
 
     .modal-overlay {
       position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex;
-      align-items: center; justify-content: center; z-index: 50;
+      align-items: center; justify-content: center; z-index: 50; padding: 1rem;
     }
     .modal-box {
-      background: #fff; border-radius: 8px; padding: 1.5rem; max-width: 700px; width: 90%;
+      background: #fff; border-radius: 8px; padding: 1.25rem; max-width: 700px; width: 100%;
       max-height: 85vh; overflow-y: auto;
     }
     .modal-box h2 { margin-top: 0; }
     .modal-summary span { display: inline-block; margin-right: 1.5rem; font-weight: bold; }
-    .modal-actions { margin-top: 1rem; display: flex; gap: 0.75rem; }
+    .modal-actions { margin-top: 1rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .modal-actions button { flex: 1; min-width: 140px; padding: 0.7rem; border-radius: 6px; border: 1px solid #075E54; background: #fff; color: #075E54; }
     .status-delivered { color: #1a7a3c; font-weight: bold; }
     .status-failed { color: #c0392b; font-weight: bold; }
     .status-interrupted { color: #a67c00; font-weight: bold; }
+
+    @media (max-width: 640px) {
+      header { flex-direction: column; align-items: stretch; text-align: center; }
+      nav#tabs button { font-size: 0.85rem; padding: 0.6rem 0.5rem; }
+      .panel { margin: 0 0.5rem 1rem; padding: 1rem; }
+      .row { flex-direction: column; }
+    }
   </style>
 </head>
 <body>
@@ -115,75 +137,86 @@
 
     <nav id="tabs">
       <button type="button" class="tab-btn active" data-tab="status">Statut &amp; Connexion</button>
-      <button type="button" class="tab-btn" data-tab="groups">Gestion &amp; Recherche des Groupes</button>
-      <button type="button" class="tab-btn" data-tab="participants">Participants &amp; Contacts</button>
-      <button type="button" class="tab-btn" data-tab="import">Importation Excel / CSV</button>
+      <button type="button" class="tab-btn" data-tab="groups">Groupes &amp; Contacts</button>
+      <button type="button" class="tab-btn" data-tab="import">Import Excel/CSV</button>
       <button type="button" class="tab-btn" data-tab="campaign">Centre d'Envoi</button>
     </nav>
 
-    <!-- Section 1 : Statut & Connexion WhatsApp -->
+    <!-- Section 1 : Statut & Connexion -->
     <section class="panel active" id="panel-status">
       <h2>Statut &amp; Connexion WhatsApp</h2>
       <span id="status-badge" class="badge disconnected">Vérification...</span>
-      <div id="qr-container" hidden>
-        <img id="qr-image" alt="QR Code WhatsApp" />
-        <p>Scannez ce QR code avec WhatsApp pour connecter l'appareil.</p>
+
+      <div class="mode-toggle" id="connect-mode-toggle">
+        <button type="button" class="mode-btn active" data-mode="pc">💻 Mode PC (QR Code)</button>
+        <button type="button" class="mode-btn" data-mode="mobile">📱 Mode Mobile (Code d'association)</button>
+      </div>
+
+      <div id="pc-mode-panel">
+        <div id="qr-container" hidden>
+          <img id="qr-image" alt="QR Code WhatsApp" />
+          <p>Scannez ce QR code avec WhatsApp (Appareils liés) pour connecter l'appareil.</p>
+        </div>
+      </div>
+
+      <div id="mobile-mode-panel" hidden>
+        <div class="field">
+          <label for="pairing-phone">Numéro de téléphone (avec indicatif pays, ex: 225xxxxxxxxx)</label>
+          <input type="tel" id="pairing-phone" placeholder="225xxxxxxxxx" />
+        </div>
+        <button type="button" id="generate-pairing-btn" class="send-button" style="width:auto;">Générer mon Code d'Association</button>
+        <div id="pairing-result"></div>
       </div>
     </section>
 
-    <!-- Section 2 : Gestion & Recherche des Groupes -->
+    <!-- Section 2 : Groupes & Contacts -->
     <section class="panel" id="panel-groups">
-      <h2>Gestion &amp; Recherche des Groupes</h2>
+      <h2>Groupes &amp; Contacts</h2>
       <button type="button" id="load-groups-btn">Lister mes groupes</button>
-      <br />
       <input type="text" id="search-groups" placeholder="Rechercher un groupe par nom..." />
-      <table>
-        <thead>
-          <tr><th>Nom du groupe</th><th>ID du groupe</th><th>Membres</th><th>Action</th></tr>
-        </thead>
-        <tbody id="groups-body">
-          <tr><td colspan="4" class="empty">Cliquez sur "Lister mes groupes" pour charger la liste.</td></tr>
-        </tbody>
-      </table>
-    </section>
 
-    <!-- Section 3 : Participants & Contacts -->
-    <section class="panel" id="panel-participants">
-      <h2>Participants &amp; Contacts</h2>
-      <div class="field">
-        <label for="participants-group-select">Groupe</label>
-        <select id="participants-group-select">
-          <option value="">-- Sélectionnez un groupe (onglet "Gestion des Groupes") --</option>
-        </select>
+      <div class="group-actions">
+        <button type="button" id="select-all-btn">Tout sélectionner</button>
+        <button type="button" id="deselect-all-btn">Tout désélectionner</button>
+        <span id="selected-groups-count">0 groupe(s) sélectionné(s)</span>
       </div>
-      <button type="button" id="load-participants-btn">Charger les membres</button>
 
-      <h3 id="participants-title" style="margin-top: 1.5rem;"></h3>
-      <ul id="participants-list"></ul>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th></th><th>Nom du groupe</th><th>ID du groupe</th><th>Membres</th></tr>
+          </thead>
+          <tbody id="groups-body">
+            <tr><td colspan="4" class="empty">Cliquez sur "Lister mes groupes" pour charger la liste.</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
-    <!-- Section 4 : Importation de Fichiers (Excel / CSV) -->
+    <!-- Section 3 : Import Excel/CSV -->
     <section class="panel" id="panel-import">
-      <h2>Importation de Fichiers (Excel / CSV)</h2>
-      <div id="import-drop-zone">Glissez-déposez un fichier .xlsx ou .csv ici, ou cliquez pour parcourir</div>
+      <h2>Import Excel / CSV</h2>
+      <div id="import-drop-zone">Glissez-déposez un fichier .xlsx ou .csv ici, ou touchez pour parcourir</div>
       <input type="file" id="import-file" accept=".xlsx,.csv" hidden />
       <p id="import-file-name" class="empty">Aucun fichier sélectionné.</p>
       <button type="button" id="import-btn">Importer</button>
       <div id="import-result" hidden></div>
 
-      <table style="margin-top: 1rem;">
-        <thead>
-          <tr><th>Téléphone</th><th>Prénom</th></tr>
-        </thead>
-        <tbody id="import-body">
-          <tr><td colspan="2" class="empty">Aucun contact importé.</td></tr>
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table style="margin-top: 1rem;">
+          <thead>
+            <tr><th>Téléphone</th><th>Prénom</th></tr>
+          </thead>
+          <tbody id="import-body">
+            <tr><td colspan="2" class="empty">Aucun contact importé.</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
-    <!-- Section 5 : Centre d'Envoi Multi-Médias & Traçabilité En Direct -->
+    <!-- Section 4 : Centre d'Envoi Multi-Médias -->
     <section class="panel" id="panel-campaign">
-      <h2>Centre d'Envoi Multi-Médias &amp; Traçabilité En Direct</h2>
+      <h2>Centre d'Envoi Multi-Médias</h2>
 
       <div class="warning-box">
         ⚠️ Attention : L'envoi massif ou trop rapide peut entraîner le blocage temporaire ou définitif de votre compte WhatsApp par Meta. Privilégiez un délai d'au moins 10 à 15 secondes entre chaque message.
@@ -196,26 +229,23 @@
 
       <div class="field">
         <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF, Sticker WEBP)</label>
-        <div id="drop-zone">Glissez-déposez un fichier ici, ou cliquez pour parcourir</div>
+        <div id="drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
         <input type="file" id="campaign-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,.webp,image/jpeg,image/png,image/webp,video/mp4,application/pdf" hidden />
         <p id="campaign-file-name" class="empty">Aucun fichier sélectionné.</p>
       </div>
 
       <div class="field">
         <label>Cible de l'envoi</label>
-        <label><input type="radio" name="target-mode" value="group" checked /> Groupe sélectionné</label>
+        <label><input type="radio" name="target-mode" value="groups" checked /> Groupe(s) sélectionné(s)</label>
         <label style="margin-left: 1.5rem;"><input type="radio" name="target-mode" value="import" /> Liste importée (Excel/CSV)</label>
       </div>
 
-      <div class="field" id="campaign-group-field">
-        <label for="campaign-group-select">Groupe cible</label>
-        <select id="campaign-group-select">
-          <option value="">-- Sélectionnez un groupe (onglet "Gestion des Groupes") --</option>
-        </select>
+      <div class="field" id="campaign-groups-field">
+        <p id="campaign-groups-count" class="empty">0 groupe(s) sélectionné(s) dans l'onglet "Groupes &amp; Contacts".</p>
       </div>
 
       <div class="field" id="campaign-import-field" hidden>
-        <p id="campaign-import-count" class="empty">Aucun contact importé pour le moment (onglet "Importation Excel / CSV").</p>
+        <p id="campaign-import-count" class="empty">Aucun contact importé pour le moment (onglet "Import Excel/CSV").</p>
       </div>
 
       <div class="row">
@@ -224,7 +254,7 @@
           <input type="number" id="batch-size" value="5" min="1" />
         </div>
         <div class="field">
-          <label for="delay-seconds">Délai de pause entre chaque message (secondes)</label>
+          <label for="delay-seconds">Délai de pause entre messages (secondes)</label>
           <input type="number" id="delay-seconds" value="12" min="1" />
         </div>
       </div>
@@ -261,16 +291,18 @@
       </p>
       <p>Statut de la campagne : <strong id="report-status"></strong></p>
 
-      <table>
-        <thead>
-          <tr><th>Destinataire</th><th>Heure</th><th>Statut</th></tr>
-        </thead>
-        <tbody id="report-body"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Destinataire</th><th>Heure</th><th>Statut</th></tr>
+          </thead>
+          <tbody id="report-body"></tbody>
+        </table>
+      </div>
 
       <div class="modal-actions">
-        <button type="button" id="download-report-json-btn">⬇️ Télécharger (JSON)</button>
-        <button type="button" id="download-report-csv-btn">⬇️ Télécharger (CSV)</button>
+        <button type="button" id="download-report-json-btn">⬇️ JSON</button>
+        <button type="button" id="download-report-csv-btn">⬇️ CSV</button>
         <button type="button" id="close-report-btn">Fermer</button>
       </div>
     </div>
@@ -278,7 +310,7 @@
 
   <script>
     const STORAGE_KEY = 'admin_password';
-    const state = { groups: [], filteredGroups: [], importedContacts: [] };
+    const state = { groups: [], selectedGroupIds: new Set(), importedContacts: [] };
     let selectedFile = null;
     let lastReportShownAt = null;
 
@@ -374,8 +406,49 @@
       });
     });
 
-    // ---------- Section 1 : Statut & Connexion ----------
+    // ---------- Section 1 : Statut & Connexion (PC / Mobile) ----------
     let statusInterval = null;
+
+    document.querySelectorAll('.mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mode-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const mode = btn.dataset.mode;
+        document.getElementById('pc-mode-panel').hidden = mode !== 'pc';
+        document.getElementById('mobile-mode-panel').hidden = mode !== 'mobile';
+      });
+    });
+
+    document.getElementById('generate-pairing-btn').addEventListener('click', async () => {
+      const phone = document.getElementById('pairing-phone').value.trim();
+      const resultEl = document.getElementById('pairing-result');
+
+      if (!phone) {
+        resultEl.innerHTML = '<p class="error">Renseignez un numéro de téléphone.</p>';
+        return;
+      }
+
+      resultEl.innerHTML = '<p>Génération du code en cours...</p>';
+
+      try {
+        const res = await apiFetch('/api/pairing-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumber: phone }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          resultEl.innerHTML = '<p class="error">' + (data.error || 'Échec de la génération du code.') + '</p>';
+          return;
+        }
+        resultEl.innerHTML =
+          '<div id="pairing-code-display">' + data.code + '</div>' +
+          '<p>Sur votre téléphone : WhatsApp &gt; Appareils liés &gt; Lier un appareil &gt; Lier avec le numéro de téléphone, puis saisissez ce code.</p>' +
+          '<a class="open-whatsapp-btn" href="whatsapp://">📲 Ouvrir WhatsApp</a>';
+      } catch (err) {
+        resultEl.innerHTML = '<p class="error">Erreur réseau lors de la génération du code.</p>';
+      }
+    });
 
     async function pollStatus() {
       try {
@@ -404,19 +477,12 @@
       }
     }
 
-    // ---------- Section 2 : Gestion & Recherche des Groupes ----------
-    function populateGroupSelects() {
-      [document.getElementById('participants-group-select'), document.getElementById('campaign-group-select')].forEach((select) => {
-        const current = select.value;
-        select.innerHTML = '<option value="">-- Sélectionnez un groupe --</option>';
-        state.groups.forEach((group) => {
-          const opt = document.createElement('option');
-          opt.value = group.id;
-          opt.textContent = group.subject || '(sans nom)';
-          select.appendChild(opt);
-        });
-        if (current) select.value = current;
-      });
+    // ---------- Section 2 : Groupes & Contacts (multisélection) ----------
+    function updateSelectedGroupsUI() {
+      const count = state.selectedGroupIds.size;
+      document.getElementById('selected-groups-count').textContent = count + ' groupe(s) sélectionné(s)';
+      document.getElementById('campaign-groups-count').textContent =
+        count + ' groupe(s) sélectionné(s) dans l\'onglet "Groupes & Contacts".';
     }
 
     function renderGroupsTable(groups) {
@@ -431,6 +497,17 @@
       groups.forEach((group) => {
         const tr = document.createElement('tr');
 
+        const checkTd = document.createElement('td');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = state.selectedGroupIds.has(group.id);
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) state.selectedGroupIds.add(group.id);
+          else state.selectedGroupIds.delete(group.id);
+          updateSelectedGroupsUI();
+        });
+        checkTd.appendChild(checkbox);
+
         const nameTd = document.createElement('td');
         nameTd.textContent = group.subject || '(sans nom)';
 
@@ -440,23 +517,17 @@
         const countTd = document.createElement('td');
         countTd.textContent = Array.isArray(group.participants) ? group.participants.length : '-';
 
-        const actionTd = document.createElement('td');
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.textContent = 'Voir les participants';
-        btn.addEventListener('click', () => {
-          document.querySelector('.tab-btn[data-tab="participants"]').click();
-          document.getElementById('participants-group-select').value = group.id;
-          loadParticipants();
-        });
-        actionTd.appendChild(btn);
-
+        tr.appendChild(checkTd);
         tr.appendChild(nameTd);
         tr.appendChild(idTd);
         tr.appendChild(countTd);
-        tr.appendChild(actionTd);
         tbody.appendChild(tr);
       });
+    }
+
+    function currentFilteredGroups() {
+      const q = document.getElementById('search-groups').value.trim().toLowerCase();
+      return q ? state.groups.filter((g) => (g.subject || '').toLowerCase().includes(q)) : state.groups;
     }
 
     async function loadGroups() {
@@ -466,62 +537,29 @@
         const res = await apiFetch('/api/groups');
         const groups = await res.json();
         state.groups = Array.isArray(groups) ? groups : [];
-        populateGroupSelects();
-        renderGroupsTable(state.groups);
+        renderGroupsTable(currentFilteredGroups());
       } catch (err) {
         tbody.innerHTML = '<tr><td colspan="4" class="empty">Erreur lors du chargement des groupes.</td></tr>';
       }
     }
     document.getElementById('load-groups-btn').addEventListener('click', loadGroups);
 
-    document.getElementById('search-groups').addEventListener('input', (e) => {
-      const q = e.target.value.trim().toLowerCase();
-      const filtered = q
-        ? state.groups.filter((g) => (g.subject || '').toLowerCase().includes(q))
-        : state.groups;
-      renderGroupsTable(filtered);
+    document.getElementById('search-groups').addEventListener('input', () => {
+      renderGroupsTable(currentFilteredGroups());
     });
 
-    // ---------- Section 3 : Participants & Contacts ----------
-    async function loadParticipants() {
-      const groupId = document.getElementById('participants-group-select').value;
-      const title = document.getElementById('participants-title');
-      const list = document.getElementById('participants-list');
+    document.getElementById('select-all-btn').addEventListener('click', () => {
+      currentFilteredGroups().forEach((g) => state.selectedGroupIds.add(g.id));
+      renderGroupsTable(currentFilteredGroups());
+      updateSelectedGroupsUI();
+    });
+    document.getElementById('deselect-all-btn').addEventListener('click', () => {
+      currentFilteredGroups().forEach((g) => state.selectedGroupIds.delete(g.id));
+      renderGroupsTable(currentFilteredGroups());
+      updateSelectedGroupsUI();
+    });
 
-      if (!groupId) {
-        title.textContent = 'Sélectionnez un groupe.';
-        return;
-      }
-
-      title.textContent = 'Chargement des participants...';
-      list.innerHTML = '';
-
-      try {
-        const res = await apiFetch('/api/groups/' + encodeURIComponent(groupId) + '/participants');
-        const participants = await res.json();
-        const list2 = Array.isArray(participants) ? participants : [];
-
-        const group = state.groups.find((g) => g.id === groupId);
-        const groupName = group ? group.subject : groupId;
-
-        if (list2.length === 0) {
-          title.textContent = 'Aucun participant trouvé pour "' + groupName + '".';
-          return;
-        }
-
-        title.textContent = 'Membres de "' + groupName + '" (' + list2.length + ')';
-        list2.forEach((p) => {
-          const li = document.createElement('li');
-          li.textContent = (p.id || '').split('@')[0];
-          list.appendChild(li);
-        });
-      } catch (err) {
-        title.textContent = 'Erreur lors du chargement des participants.';
-      }
-    }
-    document.getElementById('load-participants-btn').addEventListener('click', loadParticipants);
-
-    // ---------- Section 4 : Importation Excel / CSV ----------
+    // ---------- Section 3 : Import Excel / CSV ----------
     let selectedImportFile = null;
     const importDropZone = document.getElementById('import-drop-zone');
     const importFileInput = document.getElementById('import-file');
@@ -559,10 +597,9 @@
         });
       }
 
-      const countEl = document.getElementById('campaign-import-count');
-      countEl.textContent = state.importedContacts.length > 0
+      document.getElementById('campaign-import-count').textContent = state.importedContacts.length > 0
         ? state.importedContacts.length + ' contact(s) prêt(s) à être utilisés comme cible.'
-        : 'Aucun contact importé pour le moment (onglet "Importation Excel / CSV").';
+        : 'Aucun contact importé pour le moment (onglet "Import Excel/CSV").';
     }
 
     function showImportResult(message, isError) {
@@ -596,10 +633,10 @@
       }
     });
 
-    // ---------- Section 5 : Centre d'Envoi ----------
+    // ---------- Section 4 : Centre d'Envoi Multi-Médias ----------
     function toggleTargetMode() {
       const mode = document.querySelector('input[name="target-mode"]:checked').value;
-      document.getElementById('campaign-group-field').hidden = mode !== 'group';
+      document.getElementById('campaign-groups-field').hidden = mode !== 'groups';
       document.getElementById('campaign-import-field').hidden = mode !== 'import';
     }
     document.querySelectorAll('input[name="target-mode"]').forEach((radio) => {
@@ -634,14 +671,16 @@
     document.getElementById('send-campaign-btn').addEventListener('click', async () => {
       const message = document.getElementById('campaign-message').value.trim();
       const mode = document.querySelector('input[name="target-mode"]:checked').value;
-      const groupId = document.getElementById('campaign-group-select').value;
       const batchSize = document.getElementById('batch-size').value;
       const delaySeconds = document.getElementById('delay-seconds').value;
 
       if (!message) { showCampaignFeedback('Le message ne peut pas être vide.', true); return; }
-      if (mode === 'group' && !groupId) { showCampaignFeedback('Sélectionnez un groupe cible.', true); return; }
+      if (mode === 'groups' && state.selectedGroupIds.size === 0) {
+        showCampaignFeedback('Sélectionnez au moins un groupe (onglet "Groupes & Contacts").', true);
+        return;
+      }
       if (mode === 'import' && state.importedContacts.length === 0) {
-        showCampaignFeedback('Importez d\'abord une liste de contacts (onglet "Importation Excel / CSV").', true);
+        showCampaignFeedback('Importez d\'abord une liste de contacts (onglet "Import Excel/CSV").', true);
         return;
       }
 
@@ -650,8 +689,8 @@
       formData.append('batchSize', batchSize);
       formData.append('delaySeconds', delaySeconds);
 
-      if (mode === 'group') {
-        formData.append('groupId', groupId);
+      if (mode === 'groups') {
+        formData.append('groupIds', JSON.stringify(Array.from(state.selectedGroupIds)));
       } else {
         const numbers = state.importedContacts.map((c) => c.telephone);
         formData.append('recipients', JSON.stringify(numbers));
@@ -818,6 +857,7 @@
     // ---------- Init ----------
     function init() {
       toggleTargetMode();
+      updateSelectedGroupsUI();
       pollStatus();
       if (statusInterval) clearInterval(statusInterval);
       statusInterval = setInterval(pollStatus, 4000);

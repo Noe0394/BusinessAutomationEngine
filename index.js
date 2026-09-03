@@ -286,6 +286,25 @@ app.get('/api/status', requireAdminPassword, async (req, res) => {
   res.status(200).json(response);
 });
 
+app.post('/api/pairing-code', requireAdminPassword, async (req, res) => {
+  const { phoneNumber } = req.body || {};
+
+  if (!phoneNumber || !String(phoneNumber).replace(/\D/g, '')) {
+    return res.status(400).json({ error: 'Le champ "phoneNumber" est requis (indicatif pays inclus, ex: 225xxxxxxxxx).' });
+  }
+
+  try {
+    const code = await whatsapp.requestPairingCode(phoneNumber);
+    res.status(200).json({ code });
+  } catch (err) {
+    if (err.message === 'ALREADY_REGISTERED') {
+      return res.status(409).json({ error: 'Cet appareil est déjà connecté à WhatsApp.' });
+    }
+    console.error('Erreur lors de la génération du code d\'association:', err);
+    res.status(500).json({ error: 'Échec de la génération du code d\'association.' });
+  }
+});
+
 app.post('/api/messages', requireAdminPassword, async (req, res) => {
   const { to, message } = req.body;
 
@@ -324,7 +343,7 @@ app.get('/api/groups/:id/participants', requireAdminPassword, async (req, res) =
 
 app.post('/api/messages/queue', requireAdminPassword, upload.single('media'), async (req, res) => {
   const { message, groupId, delaySeconds, batchSize } = req.body;
-  let { recipients } = req.body;
+  let { recipients, groupIds } = req.body;
 
   if (typeof recipients === 'string') {
     try {
@@ -334,19 +353,35 @@ app.post('/api/messages/queue', requireAdminPassword, upload.single('media'), as
     }
   }
 
-  if ((!Array.isArray(recipients) || recipients.length === 0) && groupId) {
+  if (typeof groupIds === 'string') {
     try {
-      const participants = await whatsapp.getGroupParticipants(groupId);
-      recipients = (participants || []).map((p) => p.id);
+      groupIds = JSON.parse(groupIds);
     } catch (err) {
-      console.error('Erreur lors de la récupération des participants du groupe cible:', err);
-      return res.status(400).json({ error: 'Impossible de récupérer les participants du groupe cible.' });
+      groupIds = groupIds.split(',').map((n) => n.trim()).filter(Boolean);
+    }
+  }
+
+  const targetGroupIds = Array.isArray(groupIds) && groupIds.length > 0
+    ? groupIds
+    : (groupId ? [groupId] : []);
+
+  if ((!Array.isArray(recipients) || recipients.length === 0) && targetGroupIds.length > 0) {
+    try {
+      const merged = new Set();
+      for (const gId of targetGroupIds) {
+        const participants = await whatsapp.getGroupParticipants(gId);
+        (participants || []).forEach((p) => merged.add(p.id));
+      }
+      recipients = Array.from(merged);
+    } catch (err) {
+      console.error('Erreur lors de la récupération des participants des groupes cibles:', err);
+      return res.status(400).json({ error: 'Impossible de récupérer les participants des groupes cibles.' });
     }
   }
 
   if (!Array.isArray(recipients) || recipients.length === 0 || !message) {
     return res.status(400).json({
-      error: 'Fournissez "recipients" (tableau ou liste) ou "groupId", ainsi qu\'un "message".',
+      error: 'Fournissez "recipients" (tableau ou liste), "groupId" ou "groupIds", ainsi qu\'un "message".',
     });
   }
 
