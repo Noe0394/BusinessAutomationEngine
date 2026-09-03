@@ -51,6 +51,9 @@ function randomDelay(minMs, maxMs) {
   return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
 }
 
+// Délai non-bloquant : setTimeout laisse la boucle d'événements de Node
+// libre pendant l'attente, donc le serveur reste réactif (health checks,
+// heartbeat WebSocket de Baileys, autres requêtes HTTP) même en pleine campagne.
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -68,21 +71,56 @@ async function interruptibleSleep(ms, shouldStop) {
   }
 }
 
+function markRemainingInterrupted(campaign, recipients, fromIndex) {
+  for (let j = fromIndex; j < recipients.length; j += 1) {
+    campaign.results.push({
+      to: normalizeJid(recipients[j]),
+      status: 'interrupted',
+      timestamp: new Date().toISOString(),
+    });
+  }
+  campaign.status = 'stopped';
+  campaign.paused = false;
+  campaign.finishedAt = new Date().toISOString();
+}
+
+// En cas de coupure réseau/Baileys en pleine campagne, on ne marque pas les
+// destinataires restants comme échoués : on met la campagne en pause (le
+// statut public reste "running" pour ne pas casser le suivi côté client) et
+// on attend que la connexion revienne avant de reprendre l'envoi.
+async function waitForConnection(campaign) {
+  if (whatsapp.isConnected()) {
+    return;
+  }
+
+  campaign.paused = true;
+  console.log('Campagne: mise en pause — connexion WhatsApp perdue, en attente de reconnexion...');
+
+  while (!whatsapp.isConnected() && !campaign.stopRequested) {
+    await sleep(1000);
+  }
+
+  campaign.paused = false;
+  if (!campaign.stopRequested) {
+    console.log('Campagne: reprise après reconnexion WhatsApp.');
+  }
+}
+
 async function runCampaignQueue(campaign, recipients, message, options = {}) {
   const { delaySeconds, batchSize, media } = options;
   const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipients.length;
 
   for (let i = 0; i < recipients.length; i += 1) {
     if (campaign.stopRequested) {
-      for (let j = i; j < recipients.length; j += 1) {
-        campaign.results.push({
-          to: normalizeJid(recipients[j]),
-          status: 'interrupted',
-          timestamp: new Date().toISOString(),
-        });
-      }
-      campaign.status = 'stopped';
-      campaign.finishedAt = new Date().toISOString();
+      markRemainingInterrupted(campaign, recipients, i);
+      console.log('Campagne: interrompue par l\'utilisateur.');
+      return;
+    }
+
+    await waitForConnection(campaign);
+
+    if (campaign.stopRequested) {
+      markRemainingInterrupted(campaign, recipients, i);
       console.log('Campagne: interrompue par l\'utilisateur.');
       return;
     }
@@ -134,6 +172,7 @@ function startCampaign(recipients, message, options = {}) {
     success: 0,
     failed: 0,
     status: 'running',
+    paused: false,
     stopRequested: false,
     startedAt: new Date().toISOString(),
     finishedAt: null,
@@ -145,6 +184,7 @@ function startCampaign(recipients, message, options = {}) {
   runCampaignQueue(campaign, recipients, message, options).catch((err) => {
     console.error('Erreur pendant la campagne:', err);
     campaign.status = 'stopped';
+    campaign.paused = false;
     campaign.finishedAt = new Date().toISOString();
   });
 

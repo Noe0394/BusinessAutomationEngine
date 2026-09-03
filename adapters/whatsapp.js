@@ -3,6 +3,7 @@ if (!globalThis.crypto) {
   globalThis.crypto = crypto.webcrypto || crypto;
 }
 
+const fs = require('fs');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -10,10 +11,25 @@ const {
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 
+// Sur Render (et la plupart des PaaS), le disque local est éphémère : sans
+// disque persistant monté sur ce chemin, la session est reperdue à chaque
+// redéploiement/redémarrage et il faut se réappairer. Le chemin est donc
+// configurable via AUTH_DIR pour pointer vers un Render Disk si disponible.
+const AUTH_DIR = process.env.AUTH_DIR || 'auth_info_baileys';
+
+if (!process.env.AUTH_DIR) {
+  console.warn(
+    `AUTH_DIR non défini : la session WhatsApp est stockée dans "${AUTH_DIR}" sur le disque local. ` +
+    'Sur Render, ce dossier est effacé à chaque redéploiement sauf si vous montez un disque persistant ' +
+    '(Render Disk) sur ce chemin et définissez AUTH_DIR en conséquence.',
+  );
+}
+
 let sock = null;
 let latestQR = null;
 let connected = false;
 let authState = null;
+let reconnectTimer = null;
 
 function getQRCode() {
   return latestQR;
@@ -23,8 +39,23 @@ function isConnected() {
   return connected;
 }
 
+function scheduleReconnect(delayMs = 3000) {
+  if (reconnectTimer) {
+    return;
+  }
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect().catch((err) => {
+      console.error('Erreur lors de la tentative de reconnexion WhatsApp:', err);
+      scheduleReconnect();
+    });
+  }, delayMs);
+}
+
 async function connect() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+  fs.mkdirSync(AUTH_DIR, { recursive: true });
+
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   authState = state;
 
   sock = makeWASocket({
@@ -48,14 +79,24 @@ async function connect() {
     if (connection === 'close') {
       connected = false;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log('Connexion WhatsApp fermée.', statusCode ? `(code: ${statusCode})` : '', 'Reconnexion:', shouldReconnect);
-      if (shouldReconnect) {
-        connect();
+      const loggedOut = statusCode === DisconnectReason.loggedOut;
+
+      console.log(
+        'Connexion WhatsApp fermée.',
+        statusCode ? `(code: ${statusCode})` : '',
+        loggedOut ? '— déconnexion volontaire, pas de reconnexion.' : '— reconnexion automatique planifiée.',
+      );
+
+      if (!loggedOut) {
+        scheduleReconnect();
       }
     } else if (connection === 'open') {
       connected = true;
       latestQR = null;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       console.log('Connexion WhatsApp établie.');
     }
   });
