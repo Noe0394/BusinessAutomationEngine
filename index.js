@@ -120,6 +120,59 @@ app.post('/api/messages', async (req, res) => {
   }
 });
 
+app.get('/api/groups', async (req, res) => {
+  try {
+    const groups = await whatsapp.getGroups();
+    res.status(200).json(groups);
+  } catch (err) {
+    console.error('Erreur lors de la récupération des groupes:', err);
+    res.status(500).json({ error: 'Échec de la récupération des groupes.' });
+  }
+});
+
+app.get('/api/groups/:id/participants', async (req, res) => {
+  try {
+    const participants = await whatsapp.getGroupParticipants(req.params.id);
+    res.status(200).json(participants);
+  } catch (err) {
+    console.error('Erreur lors de la récupération des participants:', err);
+    res.status(500).json({ error: 'Échec de la récupération des participants.' });
+  }
+});
+
+app.post('/api/messages/queue', async (req, res) => {
+  const { recipients, message, delaySeconds } = req.body;
+
+  if (!Array.isArray(recipients) || recipients.length === 0 || !message) {
+    return res.status(400).json({
+      error: 'Les champs "recipients" (tableau non vide) et "message" sont requis.',
+    });
+  }
+
+  const delayMs = (parseFloat(delaySeconds) || 10) * 1000;
+
+  res.status(202).json({ status: 'queue_started', total: recipients.length, delaySeconds: delayMs / 1000 });
+
+  (async () => {
+    for (let i = 0; i < recipients.length; i += 1) {
+      const to = normalizeJid(recipients[i]);
+      try {
+        await whatsapp.sendMessage(to, message);
+        console.log(`File d'attente: message envoyé à ${to} (${i + 1}/${recipients.length}).`);
+      } catch (err) {
+        console.error(`File d'attente: échec de l'envoi à ${to}:`, err);
+      }
+
+      if (i < recipients.length - 1) {
+        await sleep(delayMs);
+      }
+    }
+    console.log("File d'attente: terminée.");
+  })().catch((err) => {
+    console.error("Erreur pendant le traitement de la file d'attente:", err);
+  });
+});
+
 app.post('/api/campaign/excel', upload.single('file'), async (req, res) => {
   let contacts;
 

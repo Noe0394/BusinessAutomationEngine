@@ -72,4 +72,24 @@ async function getGroupMetadata(groupId) {
   return sock.groupMetadata(groupId);
 }
 
-module.exports = { connect, sendMessage, getQRCode, getGroupMetadata };
+async function getGroups() {
+  if (!sock) {
+    throw new Error('Adaptateur WhatsApp non initialisé.');
+  }
+  const groups = await sock.groupFetchAllParticipating();
+  return Object.values(groups);
+}
+
+async function getGroupParticipants(groupId) {
+  const metadata = await getGroupMetadata(groupId);
+  return metadata.participants;
+}
+
+module.exports = {
+  connect,
+  sendMessage,
+  getQRCode,
+  getGroupMetadata,
+  getGroups,
+  getGroupParticipants,
+};
