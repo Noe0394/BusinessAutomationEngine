@@ -54,7 +54,7 @@
     }
     .open-whatsapp-btn { display: inline-block; background: #25D366; color: #fff; text-decoration: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: bold; min-height: 48px; text-align: center; }
 
-    #search-groups, #search-tg-groups, #search-fb-conversations { width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 6px; margin: 1rem 0; min-height: 44px; }
+    #search-groups, #search-tg-groups { width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 6px; margin: 1rem 0; min-height: 44px; }
     .group-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
     .group-actions button { padding: 0.6rem 1rem; border: 1px solid #075E54; background: #fff; color: #075E54; border-radius: 6px; }
     #selected-groups-count { font-weight: bold; margin-left: 0.5rem; }
@@ -68,11 +68,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #fb-drop-zone, #tg-drop-zone, #studio-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #fb-drop-zone.dragover, #tg-drop-zone.dragover, #studio-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -86,9 +86,9 @@
     .stop-button { background: #c0392b; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; margin-top: 0.75rem; }
     .stop-button:disabled { background: #e6a8a1; cursor: not-allowed; }
 
-    #campaign-feedback, #fb-feedback, #tg-feedback, #studio-feedback { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
-    #campaign-feedback.ok, #fb-feedback.ok, #tg-feedback.ok, #studio-feedback.ok { background: #d4f5dd; color: #1a7a3c; }
-    #campaign-feedback.error, #fb-feedback.error, #tg-feedback.error, #studio-feedback.error { background: #fbdada; color: #c0392b; }
+    #campaign-feedback, #tg-feedback { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
+    #campaign-feedback.ok, #tg-feedback.ok { background: #d4f5dd; color: #1a7a3c; }
+    #campaign-feedback.error, #tg-feedback.error { background: #fbdada; color: #c0392b; }
 
     #progress-area { margin-top: 1.5rem; }
     #progress-bar-outer { width: 100%; background: #eee; border-radius: 999px; height: 24px; overflow: hidden; }
@@ -159,8 +159,6 @@
       <button type="button" class="tab-btn active" data-tab="connections">🔌 Connexions &amp; Statuts</button>
       <button type="button" class="tab-btn" data-tab="whatsapp">WhatsApp</button>
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
-      <button type="button" class="tab-btn" data-tab="facebook">Facebook Messenger</button>
-      <button type="button" class="tab-btn" data-tab="studio">🎬 Studio Auto-Publication</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Statuts -->
@@ -218,34 +216,6 @@
         </div>
       </div>
 
-      <div class="conn-block" data-module="facebook">
-        <h3>Facebook Messenger <span id="fb-status-badge" class="badge disconnected">Vérification...</span></h3>
-        <p class="empty">Connexion officielle via Facebook Login — un seul clic, aucune clé à saisir.</p>
-        <button type="button" id="fb-connect-btn">🔵 Se connecter avec Facebook</button>
-        <p id="fb-connect-hint" class="empty" hidden></p>
-      </div>
-
-      <div class="conn-block" data-module="studio_video">
-        <h3>Studio Auto-Publication</h3>
-        <p class="empty">Connexion officielle à chaque plateforme — un seul clic, aucune clé à saisir.</p>
-
-        <p>
-          <strong>YouTube :</strong> <span id="studio-conn-status-youtube" class="badge disconnected">Vérification...</span>
-          <button type="button" id="youtube-connect-btn">🔴 Se connecter avec Google</button>
-        </p>
-        <p id="youtube-connect-hint" class="empty" hidden></p>
-
-        <p>
-          <strong>Instagram :</strong> <span id="studio-conn-status-instagram" class="badge disconnected">Vérification...</span>
-          <span class="empty">(lié automatiquement à la connexion Facebook ci-dessus, si un compte Instagram professionnel y est associé)</span>
-        </p>
-
-        <p>
-          <strong>TikTok :</strong> <span id="studio-conn-status-tiktok" class="badge disconnected">Vérification...</span>
-          <button type="button" id="tiktok-connect-btn">⬛ Se connecter avec TikTok</button>
-        </p>
-        <p id="tiktok-connect-hint" class="empty" hidden></p>
-      </div>
     </section>
 
     <!-- Onglet WhatsApp : groupes, import, centre d'envoi -->
@@ -417,137 +387,6 @@
       </div>
     </section>
 
-    <!-- Onglet Facebook Messenger -->
-    <section class="panel" id="panel-facebook">
-      <h2>Facebook Messenger</h2>
-      <p class="empty">
-        Intégration via l'API officielle Meta Messenger Platform (Page Facebook). Contrairement à WhatsApp, il ne
-        s'agit pas ici de "groupes" mais des conversations de la Page avec ses utilisateurs.
-      </p>
-
-      <div class="warning-box">
-        ⚠️ Bonnes pratiques : Messenger limite l'envoi hors du délai de 24h suivant le dernier message d'un
-        utilisateur (sauf tag approuvé par Meta). Respectez un délai d'au moins 10 à 15 secondes entre chaque
-        message et évitez tout envoi promotionnel non sollicité, sous peine de restriction de votre Page.
-      </div>
-
-      <button type="button" id="load-fb-conversations-btn">Lister les conversations</button>
-      <input type="text" id="search-fb-conversations" placeholder="Rechercher une conversation par nom..." />
-
-      <div class="group-actions">
-        <button type="button" id="fb-select-all-btn">Tout sélectionner</button>
-        <button type="button" id="fb-deselect-all-btn">Tout désélectionner</button>
-        <span id="fb-selected-count">0 conversation(s) sélectionnée(s)</span>
-      </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th></th><th>Nom / Aperçu</th><th>Dernière activité</th></tr>
-          </thead>
-          <tbody id="fb-conversations-body">
-            <tr><td colspan="3" class="empty">Cliquez sur "Lister les conversations" pour charger la liste.</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="field" style="margin-top: 1.5rem;">
-        <label for="fb-message">Message (texte)</label>
-        <textarea id="fb-message" placeholder="Écrivez votre message ici... 😀"></textarea>
-      </div>
-
-      <div class="field">
-        <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF)</label>
-        <div id="fb-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
-        <input type="file" id="fb-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
-        <p id="fb-file-name" class="empty">Aucun fichier sélectionné.</p>
-      </div>
-
-      <div class="row">
-        <div class="field">
-          <label for="fb-batch-size">Nombre de messages par lot</label>
-          <input type="number" id="fb-batch-size" value="5" min="1" />
-        </div>
-        <div class="field">
-          <label for="fb-delay-seconds">Délai d'attente entre chaque message (secondes)</label>
-          <input type="number" id="fb-delay-seconds" value="12" min="1" />
-        </div>
-      </div>
-
-      <button type="button" id="send-fb-campaign-btn" class="send-button">🚀 Lancer l'envoi Messenger</button>
-      <div id="fb-feedback" hidden></div>
-    </section>
-
-    <!-- Onglet Studio Auto-Publication -->
-    <section class="panel" id="panel-studio">
-      <h2>🎬 Studio Auto-Publication</h2>
-      <p class="empty">
-        Publication via les API officielles de chaque plateforme (YouTube Data API, Instagram Graph API, TikTok
-        Content Posting API). Nécessite des jetons d'autorisation déjà émis côté serveur — voir la configuration
-        <code>GOOGLE_CLIENT_ID</code>/<code>GOOGLE_CLIENT_SECRET</code>/<code>YOUTUBE_REFRESH_TOKEN</code>,
-        <code>IG_ACCESS_TOKEN</code>/<code>IG_USER_ID</code>, <code>TIKTOK_ACCESS_TOKEN</code>.
-      </p>
-
-      <div class="warning-box">
-        ⚠️ Tant que l'app TikTok n'est pas auditée par TikTok, les publications sont forcées en privé (visibles
-        uniquement par le compte développeur connecté). Le format Shorts YouTube (9:16, &lt; 60s) reste sous votre
-        responsabilité : ce module ne vérifie pas automatiquement la durée ni le ratio de la vidéo.
-      </div>
-
-      <div class="field">
-        <label>Vidéo (MP4 ou MOV)</label>
-        <div id="studio-drop-zone">Glissez-déposez votre vidéo ici, ou touchez pour parcourir</div>
-        <input type="file" id="studio-file" accept=".mp4,.mov,video/mp4,video/quicktime" hidden />
-        <p id="studio-file-name" class="empty">Aucune vidéo sélectionnée.</p>
-      </div>
-
-      <div class="field">
-        <label for="studio-title">Titre de la publication</label>
-        <input type="text" id="studio-title" placeholder="Ex: Mon nouveau Short 🚀" />
-      </div>
-
-      <div class="field">
-        <label for="studio-caption">Légende / Description (emojis, hashtags)</label>
-        <textarea id="studio-caption" placeholder="Décrivez votre vidéo... 😀 #shorts #reels #fyp"></textarea>
-      </div>
-
-      <div class="field">
-        <label>Réseaux cibles</label>
-        <label><input type="checkbox" id="studio-platform-youtube" value="youtube" /> YouTube Shorts</label>
-        <label style="margin-left: 1.5rem;"><input type="checkbox" id="studio-platform-instagram" value="instagram" /> Instagram Reels</label>
-        <label style="margin-left: 1.5rem;"><input type="checkbox" id="studio-platform-tiktok" value="tiktok" /> TikTok</label>
-      </div>
-
-      <div class="field">
-        <label>Programmation</label>
-        <label><input type="radio" name="studio-schedule-mode" value="now" checked /> Publier maintenant</label>
-        <label style="margin-left: 1.5rem;"><input type="radio" name="studio-schedule-mode" value="later" /> Programmer</label>
-      </div>
-
-      <div class="field" id="studio-schedule-field" hidden>
-        <label for="studio-schedule-at">Date et heure de publication</label>
-        <input type="datetime-local" id="studio-schedule-at" />
-      </div>
-
-      <button type="button" id="studio-publish-btn" class="send-button">🚀 Publier</button>
-      <div id="studio-feedback" hidden></div>
-
-      <div id="studio-status-board" style="margin-top: 1.5rem;">
-        <div class="field" id="studio-status-youtube-row" hidden>
-          <strong>YouTube :</strong> <span id="studio-status-youtube">-</span>
-        </div>
-        <div class="field" id="studio-status-instagram-row" hidden>
-          <strong>Instagram :</strong> <span id="studio-status-instagram">-</span>
-        </div>
-        <div class="field" id="studio-status-tiktok-row" hidden>
-          <strong>TikTok :</strong> <span id="studio-status-tiktok">-</span>
-        </div>
-      </div>
-
-      <p style="margin-top: 1.5rem;">
-        <button type="button" id="show-last-report-btn-studio" hidden>📋 Exporter le dernier rapport (JSON)</button>
-      </p>
-    </section>
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -589,9 +428,7 @@
     let currentAllowedModules = null; // null = tous les modules (admin, ou clé héritée sans restriction)
     const MODULE_TABS = {
       whatsapp: ['whatsapp'],
-      facebook: ['facebook'],
       telegram: ['telegram'],
-      studio_video: ['studio'],
     };
 
     function hasModule(moduleName) {
@@ -809,8 +646,6 @@
         if (btn.dataset.tab === 'connections') {
           if (hasModule('whatsapp')) pollStatus();
           if (hasModule('telegram')) tgRefreshStatus();
-          if (hasModule('facebook')) fbRefreshStatus();
-          if (hasModule('studio_video')) studioConnRefreshStatus();
         }
         if (btn.dataset.tab === 'telegram') tgRefreshStatus();
       });
@@ -884,111 +719,6 @@
         }
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
-      }
-    }
-
-    // Une connexion OAuth (Facebook/Google/TikTok) ne peut se déclencher que
-    // par une navigation top-level (le fournisseur affiche son propre écran
-    // de consentement) : on ne peut pas y joindre nos en-têtes d'auth
-    // habituels, donc on les passe en paramètre de requête — supporté par
-    // requireAccess côté serveur pour exactement ce cas d'usage.
-    function connectUrl(path) {
-      const { type, value } = getStoredAuth();
-      const param = type === 'admin' ? 'password' : 'licenseKey';
-      return path + '?' + param + '=' + encodeURIComponent(value);
-    }
-
-    // ---------- Connexions : Facebook (OAuth "Se connecter avec Facebook") ----------
-    async function fbRefreshStatus() {
-      try {
-        const res = await apiFetch('/api/facebook/status');
-        const data = await res.json();
-        const badge = document.getElementById('fb-status-badge');
-        const btn = document.getElementById('fb-connect-btn');
-        const hint = document.getElementById('fb-connect-hint');
-
-        badge.textContent = data.connected ? 'Connecté' : 'Non connecté';
-        badge.className = 'badge ' + (data.connected ? 'connected' : 'disconnected');
-        btn.hidden = Boolean(data.connected);
-
-        if (!data.connectAvailable) {
-          hint.hidden = false;
-          hint.textContent = "Connexion indisponible pour le moment — contactez l'administrateur.";
-          btn.disabled = true;
-        } else {
-          hint.hidden = true;
-          btn.disabled = false;
-        }
-      } catch (err) {
-        // apiFetch gère déjà la redirection vers le login en cas de 401
-      }
-    }
-
-    document.getElementById('fb-connect-btn').addEventListener('click', () => {
-      window.location.href = connectUrl('/api/facebook/connect');
-    });
-
-    // ---------- Connexions : Studio (OAuth YouTube/TikTok, Instagram via Facebook) ----------
-    async function studioConnRefreshStatus() {
-      try {
-        const res = await apiFetch('/api/media/status');
-        const data = await res.json();
-
-        ['youtube', 'instagram', 'tiktok'].forEach((platform) => {
-          const badge = document.getElementById('studio-conn-status-' + platform);
-          const configured = data[platform] && data[platform].configured;
-          badge.textContent = configured ? 'Connecté' : 'Non connecté';
-          badge.className = 'badge ' + (configured ? 'connected' : 'disconnected');
-        });
-
-        const youtubeBtn = document.getElementById('youtube-connect-btn');
-        youtubeBtn.hidden = Boolean(data.youtube.configured);
-        youtubeBtn.disabled = !data.youtube.connectAvailable;
-        document.getElementById('youtube-connect-hint').hidden = data.youtube.connectAvailable;
-        if (!data.youtube.connectAvailable) {
-          document.getElementById('youtube-connect-hint').textContent = "Connexion indisponible pour le moment — contactez l'administrateur.";
-        }
-
-        const tiktokBtn = document.getElementById('tiktok-connect-btn');
-        tiktokBtn.hidden = Boolean(data.tiktok.configured);
-        tiktokBtn.disabled = !data.tiktok.connectAvailable;
-        document.getElementById('tiktok-connect-hint').hidden = data.tiktok.connectAvailable;
-        if (!data.tiktok.connectAvailable) {
-          document.getElementById('tiktok-connect-hint').textContent = "Connexion indisponible pour le moment — contactez l'administrateur.";
-        }
-      } catch (err) {
-        // apiFetch gère déjà la redirection vers le login en cas de 401
-      }
-    }
-
-    document.getElementById('youtube-connect-btn').addEventListener('click', () => {
-      window.location.href = connectUrl('/api/media/youtube/connect');
-    });
-    document.getElementById('tiktok-connect-btn').addEventListener('click', () => {
-      window.location.href = connectUrl('/api/media/tiktok/connect');
-    });
-
-    // Après un retour de callback OAuth (redirection vers /dashboard?xxxConnect=success|error) :
-    // affiche un message ponctuel puis nettoie l'URL pour ne pas le répéter au rafraîchissement.
-    function handleOAuthReturn() {
-      const params = new URLSearchParams(window.location.search);
-      const mapping = [
-        ['fbConnect', 'Facebook'],
-        ['youtubeConnect', 'YouTube'],
-        ['tiktokConnect', 'TikTok'],
-      ];
-      let handled = false;
-
-      mapping.forEach(([param, label]) => {
-        if (params.has(param)) {
-          handled = true;
-          const ok = params.get(param) === 'success';
-          window.alert(ok ? `${label} : connexion réussie !` : `${label} : échec de la connexion, réessayez.`);
-        }
-      });
-
-      if (handled) {
-        window.history.replaceState({}, '', window.location.pathname);
       }
     }
 
@@ -1386,163 +1116,6 @@
       }
     }
 
-    // ---------- Facebook Messenger ----------
-    const fbState = { conversations: [], selectedIds: new Set() };
-    let selectedFbFile = null;
-
-    function fbUpdateSelectedUI() {
-      document.getElementById('fb-selected-count').textContent = fbState.selectedIds.size + ' conversation(s) sélectionnée(s)';
-    }
-
-    function fbCurrentFiltered() {
-      const q = document.getElementById('search-fb-conversations').value.trim().toLowerCase();
-      return q ? fbState.conversations.filter((c) => (c.name || '').toLowerCase().includes(q)) : fbState.conversations;
-    }
-
-    function fbRenderTable(conversations) {
-      const tbody = document.getElementById('fb-conversations-body');
-      tbody.innerHTML = '';
-
-      if (conversations.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="empty">Aucune conversation trouvée.</td></tr>';
-        return;
-      }
-
-      conversations.forEach((c) => {
-        const tr = document.createElement('tr');
-
-        const checkTd = document.createElement('td');
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = fbState.selectedIds.has(c.id);
-        checkbox.disabled = !c.recipientId;
-        checkbox.addEventListener('change', () => {
-          if (checkbox.checked) fbState.selectedIds.add(c.id);
-          else fbState.selectedIds.delete(c.id);
-          fbUpdateSelectedUI();
-        });
-        checkTd.appendChild(checkbox);
-
-        const nameTd = document.createElement('td');
-        nameTd.textContent = c.name || c.id;
-
-        const timeTd = document.createElement('td');
-        timeTd.textContent = c.updatedTime ? new Date(c.updatedTime).toLocaleString() : '-';
-
-        tr.appendChild(checkTd);
-        tr.appendChild(nameTd);
-        tr.appendChild(timeTd);
-        tbody.appendChild(tr);
-      });
-    }
-
-    async function fbLoadConversations() {
-      const tbody = document.getElementById('fb-conversations-body');
-      tbody.innerHTML = '<tr><td colspan="3" class="empty">Chargement...</td></tr>';
-      try {
-        const res = await apiFetch('/api/facebook/groups');
-        const data = await res.json();
-        if (!res.ok) {
-          tbody.innerHTML = '<tr><td colspan="3" class="empty">' + (data.error || 'Erreur lors du chargement.') + '</td></tr>';
-          return;
-        }
-        fbState.conversations = Array.isArray(data) ? data : [];
-        fbRenderTable(fbCurrentFiltered());
-      } catch (err) {
-        tbody.innerHTML = '<tr><td colspan="3" class="empty">Erreur réseau lors du chargement des conversations.</td></tr>';
-      }
-    }
-    document.getElementById('load-fb-conversations-btn').addEventListener('click', fbLoadConversations);
-
-    document.getElementById('search-fb-conversations').addEventListener('input', () => {
-      fbRenderTable(fbCurrentFiltered());
-    });
-
-    document.getElementById('fb-select-all-btn').addEventListener('click', () => {
-      fbCurrentFiltered().forEach((c) => { if (c.recipientId) fbState.selectedIds.add(c.id); });
-      fbRenderTable(fbCurrentFiltered());
-      fbUpdateSelectedUI();
-    });
-    document.getElementById('fb-deselect-all-btn').addEventListener('click', () => {
-      fbCurrentFiltered().forEach((c) => fbState.selectedIds.delete(c.id));
-      fbRenderTable(fbCurrentFiltered());
-      fbUpdateSelectedUI();
-    });
-
-    const fbDropZone = document.getElementById('fb-drop-zone');
-    const fbFileInput = document.getElementById('fb-file');
-    fbDropZone.addEventListener('click', () => fbFileInput.click());
-    fbDropZone.addEventListener('dragover', (e) => { e.preventDefault(); fbDropZone.classList.add('dragover'); });
-    fbDropZone.addEventListener('dragleave', () => fbDropZone.classList.remove('dragover'));
-    fbDropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      fbDropZone.classList.remove('dragover');
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) fbSetSelectedFile(e.dataTransfer.files[0]);
-    });
-    fbFileInput.addEventListener('change', () => {
-      if (fbFileInput.files && fbFileInput.files[0]) fbSetSelectedFile(fbFileInput.files[0]);
-    });
-    function fbSetSelectedFile(file) {
-      selectedFbFile = file;
-      document.getElementById('fb-file-name').textContent = 'Fichier sélectionné : ' + file.name;
-    }
-
-    function fbShowFeedback(message, isError) {
-      const el = document.getElementById('fb-feedback');
-      el.hidden = false;
-      el.textContent = message;
-      el.className = isError ? 'error' : 'ok';
-    }
-
-    document.getElementById('send-fb-campaign-btn').addEventListener('click', async () => {
-      const message = document.getElementById('fb-message').value.trim();
-      const batchSize = document.getElementById('fb-batch-size').value;
-      const delaySeconds = document.getElementById('fb-delay-seconds').value;
-
-      if (!message) { fbShowFeedback('Le message ne peut pas être vide.', true); return; }
-      if (fbState.selectedIds.size === 0) {
-        fbShowFeedback('Sélectionnez au moins une conversation.', true);
-        return;
-      }
-
-      const recipients = fbState.conversations
-        .filter((c) => fbState.selectedIds.has(c.id) && c.recipientId)
-        .map((c) => c.recipientId);
-
-      if (recipients.length === 0) {
-        fbShowFeedback('Aucun destinataire valide dans la sélection.', true);
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append('message', message);
-      formData.append('batchSize', batchSize);
-      formData.append('delaySeconds', delaySeconds);
-      formData.append('recipients', JSON.stringify(recipients));
-      if (selectedFbFile) formData.append('media', selectedFbFile);
-
-      const sendBtn = document.getElementById('send-fb-campaign-btn');
-      sendBtn.disabled = true;
-
-      try {
-        const res = await apiFetch('/api/facebook/queue', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (!res.ok) {
-          fbShowFeedback(data.error || 'Échec du lancement de la campagne Messenger.', true);
-        } else {
-          fbShowFeedback(
-            '🚀 Campagne Messenger lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
-            ', délai ' + data.delaySeconds + 's' + (data.media ? ', pièce jointe : ' + data.media : '') + '.',
-            false,
-          );
-        }
-      } catch (err) {
-        fbShowFeedback('Erreur réseau lors du lancement de la campagne.', true);
-      } finally {
-        sendBtn.disabled = false;
-      }
-    });
-
     // ---------- Telegram ----------
     const tgState = { groups: [], selectedIds: new Set() };
     let selectedTgFile = null;
@@ -1805,151 +1378,10 @@
       }
     });
 
-    // ---------- Studio Auto-Publication ----------
-    let selectedStudioFile = null;
-    let studioPollInterval = null;
-
-    const studioDropZone = document.getElementById('studio-drop-zone');
-    const studioFileInput = document.getElementById('studio-file');
-    studioDropZone.addEventListener('click', () => studioFileInput.click());
-    studioDropZone.addEventListener('dragover', (e) => { e.preventDefault(); studioDropZone.classList.add('dragover'); });
-    studioDropZone.addEventListener('dragleave', () => studioDropZone.classList.remove('dragover'));
-    studioDropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      studioDropZone.classList.remove('dragover');
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) studioSetSelectedFile(e.dataTransfer.files[0]);
-    });
-    studioFileInput.addEventListener('change', () => {
-      if (studioFileInput.files && studioFileInput.files[0]) studioSetSelectedFile(studioFileInput.files[0]);
-    });
-    function studioSetSelectedFile(file) {
-      selectedStudioFile = file;
-      document.getElementById('studio-file-name').textContent = 'Vidéo sélectionnée : ' + file.name;
-    }
-
-    document.querySelectorAll('input[name="studio-schedule-mode"]').forEach((radio) => {
-      radio.addEventListener('change', () => {
-        const mode = document.querySelector('input[name="studio-schedule-mode"]:checked').value;
-        document.getElementById('studio-schedule-field').hidden = mode !== 'later';
-      });
-    });
-
-    function studioShowFeedback(message, isError) {
-      const el = document.getElementById('studio-feedback');
-      el.hidden = false;
-      el.textContent = message;
-      el.className = isError ? 'error' : 'ok';
-    }
-
-    function studioStatusLabel(status) {
-      if (status === 'pending') return 'En attente...';
-      if (status === 'in_progress') return 'En cours...';
-      if (status === 'done') return 'Publié !';
-      if (status === 'error') return 'Échec.';
-      return status;
-    }
-
-    function studioUpdatePlatformRow(platform, track) {
-      const row = document.getElementById('studio-status-' + platform + '-row');
-      const span = document.getElementById('studio-status-' + platform);
-      if (!track) { row.hidden = true; return; }
-      row.hidden = false;
-      span.textContent = track.message || studioStatusLabel(track.status);
-      span.className = track.status === 'done' ? 'status-delivered' : (track.status === 'error' ? 'status-failed' : '');
-    }
-
-    async function studioPollStatus() {
-      try {
-        const res = await apiFetch('/api/media/publish-status');
-        const data = await res.json();
-
-        if (!data.exists) return;
-
-        ['youtube', 'instagram', 'tiktok'].forEach((platform) => {
-          studioUpdatePlatformRow(platform, data.platforms[platform] || null);
-        });
-
-        const stillActive = Object.values(data.platforms).some((p) => p.status === 'pending' || p.status === 'in_progress');
-        const publishBtn = document.getElementById('studio-publish-btn');
-
-        if (stillActive) {
-          publishBtn.disabled = true;
-          if (!studioPollInterval) {
-            studioPollInterval = setInterval(studioPollStatus, 4000);
-          }
-        } else {
-          publishBtn.disabled = false;
-          if (studioPollInterval) { clearInterval(studioPollInterval); studioPollInterval = null; }
-
-          const successCount = Object.values(data.platforms).filter((p) => p.status === 'done').length;
-          const errorCount = Object.values(data.platforms).filter((p) => p.status === 'error').length;
-          studioShowFeedback(
-            `Publication terminée : ${successCount} réussite(s), ${errorCount} échec(s).`,
-            errorCount > 0 && successCount === 0,
-          );
-          window.__lastPublishReport = data;
-          document.getElementById('show-last-report-btn-studio').hidden = false;
-        }
-      } catch (err) {
-        // apiFetch gère déjà la redirection vers le login en cas de 401
-      }
-    }
-
-    document.getElementById('show-last-report-btn-studio').addEventListener('click', () => {
-      if (!window.__lastPublishReport) return;
-      downloadBlob(JSON.stringify(window.__lastPublishReport, null, 2), 'rapport-publication.json', 'application/json');
-    });
-
-    document.getElementById('studio-publish-btn').addEventListener('click', async () => {
-      const title = document.getElementById('studio-title').value.trim();
-      const caption = document.getElementById('studio-caption').value.trim();
-      const scheduleMode = document.querySelector('input[name="studio-schedule-mode"]:checked').value;
-      const scheduleAtRaw = document.getElementById('studio-schedule-at').value;
-
-      const platforms = ['youtube', 'instagram', 'tiktok'].filter((p) => document.getElementById('studio-platform-' + p).checked);
-
-      if (!selectedStudioFile) { studioShowFeedback('Sélectionnez une vidéo (MP4 ou MOV).', true); return; }
-      if (platforms.length === 0) { studioShowFeedback('Sélectionnez au moins un réseau cible.', true); return; }
-      if (scheduleMode === 'later' && !scheduleAtRaw) { studioShowFeedback('Renseignez une date/heure de programmation.', true); return; }
-
-      const formData = new FormData();
-      formData.append('video', selectedStudioFile);
-      formData.append('title', title);
-      formData.append('caption', caption);
-      formData.append('platforms', JSON.stringify(platforms));
-      if (scheduleMode === 'later') {
-        formData.append('scheduleAt', new Date(scheduleAtRaw).toISOString());
-      }
-
-      const publishBtn = document.getElementById('studio-publish-btn');
-      publishBtn.disabled = true;
-
-      ['youtube', 'instagram', 'tiktok'].forEach((platform) => {
-        studioUpdatePlatformRow(platform, platforms.includes(platform) ? { status: 'pending', message: 'En attente...' } : null);
-      });
-
-      try {
-        const res = await apiFetch('/api/media/publish-all', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (!res.ok) {
-          studioShowFeedback(data.error || 'Échec du lancement de la publication.', true);
-          publishBtn.disabled = false;
-          return;
-        }
-        studioShowFeedback('Publication lancée sur ' + platforms.length + ' réseau(x)...', false);
-        if (studioPollInterval) { clearInterval(studioPollInterval); studioPollInterval = null; }
-        studioPollStatus();
-      } catch (err) {
-        studioShowFeedback('Erreur réseau lors du lancement de la publication.', true);
-        publishBtn.disabled = false;
-      }
-    });
-
     // ---------- Init ----------
     function init() {
       toggleTargetMode();
       updateSelectedGroupsUI();
-      fbUpdateSelectedUI();
       tgUpdateSelectedUI();
 
       if (hasModule('whatsapp')) {
@@ -1959,11 +1391,9 @@
         pollCampaignStatus();
       }
       if (hasModule('telegram')) tgRefreshStatus();
-      if (hasModule('facebook')) fbRefreshStatus();
-      if (hasModule('studio_video')) { studioConnRefreshStatus(); studioPollStatus(); }
     }
 
-    tryAutoLogin().then((ok) => { if (ok) { init(); handleOAuthReturn(); } });
+    tryAutoLogin().then((ok) => { if (ok) init(); });
   </script>
 </body>
 </html>
