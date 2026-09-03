@@ -96,9 +96,11 @@
     #import-result.error { background: #fbdada; color: #c0392b; }
 
     .modal-overlay {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex;
+      display: none;
+      position: fixed; inset: 0; background: rgba(0,0,0,0.5);
       align-items: center; justify-content: center; z-index: 50; padding: 1rem;
     }
+    .modal-overlay.show { display: flex; }
     .modal-box {
       background: #fff; border-radius: 8px; padding: 1.25rem; max-width: 700px; width: 100%;
       max-height: 85vh; overflow-y: auto;
@@ -281,7 +283,7 @@
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
-  <div class="modal-overlay" id="report-modal" hidden>
+  <div class="modal-overlay" id="report-modal">
     <div class="modal-box">
       <h2>Rapport Final de Campagne</h2>
       <p class="modal-summary">
@@ -313,6 +315,7 @@
     const state = { groups: [], selectedGroupIds: new Set(), importedContacts: [] };
     let selectedFile = null;
     let lastReportShownAt = null;
+    let observedRunningStartedAt = null;
 
     // ---------- Auth ----------
     function getStoredPassword() {
@@ -776,13 +779,26 @@
       });
 
       window.__lastCampaignReport = campaign;
-      document.getElementById('report-modal').hidden = false;
+      document.getElementById('report-modal').classList.add('show');
       document.getElementById('show-last-report-btn').hidden = false;
     }
 
-    document.getElementById('close-report-btn').addEventListener('click', () => {
-      document.getElementById('report-modal').hidden = true;
+    function closeReportModal() {
+      document.getElementById('report-modal').classList.remove('show');
+    }
+
+    document.getElementById('close-report-btn').addEventListener('click', closeReportModal);
+
+    document.getElementById('report-modal').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeReportModal();
     });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('report-modal').classList.contains('show')) {
+        closeReportModal();
+      }
+    });
+
     document.getElementById('show-last-report-btn').addEventListener('click', () => {
       if (window.__lastCampaignReport) showReportModal(window.__lastCampaignReport);
     });
@@ -833,6 +849,7 @@
         const stopBtn = document.getElementById('stop-campaign-btn');
 
         if (data.status === 'running') {
+          observedRunningStartedAt = data.startedAt;
           sendBtn.disabled = true;
           stopBtn.hidden = false;
           stopBtn.disabled = false;
@@ -844,7 +861,10 @@
 
           if (campaignInterval) { clearInterval(campaignInterval); campaignInterval = null; }
 
-          if (lastReportShownAt !== data.startedAt) {
+          // N'affiche le rapport que si cette session a réellement vu la campagne
+          // tourner (évite une réouverture au chargement de page pour une ancienne
+          // campagne déjà terminée, encore en mémoire côté serveur).
+          if (observedRunningStartedAt === data.startedAt && lastReportShownAt !== data.startedAt) {
             lastReportShownAt = data.startedAt;
             showReportModal(data);
           }
