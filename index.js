@@ -882,6 +882,19 @@ app.post('/api/campaign/excel', requireAccess, requireModule('whatsapp'), upload
   });
 });
 
+// Vue d'ensemble pratique des 3 connexions OAuth (Facebook/Google/TikTok) en
+// un seul appel — mêmes booléens que /api/facebook/status et
+// /api/media/status, juste regroupés. N'importe quel utilisateur authentifié
+// (admin ou licence) peut la lire : ce ne sont que des booléens de
+// disponibilité, jamais les identifiants eux-mêmes.
+app.get('/api/oauth/status', requireAccess, (req, res) => {
+  res.status(200).json({
+    facebook: { configured: facebook.isConfigured(), connectAvailable: facebook.isConnectAvailable() },
+    google: { configured: mediaPublisher.isYoutubeConfigured(), connectAvailable: mediaPublisher.isYoutubeConnectAvailable() },
+    tiktok: { configured: mediaPublisher.isTikTokConfigured(), connectAvailable: mediaPublisher.isTikTokConnectAvailable() },
+  });
+});
+
 app.get('/api/facebook/status', requireAccess, requireModule('facebook'), async (req, res) => {
   const status = await facebook.checkConnection();
   res.status(200).json({ configured: facebook.isConfigured(), connectAvailable: facebook.isConnectAvailable(), ...status });
