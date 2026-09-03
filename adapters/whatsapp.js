@@ -65,4 +65,11 @@ async function sendMessage(to, text) {
   return sock.sendMessage(to, { text });
 }
 
-module.exports = { connect, sendMessage, getQRCode };
+async function getGroupMetadata(groupId) {
+  if (!sock) {
+    throw new Error('Adaptateur WhatsApp non initialisé.');
+  }
+  return sock.groupMetadata(groupId);
+}
+
+module.exports = { connect, sendMessage, getQRCode, getGroupMetadata };

@@ -4,13 +4,68 @@ if (!globalThis.crypto) {
 }
 
 const express = require('express');
+const multer = require('multer');
+const XLSX = require('xlsx');
 const QRCode = require('qrcode');
 const whatsapp = require('./adapters/whatsapp');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(express.json());
+
+function replaceVariables(template, row) {
+  return String(template).replace(/{(\w+)}/g, (match, key) => (
+    row[key] !== undefined && row[key] !== null ? String(row[key]) : match
+  ));
+}
+
+function normalizeJid(telephone) {
+  const raw = String(telephone).trim();
+  if (raw.includes('@')) {
+    return raw;
+  }
+  const digits = raw.replace(/\D/g, '');
+  return `${digits}@s.whatsapp.net`;
+}
+
+function randomDelay(minMs, maxMs) {
+  return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runCampaign(contacts, minDelayMs, maxDelayMs) {
+  for (let i = 0; i < contacts.length; i += 1) {
+    const row = contacts[i];
+
+    if (!row.telephone || !row.message) {
+      console.warn(`Campagne: ligne ${i + 1} ignorée (champs "telephone" et "message" requis).`);
+      continue;
+    }
+
+    const to = normalizeJid(row.telephone);
+    const text = replaceVariables(row.message, row);
+
+    try {
+      await whatsapp.sendMessage(to, text);
+      console.log(`Campagne: message envoyé à ${to} (${i + 1}/${contacts.length}).`);
+    } catch (err) {
+      console.error(`Campagne: échec de l'envoi à ${to}:`, err);
+    }
+
+    if (i < contacts.length - 1) {
+      const delay = randomDelay(minDelayMs, maxDelayMs);
+      console.log(`Campagne: attente de ${Math.round(delay / 1000)}s avant le prochain envoi...`);
+      await sleep(delay);
+    }
+  }
+
+  console.log('Campagne: terminée.');
+}
 
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
@@ -63,6 +118,45 @@ app.post('/api/messages', async (req, res) => {
     console.error('Erreur lors de l\'envoi du message:', err);
     res.status(500).json({ error: 'Échec de l\'envoi du message.' });
   }
+});
+
+app.post('/api/campaign/excel', upload.single('file'), async (req, res) => {
+  let contacts;
+
+  try {
+    if (req.file) {
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      contacts = XLSX.utils.sheet_to_json(sheet);
+    } else if (Array.isArray(req.body?.contacts)) {
+      contacts = req.body.contacts;
+    } else {
+      return res.status(400).json({
+        error: 'Fournissez un fichier Excel (champ "file") ou un tableau JSON "contacts" avec les colonnes telephone, prenom, message.',
+      });
+    }
+  } catch (err) {
+    console.error('Erreur lors de la lecture du fichier Excel:', err);
+    return res.status(400).json({ error: 'Fichier Excel invalide.' });
+  }
+
+  if (!Array.isArray(contacts) || contacts.length === 0) {
+    return res.status(400).json({ error: 'Aucun contact à traiter.' });
+  }
+
+  const minDelaySeconds = parseFloat(req.body?.minDelaySeconds) || 8;
+  const maxDelaySeconds = parseFloat(req.body?.maxDelaySeconds) || 15;
+
+  res.status(202).json({
+    status: 'campaign_started',
+    total: contacts.length,
+    minDelaySeconds,
+    maxDelaySeconds,
+  });
+
+  runCampaign(contacts, minDelaySeconds * 1000, maxDelaySeconds * 1000).catch((err) => {
+    console.error('Erreur pendant l\'exécution de la campagne:', err);
+  });
 });
 
 app.listen(PORT, () => {
