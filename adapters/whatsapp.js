@@ -7,11 +7,8 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  makeInMemoryStore,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
-
-const store = makeInMemoryStore({});
 
 let sock = null;
 let latestQR = null;
@@ -27,8 +24,6 @@ async function connect() {
     auth: state,
     printQRInTerminal: false,
   });
-
-  store.bind(sock.ev);
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -78,11 +73,6 @@ async function getGroupMetadata(groupId) {
 }
 
 async function getGroups() {
-  const cached = store.groupMetadata ? Object.values(store.groupMetadata) : [];
-  if (cached.length > 0) {
-    return cached;
-  }
-
   if (!sock) {
     return [];
   }
@@ -91,7 +81,7 @@ async function getGroups() {
     const groups = await sock.groupFetchAllParticipating();
     return Object.values(groups);
   } catch (err) {
-    console.error('Erreur lors de la récupération des groupes (fallback):', err);
+    console.error('Erreur lors de la récupération des groupes:', err);
     return [];
   }
 }
