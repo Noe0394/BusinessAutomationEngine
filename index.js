@@ -12,21 +12,20 @@ const whatsapp = require('./adapters/whatsapp');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '@CYRUS2026';
 const upload = multer({ storage: multer.memoryStorage() });
 const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
+
+if (!process.env.ADMIN_PASSWORD) {
+  console.warn('ADMIN_PASSWORD non défini : utilisation du mot de passe par défaut codé en dur. Définissez cette variable d\'environnement avant tout déploiement public.');
+}
 
 app.use(express.json());
 
 function requireAdminPassword(req, res, next) {
-  const configured = process.env.ADMIN_PASSWORD;
-
-  if (!configured) {
-    return next();
-  }
-
   const provided = req.get('x-admin-password') || req.query.password;
 
-  if (provided && provided === configured) {
+  if (provided && provided === ADMIN_PASSWORD) {
     return next();
   }
 
@@ -175,53 +174,15 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-app.get('/qr', async (req, res) => {
-  const qr = whatsapp.getQRCode();
-
-  if (!qr) {
-    return res.status(200).send(`
-      <html>
-        <head><title>QR Code WhatsApp</title><meta http-equiv="refresh" content="5"></head>
-        <body style="font-family: sans-serif; text-align: center; margin-top: 4rem;">
-          <h1>Aucun QR code disponible</h1>
-          <p>Soit l'appareil est déjà connecté, soit le QR code n'a pas encore été généré. Cette page se rafraîchit automatiquement.</p>
-        </body>
-      </html>
-    `);
-  }
-
-  try {
-    const qrImage = await QRCode.toDataURL(qr);
-    res.status(200).send(`
-      <html>
-        <head><title>QR Code WhatsApp</title><meta http-equiv="refresh" content="20"></head>
-        <body style="font-family: sans-serif; text-align: center; margin-top: 4rem;">
-          <h1>Scannez ce QR code avec WhatsApp</h1>
-          <img src="${qrImage}" alt="QR Code WhatsApp" style="width: 300px; height: 300px;" />
-          <p>Cette page se rafraîchit automatiquement toutes les 20 secondes.</p>
-        </body>
-      </html>
-    `);
-  } catch (err) {
-    console.error('Erreur lors de la génération du QR code:', err);
-    res.status(500).json({ error: 'Échec de la génération du QR code.' });
-  }
-});
-
 app.get(['/', '/dashboard'], (req, res) => {
   res.sendFile(DASHBOARD_PATH);
 });
 
 app.post('/api/login', (req, res) => {
-  const configured = process.env.ADMIN_PASSWORD;
   const { password } = req.body || {};
 
-  if (!configured) {
-    return res.status(200).json({ success: true, authRequired: false });
-  }
-
-  if (password && password === configured) {
-    return res.status(200).json({ success: true, authRequired: true });
+  if (password && password === ADMIN_PASSWORD) {
+    return res.status(200).json({ success: true });
   }
 
   return res.status(401).json({ error: 'Mot de passe incorrect.' });
