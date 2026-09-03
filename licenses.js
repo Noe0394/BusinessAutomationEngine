@@ -1,16 +1,20 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const githubStore = require('./githubStore');
 
-// Même mise en garde que pour les sessions WhatsApp/Telegram : sans disque
-// persistant Render monté sur ce chemin, les clés générées sont perdues au
-// prochain redéploiement.
+// Sans disque persistant Render monté sur ce chemin, ce fichier local est
+// effacé à chaque redéploiement. Si githubStore est activé (GITHUB_TOKEN +
+// GITHUB_DATA_REPO définis), les clés sont aussi sauvegardées dans un repo
+// GitHub privé dédié et restaurées au démarrage (voir initFromRemote) — le
+// fichier local reste la seule chose lue/écrite au fil de l'eau, pour rester
+// rapide et synchrone.
 const LICENSES_PATH = process.env.LICENSES_PATH || path.join(__dirname, 'licenses.json');
 
-if (!process.env.LICENSES_PATH) {
+if (!process.env.LICENSES_PATH && !githubStore.enabled) {
   console.warn(
-    `LICENSES_PATH non défini : les clés de licence sont stockées dans "${LICENSES_PATH}" sur le disque local. ` +
-    'Sur Render, ce fichier est effacé à chaque redéploiement sauf disque persistant monté sur ce chemin.',
+    `LICENSES_PATH non défini et githubStore désactivé : les clés de licence sont stockées dans "${LICENSES_PATH}" sur le disque local uniquement. ` +
+    'Sur Render, ce fichier est effacé à chaque redéploiement sauf disque persistant ou GITHUB_TOKEN/GITHUB_DATA_REPO configurés.',
   );
 }
 
@@ -22,8 +26,39 @@ function loadLicenses() {
   }
 }
 
+// File d'attente séquentielle pour les envois vers GitHub : évite les
+// conflits de sha si deux sauvegardes locales arrivent rapprochées (ex:
+// création de plusieurs clés en lot).
+let pushQueue = Promise.resolve();
+
 function saveLicenses(licenses) {
-  fs.writeFileSync(LICENSES_PATH, JSON.stringify(licenses, null, 2), 'utf8');
+  const content = JSON.stringify(licenses, null, 2);
+  fs.writeFileSync(LICENSES_PATH, content, 'utf8');
+
+  if (githubStore.enabled) {
+    pushQueue = pushQueue
+      .then(() => githubStore.pushRemote(content))
+      .catch((err) => {
+        console.error('Échec de la sauvegarde des licences sur GitHub :', err.message);
+      });
+  }
+}
+
+// À appeler une fois au démarrage du serveur, avant d'accepter des requêtes :
+// restaure licenses.json depuis le repo GitHub dédié s'il y en a une version
+// là-bas (survit aux redéploiements Render sans disque persistant).
+async function initFromRemote() {
+  if (!githubStore.enabled) return;
+
+  try {
+    const remote = await githubStore.fetchRemote();
+    if (remote) {
+      fs.writeFileSync(LICENSES_PATH, remote.content, 'utf8');
+      console.log('Licences restaurées depuis le repo GitHub dédié.');
+    }
+  } catch (err) {
+    console.error('Impossible de récupérer les licences depuis GitHub au démarrage :', err.message);
+  }
 }
 
 function generateKeyString() {
@@ -199,6 +234,7 @@ function unbindDevice(key) {
 
 module.exports = {
   ALL_MODULES,
+  initFromRemote,
   createLicense,
   listLicenses,
   listLicensesWithUsage,

@@ -1306,10 +1306,17 @@ app.use((err, req, res, next) => {
   return next();
 });
 
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-  printAndWriteAdminAccessInstructions();
-});
+licenses
+  .initFromRemote()
+  .catch((err) => {
+    console.error('Erreur lors de la restauration des licences depuis GitHub :', err);
+  })
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`Server listening on port ${PORT}`);
+      printAndWriteAdminAccessInstructions();
+    });
+  });
 
 whatsapp.connect().catch((err) => {
   console.error('Erreur lors de l\'initialisation de l\'adaptateur WhatsApp:', err);
