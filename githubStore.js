@@ -88,11 +88,24 @@ function createStore(filePath) {
         status.lastFetchError = null;
         return null;
       }
-      if (httpStatus !== 200 || !body || !body.content) {
+      if (httpStatus !== 200 || !body) {
         throw new Error(`Lecture GitHub échouée (statut ${httpStatus})`);
       }
 
-      cachedSha = body.sha;
+      // Capturer le sha dès qu'on le connaît, même si le contenu ne peut pas
+      // être lu ci-dessous : sans ça, un fichier qui dépasse la limite de
+      // 1 Mo de contenu inline de l'API Contents (content absent, mais sha
+      // toujours présent) bloquerait pushRemote indéfiniment — chaque essai
+      // échouerait faute de sha connu, sans jamais pouvoir se corriger.
+      if (body.sha) cachedSha = body.sha;
+
+      if (!body.content) {
+        status.lastFetchAt = new Date().toISOString();
+        status.lastFetchOk = true;
+        status.lastFetchError = 'Contenu non lisible (fichier > 1 Mo, hors limite de l\'API Contents de GitHub) — sha capturé pour permettre une prochaine écriture.';
+        return { content: null, sha: body.sha, tooLarge: true };
+      }
+
       const content = Buffer.from(body.content, 'base64').toString('utf8');
       status.lastFetchAt = new Date().toISOString();
       status.lastFetchOk = true;
