@@ -582,7 +582,10 @@ app.get('/api/admin/licenses', requireAdmin, (req, res) => {
 });
 
 app.get('/api/admin/storage-status', requireAdmin, (req, res) => {
-  res.status(200).json(licenses.getStorageStatus());
+  res.status(200).json({
+    licenses: licenses.getStorageStatus(),
+    whatsapp: whatsapp.getStorageStatus(),
+  });
 });
 
 app.get('/api/admin/overview', requireAdmin, (req, res) => {
@@ -1340,9 +1343,16 @@ licenses
     });
   });
 
-whatsapp.connect().catch((err) => {
-  console.error('Erreur lors de l\'initialisation de l\'adaptateur WhatsApp:', err);
-});
+whatsapp
+  .restoreSessionFromRemote()
+  .catch((err) => {
+    console.error('Erreur lors de la restauration de la session WhatsApp depuis GitHub :', err);
+  })
+  .finally(() => {
+    whatsapp.connect().catch((err) => {
+      console.error('Erreur lors de l\'initialisation de l\'adaptateur WhatsApp:', err);
+    });
+  });
 
 telegram.init().catch((err) => {
   console.error('Erreur lors de l\'initialisation de l\'adaptateur Telegram:', err);

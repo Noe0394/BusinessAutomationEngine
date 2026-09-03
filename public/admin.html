@@ -79,7 +79,10 @@
           <div class="overview-card"><div class="value" id="overview-online">-</div><div class="label">Connectés maintenant</div></div>
           <div class="overview-card"><div class="value" id="overview-requests">-</div><div class="label">Requêtes cumulées</div></div>
         </div>
-        <p id="storage-status" style="margin: 1rem 0 0; padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.9rem;"></p>
+        <div id="storage-status" style="margin: 1rem 0 0; display: flex; flex-direction: column; gap: 0.5rem;">
+          <p id="storage-status-licenses" style="margin: 0; padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.9rem;"></p>
+          <p id="storage-status-whatsapp" style="margin: 0; padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.9rem;"></p>
+        </div>
       </section>
 
       <section>
@@ -248,30 +251,34 @@
 
     // Sans ça, un admin ne découvre que la persistance GitHub était mal
     // configurée (token/repo absents ou invalides) qu'après un redéploiement
-    // qui a effacé des clés jamais synchronisées à distance.
+    // qui a effacé des données jamais synchronisées à distance.
+    function renderStorageStatusLine(el, s, label) {
+      if (!s.enabled) {
+        el.style.background = '#fdf3cd';
+        el.style.color = '#7a5b00';
+        el.textContent = `⚠️ ${label} : persistance GitHub désactivée (GITHUB_TOKEN / GITHUB_DATA_REPO non définis) — perdu au prochain redémarrage.`;
+        return;
+      }
+
+      if (s.lastPushOk === false) {
+        el.style.background = '#fbe1e1';
+        el.style.color = '#8a1f1f';
+        el.textContent = `❌ ${label} : persistance GitHub active (${s.repo}) mais le dernier envoi a échoué : ${s.lastPushError}`;
+        return;
+      }
+
+      el.style.background = '#e3f6e8';
+      el.style.color = '#1a7a3c';
+      el.textContent = `✅ ${label} : persistance GitHub active (${s.repo}, branche ${s.branch})`
+        + (s.lastPushAt ? ` — dernière sauvegarde : ${new Date(s.lastPushAt).toLocaleString('fr-FR')}` : ' — rien sauvegardé encore.');
+    }
+
     async function loadStorageStatus() {
-      const el = document.getElementById('storage-status');
       try {
         const res = await apiFetch('/api/admin/storage-status');
         const s = await res.json();
-
-        if (!s.enabled) {
-          el.style.background = '#fdf3cd';
-          el.style.color = '#7a5b00';
-          el.textContent = '⚠️ Persistance GitHub désactivée (GITHUB_TOKEN / GITHUB_DATA_REPO non définis) — les clés seront perdues au prochain redéploiement.';
-          return;
-        }
-
-        if (s.lastPushOk === false) {
-          el.style.background = '#fbe1e1';
-          el.style.color = '#8a1f1f';
-          el.textContent = `❌ Persistance GitHub activée (${s.repo}) mais le dernier envoi a échoué : ${s.lastPushError}`;
-          return;
-        }
-
-        el.style.background = '#e3f6e8';
-        el.style.color = '#1a7a3c';
-        el.textContent = `✅ Persistance GitHub active (${s.repo}, branche ${s.branch})` + (s.lastPushAt ? ` — dernière sauvegarde : ${new Date(s.lastPushAt).toLocaleString('fr-FR')}` : ' — aucune clé sauvegardée encore.');
+        renderStorageStatusLine(document.getElementById('storage-status-licenses'), s.licenses, 'Licences');
+        renderStorageStatusLine(document.getElementById('storage-status-whatsapp'), s.whatsapp, 'Session WhatsApp');
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }

@@ -10,19 +10,27 @@ const {
   DisconnectReason,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
+const whatsappAuthStore = require('./whatsappAuthStore');
 
 // Sur Render (et la plupart des PaaS), le disque local est éphémère : sans
 // disque persistant monté sur ce chemin, la session est reperdue à chaque
 // redéploiement/redémarrage et il faut se réappairer. Le chemin est donc
 // configurable via AUTH_DIR pour pointer vers un Render Disk si disponible.
+// Si GITHUB_TOKEN/GITHUB_DATA_REPO sont définis (voir whatsappAuthStore.js),
+// la session est aussi sauvegardée dans le repo GitHub dédié et restaurée au
+// démarrage (voir restoreSessionFromRemote, appelée une fois par index.js
+// avant le premier connect()), sur le même principe que les licences.
 const AUTH_DIR = process.env.AUTH_DIR || 'auth_info_baileys';
 
-if (!process.env.AUTH_DIR) {
+if (!process.env.AUTH_DIR && !whatsappAuthStore.enabled) {
   console.warn(
-    `AUTH_DIR non défini : la session WhatsApp est stockée dans "${AUTH_DIR}" sur le disque local. ` +
-    'Sur Render, ce dossier est effacé à chaque redéploiement sauf si vous montez un disque persistant ' +
-    '(Render Disk) sur ce chemin et définissez AUTH_DIR en conséquence.',
+    `AUTH_DIR non défini et sauvegarde GitHub désactivée : la session WhatsApp est stockée dans "${AUTH_DIR}" sur le disque local uniquement. ` +
+    'Sur Render, ce dossier est effacé à chaque redéploiement/redémarrage sauf disque persistant ou GITHUB_TOKEN/GITHUB_DATA_REPO configurés.',
   );
+}
+
+async function restoreSessionFromRemote() {
+  return whatsappAuthStore.restoreSessionFromRemote(AUTH_DIR);
 }
 
 let sock = null;
@@ -30,6 +38,7 @@ let latestQR = null;
 let connected = false;
 let authState = null;
 let reconnectTimer = null;
+let syncStarted = false;
 
 function getQRCode() {
   return latestQR;
@@ -63,7 +72,19 @@ async function connect() {
     printQRInTerminal: false,
   });
 
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', async () => {
+    await saveCreds();
+    // Les créds changent surtout au moment de l'appairage (QR/pairing code) :
+    // on pousse immédiatement plutôt que d'attendre le prochain instantané
+    // périodique, pour ne pas devoir rescanner si le process redémarre juste
+    // après un appairage réussi.
+    whatsappAuthStore.pushSnapshot(AUTH_DIR);
+  });
+
+  if (!syncStarted) {
+    syncStarted = true;
+    whatsappAuthStore.startPeriodicSync(AUTH_DIR);
+  }
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -98,6 +119,7 @@ async function connect() {
         reconnectTimer = null;
       }
       console.log('Connexion WhatsApp établie.');
+      whatsappAuthStore.pushSnapshot(AUTH_DIR);
     }
   });
 
@@ -186,6 +208,7 @@ async function getGroupParticipants(groupId) {
 
 module.exports = {
   connect,
+  restoreSessionFromRemote,
   sendMessage,
   sendMedia,
   getQRCode,
@@ -194,4 +217,5 @@ module.exports = {
   getGroupMetadata,
   getGroups,
   getGroupParticipants,
+  getStorageStatus: whatsappAuthStore.getStatus,
 };
