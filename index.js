@@ -354,6 +354,147 @@ function startCampaign(recipients, message, options = {}) {
   return campaign;
 }
 
+// Campagne de messages directs Telegram vers une liste de contacts importée
+// (usernames et/ou numéros de téléphone), distincte de currentCampaign
+// (WhatsApp) et de la diffusion groupe/canal existante (/api/telegram/queue)
+// : ici chaque destinataire est résolu individuellement via
+// telegram.resolveRecipient avant l'envoi. Même modèle stoppable que la
+// campagne WhatsApp (pause/stop, suivi de progression).
+let currentTelegramDmCampaign = null;
+
+// Fenêtre de délai imposée entre deux envois individuels — non contournable
+// depuis le frontend, qui ne peut que choisir un délai fixe ou aléatoire à
+// l'intérieur de cette fenêtre (recommandation explicite de l'utilisateur
+// pour rester dans un usage raisonnable de l'API Telegram).
+const TELEGRAM_DM_MIN_DELAY_MS = 30_000;
+const TELEGRAM_DM_MAX_DELAY_MS = 60_000;
+
+function clampTelegramDmDelayMs(ms) {
+  if (!Number.isFinite(ms)) return null;
+  return Math.min(Math.max(ms, TELEGRAM_DM_MIN_DELAY_MS), TELEGRAM_DM_MAX_DELAY_MS);
+}
+
+async function waitForTelegramConnection(campaign) {
+  if (telegram.isConnected()) {
+    return;
+  }
+
+  campaign.paused = true;
+  console.log('Campagne Telegram: mise en pause — connexion perdue, en attente de reconnexion...');
+
+  while (!telegram.isConnected() && !campaign.stopRequested) {
+    await sleep(1000);
+  }
+
+  campaign.paused = false;
+  if (!campaign.stopRequested) {
+    console.log('Campagne Telegram: reprise après reconnexion.');
+  }
+}
+
+function markTelegramDmRemainingInterrupted(campaign, recipients, fromIndex) {
+  for (let j = fromIndex; j < recipients.length; j += 1) {
+    campaign.results.push({ to: recipients[j], status: 'interrupted', timestamp: new Date().toISOString() });
+  }
+  campaign.status = 'stopped';
+  campaign.paused = false;
+  campaign.finishedAt = new Date().toISOString();
+}
+
+async function runTelegramDmQueue(campaign, recipients, message, options = {}) {
+  const { minDelayMs, maxDelayMs, media } = options;
+
+  for (let i = 0; i < recipients.length; i += 1) {
+    if (campaign.stopRequested) {
+      markTelegramDmRemainingInterrupted(campaign, recipients, i);
+      console.log('Campagne Telegram: interrompue par l\'utilisateur.');
+      return;
+    }
+
+    await waitForTelegramConnection(campaign);
+
+    if (campaign.stopRequested) {
+      markTelegramDmRemainingInterrupted(campaign, recipients, i);
+      console.log('Campagne Telegram: interrompue par l\'utilisateur.');
+      return;
+    }
+
+    const identifier = recipients[i];
+    let status = 'failed';
+    let errorReason = null;
+
+    try {
+      const entity = await telegram.resolveRecipient(identifier);
+      if (media) {
+        await telegram.sendMedia(entity, { ...media, caption: message });
+      } else {
+        await telegram.sendMessage(entity, message);
+      }
+      status = 'delivered';
+      campaign.success += 1;
+      console.log(`Campagne Telegram: message envoyé à ${identifier} (${i + 1}/${recipients.length}).`);
+    } catch (err) {
+      campaign.failed += 1;
+      errorReason = err.message || String(err);
+      console.error(`Campagne Telegram: échec de l'envoi à ${identifier}:`, errorReason);
+    }
+
+    campaign.sent += 1;
+    campaign.results.push({ to: identifier, status, error: errorReason, timestamp: new Date().toISOString() });
+
+    if (i < recipients.length - 1 && !campaign.stopRequested) {
+      const delayMs = randomDelay(minDelayMs, maxDelayMs);
+      await interruptibleSleep(delayMs, () => campaign.stopRequested);
+    }
+  }
+
+  if (campaign.status === 'running') {
+    campaign.status = 'completed';
+    campaign.finishedAt = new Date().toISOString();
+  }
+
+  console.log('Campagne Telegram: terminée.');
+}
+
+function startTelegramDmCampaign(recipients, message, options = {}) {
+  if (currentTelegramDmCampaign && currentTelegramDmCampaign.status === 'running') {
+    throw new Error('CAMPAIGN_IN_PROGRESS');
+  }
+
+  const { maxPerCycle, media } = options;
+  const limitedRecipients = Number.isInteger(maxPerCycle) && maxPerCycle > 0
+    ? recipients.slice(0, maxPerCycle)
+    : recipients;
+
+  const minDelayMs = clampTelegramDmDelayMs(options.minDelayMs) || TELEGRAM_DM_MIN_DELAY_MS;
+  const maxDelayMs = Math.max(clampTelegramDmDelayMs(options.maxDelayMs) || TELEGRAM_DM_MAX_DELAY_MS, minDelayMs);
+
+  currentTelegramDmCampaign = {
+    total: limitedRecipients.length,
+    truncated: limitedRecipients.length < recipients.length,
+    sent: 0,
+    success: 0,
+    failed: 0,
+    status: 'running',
+    paused: false,
+    stopRequested: false,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    results: [],
+  };
+
+  const campaign = currentTelegramDmCampaign;
+
+  runTelegramDmQueue(campaign, limitedRecipients, message, { minDelayMs, maxDelayMs, media }).catch((err) => {
+    console.error('Erreur pendant la campagne Telegram:', err);
+    campaign.status = 'stopped';
+    campaign.paused = false;
+    campaign.finishedAt = new Date().toISOString();
+  });
+
+  return campaign;
+}
+
 async function findGroupByName(name) {
   const groups = await whatsapp.getGroups();
   const needle = name.trim().toLowerCase();
@@ -1176,6 +1317,112 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), upload
   }).catch((err) => {
     console.error('Erreur pendant la campagne Telegram:', err);
   });
+});
+
+// Import d'une liste de contacts (usernames et/ou numéros de téléphone)
+// depuis un fichier CSV/Excel, ou directement un tableau JSON — même
+// pattern que /api/contacts/import (WhatsApp), colonnes acceptées :
+// username/telegram/contact/identifiant pour l'identifiant, prenom/nom/name
+// pour le nom affiché. Ne persiste rien côté serveur : le frontend garde la
+// liste importée en mémoire le temps de composer et lancer l'envoi.
+app.post('/api/telegram/contacts/import', requireAccess, requireModule('telegram'), upload.single('file'), async (req, res) => {
+  let rows;
+
+  try {
+    if (req.file) {
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(sheet);
+    } else if (Array.isArray(req.body?.contacts)) {
+      rows = req.body.contacts;
+    } else {
+      return res.status(400).json({
+        error: 'Fournissez un fichier CSV/Excel (champ "file") ou un tableau JSON "contacts".',
+      });
+    }
+  } catch (err) {
+    console.error('Erreur lors de la lecture du fichier de contacts Telegram:', err);
+    return res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .csv ou .xlsx.' });
+  }
+
+  const contacts = rows
+    .map((row) => ({
+      identifier: String(
+        row.identifiant || row.username || row.Username || row.telegram || row.Telegram
+        || row.contact || row.Contact || row.telephone || row.Telephone || row.phone || row.Phone || '',
+      ).trim(),
+      name: String(row.prenom || row.Prenom || row.nom || row.Nom || row.name || row.Name || '').trim(),
+    }))
+    .filter((c) => c.identifier);
+
+  res.status(200).json({ contacts, total: contacts.length });
+});
+
+app.post('/api/telegram/dm/queue', requireAccess, requireModule('telegram'), upload.single('media'), async (req, res) => {
+  if (!telegram.isConnected()) {
+    return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
+  }
+
+  const { message, minDelaySeconds, maxDelaySeconds, maxPerCycle } = req.body;
+  let { recipients } = req.body;
+
+  if (typeof recipients === 'string') {
+    try {
+      recipients = JSON.parse(recipients);
+    } catch (err) {
+      recipients = recipients.split(/[,\n]/).map((n) => n.trim()).filter(Boolean);
+    }
+  }
+
+  if (!Array.isArray(recipients) || recipients.length === 0 || !message) {
+    return res.status(400).json({
+      error: 'Fournissez "recipients" (tableau de usernames/numéros importés) et un "message".',
+    });
+  }
+
+  const media = req.file
+    ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
+    : null;
+
+  let campaign;
+  try {
+    campaign = startTelegramDmCampaign(recipients, message, {
+      minDelayMs: minDelaySeconds !== undefined && minDelaySeconds !== '' ? parseFloat(minDelaySeconds) * 1000 : undefined,
+      maxDelayMs: maxDelaySeconds !== undefined && maxDelaySeconds !== '' ? parseFloat(maxDelaySeconds) * 1000 : undefined,
+      maxPerCycle: maxPerCycle !== undefined && maxPerCycle !== '' ? parseInt(maxPerCycle, 10) : undefined,
+      media,
+    });
+  } catch (err) {
+    if (err.message === 'CAMPAIGN_IN_PROGRESS') {
+      return res.status(409).json({
+        error: 'Une campagne Telegram est déjà en cours. Attendez sa fin ou interrompez-la (Pause/Arrêt) avant d\'en lancer une nouvelle.',
+      });
+    }
+    throw err;
+  }
+
+  res.status(202).json({
+    status: 'tg_dm_campaign_started',
+    total: campaign.total,
+    truncated: campaign.truncated,
+  });
+});
+
+app.post('/api/telegram/dm/stop', requireAccess, requireModule('telegram'), (req, res) => {
+  if (!currentTelegramDmCampaign || currentTelegramDmCampaign.status !== 'running') {
+    return res.status(400).json({ error: 'Aucune campagne Telegram en cours à interrompre.' });
+  }
+
+  currentTelegramDmCampaign.stopRequested = true;
+  res.status(200).json({ status: 'stop_requested' });
+});
+
+app.get('/api/telegram/dm/status', requireAccess, requireModule('telegram'), (req, res) => {
+  if (!currentTelegramDmCampaign) {
+    return res.status(200).json({ exists: false });
+  }
+
+  res.status(200).json({ exists: true, ...currentTelegramDmCampaign });
 });
 
 // Doit rester PUBLIQUE et sans authentification : c'est Meta (Instagram) qui

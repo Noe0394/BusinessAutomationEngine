@@ -68,11 +68,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -86,15 +86,15 @@
     .stop-button { background: #c0392b; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; margin-top: 0.75rem; }
     .stop-button:disabled { background: #e6a8a1; cursor: not-allowed; }
 
-    #campaign-feedback, #tg-feedback { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
-    #campaign-feedback.ok, #tg-feedback.ok { background: #d4f5dd; color: #1a7a3c; }
-    #campaign-feedback.error, #tg-feedback.error { background: #fbdada; color: #c0392b; }
+    #campaign-feedback, #tg-feedback, #tg-dm-feedback { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
+    #campaign-feedback.ok, #tg-feedback.ok, #tg-dm-feedback.ok { background: #d4f5dd; color: #1a7a3c; }
+    #campaign-feedback.error, #tg-feedback.error, #tg-dm-feedback.error { background: #fbdada; color: #c0392b; }
 
-    #progress-area { margin-top: 1.5rem; }
-    #progress-bar-outer { width: 100%; background: #eee; border-radius: 999px; height: 24px; overflow: hidden; }
-    #progress-bar-inner { height: 100%; width: 0%; background: #25D366; transition: width 0.3s; }
-    #progress-text { margin-top: 0.5rem; font-weight: bold; }
-    #progress-counters span { display: inline-block; margin-right: 1.5rem; }
+    #progress-area, #tg-dm-progress-area { margin-top: 1.5rem; }
+    #progress-bar-outer, #tg-dm-progress-bar-outer { width: 100%; background: #eee; border-radius: 999px; height: 24px; overflow: hidden; }
+    #progress-bar-inner, #tg-dm-progress-bar-inner { height: 100%; width: 0%; background: #25D366; transition: width 0.3s; }
+    #progress-text, #tg-dm-progress-text { margin-top: 0.5rem; font-weight: bold; }
+    #progress-counters span, #tg-dm-progress-counters span { display: inline-block; margin-right: 1.5rem; }
     .count-success { color: #1a7a3c; font-weight: bold; }
     .count-failed { color: #c0392b; font-weight: bold; }
 
@@ -375,6 +375,61 @@
 
         <button type="button" id="send-tg-campaign-btn" class="send-button">🚀 Lancer l'envoi Telegram</button>
         <div id="tg-feedback" hidden></div>
+
+        <div class="subsection" id="tg-dm-section">
+          <h3>Gestion des Campagnes — Messages directs (liste de contacts)</h3>
+          <p class="empty">
+            Importez une liste de destinataires autorisés (usernames Telegram ou numéros de téléphone) pour leur
+            envoyer un message individuel, avec un intervalle de sécurité automatique entre chaque envoi.
+          </p>
+
+          <div id="tg-dm-drop-zone">Glissez-déposez un fichier .csv/.xlsx ici, ou touchez pour parcourir</div>
+          <input type="file" id="tg-dm-import-file" accept=".csv,.xlsx" hidden />
+          <p id="tg-dm-import-file-name" class="empty">Aucun fichier sélectionné.</p>
+          <button type="button" id="tg-dm-import-btn">Importer</button>
+          <p id="tg-dm-import-count" class="empty">Aucun contact importé.</p>
+
+          <div class="field">
+            <label for="tg-dm-message">Message individuel (emojis supportés)</label>
+            <textarea id="tg-dm-message" placeholder="Bonjour {prenom}, ..."></textarea>
+          </div>
+
+          <div class="warning-box">
+            ⚠️ Le délai entre chaque envoi est automatiquement maintenu entre 30 et 60 secondes pour rester dans un
+            usage raisonnable de l'API Telegram — non réductible en dessous de ce seuil.
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label for="tg-dm-min-delay">Délai minimum (secondes, 30 à 60)</label>
+              <input type="number" id="tg-dm-min-delay" value="30" min="30" max="60" />
+            </div>
+            <div class="field">
+              <label for="tg-dm-max-delay">Délai maximum (secondes, 30 à 60)</label>
+              <input type="number" id="tg-dm-max-delay" value="60" min="30" max="60" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="tg-dm-max-per-cycle">Limite maximale de messages pour ce cycle</label>
+            <input type="number" id="tg-dm-max-per-cycle" value="20" min="1" />
+          </div>
+
+          <button type="button" id="tg-dm-send-btn" class="send-button">🚀 Lancer la campagne de messages directs</button>
+          <button type="button" id="tg-dm-stop-btn" class="stop-button" hidden>⛔ Pause / Arrêt</button>
+          <div id="tg-dm-feedback" hidden></div>
+
+          <div id="tg-dm-progress-area" hidden>
+            <div id="tg-dm-progress-bar-outer">
+              <div id="tg-dm-progress-bar-inner"></div>
+            </div>
+            <p id="tg-dm-progress-text">Envoi 0/0 - 0%</p>
+            <p id="tg-dm-progress-counters">
+              <span class="count-success">✅ Réussites : 0</span>
+              <span class="count-failed">❌ Échecs : 0</span>
+            </p>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1224,6 +1279,162 @@
         tgShowFeedback('Erreur réseau lors du lancement de la campagne.', true);
       } finally {
         sendBtn.disabled = false;
+      }
+    });
+
+    // ---------- Telegram : messages directs vers une liste de contacts importée ----------
+    let tgDmImportedContacts = [];
+    let selectedTgDmFile = null;
+    let tgDmInterval = null;
+    let tgDmObservedRunningStartedAt = null;
+
+    const tgDmDropZone = document.getElementById('tg-dm-drop-zone');
+    const tgDmFileInput = document.getElementById('tg-dm-import-file');
+    tgDmDropZone.addEventListener('click', () => tgDmFileInput.click());
+    tgDmDropZone.addEventListener('dragover', (e) => { e.preventDefault(); tgDmDropZone.classList.add('dragover'); });
+    tgDmDropZone.addEventListener('dragleave', () => tgDmDropZone.classList.remove('dragover'));
+    tgDmDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      tgDmDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) tgDmSetSelectedFile(e.dataTransfer.files[0]);
+    });
+    tgDmFileInput.addEventListener('change', () => {
+      if (tgDmFileInput.files && tgDmFileInput.files[0]) tgDmSetSelectedFile(tgDmFileInput.files[0]);
+    });
+    function tgDmSetSelectedFile(file) {
+      selectedTgDmFile = file;
+      document.getElementById('tg-dm-import-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    function tgDmShowFeedback(message, isError) {
+      const el = document.getElementById('tg-dm-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    document.getElementById('tg-dm-import-btn').addEventListener('click', async () => {
+      if (!selectedTgDmFile) { tgDmShowFeedback('Sélectionnez d\'abord un fichier .csv ou .xlsx.', true); return; }
+
+      const formData = new FormData();
+      formData.append('file', selectedTgDmFile);
+
+      try {
+        const res = await apiFetch('/api/telegram/contacts/import', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          tgDmShowFeedback(data.error || 'Échec de l\'import.', true);
+          return;
+        }
+        tgDmImportedContacts = data.contacts || [];
+        document.getElementById('tg-dm-import-count').textContent = tgDmImportedContacts.length > 0
+          ? tgDmImportedContacts.length + ' contact(s) importé(s) et prêt(s) à être contactés.'
+          : 'Aucun contact valide trouvé dans le fichier (colonne "username" ou "telephone" attendue).';
+        tgDmShowFeedback(tgDmImportedContacts.length + ' contact(s) importé(s).', false);
+      } catch (err) {
+        tgDmShowFeedback('Erreur réseau lors de l\'import.', true);
+      }
+    });
+
+    function tgDmUpdateProgressUI(campaign) {
+      const area = document.getElementById('tg-dm-progress-area');
+      area.hidden = false;
+      const pct = campaign.total > 0 ? Math.round((campaign.sent / campaign.total) * 100) : 0;
+      document.getElementById('tg-dm-progress-bar-inner').style.width = pct + '%';
+      document.getElementById('tg-dm-progress-text').textContent = 'Envoi ' + campaign.sent + '/' + campaign.total + ' - ' + pct + '%';
+      document.getElementById('tg-dm-progress-counters').innerHTML =
+        '<span class="count-success">✅ Réussites : ' + campaign.success + '</span>' +
+        '<span class="count-failed">❌ Échecs : ' + campaign.failed + '</span>';
+    }
+
+    function tgDmStartPolling() {
+      if (tgDmInterval) clearInterval(tgDmInterval);
+      tgDmPollStatus();
+      tgDmInterval = setInterval(tgDmPollStatus, 1500);
+    }
+
+    async function tgDmPollStatus() {
+      try {
+        const res = await apiFetch('/api/telegram/dm/status');
+        const data = await res.json();
+        if (!data.exists) return;
+
+        const sendBtn = document.getElementById('tg-dm-send-btn');
+        const stopBtn = document.getElementById('tg-dm-stop-btn');
+
+        if (data.status === 'running') {
+          tgDmObservedRunningStartedAt = data.startedAt;
+          sendBtn.disabled = true;
+          stopBtn.hidden = false;
+          stopBtn.disabled = false;
+          tgDmUpdateProgressUI(data);
+        } else {
+          sendBtn.disabled = false;
+          stopBtn.hidden = true;
+          tgDmUpdateProgressUI(data);
+
+          if (tgDmInterval) { clearInterval(tgDmInterval); tgDmInterval = null; }
+
+          if (tgDmObservedRunningStartedAt === data.startedAt) {
+            tgDmShowFeedback(
+              (data.status === 'stopped' ? '⛔ Campagne interrompue' : '✅ Campagne terminée') +
+              ' — ' + data.success + ' réussite(s), ' + data.failed + ' échec(s) sur ' + data.total + '.',
+              data.status === 'stopped',
+            );
+          }
+        }
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    document.getElementById('tg-dm-send-btn').addEventListener('click', async () => {
+      const message = document.getElementById('tg-dm-message').value.trim();
+      const minDelaySeconds = document.getElementById('tg-dm-min-delay').value;
+      const maxDelaySeconds = document.getElementById('tg-dm-max-delay').value;
+      const maxPerCycle = document.getElementById('tg-dm-max-per-cycle').value;
+
+      if (!message) { tgDmShowFeedback('Le message ne peut pas être vide.', true); return; }
+      if (tgDmImportedContacts.length === 0) {
+        tgDmShowFeedback('Importez d\'abord une liste de contacts.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('message', message);
+      formData.append('minDelaySeconds', minDelaySeconds);
+      formData.append('maxDelaySeconds', maxDelaySeconds);
+      formData.append('maxPerCycle', maxPerCycle);
+      formData.append('recipients', JSON.stringify(tgDmImportedContacts.map((c) => c.identifier)));
+
+      const sendBtn = document.getElementById('tg-dm-send-btn');
+      sendBtn.disabled = true;
+
+      try {
+        const res = await apiFetch('/api/telegram/dm/queue', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          tgDmShowFeedback(data.error || 'Échec du lancement de la campagne.', true);
+          sendBtn.disabled = false;
+        } else {
+          tgDmShowFeedback(
+            '🚀 Campagne lancée : ' + data.total + ' destinataire(s)' +
+            (data.truncated ? ' (liste tronquée à la limite du cycle)' : '') + '.',
+            false,
+          );
+          tgDmStartPolling();
+        }
+      } catch (err) {
+        tgDmShowFeedback('Erreur réseau lors du lancement de la campagne.', true);
+        sendBtn.disabled = false;
+      }
+    });
+
+    document.getElementById('tg-dm-stop-btn').addEventListener('click', async () => {
+      try {
+        await apiFetch('/api/telegram/dm/stop', { method: 'POST' });
+      } catch (err) {
+        // le prochain poll reflétera l'état réel
       }
     });
 

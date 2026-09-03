@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { TelegramClient } = require('telegram');
+const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
 
@@ -194,6 +194,65 @@ class TelegramAdapter {
         unreadCount: d.unreadCount || 0,
       }))
       .filter((g) => g.id);
+  }
+
+  /**
+   * Résout un identifiant fourni par l'utilisateur (username "@untel" ou
+   * numéro de téléphone) vers une entité Telegram utilisable par
+   * sendMessage/sendFile. Un username se résout directement via getEntity.
+   * Un numéro nécessite de passer par contacts.importContacts (l'API
+   * MTProto n'autorise pas la recherche libre d'un numéro par respect de la
+   * vie privée) — cette étape ajoute aussi le contact au carnet du compte
+   * connecté, ce qui est le comportement attendu pour une "liste de
+   * diffusion" de contacts qu'on gère. Si Telegram ne peut pas relier ce
+   * numéro à un compte (non inscrit, ou visibilité restreinte par ses
+   * paramètres de confidentialité), la résolution échoue proprement.
+   */
+  async resolveRecipient(identifier) {
+    if (!this.connected) {
+      throw new Error('TELEGRAM_NOT_CONNECTED');
+    }
+
+    const value = String(identifier || '').trim();
+    if (!value) {
+      throw new Error('EMPTY_RECIPIENT');
+    }
+
+    const looksLikeUsername = value.startsWith('@') || /^[a-zA-Z][a-zA-Z0-9_]{4,31}$/.test(value);
+
+    if (looksLikeUsername) {
+      const username = value.startsWith('@') ? value : `@${value}`;
+      try {
+        return await this.client.getEntity(username);
+      } catch (err) {
+        throw new Error('RECIPIENT_NOT_FOUND');
+      }
+    }
+
+    const digits = value.replace(/[^\d+]/g, '');
+    if (!digits.replace('+', '')) {
+      throw new Error('INVALID_RECIPIENT');
+    }
+    const phone = digits.startsWith('+') ? digits : `+${digits}`;
+
+    try {
+      const result = await this.client.invoke(new Api.contacts.ImportContacts({
+        contacts: [new Api.InputPhoneContact({
+          clientId: Math.floor(Math.random() * 1_000_000_000),
+          phone,
+          firstName: 'Contact',
+          lastName: '',
+        })],
+      }));
+
+      if (!result.users || result.users.length === 0) {
+        throw new Error('RECIPIENT_NOT_FOUND');
+      }
+      return result.users[0];
+    } catch (err) {
+      if (err.message === 'RECIPIENT_NOT_FOUND') throw err;
+      throw new Error('RECIPIENT_NOT_FOUND');
+    }
   }
 
   async sendMessage(chatId, text) {
