@@ -72,6 +72,27 @@ async function sendMessage(to, text) {
   return sock.sendMessage(to, { text });
 }
 
+async function sendMedia(to, { buffer, mimetype, filename, caption }) {
+  if (!sock) {
+    throw new Error('Adaptateur WhatsApp non initialisé.');
+  }
+
+  if (mimetype && mimetype.startsWith('image/')) {
+    return sock.sendMessage(to, { image: buffer, caption });
+  }
+
+  if (mimetype && mimetype.startsWith('video/')) {
+    return sock.sendMessage(to, { video: buffer, caption });
+  }
+
+  return sock.sendMessage(to, {
+    document: buffer,
+    mimetype: mimetype || 'application/octet-stream',
+    fileName: filename || 'fichier',
+    caption,
+  });
+}
+
 async function getGroupMetadata(groupId) {
   if (!sock) {
     throw new Error('Adaptateur WhatsApp non initialisé.');
@@ -101,6 +122,7 @@ async function getGroupParticipants(groupId) {
 module.exports = {
   connect,
   sendMessage,
+  sendMedia,
   getQRCode,
   isConnected,
   getGroupMetadata,

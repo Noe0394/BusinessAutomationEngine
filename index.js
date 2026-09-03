@@ -13,7 +13,7 @@ const whatsapp = require('./adapters/whatsapp');
 const app = express();
 const PORT = process.env.PORT || 10000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '@CYRUS2026';
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
 const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
 
 if (!process.env.ADMIN_PASSWORD) {
@@ -55,20 +55,29 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function sendToQueue(recipients, message, fixedDelaySeconds) {
+async function sendToQueue(recipients, message, options = {}) {
+  const { delaySeconds, batchSize, media } = options;
+  const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipients.length;
+
   for (let i = 0; i < recipients.length; i += 1) {
     const to = normalizeJid(recipients[i]);
 
     try {
-      await whatsapp.sendMessage(to, message);
+      if (media) {
+        await whatsapp.sendMedia(to, { ...media, caption: message });
+      } else {
+        await whatsapp.sendMessage(to, message);
+      }
       console.log(`File d'attente: message envoyé à ${to} (${i + 1}/${recipients.length}).`);
     } catch (err) {
       console.error(`File d'attente: échec de l'envoi à ${to}:`, err);
     }
 
     if (i < recipients.length - 1) {
-      const delayMs = fixedDelaySeconds ? fixedDelaySeconds * 1000 : randomDelay(8000, 15000);
-      console.log(`File d'attente: attente de ${Math.round(delayMs / 1000)}s avant le prochain envoi...`);
+      const baseDelayMs = delaySeconds ? delaySeconds * 1000 : randomDelay(8000, 15000);
+      const endOfBatch = (i + 1) % batch === 0;
+      const delayMs = endOfBatch ? baseDelayMs * 3 : baseDelayMs;
+      console.log(`File d'attente: attente de ${Math.round(delayMs / 1000)}s ${endOfBatch ? '(pause entre lots) ' : ''}avant le prochain envoi...`);
       await sleep(delayMs);
     }
   }
@@ -130,7 +139,7 @@ async function handleNaturalMessage(message) {
     const recipients = participants.map((p) => p.id);
     const delaySeconds = delaySecondsRaw ? parseFloat(delaySecondsRaw) : undefined;
 
-    sendToQueue(recipients, campaignMessage.trim(), delaySeconds).catch((err) => {
+    sendToQueue(recipients, campaignMessage.trim(), { delaySeconds }).catch((err) => {
       console.error('Erreur pendant la campagne lancée via le chat:', err);
     });
 
@@ -242,26 +251,75 @@ app.get('/api/groups/:id/participants', requireAdminPassword, async (req, res) =
   }
 });
 
-app.post('/api/messages/queue', requireAdminPassword, async (req, res) => {
-  const { recipients, message, delaySeconds } = req.body;
+app.post('/api/messages/queue', requireAdminPassword, upload.single('media'), async (req, res) => {
+  const { message, groupId, delaySeconds, batchSize } = req.body;
+  let { recipients } = req.body;
+
+  if (typeof recipients === 'string') {
+    try {
+      recipients = JSON.parse(recipients);
+    } catch (err) {
+      recipients = recipients.split(/[,\n]/).map((n) => n.trim()).filter(Boolean);
+    }
+  }
+
+  if ((!Array.isArray(recipients) || recipients.length === 0) && groupId) {
+    try {
+      const participants = await whatsapp.getGroupParticipants(groupId);
+      recipients = (participants || []).map((p) => p.id);
+    } catch (err) {
+      console.error('Erreur lors de la récupération des participants du groupe cible:', err);
+      return res.status(400).json({ error: 'Impossible de récupérer les participants du groupe cible.' });
+    }
+  }
 
   if (!Array.isArray(recipients) || recipients.length === 0 || !message) {
     return res.status(400).json({
-      error: 'Les champs "recipients" (tableau non vide) et "message" sont requis.',
+      error: 'Fournissez "recipients" (tableau ou liste) ou "groupId", ainsi qu\'un "message".',
     });
   }
 
-  const fixedDelaySeconds = delaySeconds !== undefined ? parseFloat(delaySeconds) : undefined;
+  const fixedDelaySeconds = delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined;
+  const parsedBatchSize = batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined;
+  const media = req.file
+    ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
+    : null;
 
   res.status(202).json({
     status: 'queue_started',
     total: recipients.length,
     delaySeconds: fixedDelaySeconds || '8-15 (aléatoire)',
+    batchSize: parsedBatchSize || recipients.length,
+    media: media ? media.filename : null,
   });
 
-  sendToQueue(recipients, message, fixedDelaySeconds).catch((err) => {
+  sendToQueue(recipients, message, { delaySeconds: fixedDelaySeconds, batchSize: parsedBatchSize, media }).catch((err) => {
     console.error("Erreur pendant le traitement de la file d'attente:", err);
   });
+});
+
+app.post('/api/contacts/import', requireAdminPassword, upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Aucun fichier fourni (champ "file").' });
+  }
+
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet);
+
+    const contacts = rows
+      .map((row) => ({
+        telephone: String(row.telephone || row.Telephone || row.phone || row.Phone || row.numero || row.Numero || '').trim(),
+        prenom: String(row.prenom || row.Prenom || row.name || row.Name || '').trim(),
+      }))
+      .filter((c) => c.telephone);
+
+    res.status(200).json({ contacts, total: contacts.length });
+  } catch (err) {
+    console.error('Erreur lors de l\'import du fichier de contacts:', err);
+    res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .xlsx ou .csv avec une colonne "telephone".' });
+  }
 });
 
 app.post('/api/chat-natural', requireAdminPassword, async (req, res) => {
@@ -317,6 +375,17 @@ app.post('/api/campaign/excel', requireAdminPassword, upload.single('file'), asy
   runCampaign(contacts, minDelaySeconds * 1000, maxDelaySeconds * 1000).catch((err) => {
     console.error('Erreur pendant l\'exécution de la campagne:', err);
   });
+});
+
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ error: `Erreur de téléversement : ${err.message}` });
+  }
+  if (err) {
+    console.error('Erreur non gérée:', err);
+    return res.status(500).json({ error: 'Erreur interne du serveur.' });
+  }
+  return next();
 });
 
 app.listen(PORT, () => {

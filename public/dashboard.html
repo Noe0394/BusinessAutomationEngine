@@ -5,7 +5,7 @@
   <title>Orchestrateur WhatsApp</title>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: sans-serif; margin: 0; background: #f7f7f8; color: #1a1a1a; }
+    body { font-family: sans-serif; margin: 0; background: #f2f2f3; color: #1a1a1a; }
     header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; background: #075E54; color: #fff; }
     header h1 { margin: 0; font-size: 1.25rem; }
     header button { background: #fff; color: #075E54; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; }
@@ -15,25 +15,55 @@
     #login-screen button { width: 100%; padding: 0.5rem; background: #075E54; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
     .error { color: #c0392b; }
 
-    section { margin: 1.5rem 2rem; background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    nav#tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 1rem 2rem 0; background: #f2f2f3; position: sticky; top: 0; }
+    nav#tabs button { padding: 0.6rem 1rem; border: none; border-radius: 6px 6px 0 0; background: #ddd; cursor: pointer; font-weight: bold; }
+    nav#tabs button.active { background: #fff; color: #075E54; }
+
+    .panel { display: none; margin: 0 2rem 2rem; background: #fff; padding: 1.5rem; border-radius: 0 8px 8px 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    .panel.active { display: block; }
+
     table { border-collapse: collapse; width: 100%; }
     th, td { border: 1px solid #e0e0e0; padding: 0.5rem 0.75rem; text-align: left; }
     th { background: #f5f5f5; }
     button { cursor: pointer; }
     .empty { color: #777; }
 
-    #qr-container { text-align: center; margin-top: 1rem; }
+    .badge { display: inline-block; padding: 0.3rem 0.9rem; border-radius: 999px; font-weight: bold; }
+    .badge.connected { background: #d4f5dd; color: #1a7a3c; }
+    .badge.disconnected { background: #fbdada; color: #c0392b; }
+
+    #qr-container { text-align: center; margin-top: 1.5rem; }
     #qr-image { width: 260px; height: 260px; }
 
     #participants-list { list-style: none; padding: 0; }
     #participants-list li { padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
 
-    #chat-log { max-height: 300px; overflow-y: auto; border: 1px solid #e0e0e0; padding: 0.75rem; margin-bottom: 0.75rem; border-radius: 4px; background: #fafafa; }
-    .chat-line { margin-bottom: 0.5rem; white-space: pre-wrap; }
-    .chat-line.assistant strong { color: #075E54; }
-    #chat-form { display: flex; gap: 0.5rem; }
-    #chat-input { flex: 1; padding: 0.5rem; }
-    #chat-form button { padding: 0.5rem 1rem; background: #075E54; color: #fff; border: none; border-radius: 4px; }
+    .field { margin-bottom: 1rem; }
+    .field label { display: block; font-weight: bold; margin-bottom: 0.3rem; }
+    .field input[type="text"], .field input[type="number"], .field select, .field textarea {
+      width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;
+    }
+    .field textarea { min-height: 90px; resize: vertical; }
+    .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .row .field { flex: 1; min-width: 220px; }
+
+    #drop-zone {
+      border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
+      color: #666; cursor: pointer; margin-bottom: 1rem;
+    }
+    #drop-zone.dragover { background: #eef8f4; border-color: #075E54; }
+
+    .warning-box {
+      background: #fff3cd; border: 1px solid #ffcc00; color: #7a5c00;
+      padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; font-weight: bold;
+    }
+
+    .send-button { background: #25D366; color: #fff; border: none; padding: 0.7rem 1.5rem; border-radius: 6px; font-weight: bold; font-size: 1rem; }
+    .send-button:disabled { background: #a9d9bc; cursor: not-allowed; }
+
+    #campaign-result, #import-result { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
+    #campaign-result.ok, #import-result.ok { background: #d4f5dd; color: #1a7a3c; }
+    #campaign-result.error, #import-result.error { background: #fbdada; color: #c0392b; }
   </style>
 </head>
 <body>
@@ -52,64 +82,147 @@
       <button id="logout-btn" type="button">Se déconnecter</button>
     </header>
 
-    <section id="status-section">
-      <h2>Statut de connexion</h2>
-      <p id="status-text">Vérification...</p>
+    <nav id="tabs">
+      <button type="button" class="tab-btn active" data-tab="status">Statut &amp; Connexion</button>
+      <button type="button" class="tab-btn" data-tab="groups">Gestion des Groupes</button>
+      <button type="button" class="tab-btn" data-tab="participants">Participants &amp; Extraction</button>
+      <button type="button" class="tab-btn" data-tab="campaign">Campagnes d'Envoi &amp; Médias</button>
+      <button type="button" class="tab-btn" data-tab="import">Importation Excel / CSV</button>
+    </nav>
+
+    <!-- Section 1 : Statut & Connexion -->
+    <section class="panel active" id="panel-status">
+      <h2>Statut &amp; Connexion</h2>
+      <span id="status-badge" class="badge disconnected">Vérification...</span>
       <div id="qr-container" hidden>
         <img id="qr-image" alt="QR Code WhatsApp" />
         <p>Scannez ce QR code avec WhatsApp pour connecter l'appareil.</p>
       </div>
     </section>
 
-    <div id="main-content" hidden>
-      <section id="groups-section">
-        <h2>Groupes WhatsApp</h2>
-        <table>
-          <thead>
-            <tr><th>Nom du groupe</th><th>ID du groupe</th><th>Action</th></tr>
-          </thead>
-          <tbody id="groups-body">
-            <tr><td colspan="3" class="empty">Chargement...</td></tr>
-          </tbody>
-        </table>
+    <!-- Section 2 : Gestion des Groupes -->
+    <section class="panel" id="panel-groups">
+      <h2>Gestion des Groupes</h2>
+      <button type="button" id="load-groups-btn">Lister mes groupes</button>
+      <table style="margin-top: 1rem;">
+        <thead>
+          <tr><th>Nom du groupe</th><th>ID du groupe</th><th>Membres</th><th>Action</th></tr>
+        </thead>
+        <tbody id="groups-body">
+          <tr><td colspan="4" class="empty">Cliquez sur "Lister mes groupes" pour charger la liste.</td></tr>
+        </tbody>
+      </table>
+    </section>
 
-        <div id="participants">
-          <h3 id="participants-title"></h3>
-          <ul id="participants-list"></ul>
+    <!-- Section 3 : Participants & Extraction -->
+    <section class="panel" id="panel-participants">
+      <h2>Participants &amp; Extraction</h2>
+      <div class="field">
+        <label for="participants-group-select">Groupe</label>
+        <select id="participants-group-select">
+          <option value="">-- Sélectionnez un groupe (onglet "Gestion des Groupes") --</option>
+        </select>
+      </div>
+      <button type="button" id="load-participants-btn">Charger les membres</button>
+      <button type="button" id="use-participants-btn">Utiliser comme destinataires de campagne</button>
+
+      <h3 id="participants-title" style="margin-top: 1.5rem;"></h3>
+      <ul id="participants-list"></ul>
+    </section>
+
+    <!-- Section 4 : Campagnes d'Envoi & Médias -->
+    <section class="panel" id="panel-campaign">
+      <h2>Campagnes d'Envoi &amp; Médias</h2>
+
+      <div class="warning-box">
+        ⚠️ Attention : L'envoi massif ou trop rapide peut entraîner le blocage temporaire ou définitif de votre compte WhatsApp par Meta. Privilégiez un délai d'au moins 10 à 15 secondes entre chaque message.
+      </div>
+
+      <div class="field">
+        <label for="campaign-message">Message (emojis et texte libre supportés)</label>
+        <textarea id="campaign-message" placeholder="Écrivez votre message ici... 😀"></textarea>
+      </div>
+
+      <div class="field">
+        <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF)</label>
+        <div id="drop-zone">Glissez-déposez un fichier ici, ou cliquez pour parcourir</div>
+        <input type="file" id="campaign-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+        <p id="campaign-file-name" class="empty">Aucun fichier sélectionné.</p>
+      </div>
+
+      <div class="field">
+        <label>Cible de l'envoi</label>
+        <label><input type="radio" name="target-mode" value="group" checked /> Groupe WhatsApp</label>
+        <label style="margin-left: 1.5rem;"><input type="radio" name="target-mode" value="numbers" /> Liste de numéros</label>
+      </div>
+
+      <div class="field" id="campaign-group-field">
+        <label for="campaign-group-select">Groupe cible</label>
+        <select id="campaign-group-select">
+          <option value="">-- Sélectionnez un groupe (onglet "Gestion des Groupes") --</option>
+        </select>
+      </div>
+
+      <div class="field" id="campaign-numbers-field" hidden>
+        <label for="campaign-numbers">Numéros cibles (un par ligne, ou importés depuis l'onglet Excel/CSV)</label>
+        <textarea id="campaign-numbers" placeholder="22501020304&#10;22505060708"></textarea>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="batch-size">Nombre de messages par lot</label>
+          <input type="number" id="batch-size" value="5" min="1" />
         </div>
-      </section>
+        <div class="field">
+          <label for="delay-seconds">Délai d'attente entre chaque message (secondes)</label>
+          <input type="number" id="delay-seconds" value="12" min="1" />
+        </div>
+      </div>
 
-      <section id="chat-section">
-        <h2>Assistant (langage naturel)</h2>
-        <div id="chat-log"></div>
-        <form id="chat-form">
-          <input type="text" id="chat-input" placeholder='Ex: "liste mes groupes"' autocomplete="off" />
-          <button type="submit">Envoyer</button>
-        </form>
-      </section>
-    </div>
+      <button type="button" id="send-campaign-btn" class="send-button">🚀 Lancer l'envoi</button>
+      <div id="campaign-result" hidden></div>
+    </section>
+
+    <!-- Section 5 : Importation Excel / CSV -->
+    <section class="panel" id="panel-import">
+      <h2>Importation Excel / CSV</h2>
+      <div class="field">
+        <label for="import-file">Fichier de contacts (.xlsx ou .csv, colonnes "telephone" et "prenom")</label>
+        <input type="file" id="import-file" accept=".xlsx,.csv" />
+      </div>
+      <button type="button" id="import-btn">Importer</button>
+      <div id="import-result" hidden></div>
+
+      <table style="margin-top: 1rem;">
+        <thead>
+          <tr><th>Téléphone</th><th>Prénom</th></tr>
+        </thead>
+        <tbody id="import-body">
+          <tr><td colspan="2" class="empty">Aucun contact importé.</td></tr>
+        </tbody>
+      </table>
+    </section>
   </div>
 
   <script>
     const STORAGE_KEY = 'admin_password';
+    const state = { groups: [], importedContacts: [] };
+    let selectedFile = null;
 
+    // ---------- Auth ----------
     function getStoredPassword() {
       try { return localStorage.getItem(STORAGE_KEY) || ''; } catch (err) { return ''; }
     }
-
     function setStoredPassword(pw) {
       try { localStorage.setItem(STORAGE_KEY, pw); } catch (err) { /* stockage indisponible */ }
     }
-
     function clearStoredPassword() {
       try { localStorage.removeItem(STORAGE_KEY); } catch (err) { /* stockage indisponible */ }
     }
-
     function authHeaders() {
       const pw = getStoredPassword();
       return pw ? { 'x-admin-password': pw } : {};
     }
-
     async function apiFetch(url, options) {
       options = options || {};
       const headers = Object.assign({}, options.headers || {}, authHeaders());
@@ -122,21 +235,12 @@
     }
 
     function showLogin(errorMessage) {
-      if (statusInterval) {
-        clearInterval(statusInterval);
-        statusInterval = null;
-      }
+      if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
       document.getElementById('app').hidden = true;
       document.getElementById('login-screen').hidden = false;
       const errEl = document.getElementById('login-error');
-      if (errorMessage) {
-        errEl.textContent = errorMessage;
-        errEl.hidden = false;
-      } else {
-        errEl.hidden = true;
-      }
+      if (errorMessage) { errEl.textContent = errorMessage; errEl.hidden = false; } else { errEl.hidden = true; }
     }
-
     function showApp() {
       document.getElementById('login-screen').hidden = true;
       document.getElementById('app').hidden = false;
@@ -172,26 +276,31 @@
 
     async function tryAutoLogin() {
       const pw = getStoredPassword();
-      if (!pw) {
-        showLogin();
-        return false;
-      }
+      if (!pw) { showLogin(); return false; }
       try {
         const res = await fetch('/api/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password: pw }),
         });
-        if (res.ok) {
-          showApp();
-          return true;
-        }
+        if (res.ok) { showApp(); return true; }
       } catch (err) { /* réseau indisponible */ }
       clearStoredPassword();
       showLogin();
       return false;
     }
 
+    // ---------- Tabs ----------
+    document.querySelectorAll('.tab-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+      });
+    });
+
+    // ---------- Section 1 : Statut & Connexion ----------
     let statusInterval = null;
     let wasConnected = false;
 
@@ -199,22 +308,18 @@
       try {
         const res = await apiFetch('/api/status');
         const data = await res.json();
-        const statusText = document.getElementById('status-text');
+        const badge = document.getElementById('status-badge');
         const qrContainer = document.getElementById('qr-container');
         const qrImage = document.getElementById('qr-image');
-        const mainContent = document.getElementById('main-content');
 
         if (data.connected) {
-          statusText.textContent = '✅ Connecté à WhatsApp';
+          badge.textContent = 'Connecté';
+          badge.className = 'badge connected';
           qrContainer.hidden = true;
-          mainContent.hidden = false;
-          if (!wasConnected) {
-            loadGroups();
-          }
           wasConnected = true;
         } else {
-          statusText.textContent = '⏳ En attente de connexion...';
-          mainContent.hidden = true;
+          badge.textContent = 'Déconnecté';
+          badge.className = 'badge disconnected';
           if (data.qr) {
             qrImage.src = data.qr;
             qrContainer.hidden = false;
@@ -228,26 +333,38 @@
       }
     }
 
+    // ---------- Section 2 : Gestion des Groupes ----------
+    function populateGroupSelects() {
+      [document.getElementById('participants-group-select'), document.getElementById('campaign-group-select')].forEach((select) => {
+        const current = select.value;
+        select.innerHTML = '<option value="">-- Sélectionnez un groupe --</option>';
+        state.groups.forEach((group) => {
+          const opt = document.createElement('option');
+          opt.value = group.id;
+          opt.textContent = group.subject || '(sans nom)';
+          select.appendChild(opt);
+        });
+        if (current) select.value = current;
+      });
+    }
+
     async function loadGroups() {
       const tbody = document.getElementById('groups-body');
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">Chargement...</td></tr>';
       try {
         const res = await apiFetch('/api/groups');
         const groups = await res.json();
+        state.groups = Array.isArray(groups) ? groups : [];
+        populateGroupSelects();
 
         tbody.innerHTML = '';
 
-        if (!Array.isArray(groups) || groups.length === 0) {
-          const tr = document.createElement('tr');
-          const td = document.createElement('td');
-          td.colSpan = 3;
-          td.className = 'empty';
-          td.textContent = 'Aucun groupe trouvé.';
-          tr.appendChild(td);
-          tbody.appendChild(tr);
+        if (state.groups.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" class="empty">Aucun groupe trouvé.</td></tr>';
           return;
         }
 
-        groups.forEach((group) => {
+        state.groups.forEach((group) => {
           const tr = document.createElement('tr');
 
           const nameTd = document.createElement('td');
@@ -256,41 +373,63 @@
           const idTd = document.createElement('td');
           idTd.textContent = group.id;
 
+          const countTd = document.createElement('td');
+          countTd.textContent = Array.isArray(group.participants) ? group.participants.length : '-';
+
           const actionTd = document.createElement('td');
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.textContent = 'Voir les participants';
-          btn.addEventListener('click', () => loadParticipants(group.id, group.subject));
+          btn.addEventListener('click', () => {
+            document.querySelector('.tab-btn[data-tab="participants"]').click();
+            document.getElementById('participants-group-select').value = group.id;
+            loadParticipants();
+          });
           actionTd.appendChild(btn);
 
           tr.appendChild(nameTd);
           tr.appendChild(idTd);
+          tr.appendChild(countTd);
           tr.appendChild(actionTd);
           tbody.appendChild(tr);
         });
       } catch (err) {
-        // apiFetch gère déjà la redirection vers le login en cas de 401
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">Erreur lors du chargement des groupes.</td></tr>';
       }
     }
+    document.getElementById('load-groups-btn').addEventListener('click', loadGroups);
 
-    async function loadParticipants(groupId, groupName) {
+    // ---------- Section 3 : Participants & Extraction ----------
+    let currentParticipants = [];
+
+    async function loadParticipants() {
+      const groupId = document.getElementById('participants-group-select').value;
       const title = document.getElementById('participants-title');
       const list = document.getElementById('participants-list');
+
+      if (!groupId) {
+        title.textContent = 'Sélectionnez un groupe.';
+        return;
+      }
+
       title.textContent = 'Chargement des participants...';
       list.innerHTML = '';
 
       try {
         const res = await apiFetch('/api/groups/' + encodeURIComponent(groupId) + '/participants');
         const participants = await res.json();
+        currentParticipants = Array.isArray(participants) ? participants : [];
 
-        if (!Array.isArray(participants) || participants.length === 0) {
-          title.textContent = 'Aucun participant trouvé pour "' + (groupName || groupId) + '".';
+        const group = state.groups.find((g) => g.id === groupId);
+        const groupName = group ? group.subject : groupId;
+
+        if (currentParticipants.length === 0) {
+          title.textContent = 'Aucun participant trouvé pour "' + groupName + '".';
           return;
         }
 
-        title.textContent = 'Membres de "' + (groupName || groupId) + '" (' + participants.length + ')';
-
-        participants.forEach((p) => {
+        title.textContent = 'Membres de "' + groupName + '" (' + currentParticipants.length + ')';
+        currentParticipants.forEach((p) => {
           const li = document.createElement('li');
           li.textContent = (p.id || '').split('@')[0];
           list.appendChild(li);
@@ -299,42 +438,180 @@
         title.textContent = 'Erreur lors du chargement des participants.';
       }
     }
+    document.getElementById('load-participants-btn').addEventListener('click', loadParticipants);
 
-    function appendChatLine(author, text) {
-      const log = document.getElementById('chat-log');
-      const line = document.createElement('div');
-      line.className = 'chat-line ' + author;
-      const strong = document.createElement('strong');
-      strong.textContent = author === 'user' ? 'Vous : ' : 'Assistant : ';
-      const span = document.createElement('span');
-      span.textContent = text;
-      line.appendChild(strong);
-      line.appendChild(span);
-      log.appendChild(line);
-      log.scrollTop = log.scrollHeight;
+    document.getElementById('use-participants-btn').addEventListener('click', () => {
+      if (currentParticipants.length === 0) {
+        alert('Chargez d\'abord les membres d\'un groupe.');
+        return;
+      }
+      const numbers = currentParticipants.map((p) => (p.id || '').split('@')[0]).join('\n');
+      document.getElementById('campaign-numbers').value = numbers;
+      document.querySelector('input[name="target-mode"][value="numbers"]').checked = true;
+      toggleTargetMode();
+      document.querySelector('.tab-btn[data-tab="campaign"]').click();
+    });
+
+    // ---------- Section 4 : Campagnes d'Envoi & Médias ----------
+    function toggleTargetMode() {
+      const mode = document.querySelector('input[name="target-mode"]:checked').value;
+      document.getElementById('campaign-group-field').hidden = mode !== 'group';
+      document.getElementById('campaign-numbers-field').hidden = mode !== 'numbers';
+    }
+    document.querySelectorAll('input[name="target-mode"]').forEach((radio) => {
+      radio.addEventListener('change', toggleTargetMode);
+    });
+
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('campaign-file');
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        setSelectedFile(e.dataTransfer.files[0]);
+      }
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files && fileInput.files[0]) {
+        setSelectedFile(fileInput.files[0]);
+      }
+    });
+    function setSelectedFile(file) {
+      selectedFile = file;
+      document.getElementById('campaign-file-name').textContent = 'Fichier sélectionné : ' + file.name;
     }
 
-    document.getElementById('chat-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const input = document.getElementById('chat-input');
-      const message = input.value.trim();
-      if (!message) return;
-      appendChatLine('user', message);
-      input.value = '';
+    function showCampaignResult(message, isError) {
+      const el = document.getElementById('campaign-result');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    document.getElementById('send-campaign-btn').addEventListener('click', async () => {
+      const message = document.getElementById('campaign-message').value.trim();
+      const mode = document.querySelector('input[name="target-mode"]:checked').value;
+      const groupId = document.getElementById('campaign-group-select').value;
+      const numbersRaw = document.getElementById('campaign-numbers').value;
+      const batchSize = document.getElementById('batch-size').value;
+      const delaySeconds = document.getElementById('delay-seconds').value;
+
+      if (!message) {
+        showCampaignResult('Le message ne peut pas être vide.', true);
+        return;
+      }
+      if (mode === 'group' && !groupId) {
+        showCampaignResult('Sélectionnez un groupe cible.', true);
+        return;
+      }
+      if (mode === 'numbers' && !numbersRaw.trim()) {
+        showCampaignResult('Renseignez au moins un numéro cible.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('message', message);
+      formData.append('batchSize', batchSize);
+      formData.append('delaySeconds', delaySeconds);
+
+      if (mode === 'group') {
+        formData.append('groupId', groupId);
+      } else {
+        const numbers = numbersRaw.split(/[\n,]/).map((n) => n.trim()).filter(Boolean);
+        formData.append('recipients', JSON.stringify(numbers));
+      }
+
+      if (selectedFile) {
+        formData.append('media', selectedFile);
+      }
+
+      const sendBtn = document.getElementById('send-campaign-btn');
+      sendBtn.disabled = true;
+
       try {
-        const res = await apiFetch('/api/chat-natural', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message }),
-        });
+        const res = await apiFetch('/api/messages/queue', { method: 'POST', body: formData });
         const data = await res.json();
-        appendChatLine('assistant', data.reply || 'Pas de réponse.');
+        if (!res.ok) {
+          showCampaignResult(data.error || 'Échec du lancement de la campagne.', true);
+        } else {
+          showCampaignResult(
+            '🚀 Campagne lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
+            ', délai ' + data.delaySeconds + 's' + (data.media ? ', pièce jointe : ' + data.media : '') + '.',
+            false,
+          );
+        }
       } catch (err) {
-        appendChatLine('assistant', 'Erreur lors du traitement de la demande.');
+        showCampaignResult('Erreur réseau lors du lancement de la campagne.', true);
+      } finally {
+        sendBtn.disabled = false;
       }
     });
 
+    // ---------- Section 5 : Importation Excel / CSV ----------
+    function renderImportedContacts() {
+      const tbody = document.getElementById('import-body');
+      tbody.innerHTML = '';
+      if (state.importedContacts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="2" class="empty">Aucun contact importé.</td></tr>';
+        return;
+      }
+      state.importedContacts.forEach((c) => {
+        const tr = document.createElement('tr');
+        const telTd = document.createElement('td');
+        telTd.textContent = c.telephone;
+        const nameTd = document.createElement('td');
+        nameTd.textContent = c.prenom || '-';
+        tr.appendChild(telTd);
+        tr.appendChild(nameTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    function showImportResult(message, isError) {
+      const el = document.getElementById('import-result');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    document.getElementById('import-btn').addEventListener('click', async () => {
+      const fileInputEl = document.getElementById('import-file');
+      if (!fileInputEl.files || !fileInputEl.files[0]) {
+        showImportResult('Sélectionnez un fichier .xlsx ou .csv.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('file', fileInputEl.files[0]);
+
+      try {
+        const res = await apiFetch('/api/contacts/import', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          showImportResult(data.error || 'Échec de l\'import.', true);
+          return;
+        }
+        state.importedContacts = data.contacts || [];
+        renderImportedContacts();
+        showImportResult(data.total + ' contact(s) importé(s).', false);
+
+        if (state.importedContacts.length > 0) {
+          const numbers = state.importedContacts.map((c) => c.telephone).join('\n');
+          document.getElementById('campaign-numbers').value = numbers;
+          document.querySelector('input[name="target-mode"][value="numbers"]').checked = true;
+          toggleTargetMode();
+        }
+      } catch (err) {
+        showImportResult('Erreur réseau lors de l\'import.', true);
+      }
+    });
+
+    // ---------- Init ----------
     function init() {
+      toggleTargetMode();
       pollStatus();
       if (statusInterval) clearInterval(statusInterval);
       statusInterval = setInterval(pollStatus, 4000);
