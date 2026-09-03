@@ -1,4 +1,4 @@
-FROM node:18-slim
+FROM node:20-slim
 
 # Installation des outils de build pour les modules natifs Node.js
 RUN apt-get update && apt-get install -y \

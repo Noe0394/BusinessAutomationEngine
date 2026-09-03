@@ -1,4 +1,7 @@
-global.crypto = require('crypto');
+const crypto = require('crypto');
+if (!globalThis.crypto) {
+  globalThis.crypto = crypto.webcrypto || crypto;
+}
 
 const express = require('express');
 const whatsapp = require('./adapters/whatsapp');

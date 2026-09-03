@@ -1,4 +1,7 @@
-global.crypto = require('crypto');
+const crypto = require('crypto');
+if (!globalThis.crypto) {
+  globalThis.crypto = crypto.webcrypto || crypto;
+}
 
 const {
   default: makeWASocket,
