@@ -1,3 +1,5 @@
+global.crypto = require('crypto');
+
 const express = require('express');
 const whatsapp = require('./adapters/whatsapp');
 
