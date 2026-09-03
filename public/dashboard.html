@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Orchestrateur WhatsApp</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: sans-serif; margin: 0; background: #f7f7f8; color: #1a1a1a; }
+    header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 2rem; background: #075E54; color: #fff; }
+    header h1 { margin: 0; font-size: 1.25rem; }
+    header button { background: #fff; color: #075E54; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; }
+
+    #login-screen { max-width: 320px; margin: 4rem auto; padding: 2rem; background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); text-align: center; }
+    #login-screen input { width: 100%; padding: 0.5rem; margin-bottom: 1rem; }
+    #login-screen button { width: 100%; padding: 0.5rem; background: #075E54; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    .error { color: #c0392b; }
+
+    section { margin: 1.5rem 2rem; background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #e0e0e0; padding: 0.5rem 0.75rem; text-align: left; }
+    th { background: #f5f5f5; }
+    button { cursor: pointer; }
+    .empty { color: #777; }
+
+    #qr-container { text-align: center; margin-top: 1rem; }
+    #qr-image { width: 260px; height: 260px; }
+
+    #participants-list { list-style: none; padding: 0; }
+    #participants-list li { padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
+
+    #chat-log { max-height: 300px; overflow-y: auto; border: 1px solid #e0e0e0; padding: 0.75rem; margin-bottom: 0.75rem; border-radius: 4px; background: #fafafa; }
+    .chat-line { margin-bottom: 0.5rem; white-space: pre-wrap; }
+    .chat-line.assistant strong { color: #075E54; }
+    #chat-form { display: flex; gap: 0.5rem; }
+    #chat-input { flex: 1; padding: 0.5rem; }
+    #chat-form button { padding: 0.5rem 1rem; background: #075E54; color: #fff; border: none; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="login-screen">
+    <h1>Connexion administrateur</h1>
+    <form id="login-form">
+      <input type="password" id="login-password" placeholder="Mot de passe administrateur" required />
+      <button type="submit">Se connecter</button>
+    </form>
+    <p id="login-error" class="error" hidden></p>
+  </div>
+
+  <div id="app" hidden>
+    <header>
+      <h1>Orchestrateur WhatsApp</h1>
+      <button id="logout-btn" type="button">Se déconnecter</button>
+    </header>
+
+    <section id="status-section">
+      <h2>Statut de connexion</h2>
+      <p id="status-text">Vérification...</p>
+      <div id="qr-container" hidden>
+        <img id="qr-image" alt="QR Code WhatsApp" />
+        <p>Scannez ce QR code avec WhatsApp pour connecter l'appareil.</p>
+      </div>
+    </section>
+
+    <div id="main-content" hidden>
+      <section id="groups-section">
+        <h2>Groupes WhatsApp</h2>
+        <table>
+          <thead>
+            <tr><th>Nom du groupe</th><th>ID du groupe</th><th>Action</th></tr>
+          </thead>
+          <tbody id="groups-body">
+            <tr><td colspan="3" class="empty">Chargement...</td></tr>
+          </tbody>
+        </table>
+
+        <div id="participants">
+          <h3 id="participants-title"></h3>
+          <ul id="participants-list"></ul>
+        </div>
+      </section>
+
+      <section id="chat-section">
+        <h2>Assistant (langage naturel)</h2>
+        <div id="chat-log"></div>
+        <form id="chat-form">
+          <input type="text" id="chat-input" placeholder='Ex: "liste mes groupes"' autocomplete="off" />
+          <button type="submit">Envoyer</button>
+        </form>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'admin_password';
+
+    function getStoredPassword() {
+      try { return localStorage.getItem(STORAGE_KEY) || ''; } catch (err) { return ''; }
+    }
+
+    function setStoredPassword(pw) {
+      try { localStorage.setItem(STORAGE_KEY, pw); } catch (err) { /* stockage indisponible */ }
+    }
+
+    function clearStoredPassword() {
+      try { localStorage.removeItem(STORAGE_KEY); } catch (err) { /* stockage indisponible */ }
+    }
+
+    function authHeaders() {
+      const pw = getStoredPassword();
+      return pw ? { 'x-admin-password': pw } : {};
+    }
+
+    async function apiFetch(url, options) {
+      options = options || {};
+      const headers = Object.assign({}, options.headers || {}, authHeaders());
+      const res = await fetch(url, Object.assign({}, options, { headers }));
+      if (res.status === 401) {
+        showLogin('Session expirée ou mot de passe invalide.');
+        throw new Error('unauthorized');
+      }
+      return res;
+    }
+
+    function showLogin(errorMessage) {
+      if (statusInterval) {
+        clearInterval(statusInterval);
+        statusInterval = null;
+      }
+      document.getElementById('app').hidden = true;
+      document.getElementById('login-screen').hidden = false;
+      const errEl = document.getElementById('login-error');
+      if (errorMessage) {
+        errEl.textContent = errorMessage;
+        errEl.hidden = false;
+      } else {
+        errEl.hidden = true;
+      }
+    }
+
+    function showApp() {
+      document.getElementById('login-screen').hidden = true;
+      document.getElementById('app').hidden = false;
+    }
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = document.getElementById('login-password').value;
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        if (!res.ok) {
+          document.getElementById('login-error').textContent = 'Mot de passe incorrect.';
+          document.getElementById('login-error').hidden = false;
+          return;
+        }
+        setStoredPassword(password);
+        showApp();
+        init();
+      } catch (err) {
+        document.getElementById('login-error').textContent = 'Erreur de connexion au serveur.';
+        document.getElementById('login-error').hidden = false;
+      }
+    });
+
+    document.getElementById('logout-btn').addEventListener('click', () => {
+      clearStoredPassword();
+      showLogin();
+    });
+
+    async function tryAutoLogin() {
+      const pw = getStoredPassword();
+      if (!pw) {
+        showLogin();
+        return false;
+      }
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw }),
+        });
+        if (res.ok) {
+          showApp();
+          return true;
+        }
+      } catch (err) { /* réseau indisponible */ }
+      clearStoredPassword();
+      showLogin();
+      return false;
+    }
+
+    let statusInterval = null;
+    let wasConnected = false;
+
+    async function pollStatus() {
+      try {
+        const res = await apiFetch('/api/status');
+        const data = await res.json();
+        const statusText = document.getElementById('status-text');
+        const qrContainer = document.getElementById('qr-container');
+        const qrImage = document.getElementById('qr-image');
+        const mainContent = document.getElementById('main-content');
+
+        if (data.connected) {
+          statusText.textContent = '✅ Connecté à WhatsApp';
+          qrContainer.hidden = true;
+          mainContent.hidden = false;
+          if (!wasConnected) {
+            loadGroups();
+          }
+          wasConnected = true;
+        } else {
+          statusText.textContent = '⏳ En attente de connexion...';
+          mainContent.hidden = true;
+          if (data.qr) {
+            qrImage.src = data.qr;
+            qrContainer.hidden = false;
+          } else {
+            qrContainer.hidden = true;
+          }
+          wasConnected = false;
+        }
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    async function loadGroups() {
+      const tbody = document.getElementById('groups-body');
+      try {
+        const res = await apiFetch('/api/groups');
+        const groups = await res.json();
+
+        tbody.innerHTML = '';
+
+        if (!Array.isArray(groups) || groups.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 3;
+          td.className = 'empty';
+          td.textContent = 'Aucun groupe trouvé.';
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
+
+        groups.forEach((group) => {
+          const tr = document.createElement('tr');
+
+          const nameTd = document.createElement('td');
+          nameTd.textContent = group.subject || '(sans nom)';
+
+          const idTd = document.createElement('td');
+          idTd.textContent = group.id;
+
+          const actionTd = document.createElement('td');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = 'Voir les participants';
+          btn.addEventListener('click', () => loadParticipants(group.id, group.subject));
+          actionTd.appendChild(btn);
+
+          tr.appendChild(nameTd);
+          tr.appendChild(idTd);
+          tr.appendChild(actionTd);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    async function loadParticipants(groupId, groupName) {
+      const title = document.getElementById('participants-title');
+      const list = document.getElementById('participants-list');
+      title.textContent = 'Chargement des participants...';
+      list.innerHTML = '';
+
+      try {
+        const res = await apiFetch('/api/groups/' + encodeURIComponent(groupId) + '/participants');
+        const participants = await res.json();
+
+        if (!Array.isArray(participants) || participants.length === 0) {
+          title.textContent = 'Aucun participant trouvé pour "' + (groupName || groupId) + '".';
+          return;
+        }
+
+        title.textContent = 'Membres de "' + (groupName || groupId) + '" (' + participants.length + ')';
+
+        participants.forEach((p) => {
+          const li = document.createElement('li');
+          li.textContent = (p.id || '').split('@')[0];
+          list.appendChild(li);
+        });
+      } catch (err) {
+        title.textContent = 'Erreur lors du chargement des participants.';
+      }
+    }
+
+    function appendChatLine(author, text) {
+      const log = document.getElementById('chat-log');
+      const line = document.createElement('div');
+      line.className = 'chat-line ' + author;
+      const strong = document.createElement('strong');
+      strong.textContent = author === 'user' ? 'Vous : ' : 'Assistant : ';
+      const span = document.createElement('span');
+      span.textContent = text;
+      line.appendChild(strong);
+      line.appendChild(span);
+      log.appendChild(line);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    document.getElementById('chat-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = document.getElementById('chat-input');
+      const message = input.value.trim();
+      if (!message) return;
+      appendChatLine('user', message);
+      input.value = '';
+      try {
+        const res = await apiFetch('/api/chat-natural', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+        const data = await res.json();
+        appendChatLine('assistant', data.reply || 'Pas de réponse.');
+      } catch (err) {
+        appendChatLine('assistant', 'Erreur lors du traitement de la demande.');
+      }
+    });
+
+    function init() {
+      pollStatus();
+      if (statusInterval) clearInterval(statusInterval);
+      statusInterval = setInterval(pollStatus, 4000);
+    }
+
+    tryAutoLogin().then((ok) => { if (ok) init(); });
+  </script>
+</body>
+</html>

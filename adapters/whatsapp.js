@@ -12,9 +12,14 @@ const qrcode = require('qrcode-terminal');
 
 let sock = null;
 let latestQR = null;
+let connected = false;
 
 function getQRCode() {
   return latestQR;
+}
+
+function isConnected() {
+  return connected;
 }
 
 async function connect() {
@@ -39,6 +44,7 @@ async function connect() {
     }
 
     if (connection === 'close') {
+      connected = false;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       console.log('Connexion WhatsApp fermée.', statusCode ? `(code: ${statusCode})` : '', 'Reconnexion:', shouldReconnect);
@@ -46,6 +52,7 @@ async function connect() {
         connect();
       }
     } else if (connection === 'open') {
+      connected = true;
       latestQR = null;
       console.log('Connexion WhatsApp établie.');
     }
@@ -95,6 +102,7 @@ module.exports = {
   connect,
   sendMessage,
   getQRCode,
+  isConnected,
   getGroupMetadata,
   getGroups,
   getGroupParticipants,
