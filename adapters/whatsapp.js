@@ -27,6 +27,9 @@ async function connect() {
 
     if (qr) {
       qrcode.generate(qr, { small: true });
+      console.log("=== QR CODE BRUT ===");
+      console.log(qr);
+      console.log("====================");
     }
 
     if (connection === 'close') {
