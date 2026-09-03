@@ -344,6 +344,15 @@
             actionTd.appendChild(unbindBtn);
           }
 
+          const deleteBtn = document.createElement('button');
+          deleteBtn.type = 'button';
+          deleteBtn.style.marginLeft = '0.5rem';
+          deleteBtn.style.background = '#c0392b';
+          deleteBtn.style.color = '#fff';
+          deleteBtn.textContent = 'Supprimer';
+          deleteBtn.addEventListener('click', () => deleteLicenseKey(lic.key));
+          actionTd.appendChild(deleteBtn);
+
           [keyTd, createdTd, expTd, statusTd, onlineTd, requestsTd, modulesTd, deviceTd, noteTd, actionTd].forEach((td) => tr.appendChild(td));
           tbody.appendChild(tr);
         });
@@ -378,6 +387,21 @@
           method: 'POST',
         });
         loadLicenses();
+      } catch (err) {
+        // la liste reste inchangée, l'utilisateur peut réessayer
+      }
+    }
+
+    async function deleteLicenseKey(key) {
+      if (!window.confirm('Supprimer définitivement la clé ' + key + ' ? Cette action est irréversible.')) {
+        return;
+      }
+      try {
+        await apiFetch('/api/admin/licenses/' + encodeURIComponent(key), {
+          method: 'DELETE',
+        });
+        loadLicenses();
+        loadOverview();
       } catch (err) {
         // la liste reste inchangée, l'utilisateur peut réessayer
       }

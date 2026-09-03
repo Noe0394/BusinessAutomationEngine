@@ -124,7 +124,7 @@ function requireAdmin(req, res, next) {
 // restriction de module), soit avec une clé de licence valide, active et non
 // expirée — dans ce cas req.allowedModules porte la liste des modules
 // autorisés pour cette clé, vérifiée ensuite par requireModule().
-function requireAccess(req, res, next) {
+async function requireAccess(req, res, next) {
   const providedPassword = req.get('x-admin-password') || req.query.password;
 
   if (providedPassword && providedPassword === ADMIN_PASSWORD) {
@@ -137,7 +137,7 @@ function requireAccess(req, res, next) {
   const deviceId = req.get('x-device-id') || req.query.deviceId;
 
   if (providedKey) {
-    const result = licenses.verifyKey(providedKey, deviceId);
+    const result = await licenses.verifyKey(providedKey, deviceId);
     if (result.valid) {
       req.isAdmin = false;
       req.licenseKey = providedKey;
@@ -553,9 +553,9 @@ app.post('/api/admin/login', (req, res) => {
   return res.status(401).json({ error: 'Mot de passe incorrect.' });
 });
 
-app.post('/api/auth/verify-key', (req, res) => {
+app.post('/api/auth/verify-key', async (req, res) => {
   const { key, deviceId } = req.body || {};
-  const result = licenses.verifyKey(key, deviceId);
+  const result = await licenses.verifyKey(key, deviceId);
 
   if (!result.valid) {
     const messages = {
@@ -625,43 +625,61 @@ app.post('/api/admin/oauth-config/tiktok', requireAdmin, (req, res) => {
   res.status(200).json({ success: true });
 });
 
-app.post('/api/admin/licenses', requireAdmin, (req, res) => {
+app.post('/api/admin/licenses', requireAdmin, async (req, res) => {
   const { expiresAt, note, allowedModules } = req.body || {};
 
   if (expiresAt && Number.isNaN(new Date(expiresAt).getTime())) {
     return res.status(400).json({ error: 'Date d\'expiration invalide.' });
   }
 
-  const license = licenses.createLicense({ expiresAt: expiresAt || null, note, allowedModules });
+  const license = await licenses.createLicense({ expiresAt: expiresAt || null, note, allowedModules });
   res.status(201).json(license);
 });
 
-app.post('/api/admin/licenses/:key/toggle', requireAdmin, (req, res) => {
+app.post('/api/admin/licenses/:key/toggle', requireAdmin, async (req, res) => {
   const { active } = req.body || {};
 
   try {
-    const license = licenses.setLicenseActive(req.params.key, Boolean(active));
+    const license = await licenses.setLicenseActive(req.params.key, Boolean(active));
     res.status(200).json(license);
   } catch (err) {
     if (err.message === 'LICENSE_NOT_FOUND') {
       return res.status(404).json({ error: 'Clé de licence introuvable.' });
     }
-    throw err;
+    console.error('Erreur lors de la mise à jour de la licence :', err);
+    res.status(500).json({ error: 'Erreur interne du serveur.' });
   }
 });
 
 // Libère la clé de son appareil actuel : le client pourra la réutiliser sur
 // un nouvel appareil (perte/changement de téléphone, etc.) sans devoir en
 // racheter une.
-app.post('/api/admin/licenses/:key/unbind-device', requireAdmin, (req, res) => {
+app.post('/api/admin/licenses/:key/unbind-device', requireAdmin, async (req, res) => {
   try {
-    const license = licenses.unbindDevice(req.params.key);
+    const license = await licenses.unbindDevice(req.params.key);
     res.status(200).json(license);
   } catch (err) {
     if (err.message === 'LICENSE_NOT_FOUND') {
       return res.status(404).json({ error: 'Clé de licence introuvable.' });
     }
-    throw err;
+    console.error('Erreur lors de la libération de l\'appareil :', err);
+    res.status(500).json({ error: 'Erreur interne du serveur.' });
+  }
+});
+
+// Suppression définitive d'une clé générée par erreur ou dont le client a
+// été remboursé — contrairement au toggle actif/inactif, elle disparaît de
+// la liste.
+app.delete('/api/admin/licenses/:key', requireAdmin, async (req, res) => {
+  try {
+    const license = await licenses.deleteLicense(req.params.key);
+    res.status(200).json(license);
+  } catch (err) {
+    if (err.message === 'LICENSE_NOT_FOUND') {
+      return res.status(404).json({ error: 'Clé de licence introuvable.' });
+    }
+    console.error('Erreur lors de la suppression de la licence :', err);
+    res.status(500).json({ error: 'Erreur interne du serveur.' });
   }
 });
 

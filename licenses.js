@@ -31,7 +31,13 @@ function loadLicenses() {
 // création de plusieurs clés en lot).
 let pushQueue = Promise.resolve();
 
-function saveLicenses(licenses) {
+// Attend la fin de l'envoi vers GitHub avant de rendre la main : sans ça, un
+// redémarrage du serveur (crash WhatsApp, veille Render...) survenant entre
+// l'écriture locale et la fin de l'envoi distant fait perdre la clé — au
+// redémarrage suivant, initFromRemote() écrase le fichier local (qui avait
+// la clé) avec la version distante (qui ne l'a pas encore). Écrire en
+// synchrone puis attendre le push rend cette fenêtre de perte négligeable.
+async function saveLicenses(licenses) {
   const content = JSON.stringify(licenses, null, 2);
   fs.writeFileSync(LICENSES_PATH, content, 'utf8');
 
@@ -41,6 +47,7 @@ function saveLicenses(licenses) {
       .catch((err) => {
         console.error('Échec de la sauvegarde des licences sur GitHub :', err.message);
       });
+    await pushQueue;
   }
 }
 
@@ -81,7 +88,7 @@ function normalizeModules(allowedModules) {
   return allowedModules.filter((m) => ALL_MODULES.includes(m));
 }
 
-function createLicense({ expiresAt, note, allowedModules } = {}) {
+async function createLicense({ expiresAt, note, allowedModules } = {}) {
   const licenses = loadLicenses();
 
   const license = {
@@ -104,8 +111,24 @@ function createLicense({ expiresAt, note, allowedModules } = {}) {
   };
 
   licenses.push(license);
-  saveLicenses(licenses);
+  await saveLicenses(licenses);
   return license;
+}
+
+// Suppression définitive d'une clé (ex: erreur de saisie, client remboursé).
+// Contrairement à la désactivation (setLicenseActive), la clé disparaît
+// entièrement de la liste — irréversible.
+async function deleteLicense(key) {
+  const licenses = loadLicenses();
+  const index = licenses.findIndex((l) => l.key === key);
+
+  if (index === -1) {
+    throw new Error('LICENSE_NOT_FOUND');
+  }
+
+  const [removed] = licenses.splice(index, 1);
+  await saveLicenses(licenses);
+  return removed;
 }
 
 function listLicenses() {
@@ -164,7 +187,7 @@ function getOverview() {
   };
 }
 
-function setLicenseActive(key, active) {
+async function setLicenseActive(key, active) {
   const licenses = loadLicenses();
   const license = licenses.find((l) => l.key === key);
 
@@ -173,11 +196,11 @@ function setLicenseActive(key, active) {
   }
 
   license.active = Boolean(active);
-  saveLicenses(licenses);
+  await saveLicenses(licenses);
   return license;
 }
 
-function verifyKey(key, deviceId) {
+async function verifyKey(key, deviceId) {
   if (!key) {
     return { valid: false, reason: 'MISSING_KEY' };
   }
@@ -206,7 +229,7 @@ function verifyKey(key, deviceId) {
     // appareil (jusqu'à libération manuelle par l'admin).
     license.boundDeviceId = deviceId;
     license.boundAt = new Date().toISOString();
-    saveLicenses(licenses);
+    await saveLicenses(licenses);
   } else if (license.boundDeviceId !== deviceId) {
     return { valid: false, reason: 'DEVICE_MISMATCH' };
   }
@@ -218,7 +241,7 @@ function verifyKey(key, deviceId) {
   return { valid: true, license: { ...license, allowedModules } };
 }
 
-function unbindDevice(key) {
+async function unbindDevice(key) {
   const licenses = loadLicenses();
   const license = licenses.find((l) => l.key === key);
 
@@ -228,7 +251,7 @@ function unbindDevice(key) {
 
   license.boundDeviceId = null;
   license.boundAt = null;
-  saveLicenses(licenses);
+  await saveLicenses(licenses);
   return license;
 }
 
@@ -247,6 +270,7 @@ module.exports = {
   ALL_MODULES,
   initFromRemote,
   createLicense,
+  deleteLicense,
   listLicenses,
   listLicensesWithUsage,
   setLicenseActive,
