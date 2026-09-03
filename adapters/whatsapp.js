@@ -77,6 +77,10 @@ async function sendMedia(to, { buffer, mimetype, filename, caption }) {
     throw new Error('Adaptateur WhatsApp non initialisé.');
   }
 
+  if (mimetype === 'image/webp') {
+    return sock.sendMessage(to, { sticker: buffer });
+  }
+
   if (mimetype && mimetype.startsWith('image/')) {
     return sock.sendMessage(to, { image: buffer, caption });
   }

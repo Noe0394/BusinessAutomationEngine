@@ -55,12 +55,40 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function sendToQueue(recipients, message, options = {}) {
+let currentCampaign = null;
+
+async function interruptibleSleep(ms, shouldStop) {
+  const tickMs = 300;
+  let elapsed = 0;
+  while (elapsed < ms) {
+    if (shouldStop()) return;
+    const step = Math.min(tickMs, ms - elapsed);
+    await sleep(step);
+    elapsed += step;
+  }
+}
+
+async function runCampaignQueue(campaign, recipients, message, options = {}) {
   const { delaySeconds, batchSize, media } = options;
   const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipients.length;
 
   for (let i = 0; i < recipients.length; i += 1) {
+    if (campaign.stopRequested) {
+      for (let j = i; j < recipients.length; j += 1) {
+        campaign.results.push({
+          to: normalizeJid(recipients[j]),
+          status: 'interrupted',
+          timestamp: new Date().toISOString(),
+        });
+      }
+      campaign.status = 'stopped';
+      campaign.finishedAt = new Date().toISOString();
+      console.log('Campagne: interrompue par l\'utilisateur.');
+      return;
+    }
+
     const to = normalizeJid(recipients[i]);
+    let status = 'failed';
 
     try {
       if (media) {
@@ -68,21 +96,59 @@ async function sendToQueue(recipients, message, options = {}) {
       } else {
         await whatsapp.sendMessage(to, message);
       }
-      console.log(`File d'attente: message envoyé à ${to} (${i + 1}/${recipients.length}).`);
+      status = 'delivered';
+      campaign.success += 1;
+      console.log(`Campagne: message envoyé à ${to} (${i + 1}/${recipients.length}).`);
     } catch (err) {
-      console.error(`File d'attente: échec de l'envoi à ${to}:`, err);
+      campaign.failed += 1;
+      console.error(`Campagne: échec de l'envoi à ${to}:`, err);
     }
 
-    if (i < recipients.length - 1) {
+    campaign.sent += 1;
+    campaign.results.push({ to, status, timestamp: new Date().toISOString() });
+
+    if (i < recipients.length - 1 && !campaign.stopRequested) {
       const baseDelayMs = delaySeconds ? delaySeconds * 1000 : randomDelay(8000, 15000);
       const endOfBatch = (i + 1) % batch === 0;
       const delayMs = endOfBatch ? baseDelayMs * 3 : baseDelayMs;
-      console.log(`File d'attente: attente de ${Math.round(delayMs / 1000)}s ${endOfBatch ? '(pause entre lots) ' : ''}avant le prochain envoi...`);
-      await sleep(delayMs);
+      await interruptibleSleep(delayMs, () => campaign.stopRequested);
     }
   }
 
-  console.log("File d'attente: terminée.");
+  if (campaign.status === 'running') {
+    campaign.status = 'completed';
+    campaign.finishedAt = new Date().toISOString();
+  }
+
+  console.log('Campagne: terminée.');
+}
+
+function startCampaign(recipients, message, options = {}) {
+  if (currentCampaign && currentCampaign.status === 'running') {
+    throw new Error('CAMPAIGN_IN_PROGRESS');
+  }
+
+  currentCampaign = {
+    total: recipients.length,
+    sent: 0,
+    success: 0,
+    failed: 0,
+    status: 'running',
+    stopRequested: false,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    results: [],
+  };
+
+  const campaign = currentCampaign;
+
+  runCampaignQueue(campaign, recipients, message, options).catch((err) => {
+    console.error('Erreur pendant la campagne:', err);
+    campaign.status = 'stopped';
+    campaign.finishedAt = new Date().toISOString();
+  });
+
+  return campaign;
 }
 
 async function findGroupByName(name) {
@@ -139,9 +205,14 @@ async function handleNaturalMessage(message) {
     const recipients = participants.map((p) => p.id);
     const delaySeconds = delaySecondsRaw ? parseFloat(delaySecondsRaw) : undefined;
 
-    sendToQueue(recipients, campaignMessage.trim(), { delaySeconds }).catch((err) => {
-      console.error('Erreur pendant la campagne lancée via le chat:', err);
-    });
+    try {
+      startCampaign(recipients, campaignMessage.trim(), { delaySeconds });
+    } catch (err) {
+      if (err.message === 'CAMPAIGN_IN_PROGRESS') {
+        return 'Une campagne est déjà en cours. Attendez sa fin ou interrompez-la avant d\'en lancer une nouvelle.';
+      }
+      throw err;
+    }
 
     const delayLabel = delaySeconds ? `${delaySeconds}s fixe` : '8-15s aléatoire';
     return `🚀 Campagne lancée sur le groupe "${group.subject}" (${recipients.length} membre(s)). Délai entre chaque envoi : ${delayLabel}.`;
@@ -285,17 +356,46 @@ app.post('/api/messages/queue', requireAdminPassword, upload.single('media'), as
     ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
     : null;
 
+  let campaign;
+  try {
+    campaign = startCampaign(recipients, message, {
+      delaySeconds: fixedDelaySeconds,
+      batchSize: parsedBatchSize,
+      media,
+    });
+  } catch (err) {
+    if (err.message === 'CAMPAIGN_IN_PROGRESS') {
+      return res.status(409).json({
+        error: 'Une campagne est déjà en cours. Attendez sa fin ou interrompez-la (STOP) avant d\'en lancer une nouvelle.',
+      });
+    }
+    throw err;
+  }
+
   res.status(202).json({
-    status: 'queue_started',
-    total: recipients.length,
+    status: 'campaign_started',
+    total: campaign.total,
     delaySeconds: fixedDelaySeconds || '8-15 (aléatoire)',
     batchSize: parsedBatchSize || recipients.length,
     media: media ? media.filename : null,
   });
+});
 
-  sendToQueue(recipients, message, { delaySeconds: fixedDelaySeconds, batchSize: parsedBatchSize, media }).catch((err) => {
-    console.error("Erreur pendant le traitement de la file d'attente:", err);
-  });
+app.post('/api/messages/stop', requireAdminPassword, (req, res) => {
+  if (!currentCampaign || currentCampaign.status !== 'running') {
+    return res.status(400).json({ error: 'Aucune campagne en cours à interrompre.' });
+  }
+
+  currentCampaign.stopRequested = true;
+  res.status(200).json({ status: 'stop_requested' });
+});
+
+app.get('/api/messages/status', requireAdminPassword, (req, res) => {
+  if (!currentCampaign) {
+    return res.status(200).json({ exists: false });
+  }
+
+  res.status(200).json({ exists: true, ...currentCampaign });
 });
 
 app.post('/api/contacts/import', requireAdminPassword, upload.single('file'), async (req, res) => {
