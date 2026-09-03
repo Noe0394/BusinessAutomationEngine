@@ -9,12 +9,14 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const QRCode = require('qrcode');
 const whatsapp = require('./adapters/whatsapp');
+const FacebookMessengerAdapter = require('./adapters/facebook');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '@CYRUS2026';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
 const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
+const facebook = new FacebookMessengerAdapter();
 
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('ADMIN_PASSWORD non défini : utilisation du mot de passe par défaut codé en dur. Définissez cette variable d\'environnement avant tout déploiement public.');
@@ -549,6 +551,72 @@ app.post('/api/campaign/excel', requireAdminPassword, upload.single('file'), asy
 
   runCampaign(contacts, minDelaySeconds * 1000, maxDelaySeconds * 1000).catch((err) => {
     console.error('Erreur pendant l\'exécution de la campagne:', err);
+  });
+});
+
+app.get('/api/facebook/groups', requireAdminPassword, async (req, res) => {
+  if (!facebook.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Facebook Messenger non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
+    });
+  }
+
+  try {
+    const conversations = await facebook.getConversations();
+    res.status(200).json(conversations);
+  } catch (err) {
+    console.error('Erreur lors de la récupération des conversations Facebook:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Échec de la récupération des conversations Facebook Messenger.' });
+  }
+});
+
+app.post('/api/facebook/queue', requireAdminPassword, upload.single('media'), async (req, res) => {
+  if (!facebook.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Facebook Messenger non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
+    });
+  }
+
+  const { message, delaySeconds, batchSize } = req.body;
+  let { recipients } = req.body;
+
+  if (typeof recipients === 'string') {
+    try {
+      recipients = JSON.parse(recipients);
+    } catch (err) {
+      recipients = recipients.split(/[,\n]/).map((n) => n.trim()).filter(Boolean);
+    }
+  }
+
+  if (!Array.isArray(recipients) || recipients.length === 0 || !message) {
+    return res.status(400).json({
+      error: 'Fournissez "recipients" (tableau des destinataires Messenger) et un "message".',
+    });
+  }
+
+  const fixedDelaySeconds = delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined;
+  const parsedBatchSize = batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined;
+  const media = req.file
+    ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
+    : null;
+
+  res.status(202).json({
+    status: 'fb_queue_started',
+    total: recipients.length,
+    delaySeconds: fixedDelaySeconds || '10-15 (aléatoire)',
+    batchSize: parsedBatchSize || recipients.length,
+    media: media ? media.filename : null,
+  });
+
+  facebook.sendBulk(recipients, message, {
+    delaySeconds: fixedDelaySeconds,
+    batchSize: parsedBatchSize,
+    media,
+  }).then((results) => {
+    const success = results.filter((r) => r.status === 'delivered').length;
+    console.log(`Facebook Messenger: campagne terminée (${success}/${results.length} réussite(s)).`);
+  }).catch((err) => {
+    console.error('Erreur pendant la campagne Facebook Messenger:', err);
   });
 });
 

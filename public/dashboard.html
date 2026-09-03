@@ -142,6 +142,7 @@
       <button type="button" class="tab-btn" data-tab="groups">Groupes &amp; Contacts</button>
       <button type="button" class="tab-btn" data-tab="import">Import Excel/CSV</button>
       <button type="button" class="tab-btn" data-tab="campaign">Centre d'Envoi</button>
+      <button type="button" class="tab-btn" data-tab="facebook">Facebook Messenger</button>
     </nav>
 
     <!-- Section 1 : Statut & Connexion -->
@@ -279,6 +280,68 @@
       <p style="margin-top: 1rem;">
         <button type="button" id="show-last-report-btn" hidden>📋 Voir le dernier rapport de campagne</button>
       </p>
+    </section>
+
+    <!-- Section 5 : Facebook Messenger -->
+    <section class="panel" id="panel-facebook">
+      <h2>Facebook Messenger</h2>
+      <p class="empty">
+        Intégration via l'API officielle Meta Messenger Platform (Page Facebook). Nécessite la variable
+        d'environnement <code>FB_PAGE_ACCESS_TOKEN</code> côté serveur. Contrairement à WhatsApp, il ne s'agit pas
+        ici de "groupes" mais des conversations de la Page avec ses utilisateurs.
+      </p>
+
+      <div class="warning-box">
+        ⚠️ Bonnes pratiques : Messenger limite l'envoi hors du délai de 24h suivant le dernier message d'un
+        utilisateur (sauf tag approuvé par Meta). Respectez un délai d'au moins 10 à 15 secondes entre chaque
+        message et évitez tout envoi promotionnel non sollicité, sous peine de restriction de votre Page.
+      </div>
+
+      <button type="button" id="load-fb-conversations-btn">Lister les conversations</button>
+      <input type="text" id="search-fb-conversations" placeholder="Rechercher une conversation par nom..." />
+
+      <div class="group-actions">
+        <button type="button" id="fb-select-all-btn">Tout sélectionner</button>
+        <button type="button" id="fb-deselect-all-btn">Tout désélectionner</button>
+        <span id="fb-selected-count">0 conversation(s) sélectionnée(s)</span>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th></th><th>Nom / Aperçu</th><th>Dernière activité</th></tr>
+          </thead>
+          <tbody id="fb-conversations-body">
+            <tr><td colspan="3" class="empty">Cliquez sur "Lister les conversations" pour charger la liste.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="field" style="margin-top: 1.5rem;">
+        <label for="fb-message">Message (texte)</label>
+        <textarea id="fb-message" placeholder="Écrivez votre message ici... 😀"></textarea>
+      </div>
+
+      <div class="field">
+        <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF)</label>
+        <div id="fb-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+        <input type="file" id="fb-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+        <p id="fb-file-name" class="empty">Aucun fichier sélectionné.</p>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="fb-batch-size">Nombre de messages par lot</label>
+          <input type="number" id="fb-batch-size" value="5" min="1" />
+        </div>
+        <div class="field">
+          <label for="fb-delay-seconds">Délai d'attente entre chaque message (secondes)</label>
+          <input type="number" id="fb-delay-seconds" value="12" min="1" />
+        </div>
+      </div>
+
+      <button type="button" id="send-fb-campaign-btn" class="send-button">🚀 Lancer l'envoi Messenger</button>
+      <div id="fb-feedback" hidden></div>
     </section>
   </div>
 
@@ -874,10 +937,168 @@
       }
     }
 
+    // ---------- Section 5 : Facebook Messenger ----------
+    const fbState = { conversations: [], selectedIds: new Set() };
+    let selectedFbFile = null;
+
+    function fbUpdateSelectedUI() {
+      document.getElementById('fb-selected-count').textContent = fbState.selectedIds.size + ' conversation(s) sélectionnée(s)';
+    }
+
+    function fbCurrentFiltered() {
+      const q = document.getElementById('search-fb-conversations').value.trim().toLowerCase();
+      return q ? fbState.conversations.filter((c) => (c.name || '').toLowerCase().includes(q)) : fbState.conversations;
+    }
+
+    function fbRenderTable(conversations) {
+      const tbody = document.getElementById('fb-conversations-body');
+      tbody.innerHTML = '';
+
+      if (conversations.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">Aucune conversation trouvée.</td></tr>';
+        return;
+      }
+
+      conversations.forEach((c) => {
+        const tr = document.createElement('tr');
+
+        const checkTd = document.createElement('td');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = fbState.selectedIds.has(c.id);
+        checkbox.disabled = !c.recipientId;
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) fbState.selectedIds.add(c.id);
+          else fbState.selectedIds.delete(c.id);
+          fbUpdateSelectedUI();
+        });
+        checkTd.appendChild(checkbox);
+
+        const nameTd = document.createElement('td');
+        nameTd.textContent = c.name || c.id;
+
+        const timeTd = document.createElement('td');
+        timeTd.textContent = c.updatedTime ? new Date(c.updatedTime).toLocaleString() : '-';
+
+        tr.appendChild(checkTd);
+        tr.appendChild(nameTd);
+        tr.appendChild(timeTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function fbLoadConversations() {
+      const tbody = document.getElementById('fb-conversations-body');
+      tbody.innerHTML = '<tr><td colspan="3" class="empty">Chargement...</td></tr>';
+      try {
+        const res = await apiFetch('/api/facebook/groups');
+        const data = await res.json();
+        if (!res.ok) {
+          tbody.innerHTML = '<tr><td colspan="3" class="empty">' + (data.error || 'Erreur lors du chargement.') + '</td></tr>';
+          return;
+        }
+        fbState.conversations = Array.isArray(data) ? data : [];
+        fbRenderTable(fbCurrentFiltered());
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">Erreur réseau lors du chargement des conversations.</td></tr>';
+      }
+    }
+    document.getElementById('load-fb-conversations-btn').addEventListener('click', fbLoadConversations);
+
+    document.getElementById('search-fb-conversations').addEventListener('input', () => {
+      fbRenderTable(fbCurrentFiltered());
+    });
+
+    document.getElementById('fb-select-all-btn').addEventListener('click', () => {
+      fbCurrentFiltered().forEach((c) => { if (c.recipientId) fbState.selectedIds.add(c.id); });
+      fbRenderTable(fbCurrentFiltered());
+      fbUpdateSelectedUI();
+    });
+    document.getElementById('fb-deselect-all-btn').addEventListener('click', () => {
+      fbCurrentFiltered().forEach((c) => fbState.selectedIds.delete(c.id));
+      fbRenderTable(fbCurrentFiltered());
+      fbUpdateSelectedUI();
+    });
+
+    const fbDropZone = document.getElementById('fb-drop-zone');
+    const fbFileInput = document.getElementById('fb-file');
+    fbDropZone.addEventListener('click', () => fbFileInput.click());
+    fbDropZone.addEventListener('dragover', (e) => { e.preventDefault(); fbDropZone.classList.add('dragover'); });
+    fbDropZone.addEventListener('dragleave', () => fbDropZone.classList.remove('dragover'));
+    fbDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      fbDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) fbSetSelectedFile(e.dataTransfer.files[0]);
+    });
+    fbFileInput.addEventListener('change', () => {
+      if (fbFileInput.files && fbFileInput.files[0]) fbSetSelectedFile(fbFileInput.files[0]);
+    });
+    function fbSetSelectedFile(file) {
+      selectedFbFile = file;
+      document.getElementById('fb-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    function fbShowFeedback(message, isError) {
+      const el = document.getElementById('fb-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    document.getElementById('send-fb-campaign-btn').addEventListener('click', async () => {
+      const message = document.getElementById('fb-message').value.trim();
+      const batchSize = document.getElementById('fb-batch-size').value;
+      const delaySeconds = document.getElementById('fb-delay-seconds').value;
+
+      if (!message) { fbShowFeedback('Le message ne peut pas être vide.', true); return; }
+      if (fbState.selectedIds.size === 0) {
+        fbShowFeedback('Sélectionnez au moins une conversation.', true);
+        return;
+      }
+
+      const recipients = fbState.conversations
+        .filter((c) => fbState.selectedIds.has(c.id) && c.recipientId)
+        .map((c) => c.recipientId);
+
+      if (recipients.length === 0) {
+        fbShowFeedback('Aucun destinataire valide dans la sélection.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('message', message);
+      formData.append('batchSize', batchSize);
+      formData.append('delaySeconds', delaySeconds);
+      formData.append('recipients', JSON.stringify(recipients));
+      if (selectedFbFile) formData.append('media', selectedFbFile);
+
+      const sendBtn = document.getElementById('send-fb-campaign-btn');
+      sendBtn.disabled = true;
+
+      try {
+        const res = await apiFetch('/api/facebook/queue', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          fbShowFeedback(data.error || 'Échec du lancement de la campagne Messenger.', true);
+        } else {
+          fbShowFeedback(
+            '🚀 Campagne Messenger lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
+            ', délai ' + data.delaySeconds + 's' + (data.media ? ', pièce jointe : ' + data.media : '') + '.',
+            false,
+          );
+        }
+      } catch (err) {
+        fbShowFeedback('Erreur réseau lors du lancement de la campagne.', true);
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+
     // ---------- Init ----------
     function init() {
       toggleTargetMode();
       updateSelectedGroupsUI();
+      fbUpdateSelectedUI();
       pollStatus();
       if (statusInterval) clearInterval(statusInterval);
       statusInterval = setInterval(pollStatus, 4000);
