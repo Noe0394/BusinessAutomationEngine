@@ -11,6 +11,11 @@ const {
 const qrcode = require('qrcode-terminal');
 
 let sock = null;
+let latestQR = null;
+
+function getQRCode() {
+  return latestQR;
+}
 
 async function connect() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -26,6 +31,7 @@ async function connect() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      latestQR = qr;
       qrcode.generate(qr, { small: true });
       console.log("=== QR CODE BRUT ===");
       console.log(qr);
@@ -40,6 +46,7 @@ async function connect() {
         connect();
       }
     } else if (connection === 'open') {
+      latestQR = null;
       console.log('Connexion WhatsApp établie.');
     }
   });
@@ -58,4 +65,4 @@ async function sendMessage(to, text) {
   return sock.sendMessage(to, { text });
 }
 
-module.exports = { connect, sendMessage };
+module.exports = { connect, sendMessage, getQRCode };
