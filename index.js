@@ -55,14 +55,17 @@ function requireAdmin(req, res, next) {
   return res.status(401).json({ error: 'Accès administrateur requis.' });
 }
 
-// Accès aux fonctionnalités du dashboard (WhatsApp/Facebook/Telegram) :
-// accepté soit avec le mot de passe administrateur, soit avec une clé de
-// licence valide, active et non expirée.
+// Accès aux fonctionnalités du dashboard (WhatsApp/Facebook/Telegram/Studio) :
+// accepté soit avec le mot de passe administrateur (accès total, sans
+// restriction de module), soit avec une clé de licence valide, active et non
+// expirée — dans ce cas req.allowedModules porte la liste des modules
+// autorisés pour cette clé, vérifiée ensuite par requireModule().
 function requireAccess(req, res, next) {
   const providedPassword = req.get('x-admin-password') || req.query.password;
 
   if (providedPassword && providedPassword === ADMIN_PASSWORD) {
     req.isAdmin = true;
+    req.allowedModules = null; // null = pas de restriction (admin)
     return next();
   }
 
@@ -73,6 +76,7 @@ function requireAccess(req, res, next) {
     if (result.valid) {
       req.isAdmin = false;
       req.licenseKey = providedKey;
+      req.allowedModules = result.license.allowedModules;
       return next();
     }
   }
@@ -80,6 +84,24 @@ function requireAccess(req, res, next) {
   return res.status(401).json({
     error: 'Authentification requise (mot de passe administrateur ou clé de licence valide).',
   });
+}
+
+// À utiliser après requireAccess sur les routes propres à un module
+// (whatsapp/facebook/telegram/studio_video) : bloque avec 403 si la clé de
+// licence utilisée n'inclut pas ce module. Sans effet pour l'admin
+// (req.allowedModules === null signifie "aucune restriction").
+function requireModule(moduleName) {
+  return (req, res, next) => {
+    if (req.allowedModules === null || req.allowedModules === undefined) {
+      return next();
+    }
+    if (Array.isArray(req.allowedModules) && req.allowedModules.includes(moduleName)) {
+      return next();
+    }
+    return res.status(403).json({
+      error: `Votre clé de licence n'inclut pas le module "${moduleName}".`,
+    });
+  };
 }
 
 function replaceVariables(template, row) {
@@ -413,7 +435,7 @@ app.post('/api/login', (req, res) => {
   const { password } = req.body || {};
 
   if (password && password === ADMIN_PASSWORD) {
-    return res.status(200).json({ success: true, role: 'admin' });
+    return res.status(200).json({ success: true, role: 'admin', allowedModules: null });
   }
 
   return res.status(401).json({ error: 'Mot de passe incorrect.' });
@@ -433,7 +455,12 @@ app.post('/api/auth/verify-key', (req, res) => {
     return res.status(401).json({ error: messages[result.reason] || 'Clé de licence invalide.' });
   }
 
-  res.status(200).json({ success: true, role: 'license', expiresAt: result.license.expiresAt });
+  res.status(200).json({
+    success: true,
+    role: 'license',
+    expiresAt: result.license.expiresAt,
+    allowedModules: result.license.allowedModules,
+  });
 });
 
 app.get('/api/admin/licenses', requireAdmin, (req, res) => {
@@ -441,13 +468,13 @@ app.get('/api/admin/licenses', requireAdmin, (req, res) => {
 });
 
 app.post('/api/admin/licenses', requireAdmin, (req, res) => {
-  const { expiresAt, note } = req.body || {};
+  const { expiresAt, note, allowedModules } = req.body || {};
 
   if (expiresAt && Number.isNaN(new Date(expiresAt).getTime())) {
     return res.status(400).json({ error: 'Date d\'expiration invalide.' });
   }
 
-  const license = licenses.createLicense({ expiresAt: expiresAt || null, note });
+  const license = licenses.createLicense({ expiresAt: expiresAt || null, note, allowedModules });
   res.status(201).json(license);
 });
 
@@ -465,7 +492,7 @@ app.post('/api/admin/licenses/:key/toggle', requireAdmin, (req, res) => {
   }
 });
 
-app.get('/api/status', requireAccess, async (req, res) => {
+app.get('/api/status', requireAccess, requireModule('whatsapp'), async (req, res) => {
   const connected = whatsapp.isConnected();
   const response = { connected };
 
@@ -483,7 +510,7 @@ app.get('/api/status', requireAccess, async (req, res) => {
   res.status(200).json(response);
 });
 
-app.post('/api/pairing-code', requireAccess, async (req, res) => {
+app.post('/api/pairing-code', requireAccess, requireModule('whatsapp'), async (req, res) => {
   const { phoneNumber } = req.body || {};
 
   if (!phoneNumber || !String(phoneNumber).replace(/\D/g, '')) {
@@ -502,7 +529,7 @@ app.post('/api/pairing-code', requireAccess, async (req, res) => {
   }
 });
 
-app.post('/api/messages', requireAccess, async (req, res) => {
+app.post('/api/messages', requireAccess, requireModule('whatsapp'), async (req, res) => {
   const { to, message } = req.body;
 
   if (!to || !message) {
@@ -518,7 +545,7 @@ app.post('/api/messages', requireAccess, async (req, res) => {
   }
 });
 
-app.get('/api/groups', requireAccess, async (req, res) => {
+app.get('/api/groups', requireAccess, requireModule('whatsapp'), async (req, res) => {
   try {
     const groups = await whatsapp.getGroups();
     res.status(200).json(groups);
@@ -528,7 +555,7 @@ app.get('/api/groups', requireAccess, async (req, res) => {
   }
 });
 
-app.get('/api/groups/:id/participants', requireAccess, async (req, res) => {
+app.get('/api/groups/:id/participants', requireAccess, requireModule('whatsapp'), async (req, res) => {
   try {
     const participants = await whatsapp.getGroupParticipants(req.params.id);
     res.status(200).json(participants);
@@ -538,7 +565,7 @@ app.get('/api/groups/:id/participants', requireAccess, async (req, res) => {
   }
 });
 
-app.post('/api/messages/queue', requireAccess, upload.single('media'), async (req, res) => {
+app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload.single('media'), async (req, res) => {
   const { message, groupId, delaySeconds, batchSize } = req.body;
   let { recipients, groupIds } = req.body;
 
@@ -613,7 +640,7 @@ app.post('/api/messages/queue', requireAccess, upload.single('media'), async (re
   });
 });
 
-app.post('/api/messages/stop', requireAccess, (req, res) => {
+app.post('/api/messages/stop', requireAccess, requireModule('whatsapp'), (req, res) => {
   if (!currentCampaign || currentCampaign.status !== 'running') {
     return res.status(400).json({ error: 'Aucune campagne en cours à interrompre.' });
   }
@@ -622,7 +649,7 @@ app.post('/api/messages/stop', requireAccess, (req, res) => {
   res.status(200).json({ status: 'stop_requested' });
 });
 
-app.get('/api/messages/status', requireAccess, (req, res) => {
+app.get('/api/messages/status', requireAccess, requireModule('whatsapp'), (req, res) => {
   if (!currentCampaign) {
     return res.status(200).json({ exists: false });
   }
@@ -630,7 +657,7 @@ app.get('/api/messages/status', requireAccess, (req, res) => {
   res.status(200).json({ exists: true, ...currentCampaign });
 });
 
-app.post('/api/contacts/import', requireAccess, upload.single('file'), async (req, res) => {
+app.post('/api/contacts/import', requireAccess, requireModule('whatsapp'), upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Aucun fichier fourni (champ "file").' });
   }
@@ -654,7 +681,7 @@ app.post('/api/contacts/import', requireAccess, upload.single('file'), async (re
   }
 });
 
-app.post('/api/chat-natural', requireAccess, async (req, res) => {
+app.post('/api/chat-natural', requireAccess, requireModule('whatsapp'), async (req, res) => {
   const { message } = req.body || {};
 
   if (!message || typeof message !== 'string') {
@@ -670,7 +697,7 @@ app.post('/api/chat-natural', requireAccess, async (req, res) => {
   }
 });
 
-app.post('/api/campaign/excel', requireAccess, upload.single('file'), async (req, res) => {
+app.post('/api/campaign/excel', requireAccess, requireModule('whatsapp'), upload.single('file'), async (req, res) => {
   let contacts;
 
   try {
@@ -709,7 +736,7 @@ app.post('/api/campaign/excel', requireAccess, upload.single('file'), async (req
   });
 });
 
-app.get('/api/facebook/groups', requireAccess, async (req, res) => {
+app.get('/api/facebook/groups', requireAccess, requireModule('facebook'), async (req, res) => {
   if (!facebook.isConfigured()) {
     return res.status(503).json({
       error: 'Intégration Facebook Messenger non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
@@ -725,7 +752,7 @@ app.get('/api/facebook/groups', requireAccess, async (req, res) => {
   }
 });
 
-app.post('/api/facebook/queue', requireAccess, upload.single('media'), async (req, res) => {
+app.post('/api/facebook/queue', requireAccess, requireModule('facebook'), upload.single('media'), async (req, res) => {
   if (!facebook.isConfigured()) {
     return res.status(503).json({
       error: 'Intégration Facebook Messenger non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
@@ -775,14 +802,14 @@ app.post('/api/facebook/queue', requireAccess, upload.single('media'), async (re
   });
 });
 
-app.get('/api/telegram/status', requireAccess, (req, res) => {
+app.get('/api/telegram/status', requireAccess, requireModule('telegram'), (req, res) => {
   res.status(200).json({
     configured: telegram.isConfigured(),
     connected: telegram.isConnected(),
   });
 });
 
-app.post('/api/telegram/login/start', requireAccess, async (req, res) => {
+app.post('/api/telegram/login/start', requireAccess, requireModule('telegram'), async (req, res) => {
   const { phoneNumber } = req.body || {};
 
   if (!phoneNumber || !String(phoneNumber).replace(/\D/g, '')) {
@@ -804,7 +831,7 @@ app.post('/api/telegram/login/start', requireAccess, async (req, res) => {
   }
 });
 
-app.post('/api/telegram/login/code', requireAccess, async (req, res) => {
+app.post('/api/telegram/login/code', requireAccess, requireModule('telegram'), async (req, res) => {
   const { code } = req.body || {};
 
   if (!code) {
@@ -823,7 +850,7 @@ app.post('/api/telegram/login/code', requireAccess, async (req, res) => {
   }
 });
 
-app.post('/api/telegram/login/password', requireAccess, async (req, res) => {
+app.post('/api/telegram/login/password', requireAccess, requireModule('telegram'), async (req, res) => {
   const { password } = req.body || {};
 
   if (!password) {
@@ -842,7 +869,7 @@ app.post('/api/telegram/login/password', requireAccess, async (req, res) => {
   }
 });
 
-app.get('/api/telegram/groups', requireAccess, async (req, res) => {
+app.get('/api/telegram/groups', requireAccess, requireModule('telegram'), async (req, res) => {
   if (!telegram.isConnected()) {
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant de lister les groupes.' });
   }
@@ -856,7 +883,7 @@ app.get('/api/telegram/groups', requireAccess, async (req, res) => {
   }
 });
 
-app.post('/api/telegram/queue', requireAccess, upload.single('media'), async (req, res) => {
+app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), upload.single('media'), async (req, res) => {
   if (!telegram.isConnected()) {
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
   }
@@ -921,7 +948,7 @@ app.get('/api/media/temp/:token', (req, res) => {
   res.send(entry.buffer);
 });
 
-app.post('/api/media/publish-all', requireAccess, videoUpload.single('video'), async (req, res) => {
+app.post('/api/media/publish-all', requireAccess, requireModule('studio_video'), videoUpload.single('video'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Fichier vidéo requis (champ "video", MP4 ou MOV).' });
   }
@@ -971,7 +998,7 @@ app.post('/api/media/publish-all', requireAccess, videoUpload.single('video'), a
   });
 });
 
-app.get('/api/media/publish-status', requireAccess, (req, res) => {
+app.get('/api/media/publish-status', requireAccess, requireModule('studio_video'), (req, res) => {
   if (!currentPublishJob) {
     return res.status(200).json({ exists: false });
   }

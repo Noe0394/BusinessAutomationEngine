@@ -522,15 +522,27 @@
           <input type="text" id="new-license-note" placeholder="Ex: client Dupont" />
         </div>
       </div>
+
+      <div class="field">
+        <label>Modules inclus dans cette licence</label>
+        <label><input type="checkbox" class="new-license-module" value="whatsapp" /> WhatsApp Automation</label>
+        <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="facebook" /> Facebook Messenger</label>
+        <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="telegram" /> Telegram Engine</label>
+        <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="studio_video" /> Studio Auto-Publication (YouTube, TikTok, Instagram)</label>
+        <br />
+        <button type="button" id="new-license-select-all-btn" style="margin-top: 0.5rem;">Tout sélectionner</button>
+        <button type="button" id="new-license-deselect-all-btn">Tout désélectionner</button>
+      </div>
+
       <button type="button" id="generate-license-btn">➕ Générer une nouvelle clé</button>
 
       <div class="table-wrap" style="margin-top: 1.5rem;">
         <table>
           <thead>
-            <tr><th>Clé</th><th>Créée le</th><th>Expire le</th><th>Statut</th><th>Note</th><th>Action</th></tr>
+            <tr><th>Clé</th><th>Créée le</th><th>Expire le</th><th>Statut</th><th>Modules</th><th>Note</th><th>Action</th></tr>
           </thead>
           <tbody id="licenses-body">
-            <tr><td colspan="6" class="empty">Chargement...</td></tr>
+            <tr><td colspan="7" class="empty">Chargement...</td></tr>
           </tbody>
         </table>
       </div>
@@ -573,6 +585,13 @@
     let lastReportShownAt = null;
     let observedRunningStartedAt = null;
     let authRole = null; // 'admin' | 'license'
+    let currentAllowedModules = null; // null = tous les modules (admin, ou clé héritée sans restriction)
+    const MODULE_TABS = {
+      whatsapp: ['status', 'groups', 'import', 'campaign'],
+      facebook: ['facebook'],
+      telegram: ['telegram'],
+      studio_video: ['studio'],
+    };
 
     // ---------- Auth ----------
     function getStoredAuth() {
@@ -617,6 +636,7 @@
       if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
       if (campaignInterval) { clearInterval(campaignInterval); campaignInterval = null; }
       authRole = null;
+      currentAllowedModules = null;
       document.getElementById('app').hidden = true;
       document.getElementById('login-screen').hidden = false;
       const errEl = document.getElementById('login-error');
@@ -626,6 +646,39 @@
       document.getElementById('login-screen').hidden = true;
       document.getElementById('app').hidden = false;
       document.getElementById('admin-tab-btn').hidden = authRole !== 'admin';
+      applyModuleVisibility();
+    }
+
+    // Masque les onglets (et bascule sur le premier onglet encore visible si
+    // l'onglet actif en fait partie) dont le module n'est pas inclus dans la
+    // licence utilisée. currentAllowedModules === null (admin, ou clé créée
+    // avant l'introduction des modules) signifie "aucune restriction".
+    function applyModuleVisibility() {
+      const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]')).filter((btn) => btn.id !== 'admin-tab-btn');
+
+      if (currentAllowedModules === null) {
+        tabButtons.forEach((btn) => { btn.hidden = false; });
+        return;
+      }
+
+      const visibleTabs = new Set();
+      Object.entries(MODULE_TABS).forEach(([moduleName, tabs]) => {
+        if (currentAllowedModules.includes(moduleName)) {
+          tabs.forEach((t) => visibleTabs.add(t));
+        }
+      });
+
+      let activeStillVisible = false;
+      tabButtons.forEach((btn) => {
+        const visible = visibleTabs.has(btn.dataset.tab);
+        btn.hidden = !visible;
+        if (visible && btn.classList.contains('active')) activeStillVisible = true;
+      });
+
+      if (!activeStillVisible) {
+        const firstVisible = tabButtons.find((btn) => !btn.hidden);
+        if (firstVisible) firstVisible.click();
+      }
     }
 
     document.querySelectorAll('#login-mode-toggle .mode-btn').forEach((btn) => {
@@ -656,6 +709,7 @@
         }
         setStoredAuth('admin', password);
         authRole = 'admin';
+        currentAllowedModules = data.allowedModules ?? null;
         showApp();
         init();
       } catch (err) {
@@ -681,6 +735,7 @@
         }
         setStoredAuth('license', key);
         authRole = 'license';
+        currentAllowedModules = Array.isArray(data.allowedModules) ? data.allowedModules : null;
         showApp();
         init();
       } catch (err) {
@@ -705,14 +760,26 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ password: value }),
           });
-          if (res.ok) { authRole = 'admin'; showApp(); return true; }
+          const data = await res.json();
+          if (res.ok) {
+            authRole = 'admin';
+            currentAllowedModules = data.allowedModules ?? null;
+            showApp();
+            return true;
+          }
         } else {
           const res = await fetch('/api/auth/verify-key', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ key: value }),
           });
-          if (res.ok) { authRole = 'license'; showApp(); return true; }
+          const data = await res.json();
+          if (res.ok) {
+            authRole = 'license';
+            currentAllowedModules = Array.isArray(data.allowedModules) ? data.allowedModules : null;
+            showApp();
+            return true;
+          }
         }
       } catch (err) { /* réseau indisponible */ }
 
@@ -1616,11 +1683,18 @@
     });
 
     // ---------- Section 7 : Administration (licences) ----------
+    const MODULE_LABELS = {
+      whatsapp: 'WhatsApp',
+      facebook: 'Facebook',
+      telegram: 'Telegram',
+      studio_video: 'Studio',
+    };
+
     async function loadLicenses() {
       if (authRole !== 'admin') return;
 
       const tbody = document.getElementById('licenses-body');
-      tbody.innerHTML = '<tr><td colspan="6" class="empty">Chargement...</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">Chargement...</td></tr>';
 
       try {
         const res = await apiFetch('/api/admin/licenses');
@@ -1628,7 +1702,7 @@
         tbody.innerHTML = '';
 
         if (!Array.isArray(list) || list.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" class="empty">Aucune clé générée.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" class="empty">Aucune clé générée.</td></tr>';
           return;
         }
 
@@ -1648,6 +1722,12 @@
           statusTd.textContent = lic.active ? 'Active' : 'Désactivée';
           statusTd.className = lic.active ? 'status-delivered' : 'status-failed';
 
+          const modulesTd = document.createElement('td');
+          const modules = Array.isArray(lic.allowedModules) ? lic.allowedModules : [];
+          modulesTd.textContent = modules.length > 0
+            ? modules.map((m) => MODULE_LABELS[m] || m).join(', ')
+            : 'Aucun';
+
           const noteTd = document.createElement('td');
           noteTd.textContent = lic.note || '-';
 
@@ -1662,12 +1742,13 @@
           tr.appendChild(createdTd);
           tr.appendChild(expTd);
           tr.appendChild(statusTd);
+          tr.appendChild(modulesTd);
           tr.appendChild(noteTd);
           tr.appendChild(actionTd);
           tbody.appendChild(tr);
         });
       } catch (err) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty">Erreur lors du chargement des licences.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">Erreur lors du chargement des licences.</td></tr>';
       }
     }
 
@@ -1684,18 +1765,32 @@
       }
     }
 
+    document.getElementById('new-license-select-all-btn').addEventListener('click', () => {
+      document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = true; });
+    });
+    document.getElementById('new-license-deselect-all-btn').addEventListener('click', () => {
+      document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = false; });
+    });
+
     document.getElementById('generate-license-btn').addEventListener('click', async () => {
       const expiry = document.getElementById('new-license-expiry').value;
       const note = document.getElementById('new-license-note').value.trim();
+      const allowedModules = Array.from(document.querySelectorAll('.new-license-module:checked')).map((cb) => cb.value);
+
       try {
         const res = await apiFetch('/api/admin/licenses', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ expiresAt: expiry ? new Date(expiry).toISOString() : null, note }),
+          body: JSON.stringify({
+            expiresAt: expiry ? new Date(expiry).toISOString() : null,
+            note,
+            allowedModules,
+          }),
         });
         if (res.ok) {
           document.getElementById('new-license-note').value = '';
           document.getElementById('new-license-expiry').value = '';
+          document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = false; });
           loadLicenses();
         }
       } catch (err) {

@@ -32,7 +32,20 @@ function generateKeyString() {
   return `KEY-${random}-${year}`;
 }
 
-function createLicense({ expiresAt, note } = {}) {
+// Modules disponibles à la vente/à l'attribution. "studio_video" regroupe
+// YouTube Shorts, Instagram Reels et TikTok (ce ne sont pas des modules
+// séparés : une seule case "Studio Auto-Publication" les couvre tous les
+// trois côté formulaire admin, comme demandé).
+const ALL_MODULES = ['whatsapp', 'facebook', 'telegram', 'studio_video'];
+
+function normalizeModules(allowedModules) {
+  if (!Array.isArray(allowedModules)) {
+    return ALL_MODULES.slice();
+  }
+  return allowedModules.filter((m) => ALL_MODULES.includes(m));
+}
+
+function createLicense({ expiresAt, note, allowedModules } = {}) {
   const licenses = loadLicenses();
 
   const license = {
@@ -41,6 +54,10 @@ function createLicense({ expiresAt, note } = {}) {
     expiresAt: expiresAt || null,
     active: true,
     note: note || '',
+    // Une clé créée sans "allowedModules" explicite obtient tous les
+    // modules — comportement de secours, pas le cas normal côté formulaire
+    // admin qui envoie toujours une sélection (même vide).
+    allowedModules: normalizeModules(allowedModules),
   };
 
   licenses.push(license);
@@ -85,10 +102,15 @@ function verifyKey(key) {
     return { valid: false, reason: 'EXPIRED' };
   }
 
-  return { valid: true, license };
+  // Clés créées avant l'introduction des modules : accès complet par défaut
+  // (pas de restriction rétroactive sur des clés déjà distribuées).
+  const allowedModules = normalizeModules(license.allowedModules ?? ALL_MODULES);
+
+  return { valid: true, license: { ...license, allowedModules } };
 }
 
 module.exports = {
+  ALL_MODULES,
   createLicense,
   listLicenses,
   setLicenseActive,
