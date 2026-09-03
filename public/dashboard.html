@@ -881,7 +881,7 @@
         const data = await res.json();
         const badge = document.getElementById('fb-status-badge');
         if (!data.configured) {
-          badge.textContent = 'Non configuré';
+          badge.textContent = 'Non connecté';
           badge.className = 'badge disconnected';
           return;
         }
@@ -900,7 +900,7 @@
         ['youtube', 'instagram', 'tiktok'].forEach((platform) => {
           const badge = document.getElementById('studio-conn-status-' + platform);
           const configured = data[platform] && data[platform].configured;
-          badge.textContent = configured ? 'Configuré' : 'Non configuré';
+          badge.textContent = configured ? 'Connecté' : 'Non connecté';
           badge.className = 'badge ' + (configured ? 'connected' : 'disconnected');
         });
       } catch (err) {
@@ -1613,13 +1613,11 @@
         const notConnectedHint = document.getElementById('tg-not-connected-hint');
 
         if (!data.configured) {
-          badge.textContent = 'Non configuré';
+          badge.textContent = 'Non connecté';
           badge.className = 'badge disconnected';
           loginPanel.hidden = false;
           mainContent.hidden = true;
           notConnectedHint.hidden = false;
-          document.getElementById('tg-login-feedback').textContent =
-            'TELEGRAM_API_ID / TELEGRAM_API_HASH non définis côté serveur.';
           return;
         }
 

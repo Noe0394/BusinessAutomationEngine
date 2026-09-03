@@ -187,14 +187,14 @@
       e.preventDefault();
       const password = document.getElementById('login-password').value;
       try {
-        const res = await fetch('/api/login', {
+        const res = await fetch('/api/admin/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password }),
         });
         const data = await res.json();
-        if (!res.ok || data.role !== 'admin') {
-          document.getElementById('login-error').textContent = 'Mot de passe incorrect.';
+        if (!res.ok) {
+          document.getElementById('login-error').textContent = data.error || 'Mot de passe incorrect.';
           document.getElementById('login-error').hidden = false;
           return;
         }
@@ -216,13 +216,12 @@
       const pw = getStoredPassword();
       if (!pw) { showLogin(); return false; }
       try {
-        const res = await fetch('/api/login', {
+        const res = await fetch('/api/admin/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password: pw }),
         });
-        const data = await res.json();
-        if (res.ok && data.role === 'admin') { showApp(); return true; }
+        if (res.ok) { showApp(); return true; }
       } catch (err) { /* réseau indisponible */ }
       clearStoredPassword();
       showLogin();

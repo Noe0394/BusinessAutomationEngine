@@ -493,8 +493,10 @@ app.get(['/', '/dashboard'], (req, res) => {
 
 // Route volontairement non référencée dans la navigation du dashboard client
 // ("portail caché") — protégée par mot de passe côté page ET par requireAdmin
-// sur chaque appel API qu'elle déclenche.
-app.get('/admin-secret-portal', (req, res) => {
+// sur chaque appel API qu'elle déclenche. Sert le fichier explicitement, sans
+// aucune redirection : la page elle-même affiche son propre écran de
+// connexion si aucun jeton admin valide n'est présent côté client.
+app.get(['/admin-secret-portal', '/admin'], (req, res) => {
   res.sendFile(ADMIN_PORTAL_PATH);
 });
 
@@ -503,6 +505,18 @@ app.post('/api/login', (req, res) => {
 
   if (password && password === ADMIN_PASSWORD) {
     return res.status(200).json({ success: true, role: 'admin', allowedModules: null });
+  }
+
+  return res.status(401).json({ error: 'Mot de passe incorrect.' });
+});
+
+// Endpoint de connexion dédié au portail admin isolé (distinct de /api/login
+// utilisé par le dashboard client), même logique de vérification.
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body || {};
+
+  if (password && password === ADMIN_PASSWORD) {
+    return res.status(200).json({ success: true });
   }
 
   return res.status(401).json({ error: 'Mot de passe incorrect.' });
