@@ -1,31 +1,49 @@
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const { Readable } = require('stream');
 const axios = require('axios');
 const { google } = require('googleapis');
+const oauthConfig = require('../oauth_config');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    return null;
+  }
+}
+
+function writeJsonFile(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+}
+
+const YOUTUBE_TOKEN_PATH = process.env.YOUTUBE_TOKEN_PATH || path.join(__dirname, '..', 'youtube_token.json');
+const TIKTOK_TOKEN_PATH = process.env.TIKTOK_TOKEN_PATH || path.join(__dirname, '..', 'tiktok_token.json');
+// Même fichier que celui utilisé par adapters/facebook.js : la connexion
+// Facebook (OAuth) déverrouille aussi Instagram Reels, car les deux passent
+// par le même jeton de Page issue de "Se connecter avec Facebook".
+const FACEBOOK_TOKEN_PATH = process.env.FB_TOKEN_PATH || path.join(__dirname, '..', 'facebook_token.json');
 
 /**
  * Adaptateur unifié de publication vidéo (YouTube Shorts, Instagram Reels,
  * TikTok), basé exclusivement sur les API officielles de chaque plateforme —
  * aucune automatisation non-officielle ici, contrairement à WhatsApp/Telegram.
  *
- * Chaque plateforme attend une autorisation obtenue au préalable "à la main"
- * (flux OAuth de consentement) : ce module ne fait PAS ce flux interactif,
- * il consomme des jetons déjà émis, fournis via variables d'environnement :
- *   - YouTube  : GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, YOUTUBE_REFRESH_TOKEN
- *                (obtenus via Google Cloud Console + consentement OAuth une
- *                fois, scope https://www.googleapis.com/auth/youtube.upload)
- *   - Instagram: IG_ACCESS_TOKEN (jeton Page/Utilisateur avec la permission
- *                instagram_content_publish), IG_USER_ID (Instagram Business
- *                Account ID)
- *   - TikTok   : TIKTOK_ACCESS_TOKEN (obtenu via TikTok Login Kit, scope
- *                video.publish) — tant que l'app TikTok n'est pas auditée par
- *                TikTok, l'API Content Posting force les publications en
- *                privé ("SELF_ONLY"), visibles uniquement par le compte
- *                développeur connecté.
+ * Deux façons d'obtenir les identifiants d'application (Client ID/Secret) :
+ * en variable d'environnement (GOOGLE_CLIENT_ID/SECRET, TIKTOK_CLIENT_KEY/
+ * SECRET), ou collés une fois dans le portail admin (voir oauth_config.js) —
+ * dans les deux cas c'est un réglage unique fait par l'exploitant, jamais vu
+ * par les utilisateurs de la licence, qui cliquent juste sur "Se connecter"
+ * (getYoutubeAuthUrl/handleYoutubeCallback, getTiktokAuthUrl/
+ * handleTiktokCallback) et valident sur l'écran officiel du fournisseur.
+ * Les jetons obtenus sont stockés dans youtube_token.json/tiktok_token.json.
+ * Instagram réutilise directement la connexion Facebook (facebook_token.json)
+ * — pas de connexion séparée.
  *
  * Instagram exige que la vidéo soit accessible via une URL PUBLIQUE (Meta la
  * télécharge lui-même) : registerTempVideo()/getTempVideo() gèrent un
@@ -35,46 +53,154 @@ function sleep(ms) {
  */
 class MediaPublisherAdapter {
   constructor() {
-    this.googleClientId = process.env.GOOGLE_CLIENT_ID || null;
-    this.googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || null;
-    this.youtubeRefreshToken = process.env.YOUTUBE_REFRESH_TOKEN || null;
-
-    this.igAccessToken = process.env.IG_ACCESS_TOKEN || null;
-    this.igUserId = process.env.IG_USER_ID || null;
-
-    this.tiktokAccessToken = process.env.TIKTOK_ACCESS_TOKEN || null;
-
     this.publicBaseUrl = process.env.PUBLIC_BASE_URL || null;
-
     this.tempVideos = new Map();
 
-    if (!this.isYoutubeConfigured()) {
-      console.warn('YouTube non configuré (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/YOUTUBE_REFRESH_TOKEN manquants).');
+    if (!this.getGoogleClientId() || !this.getGoogleClientSecret()) {
+      console.warn(
+        'Google non configuré : le bouton "Se connecter avec Google" pour YouTube restera inactif tant que ' +
+        'GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET ne sont pas renseignés (variable d\'environnement, ou collés dans ' +
+        'le portail admin — réglage unique fait par l\'exploitant, jamais vu par les utilisateurs de la licence).',
+      );
     }
-    if (!this.isInstagramConfigured()) {
-      console.warn('Instagram non configuré (IG_ACCESS_TOKEN/IG_USER_ID manquants).');
-    }
-    if (!this.isTikTokConfigured()) {
-      console.warn('TikTok non configuré (TIKTOK_ACCESS_TOKEN manquant).');
+    if (!this.getTiktokClientKey() || !this.getTiktokClientSecret()) {
+      console.warn(
+        'TikTok non configuré : le bouton "Se connecter avec TikTok" restera inactif tant que ' +
+        'TIKTOK_CLIENT_KEY/TIKTOK_CLIENT_SECRET ne sont pas renseignés (variable d\'environnement, ou collés ' +
+        'dans le portail admin).',
+      );
     }
     if (!this.publicBaseUrl) {
       console.warn(
-        'PUBLIC_BASE_URL non défini : la publication Instagram (qui exige une URL vidéo publique) échouera. ' +
-        'Définissez-la avec l\'URL HTTPS publique de ce serveur (ex: https://mon-app.onrender.com).',
+        'PUBLIC_BASE_URL non défini : les flux de connexion OAuth (Google, TikTok) et la publication Instagram ' +
+        '(URL vidéo publique) échoueront. Définissez-la avec l\'URL HTTPS publique de ce serveur.',
       );
     }
   }
 
+  // Identifiants d'application (pas un utilisateur) — l'équivalent du
+  // "Client ID" derrière tout bouton "Se connecter avec Google/TikTok" sur le
+  // web. Réglage unique fait par l'exploitant, soit en variable
+  // d'environnement, soit collé dans le portail admin (oauth_config.js) — les
+  // utilisateurs de la licence ne voient jamais ça, ils cliquent juste sur
+  // "Se connecter" et valident sur l'écran officiel du fournisseur.
+  getGoogleClientId() {
+    return process.env.GOOGLE_CLIENT_ID || oauthConfig.get('google')?.clientId || null;
+  }
+
+  getGoogleClientSecret() {
+    return process.env.GOOGLE_CLIENT_SECRET || oauthConfig.get('google')?.clientSecret || null;
+  }
+
+  getTiktokClientKey() {
+    return process.env.TIKTOK_CLIENT_KEY || oauthConfig.get('tiktok')?.clientKey || null;
+  }
+
+  getTiktokClientSecret() {
+    return process.env.TIKTOK_CLIENT_SECRET || oauthConfig.get('tiktok')?.clientSecret || null;
+  }
+
   isYoutubeConfigured() {
-    return Boolean(this.googleClientId && this.googleClientSecret && this.youtubeRefreshToken);
+    return Boolean(process.env.YOUTUBE_REFRESH_TOKEN || readJsonFile(YOUTUBE_TOKEN_PATH)?.refresh_token);
   }
 
   isInstagramConfigured() {
-    return Boolean(this.igAccessToken && this.igUserId);
+    if (process.env.IG_ACCESS_TOKEN && process.env.IG_USER_ID) return true;
+    const stored = readJsonFile(FACEBOOK_TOKEN_PATH);
+    return Boolean(stored?.pageAccessToken && stored?.igUserId);
   }
 
   isTikTokConfigured() {
-    return Boolean(this.tiktokAccessToken);
+    return Boolean(process.env.TIKTOK_ACCESS_TOKEN || readJsonFile(TIKTOK_TOKEN_PATH)?.access_token);
+  }
+
+  getYoutubeRefreshToken() {
+    return process.env.YOUTUBE_REFRESH_TOKEN || readJsonFile(YOUTUBE_TOKEN_PATH)?.refresh_token || null;
+  }
+
+  getInstagramCredentials() {
+    if (process.env.IG_ACCESS_TOKEN && process.env.IG_USER_ID) {
+      return { accessToken: process.env.IG_ACCESS_TOKEN, userId: process.env.IG_USER_ID };
+    }
+    const stored = readJsonFile(FACEBOOK_TOKEN_PATH);
+    if (stored?.pageAccessToken && stored?.igUserId) {
+      return { accessToken: stored.pageAccessToken, userId: stored.igUserId };
+    }
+    return null;
+  }
+
+  getTikTokAccessToken() {
+    if (process.env.TIKTOK_ACCESS_TOKEN) return process.env.TIKTOK_ACCESS_TOKEN;
+    return readJsonFile(TIKTOK_TOKEN_PATH)?.access_token || null;
+  }
+
+  // ---------- Connexion Google/YouTube (OAuth officiel, bouton "Se connecter") ----------
+  isYoutubeConnectAvailable() {
+    return Boolean(this.getGoogleClientId() && this.getGoogleClientSecret() && this.publicBaseUrl);
+  }
+
+  buildGoogleOAuthClient(redirectUri) {
+    return new google.auth.OAuth2(this.getGoogleClientId(), this.getGoogleClientSecret(), redirectUri);
+  }
+
+  getYoutubeAuthUrl(redirectUri, state) {
+    const client = this.buildGoogleOAuthClient(redirectUri);
+    return client.generateAuthUrl({
+      access_type: 'offline',
+      prompt: 'consent',
+      scope: ['https://www.googleapis.com/auth/youtube.upload'],
+      state,
+    });
+  }
+
+  async handleYoutubeCallback(code, redirectUri) {
+    const client = this.buildGoogleOAuthClient(redirectUri);
+    const { tokens } = await client.getToken(code);
+    if (!tokens.refresh_token) {
+      // Google ne renvoie un refresh_token que sur le tout premier
+      // consentement (ou si prompt=consent, déjà forcé ci-dessus) ; sans lui
+      // on ne peut pas publier hors ligne plus tard.
+      throw new Error('NO_REFRESH_TOKEN_RETURNED');
+    }
+    writeJsonFile(YOUTUBE_TOKEN_PATH, { refresh_token: tokens.refresh_token, connectedAt: new Date().toISOString() });
+  }
+
+  // ---------- Connexion TikTok (OAuth officiel Login Kit) ----------
+  isTikTokConnectAvailable() {
+    return Boolean(this.getTiktokClientKey() && this.getTiktokClientSecret() && this.publicBaseUrl);
+  }
+
+  getTiktokAuthUrl(redirectUri, state) {
+    const params = new URLSearchParams({
+      client_key: this.getTiktokClientKey(),
+      scope: 'video.publish',
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      state,
+    });
+    return `https://www.tiktok.com/v2/auth/authorize/?${params.toString()}`;
+  }
+
+  async handleTiktokCallback(code, redirectUri) {
+    const body = new URLSearchParams({
+      client_key: this.getTiktokClientKey(),
+      client_secret: this.getTiktokClientSecret(),
+      code,
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri,
+    });
+
+    const res = await axios.post('https://open.tiktokapis.com/v2/oauth/token/', body.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+
+    const { access_token: accessToken, refresh_token: refreshToken, expires_in: expiresIn } = res.data;
+    writeJsonFile(TIKTOK_TOKEN_PATH, {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expiresAt: Date.now() + (expiresIn || 0) * 1000,
+      connectedAt: new Date().toISOString(),
+    });
   }
 
   // ---------- Stockage temporaire public (nécessaire pour Instagram) ----------
@@ -118,8 +244,8 @@ class MediaPublisherAdapter {
     }
 
     onStatus('Authentification Google...');
-    const oauth2Client = new google.auth.OAuth2(this.googleClientId, this.googleClientSecret);
-    oauth2Client.setCredentials({ refresh_token: this.youtubeRefreshToken });
+    const oauth2Client = new google.auth.OAuth2(this.getGoogleClientId(), this.getGoogleClientSecret());
+    oauth2Client.setCredentials({ refresh_token: this.getYoutubeRefreshToken() });
     const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
 
     // Astuce reconnue par YouTube pour favoriser le classement "Shorts" :
@@ -169,16 +295,17 @@ class MediaPublisherAdapter {
       }
     }
 
+    const { accessToken: igAccessToken, userId: igUserId } = this.getInstagramCredentials();
     const videoUrl = this.getPublicVideoUrl(token);
     const base = 'https://graph.facebook.com/v19.0';
 
     onStatus('Création du conteneur média (Container)...');
-    const createRes = await axios.post(`${base}/${this.igUserId}/media`, null, {
+    const createRes = await axios.post(`${base}/${igUserId}/media`, null, {
       params: {
         media_type: 'REELS',
         video_url: videoUrl,
         caption,
-        access_token: this.igAccessToken,
+        access_token: igAccessToken,
       },
     });
     const creationId = createRes.data.id;
@@ -191,7 +318,7 @@ class MediaPublisherAdapter {
       await sleep(5000);
       attempts += 1;
       const statusRes = await axios.get(`${base}/${creationId}`, {
-        params: { fields: 'status_code', access_token: this.igAccessToken },
+        params: { fields: 'status_code', access_token: igAccessToken },
       });
       statusCode = statusRes.data.status_code;
       onStatus(`Rendu en cours (${statusCode})...`);
@@ -202,8 +329,8 @@ class MediaPublisherAdapter {
     }
 
     onStatus('Publication du Reel...');
-    const publishRes = await axios.post(`${base}/${this.igUserId}/media_publish`, null, {
-      params: { creation_id: creationId, access_token: this.igAccessToken },
+    const publishRes = await axios.post(`${base}/${igUserId}/media_publish`, null, {
+      params: { creation_id: creationId, access_token: igAccessToken },
     });
 
     onStatus('Reel publié sur Instagram !');
@@ -226,7 +353,7 @@ class MediaPublisherAdapter {
 
     const base = 'https://open.tiktokapis.com';
     const headers = {
-      Authorization: `Bearer ${this.tiktokAccessToken}`,
+      Authorization: `Bearer ${this.getTikTokAccessToken()}`,
       'Content-Type': 'application/json',
     };
 

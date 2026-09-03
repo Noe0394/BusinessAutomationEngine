@@ -1,5 +1,8 @@
+const fs = require('fs');
+const path = require('path');
 const axios = require('axios');
 const FormData = require('form-data');
+const oauthConfig = require('../oauth_config');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -9,9 +12,26 @@ function randomDelay(minMs, maxMs) {
   return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
 }
 
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    return null;
+  }
+}
+
+function writeJsonFile(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+}
+
+const FACEBOOK_TOKEN_PATH = process.env.FB_TOKEN_PATH || path.join(__dirname, '..', 'facebook_token.json');
+
 /**
  * Adaptateur Facebook Messenger basé sur l'API officielle Meta Messenger
- * Platform (Graph API) pour une Page Facebook — via FB_PAGE_ACCESS_TOKEN.
+ * Platform (Graph API) pour une Page Facebook. Deux façons d'obtenir le
+ * jeton de Page : le bouton "Se connecter avec Facebook" (OAuth officiel,
+ * getAuthUrl/handleOAuthCallback, jeton stocké dans facebook_token.json), ou
+ * FB_PAGE_ACCESS_TOKEN en variable d'environnement pour un réglage manuel.
  *
  * Contrairement à adapters/whatsapp.js (protocole WhatsApp Web non-officiel
  * via Baileys, applicable à un compte personnel), Meta n'expose aucune API
@@ -29,29 +49,60 @@ function randomDelay(minMs, maxMs) {
  */
 class FacebookMessengerAdapter {
   constructor() {
-    this.pageAccessToken = process.env.FB_PAGE_ACCESS_TOKEN || null;
     this.apiVersion = process.env.FB_GRAPH_API_VERSION || 'v19.0';
     this.baseUrl = `https://graph.facebook.com/${this.apiVersion}`;
     this.pageId = null;
+    this.pageName = null;
 
-    if (!this.pageAccessToken) {
+    if (!process.env.FB_PAGE_ACCESS_TOKEN && !readJsonFile(FACEBOOK_TOKEN_PATH)?.pageAccessToken) {
       console.warn(
-        'FB_PAGE_ACCESS_TOKEN non défini : le module Facebook Messenger est inactif ' +
-        '(GET /api/facebook/groups et POST /api/facebook/queue renverront une erreur 503).',
+        'Facebook non connecté : utilisez le bouton "Se connecter avec Facebook" dans l\'onglet Connexions ' +
+        '(après avoir renseigné l\'App ID/App Secret dans le portail admin, ou via FB_APP_ID/FB_APP_SECRET).',
       );
     }
   }
 
+  // App ID/Secret identifient l'application (ce dashboard) auprès de Meta —
+  // l'équivalent du "Client ID" derrière tout bouton "Se connecter avec
+  // Facebook" sur le web. Réglage unique fait une fois par l'exploitant,
+  // soit via variable d'environnement, soit collé dans le portail admin
+  // (oauth_config.js) — les utilisateurs de la licence ne voient jamais ça.
+  getAppId() {
+    return process.env.FB_APP_ID || oauthConfig.get('facebook')?.appId || null;
+  }
+
+  getAppSecret() {
+    return process.env.FB_APP_SECRET || oauthConfig.get('facebook')?.appSecret || null;
+  }
+
+  isConnectAvailable() {
+    return Boolean(this.getAppId() && this.getAppSecret());
+  }
+
+  getStoredToken() {
+    return readJsonFile(FACEBOOK_TOKEN_PATH);
+  }
+
+  getPageAccessToken() {
+    return process.env.FB_PAGE_ACCESS_TOKEN || this.getStoredToken()?.pageAccessToken || null;
+  }
+
   isConfigured() {
-    return Boolean(this.pageAccessToken);
+    return Boolean(this.getPageAccessToken());
   }
 
   async ensurePageId() {
+    const stored = this.getStoredToken();
+    if (stored?.pageId) {
+      this.pageId = stored.pageId;
+      this.pageName = stored.pageName;
+      return this.pageId;
+    }
     if (this.pageId) {
       return this.pageId;
     }
     const res = await axios.get(`${this.baseUrl}/me`, {
-      params: { fields: 'id,name', access_token: this.pageAccessToken },
+      params: { fields: 'id,name', access_token: this.getPageAccessToken() },
     });
     this.pageId = res.data.id;
     this.pageName = res.data.name;
@@ -75,6 +126,75 @@ class FacebookMessengerAdapter {
     }
   }
 
+  // ---------- Connexion Facebook (OAuth officiel "Se connecter avec Facebook") ----------
+  getAuthUrl(redirectUri, state) {
+    const params = new URLSearchParams({
+      client_id: this.getAppId(),
+      redirect_uri: redirectUri,
+      state,
+      scope: 'pages_show_list,pages_messaging,pages_read_engagement,instagram_basic,instagram_content_publish',
+    });
+    return `https://www.facebook.com/${this.apiVersion}/dialog/oauth?${params.toString()}`;
+  }
+
+  /**
+   * Échange le code contre un jeton utilisateur, l'étend en jeton longue
+   * durée, récupère la première Page gérée par l'utilisateur (et son compte
+   * Instagram professionnel lié s'il existe), puis stocke tout sur disque.
+   * Sélection de la première Page uniquement : pas d'interface de choix
+   * multi-pages dans cette version.
+   */
+  async handleOAuthCallback(code, redirectUri) {
+    const shortLivedRes = await axios.get(`${this.baseUrl}/oauth/access_token`, {
+      params: {
+        client_id: this.getAppId(),
+        client_secret: this.getAppSecret(),
+        redirect_uri: redirectUri,
+        code,
+      },
+    });
+
+    const longLivedRes = await axios.get(`${this.baseUrl}/oauth/access_token`, {
+      params: {
+        grant_type: 'fb_exchange_token',
+        client_id: this.getAppId(),
+        client_secret: this.getAppSecret(),
+        fb_exchange_token: shortLivedRes.data.access_token,
+      },
+    });
+
+    const pagesRes = await axios.get(`${this.baseUrl}/me/accounts`, {
+      params: { access_token: longLivedRes.data.access_token },
+    });
+
+    const page = (pagesRes.data.data || [])[0];
+    if (!page) {
+      throw new Error('NO_PAGE_FOUND');
+    }
+
+    let igUserId = null;
+    try {
+      const igRes = await axios.get(`${this.baseUrl}/${page.id}`, {
+        params: { fields: 'instagram_business_account', access_token: page.access_token },
+      });
+      igUserId = igRes.data.instagram_business_account?.id || null;
+    } catch (err) {
+      // Pas de compte Instagram professionnel lié à cette Page — Messenger
+      // reste utilisable, seul le Studio (Instagram) restera indisponible.
+    }
+
+    writeJsonFile(FACEBOOK_TOKEN_PATH, {
+      pageAccessToken: page.access_token,
+      pageId: page.id,
+      pageName: page.name,
+      igUserId,
+      connectedAt: new Date().toISOString(),
+    });
+
+    this.pageId = page.id;
+    this.pageName = page.name;
+  }
+
   async getConversations() {
     if (!this.isConfigured()) {
       throw new Error('FB_NOT_CONFIGURED');
@@ -85,7 +205,7 @@ class FacebookMessengerAdapter {
     const res = await axios.get(`${this.baseUrl}/me/conversations`, {
       params: {
         fields: 'id,snippet,updated_time,participants',
-        access_token: this.pageAccessToken,
+        access_token: this.getPageAccessToken(),
       },
     });
 
@@ -117,7 +237,7 @@ class FacebookMessengerAdapter {
         message: { text },
         messaging_type: 'RESPONSE',
       },
-      { params: { access_token: this.pageAccessToken } },
+      { params: { access_token: this.getPageAccessToken() } },
     );
 
     return res.data;
@@ -144,7 +264,7 @@ class FacebookMessengerAdapter {
     });
 
     const res = await axios.post(`${this.baseUrl}/me/messages`, form, {
-      params: { access_token: this.pageAccessToken },
+      params: { access_token: this.getPageAccessToken() },
       headers: form.getHeaders(),
       maxContentLength: Infinity,
       maxBodyLength: Infinity,

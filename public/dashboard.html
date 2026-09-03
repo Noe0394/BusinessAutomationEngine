@@ -220,18 +220,31 @@
 
       <div class="conn-block" data-module="facebook">
         <h3>Facebook Messenger <span id="fb-status-badge" class="badge disconnected">Vérification...</span></h3>
-        <p class="empty">
-          Intégration via l'API officielle Meta Messenger Platform (jeton de Page). Aucune connexion interactive ici
-          — configurez <code>FB_PAGE_ACCESS_TOKEN</code> côté serveur ; ce badge reflète la validité du jeton.
-        </p>
+        <p class="empty">Connexion officielle via Facebook Login — un seul clic, aucune clé à saisir.</p>
+        <button type="button" id="fb-connect-btn">🔵 Se connecter avec Facebook</button>
+        <p id="fb-connect-hint" class="empty" hidden></p>
       </div>
 
       <div class="conn-block" data-module="studio_video">
         <h3>Studio Auto-Publication</h3>
-        <p class="empty">Statut de liaison des comptes (jetons déjà émis côté serveur, pas de connexion interactive ici).</p>
-        <p><strong>YouTube :</strong> <span id="studio-conn-status-youtube" class="badge disconnected">Vérification...</span></p>
-        <p><strong>Instagram :</strong> <span id="studio-conn-status-instagram" class="badge disconnected">Vérification...</span></p>
-        <p><strong>TikTok :</strong> <span id="studio-conn-status-tiktok" class="badge disconnected">Vérification...</span></p>
+        <p class="empty">Connexion officielle à chaque plateforme — un seul clic, aucune clé à saisir.</p>
+
+        <p>
+          <strong>YouTube :</strong> <span id="studio-conn-status-youtube" class="badge disconnected">Vérification...</span>
+          <button type="button" id="youtube-connect-btn">🔴 Se connecter avec Google</button>
+        </p>
+        <p id="youtube-connect-hint" class="empty" hidden></p>
+
+        <p>
+          <strong>Instagram :</strong> <span id="studio-conn-status-instagram" class="badge disconnected">Vérification...</span>
+          <span class="empty">(lié automatiquement à la connexion Facebook ci-dessus, si un compte Instagram professionnel y est associé)</span>
+        </p>
+
+        <p>
+          <strong>TikTok :</strong> <span id="studio-conn-status-tiktok" class="badge disconnected">Vérification...</span>
+          <button type="button" id="tiktok-connect-btn">⬛ Se connecter avec TikTok</button>
+        </p>
+        <p id="tiktok-connect-hint" class="empty" hidden></p>
       </div>
     </section>
 
@@ -874,37 +887,108 @@
       }
     }
 
-    // ---------- Connexions : Facebook (statut) ----------
+    // Une connexion OAuth (Facebook/Google/TikTok) ne peut se déclencher que
+    // par une navigation top-level (le fournisseur affiche son propre écran
+    // de consentement) : on ne peut pas y joindre nos en-têtes d'auth
+    // habituels, donc on les passe en paramètre de requête — supporté par
+    // requireAccess côté serveur pour exactement ce cas d'usage.
+    function connectUrl(path) {
+      const { type, value } = getStoredAuth();
+      const param = type === 'admin' ? 'password' : 'licenseKey';
+      return path + '?' + param + '=' + encodeURIComponent(value);
+    }
+
+    // ---------- Connexions : Facebook (OAuth "Se connecter avec Facebook") ----------
     async function fbRefreshStatus() {
       try {
         const res = await apiFetch('/api/facebook/status');
         const data = await res.json();
         const badge = document.getElementById('fb-status-badge');
-        if (!data.configured) {
-          badge.textContent = 'Non connecté';
-          badge.className = 'badge disconnected';
-          return;
-        }
-        badge.textContent = data.connected ? 'Connecté' : 'Déconnecté';
+        const btn = document.getElementById('fb-connect-btn');
+        const hint = document.getElementById('fb-connect-hint');
+
+        badge.textContent = data.connected ? 'Connecté' : 'Non connecté';
         badge.className = 'badge ' + (data.connected ? 'connected' : 'disconnected');
+        btn.hidden = Boolean(data.connected);
+
+        if (!data.connectAvailable) {
+          hint.hidden = false;
+          hint.textContent = "Connexion indisponible pour le moment — contactez l'administrateur.";
+          btn.disabled = true;
+        } else {
+          hint.hidden = true;
+          btn.disabled = false;
+        }
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }
     }
 
-    // ---------- Connexions : Studio (statut de liaison des comptes) ----------
+    document.getElementById('fb-connect-btn').addEventListener('click', () => {
+      window.location.href = connectUrl('/api/facebook/connect');
+    });
+
+    // ---------- Connexions : Studio (OAuth YouTube/TikTok, Instagram via Facebook) ----------
     async function studioConnRefreshStatus() {
       try {
         const res = await apiFetch('/api/media/status');
         const data = await res.json();
+
         ['youtube', 'instagram', 'tiktok'].forEach((platform) => {
           const badge = document.getElementById('studio-conn-status-' + platform);
           const configured = data[platform] && data[platform].configured;
           badge.textContent = configured ? 'Connecté' : 'Non connecté';
           badge.className = 'badge ' + (configured ? 'connected' : 'disconnected');
         });
+
+        const youtubeBtn = document.getElementById('youtube-connect-btn');
+        youtubeBtn.hidden = Boolean(data.youtube.configured);
+        youtubeBtn.disabled = !data.youtube.connectAvailable;
+        document.getElementById('youtube-connect-hint').hidden = data.youtube.connectAvailable;
+        if (!data.youtube.connectAvailable) {
+          document.getElementById('youtube-connect-hint').textContent = "Connexion indisponible pour le moment — contactez l'administrateur.";
+        }
+
+        const tiktokBtn = document.getElementById('tiktok-connect-btn');
+        tiktokBtn.hidden = Boolean(data.tiktok.configured);
+        tiktokBtn.disabled = !data.tiktok.connectAvailable;
+        document.getElementById('tiktok-connect-hint').hidden = data.tiktok.connectAvailable;
+        if (!data.tiktok.connectAvailable) {
+          document.getElementById('tiktok-connect-hint').textContent = "Connexion indisponible pour le moment — contactez l'administrateur.";
+        }
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    document.getElementById('youtube-connect-btn').addEventListener('click', () => {
+      window.location.href = connectUrl('/api/media/youtube/connect');
+    });
+    document.getElementById('tiktok-connect-btn').addEventListener('click', () => {
+      window.location.href = connectUrl('/api/media/tiktok/connect');
+    });
+
+    // Après un retour de callback OAuth (redirection vers /dashboard?xxxConnect=success|error) :
+    // affiche un message ponctuel puis nettoie l'URL pour ne pas le répéter au rafraîchissement.
+    function handleOAuthReturn() {
+      const params = new URLSearchParams(window.location.search);
+      const mapping = [
+        ['fbConnect', 'Facebook'],
+        ['youtubeConnect', 'YouTube'],
+        ['tiktokConnect', 'TikTok'],
+      ];
+      let handled = false;
+
+      mapping.forEach(([param, label]) => {
+        if (params.has(param)) {
+          handled = true;
+          const ok = params.get(param) === 'success';
+          window.alert(ok ? `${label} : connexion réussie !` : `${label} : échec de la connexion, réessayez.`);
+        }
+      });
+
+      if (handled) {
+        window.history.replaceState({}, '', window.location.pathname);
       }
     }
 
@@ -1879,7 +1963,7 @@
       if (hasModule('studio_video')) { studioConnRefreshStatus(); studioPollStatus(); }
     }
 
-    tryAutoLogin().then((ok) => { if (ok) init(); });
+    tryAutoLogin().then((ok) => { if (ok) { init(); handleOAuthReturn(); } });
   </script>
 </body>
 </html>

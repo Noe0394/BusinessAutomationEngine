@@ -14,6 +14,7 @@ const FacebookMessengerAdapter = require('./adapters/facebook');
 const TelegramAdapter = require('./adapters/telegram');
 const MediaPublisherAdapter = require('./adapters/media_publisher');
 const licenses = require('./licenses');
+const oauthConfig = require('./oauth_config');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -162,6 +163,26 @@ function requireModule(moduleName) {
       error: `Votre clé de licence n'inclut pas le module "${moduleName}".`,
     });
   };
+}
+
+// ---------- Anti-CSRF pour les flux OAuth (Google/TikTok/Facebook) ----------
+// Le paramètre "state" standard OAuth : généré au moment où l'utilisateur
+// clique sur "Se connecter", vérifié quand le fournisseur redirige vers notre
+// callback (qui ne peut pas porter nos en-têtes d'auth habituels puisque
+// c'est une navigation top-level initiée par le fournisseur, pas un fetch).
+const oauthStates = new Map(); // state -> expiresAt (ms)
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+function createOAuthState() {
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStates.set(state, Date.now() + OAUTH_STATE_TTL_MS);
+  return state;
+}
+
+function consumeOAuthState(state) {
+  const expiresAt = oauthStates.get(state);
+  oauthStates.delete(state);
+  return Boolean(expiresAt) && expiresAt > Date.now();
 }
 
 function replaceVariables(template, row) {
@@ -552,6 +573,42 @@ app.get('/api/admin/overview', requireAdmin, (req, res) => {
   res.status(200).json(licenses.getOverview());
 });
 
+// Permet à l'exploitant de renseigner les identifiants d'application OAuth
+// (Client ID/Secret) depuis le portail admin plutôt que de devoir les
+// définir comme variables d'environnement Render. Ne renvoie jamais les
+// secrets en retour (uniquement un booléen "configuré ou non"), pour ne pas
+// les réafficher en clair dans le navigateur une fois saisis.
+app.get('/api/admin/oauth-config', requireAdmin, (req, res) => {
+  res.status(200).json(oauthConfig.getStatus());
+});
+
+app.post('/api/admin/oauth-config/google', requireAdmin, (req, res) => {
+  const { clientId, clientSecret } = req.body || {};
+  if (!clientId || !clientSecret) {
+    return res.status(400).json({ error: 'Les champs "clientId" et "clientSecret" sont requis.' });
+  }
+  oauthConfig.set('google', { clientId, clientSecret });
+  res.status(200).json({ success: true });
+});
+
+app.post('/api/admin/oauth-config/facebook', requireAdmin, (req, res) => {
+  const { appId, appSecret } = req.body || {};
+  if (!appId || !appSecret) {
+    return res.status(400).json({ error: 'Les champs "appId" et "appSecret" sont requis.' });
+  }
+  oauthConfig.set('facebook', { appId, appSecret });
+  res.status(200).json({ success: true });
+});
+
+app.post('/api/admin/oauth-config/tiktok', requireAdmin, (req, res) => {
+  const { clientKey, clientSecret } = req.body || {};
+  if (!clientKey || !clientSecret) {
+    return res.status(400).json({ error: 'Les champs "clientKey" et "clientSecret" sont requis.' });
+  }
+  oauthConfig.set('tiktok', { clientKey, clientSecret });
+  res.status(200).json({ success: true });
+});
+
 app.post('/api/admin/licenses', requireAdmin, (req, res) => {
   const { expiresAt, note, allowedModules } = req.body || {};
 
@@ -823,7 +880,42 @@ app.post('/api/campaign/excel', requireAccess, requireModule('whatsapp'), upload
 
 app.get('/api/facebook/status', requireAccess, requireModule('facebook'), async (req, res) => {
   const status = await facebook.checkConnection();
-  res.status(200).json({ configured: facebook.isConfigured(), ...status });
+  res.status(200).json({ configured: facebook.isConfigured(), connectAvailable: facebook.isConnectAvailable(), ...status });
+});
+
+// Déclenchée par une navigation top-level (clic sur "Se connecter avec
+// Facebook"), pas par fetch/XHR : le mot de passe/la clé de licence arrive
+// donc en paramètre de requête (déjà supporté par requireAccess), jamais en
+// en-tête personnalisé impossible à poser sur une redirection de navigateur.
+app.get('/api/facebook/connect', requireAccess, requireModule('facebook'), (req, res) => {
+  if (!facebook.isConnectAvailable()) {
+    return res.status(503).json({
+      error: 'Connexion Facebook indisponible : FB_APP_ID/FB_APP_SECRET non configurés côté serveur.',
+    });
+  }
+  const redirectUri = `${PUBLIC_BASE_URL}/api/facebook/callback`;
+  const state = createOAuthState();
+  res.redirect(facebook.getAuthUrl(redirectUri, state));
+});
+
+// Route publique par nature : Meta y redirige le navigateur directement,
+// sans pouvoir transmettre nos en-têtes d'authentification. Sécurisée par le
+// paramètre "state" à usage unique (voir createOAuthState/consumeOAuthState).
+app.get('/api/facebook/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error || !code || !state || !consumeOAuthState(state)) {
+    return res.redirect('/dashboard?fbConnect=error');
+  }
+
+  try {
+    const redirectUri = `${PUBLIC_BASE_URL}/api/facebook/callback`;
+    await facebook.handleOAuthCallback(code, redirectUri);
+    res.redirect('/dashboard?fbConnect=success');
+  } catch (err) {
+    console.error('Erreur lors de la connexion Facebook (callback OAuth):', err?.response?.data || err.message);
+    res.redirect('/dashboard?fbConnect=error');
+  }
 });
 
 app.get('/api/facebook/groups', requireAccess, requireModule('facebook'), async (req, res) => {
@@ -1040,10 +1132,66 @@ app.get('/api/media/temp/:token', (req, res) => {
 
 app.get('/api/media/status', requireAccess, requireModule('studio_video'), (req, res) => {
   res.status(200).json({
-    youtube: { configured: mediaPublisher.isYoutubeConfigured() },
+    youtube: { configured: mediaPublisher.isYoutubeConfigured(), connectAvailable: mediaPublisher.isYoutubeConnectAvailable() },
     instagram: { configured: mediaPublisher.isInstagramConfigured() },
-    tiktok: { configured: mediaPublisher.isTikTokConfigured() },
+    tiktok: { configured: mediaPublisher.isTikTokConfigured(), connectAvailable: mediaPublisher.isTikTokConnectAvailable() },
   });
+});
+
+app.get('/api/media/youtube/connect', requireAccess, requireModule('studio_video'), (req, res) => {
+  if (!mediaPublisher.isYoutubeConnectAvailable()) {
+    return res.status(503).json({
+      error: 'Connexion YouTube indisponible : GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET ou PUBLIC_BASE_URL non configurés côté serveur.',
+    });
+  }
+  const redirectUri = `${PUBLIC_BASE_URL}/api/media/youtube/callback`;
+  const state = createOAuthState();
+  res.redirect(mediaPublisher.getYoutubeAuthUrl(redirectUri, state));
+});
+
+app.get('/api/media/youtube/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error || !code || !state || !consumeOAuthState(state)) {
+    return res.redirect('/dashboard?youtubeConnect=error');
+  }
+
+  try {
+    const redirectUri = `${PUBLIC_BASE_URL}/api/media/youtube/callback`;
+    await mediaPublisher.handleYoutubeCallback(code, redirectUri);
+    res.redirect('/dashboard?youtubeConnect=success');
+  } catch (err) {
+    console.error('Erreur lors de la connexion YouTube (callback OAuth):', err?.response?.data || err.message);
+    res.redirect('/dashboard?youtubeConnect=error');
+  }
+});
+
+app.get('/api/media/tiktok/connect', requireAccess, requireModule('studio_video'), (req, res) => {
+  if (!mediaPublisher.isTikTokConnectAvailable()) {
+    return res.status(503).json({
+      error: 'Connexion TikTok indisponible : TIKTOK_CLIENT_KEY/TIKTOK_CLIENT_SECRET ou PUBLIC_BASE_URL non configurés côté serveur.',
+    });
+  }
+  const redirectUri = `${PUBLIC_BASE_URL}/api/media/tiktok/callback`;
+  const state = createOAuthState();
+  res.redirect(mediaPublisher.getTiktokAuthUrl(redirectUri, state));
+});
+
+app.get('/api/media/tiktok/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error || !code || !state || !consumeOAuthState(state)) {
+    return res.redirect('/dashboard?tiktokConnect=error');
+  }
+
+  try {
+    const redirectUri = `${PUBLIC_BASE_URL}/api/media/tiktok/callback`;
+    await mediaPublisher.handleTiktokCallback(code, redirectUri);
+    res.redirect('/dashboard?tiktokConnect=success');
+  } catch (err) {
+    console.error('Erreur lors de la connexion TikTok (callback OAuth):', err?.response?.data || err.message);
+    res.redirect('/dashboard?tiktokConnect=error');
+  }
 });
 
 app.post('/api/media/publish-all', requireAccess, requireModule('studio_video'), videoUpload.single('video'), async (req, res) => {

@@ -3,3 +3,7 @@ auth_info_baileys/
 telegram_session.txt
 licenses.json
 ADMIN_ACCESS.md
+youtube_token.json
+tiktok_token.json
+facebook_token.json
+oauth_config.json
