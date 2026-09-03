@@ -18,6 +18,14 @@ if (!process.env.LICENSES_PATH && !githubStore.enabled) {
   );
 }
 
+// Les clés sont toujours générées en majuscules (generateKeyString), mais un
+// client peut les retaper à la main ou les copier depuis un champ qui les
+// reformate (ex: clavier mobile avec majuscule automatique désactivée) — sans
+// cette normalisation, une clé pourtant valide ressort comme "inconnue".
+function normalizeKey(key) {
+  return typeof key === 'string' ? key.trim().toUpperCase() : key;
+}
+
 function loadLicenses() {
   try {
     return JSON.parse(fs.readFileSync(LICENSES_PATH, 'utf8'));
@@ -120,7 +128,8 @@ async function createLicense({ expiresAt, note, allowedModules } = {}) {
 // entièrement de la liste — irréversible.
 async function deleteLicense(key) {
   const licenses = loadLicenses();
-  const index = licenses.findIndex((l) => l.key === key);
+  const normalizedKey = normalizeKey(key);
+  const index = licenses.findIndex((l) => l.key === normalizedKey);
 
   if (index === -1) {
     throw new Error('LICENSE_NOT_FOUND');
@@ -189,7 +198,7 @@ function getOverview() {
 
 async function setLicenseActive(key, active) {
   const licenses = loadLicenses();
-  const license = licenses.find((l) => l.key === key);
+  const license = licenses.find((l) => l.key === normalizeKey(key));
 
   if (!license) {
     throw new Error('LICENSE_NOT_FOUND');
@@ -206,7 +215,7 @@ async function verifyKey(key, deviceId) {
   }
 
   const licenses = loadLicenses();
-  const license = licenses.find((l) => l.key === key);
+  const license = licenses.find((l) => l.key === normalizeKey(key));
 
   if (!license) {
     return { valid: false, reason: 'NOT_FOUND' };
@@ -243,7 +252,7 @@ async function verifyKey(key, deviceId) {
 
 async function unbindDevice(key) {
   const licenses = loadLicenses();
-  const license = licenses.find((l) => l.key === key);
+  const license = licenses.find((l) => l.key === normalizeKey(key));
 
   if (!license) {
     throw new Error('LICENSE_NOT_FOUND');

@@ -545,7 +545,7 @@
 
     document.getElementById('login-form-license').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const key = document.getElementById('login-license-key').value.trim();
+      const key = document.getElementById('login-license-key').value.trim().toUpperCase();
       try {
         const res = await fetch('/api/auth/verify-key', {
           method: 'POST',
