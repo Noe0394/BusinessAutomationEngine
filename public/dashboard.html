@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>Orchestrateur WhatsApp</title>
+  <title>Orchestrateur Multi-Plateformes</title>
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     body { font-family: sans-serif; margin: 0; background: #f2f2f3; color: #1a1a1a; }
@@ -24,6 +24,11 @@
 
     .panel { display: none; margin: 0 1rem 1.5rem; background: #fff; padding: 1.25rem; border-radius: 0 8px 8px 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
     .panel.active { display: block; }
+
+    .conn-block { border: 1px solid #e0e0e0; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem; }
+    .conn-block h3 { margin-top: 0; }
+    .subsection { border-top: 2px solid #f0f0f0; margin-top: 2rem; padding-top: 1.5rem; }
+    .subsection:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
 
     .table-wrap { overflow-x: auto; }
     table { border-collapse: collapse; width: 100%; min-width: 420px; }
@@ -49,7 +54,7 @@
     }
     .open-whatsapp-btn { display: inline-block; background: #25D366; color: #fff; text-decoration: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: bold; min-height: 48px; text-align: center; }
 
-    #search-groups { width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 6px; margin: 1rem 0; min-height: 44px; }
+    #search-groups, #search-tg-groups, #search-fb-conversations { width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 6px; margin: 1rem 0; min-height: 44px; }
     .group-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
     .group-actions button { padding: 0.6rem 1rem; border: 1px solid #075E54; background: #fff; color: #075E54; border-radius: 6px; }
     #selected-groups-count { font-weight: bold; margin-left: 0.5rem; }
@@ -63,11 +68,13 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone {
+    #drop-zone, #import-drop-zone, #fb-drop-zone, #tg-drop-zone, #studio-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover { background: #eef8f4; border-color: #075E54; }
+    #drop-zone.dragover, #import-drop-zone.dragover, #fb-drop-zone.dragover, #tg-drop-zone.dragover, #studio-drop-zone.dragover {
+      background: #eef8f4; border-color: #075E54;
+    }
 
     .warning-box {
       background: #fff3cd; border: 1px solid #ffcc00; color: #7a5c00;
@@ -79,9 +86,9 @@
     .stop-button { background: #c0392b; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; margin-top: 0.75rem; }
     .stop-button:disabled { background: #e6a8a1; cursor: not-allowed; }
 
-    #campaign-feedback { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
-    #campaign-feedback.ok { background: #d4f5dd; color: #1a7a3c; }
-    #campaign-feedback.error { background: #fbdada; color: #c0392b; }
+    #campaign-feedback, #fb-feedback, #tg-feedback, #studio-feedback { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
+    #campaign-feedback.ok, #fb-feedback.ok, #tg-feedback.ok, #studio-feedback.ok { background: #d4f5dd; color: #1a7a3c; }
+    #campaign-feedback.error, #fb-feedback.error, #tg-feedback.error, #studio-feedback.error { background: #fbdada; color: #c0392b; }
 
     #progress-area { margin-top: 1.5rem; }
     #progress-bar-outer { width: 100%; background: #eee; border-radius: 999px; height: 24px; overflow: hidden; }
@@ -144,165 +151,265 @@
 
   <div id="app" hidden>
     <header>
-      <h1>Orchestrateur WhatsApp</h1>
+      <h1>Orchestrateur Multi-Plateformes</h1>
       <button id="logout-btn" type="button">Se déconnecter</button>
     </header>
 
     <nav id="tabs">
-      <button type="button" class="tab-btn active" data-tab="status">Statut &amp; Connexion</button>
-      <button type="button" class="tab-btn" data-tab="groups">Groupes &amp; Contacts</button>
-      <button type="button" class="tab-btn" data-tab="import">Import Excel/CSV</button>
-      <button type="button" class="tab-btn" data-tab="campaign">Centre d'Envoi</button>
-      <button type="button" class="tab-btn" data-tab="facebook">Facebook Messenger</button>
+      <button type="button" class="tab-btn active" data-tab="connections">🔌 Connexions &amp; Statuts</button>
+      <button type="button" class="tab-btn" data-tab="whatsapp">WhatsApp</button>
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
+      <button type="button" class="tab-btn" data-tab="facebook">Facebook Messenger</button>
       <button type="button" class="tab-btn" data-tab="studio">🎬 Studio Auto-Publication</button>
-      <button type="button" class="tab-btn" data-tab="admin" id="admin-tab-btn" hidden>🛡️ Administration</button>
     </nav>
 
-    <!-- Section 1 : Statut & Connexion -->
-    <section class="panel active" id="panel-status">
-      <h2>Statut &amp; Connexion WhatsApp</h2>
-      <span id="status-badge" class="badge disconnected">Vérification...</span>
+    <!-- Onglet unifié : Connexions & Statuts -->
+    <section class="panel active" id="panel-connections">
+      <h2>Connexions &amp; Statuts</h2>
 
-      <div class="mode-toggle" id="connect-mode-toggle">
-        <button type="button" class="mode-btn active" data-mode="pc">💻 Mode PC (QR Code)</button>
-        <button type="button" class="mode-btn" data-mode="mobile">📱 Mode Mobile (Code d'association)</button>
-      </div>
+      <div class="conn-block" data-module="whatsapp">
+        <h3>WhatsApp <span id="status-badge" class="badge disconnected">Vérification...</span></h3>
 
-      <div id="pc-mode-panel">
-        <div id="qr-container" hidden>
-          <img id="qr-image" alt="QR Code WhatsApp" />
-          <p>Scannez ce QR code avec WhatsApp (Appareils liés) pour connecter l'appareil.</p>
+        <div class="mode-toggle" id="connect-mode-toggle">
+          <button type="button" class="mode-btn active" data-mode="pc">💻 Mode PC (QR Code)</button>
+          <button type="button" class="mode-btn" data-mode="mobile">📱 Mode Mobile (Code d'association)</button>
+        </div>
+
+        <div id="pc-mode-panel">
+          <div id="qr-container" hidden>
+            <img id="qr-image" alt="QR Code WhatsApp" />
+            <p>Scannez ce QR code avec WhatsApp (Appareils liés) pour connecter l'appareil.</p>
+          </div>
+        </div>
+
+        <div id="mobile-mode-panel" hidden>
+          <div class="field">
+            <label for="pairing-phone">Numéro de téléphone (avec indicatif pays, ex: 225xxxxxxxxx)</label>
+            <input type="tel" id="pairing-phone" placeholder="225xxxxxxxxx" />
+          </div>
+          <button type="button" id="generate-pairing-btn" class="send-button" style="width:auto;">Générer mon Code d'Association</button>
+          <div id="pairing-result"></div>
         </div>
       </div>
 
-      <div id="mobile-mode-panel" hidden>
-        <div class="field">
-          <label for="pairing-phone">Numéro de téléphone (avec indicatif pays, ex: 225xxxxxxxxx)</label>
-          <input type="tel" id="pairing-phone" placeholder="225xxxxxxxxx" />
-        </div>
-        <button type="button" id="generate-pairing-btn" class="send-button" style="width:auto;">Générer mon Code d'Association</button>
-        <div id="pairing-result"></div>
-      </div>
-    </section>
+      <div class="conn-block" data-module="telegram">
+        <h3>Telegram <span id="tg-status-badge" class="badge disconnected">Vérification...</span></h3>
 
-    <!-- Section 2 : Groupes & Contacts -->
-    <section class="panel" id="panel-groups">
-      <h2>Groupes &amp; Contacts</h2>
-      <button type="button" id="load-groups-btn">Lister mes groupes</button>
-      <input type="text" id="search-groups" placeholder="Rechercher un groupe par nom..." />
+        <div id="tg-login-panel">
+          <div class="field">
+            <label for="tg-phone">Numéro de téléphone (avec indicatif pays)</label>
+            <input type="tel" id="tg-phone" placeholder="+225xxxxxxxxx" />
+          </div>
+          <button type="button" id="tg-start-login-btn">Se connecter</button>
 
-      <div class="group-actions">
-        <button type="button" id="select-all-btn">Tout sélectionner</button>
-        <button type="button" id="deselect-all-btn">Tout désélectionner</button>
-        <span id="selected-groups-count">0 groupe(s) sélectionné(s)</span>
-      </div>
+          <div class="field" id="tg-code-field" hidden style="margin-top: 1rem;">
+            <label for="tg-code">Code reçu (SMS ou app Telegram)</label>
+            <input type="text" id="tg-code" placeholder="12345" />
+            <button type="button" id="tg-submit-code-btn">Valider le code</button>
+          </div>
 
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th></th><th>Nom du groupe</th><th>ID du groupe</th><th>Membres</th></tr>
-          </thead>
-          <tbody id="groups-body">
-            <tr><td colspan="4" class="empty">Cliquez sur "Lister mes groupes" pour charger la liste.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+          <div class="field" id="tg-password-field" hidden style="margin-top: 1rem;">
+            <label for="tg-password">Mot de passe de vérification en deux étapes (2FA)</label>
+            <input type="password" id="tg-password" />
+            <button type="button" id="tg-submit-password-btn">Valider le mot de passe</button>
+          </div>
 
-    <!-- Section 3 : Import Excel/CSV -->
-    <section class="panel" id="panel-import">
-      <h2>Import Excel / CSV</h2>
-      <div id="import-drop-zone">Glissez-déposez un fichier .xlsx ou .csv ici, ou touchez pour parcourir</div>
-      <input type="file" id="import-file" accept=".xlsx,.csv" hidden />
-      <p id="import-file-name" class="empty">Aucun fichier sélectionné.</p>
-      <button type="button" id="import-btn">Importer</button>
-      <div id="import-result" hidden></div>
-
-      <div class="table-wrap">
-        <table style="margin-top: 1rem;">
-          <thead>
-            <tr><th>Téléphone</th><th>Prénom</th></tr>
-          </thead>
-          <tbody id="import-body">
-            <tr><td colspan="2" class="empty">Aucun contact importé.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- Section 4 : Centre d'Envoi Multi-Médias -->
-    <section class="panel" id="panel-campaign">
-      <h2>Centre d'Envoi Multi-Médias</h2>
-
-      <div class="warning-box">
-        ⚠️ Attention : L'envoi massif ou trop rapide peut entraîner le blocage temporaire ou définitif de votre compte WhatsApp par Meta. Privilégiez un délai d'au moins 10 à 15 secondes entre chaque message.
-      </div>
-
-      <div class="field">
-        <label for="campaign-message">Message (emojis supportés)</label>
-        <textarea id="campaign-message" placeholder="Écrivez votre message ici... 😀"></textarea>
-      </div>
-
-      <div class="field">
-        <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF, Sticker WEBP)</label>
-        <div id="drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
-        <input type="file" id="campaign-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,.webp,image/jpeg,image/png,image/webp,video/mp4,application/pdf" hidden />
-        <p id="campaign-file-name" class="empty">Aucun fichier sélectionné.</p>
-      </div>
-
-      <div class="field">
-        <label>Cible de l'envoi</label>
-        <label><input type="radio" name="target-mode" value="groups" checked /> Groupe(s) sélectionné(s)</label>
-        <label style="margin-left: 1.5rem;"><input type="radio" name="target-mode" value="import" /> Liste importée (Excel/CSV)</label>
-      </div>
-
-      <div class="field" id="campaign-groups-field">
-        <p id="campaign-groups-count" class="empty">0 groupe(s) sélectionné(s) dans l'onglet "Groupes &amp; Contacts".</p>
-      </div>
-
-      <div class="field" id="campaign-import-field" hidden>
-        <p id="campaign-import-count" class="empty">Aucun contact importé pour le moment (onglet "Import Excel/CSV").</p>
-      </div>
-
-      <div class="row">
-        <div class="field">
-          <label for="batch-size">Nombre de messages par lot</label>
-          <input type="number" id="batch-size" value="5" min="1" />
-        </div>
-        <div class="field">
-          <label for="delay-seconds">Délai de pause entre messages (secondes)</label>
-          <input type="number" id="delay-seconds" value="12" min="1" />
+          <p id="tg-login-feedback" class="empty"></p>
         </div>
       </div>
 
-      <button type="button" id="send-campaign-btn" class="send-button">🚀 Lancer l'envoi</button>
-      <button type="button" id="stop-campaign-btn" class="stop-button" hidden>⛔ STOP / Interrompre la campagne</button>
-      <div id="campaign-feedback" hidden></div>
-
-      <div id="progress-area" hidden>
-        <div id="progress-bar-outer">
-          <div id="progress-bar-inner"></div>
-        </div>
-        <p id="progress-text">Envoi 0/0 - 0%</p>
-        <p id="progress-counters">
-          <span class="count-success">✅ Réussites : 0</span>
-          <span class="count-failed">❌ Échecs : 0</span>
+      <div class="conn-block" data-module="facebook">
+        <h3>Facebook Messenger <span id="fb-status-badge" class="badge disconnected">Vérification...</span></h3>
+        <p class="empty">
+          Intégration via l'API officielle Meta Messenger Platform (jeton de Page). Aucune connexion interactive ici
+          — configurez <code>FB_PAGE_ACCESS_TOKEN</code> côté serveur ; ce badge reflète la validité du jeton.
         </p>
       </div>
 
-      <p style="margin-top: 1rem;">
-        <button type="button" id="show-last-report-btn" hidden>📋 Voir le dernier rapport de campagne</button>
-      </p>
+      <div class="conn-block" data-module="studio_video">
+        <h3>Studio Auto-Publication</h3>
+        <p class="empty">Statut de liaison des comptes (jetons déjà émis côté serveur, pas de connexion interactive ici).</p>
+        <p><strong>YouTube :</strong> <span id="studio-conn-status-youtube" class="badge disconnected">Vérification...</span></p>
+        <p><strong>Instagram :</strong> <span id="studio-conn-status-instagram" class="badge disconnected">Vérification...</span></p>
+        <p><strong>TikTok :</strong> <span id="studio-conn-status-tiktok" class="badge disconnected">Vérification...</span></p>
+      </div>
     </section>
 
-    <!-- Section 5 : Facebook Messenger -->
+    <!-- Onglet WhatsApp : groupes, import, centre d'envoi -->
+    <section class="panel" id="panel-whatsapp">
+      <h2>WhatsApp</h2>
+
+      <div class="subsection">
+        <h3>Groupes &amp; Contacts</h3>
+        <button type="button" id="load-groups-btn">Lister mes groupes</button>
+        <input type="text" id="search-groups" placeholder="Rechercher un groupe par nom..." />
+
+        <div class="group-actions">
+          <button type="button" id="select-all-btn">Tout sélectionner</button>
+          <button type="button" id="deselect-all-btn">Tout désélectionner</button>
+          <span id="selected-groups-count">0 groupe(s) sélectionné(s)</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th></th><th>Nom du groupe</th><th>ID du groupe</th><th>Membres</th></tr>
+            </thead>
+            <tbody id="groups-body">
+              <tr><td colspan="4" class="empty">Cliquez sur "Lister mes groupes" pour charger la liste.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="subsection">
+        <h3>Import Excel / CSV</h3>
+        <div id="import-drop-zone">Glissez-déposez un fichier .xlsx ou .csv ici, ou touchez pour parcourir</div>
+        <input type="file" id="import-file" accept=".xlsx,.csv" hidden />
+        <p id="import-file-name" class="empty">Aucun fichier sélectionné.</p>
+        <button type="button" id="import-btn">Importer</button>
+        <div id="import-result" hidden></div>
+
+        <div class="table-wrap">
+          <table style="margin-top: 1rem;">
+            <thead>
+              <tr><th>Téléphone</th><th>Prénom</th></tr>
+            </thead>
+            <tbody id="import-body">
+              <tr><td colspan="2" class="empty">Aucun contact importé.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="subsection">
+        <h3>Centre d'Envoi Multi-Médias</h3>
+
+        <div class="warning-box">
+          ⚠️ Attention : L'envoi massif ou trop rapide peut entraîner le blocage temporaire ou définitif de votre compte WhatsApp par Meta. Privilégiez un délai d'au moins 10 à 15 secondes entre chaque message.
+        </div>
+
+        <div class="field">
+          <label for="campaign-message">Message (emojis supportés)</label>
+          <textarea id="campaign-message" placeholder="Écrivez votre message ici... 😀"></textarea>
+        </div>
+
+        <div class="field">
+          <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF, Sticker WEBP)</label>
+          <div id="drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+          <input type="file" id="campaign-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,.webp,image/jpeg,image/png,image/webp,video/mp4,application/pdf" hidden />
+          <p id="campaign-file-name" class="empty">Aucun fichier sélectionné.</p>
+        </div>
+
+        <div class="field">
+          <label>Cible de l'envoi</label>
+          <label><input type="radio" name="target-mode" value="groups" checked /> Groupe(s) sélectionné(s)</label>
+          <label style="margin-left: 1.5rem;"><input type="radio" name="target-mode" value="import" /> Liste importée (Excel/CSV)</label>
+        </div>
+
+        <div class="field" id="campaign-groups-field">
+          <p id="campaign-groups-count" class="empty">0 groupe(s) sélectionné(s) ci-dessus.</p>
+        </div>
+
+        <div class="field" id="campaign-import-field" hidden>
+          <p id="campaign-import-count" class="empty">Aucun contact importé pour le moment (section "Import Excel/CSV" ci-dessus).</p>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="batch-size">Nombre de messages par lot</label>
+            <input type="number" id="batch-size" value="5" min="1" />
+          </div>
+          <div class="field">
+            <label for="delay-seconds">Délai de pause entre messages (secondes)</label>
+            <input type="number" id="delay-seconds" value="12" min="1" />
+          </div>
+        </div>
+
+        <button type="button" id="send-campaign-btn" class="send-button">🚀 Lancer l'envoi</button>
+        <button type="button" id="stop-campaign-btn" class="stop-button" hidden>⛔ STOP / Interrompre la campagne</button>
+        <div id="campaign-feedback" hidden></div>
+
+        <div id="progress-area" hidden>
+          <div id="progress-bar-outer">
+            <div id="progress-bar-inner"></div>
+          </div>
+          <p id="progress-text">Envoi 0/0 - 0%</p>
+          <p id="progress-counters">
+            <span class="count-success">✅ Réussites : 0</span>
+            <span class="count-failed">❌ Échecs : 0</span>
+          </p>
+        </div>
+
+        <p style="margin-top: 1rem;">
+          <button type="button" id="show-last-report-btn" hidden>📋 Voir le dernier rapport de campagne</button>
+        </p>
+      </div>
+    </section>
+
+    <!-- Onglet Telegram -->
+    <section class="panel" id="panel-telegram">
+      <h2>Telegram</h2>
+      <p class="empty" id="tg-not-connected-hint">Connectez votre compte Telegram dans l'onglet "Connexions &amp; Statuts" pour utiliser cette section.</p>
+
+      <div id="tg-main-content" hidden>
+        <button type="button" id="load-tg-groups-btn">Lister mes groupes/canaux</button>
+        <input type="text" id="search-tg-groups" placeholder="Rechercher un groupe/canal par nom..." />
+
+        <div class="group-actions">
+          <button type="button" id="tg-select-all-btn">Tout sélectionner</button>
+          <button type="button" id="tg-deselect-all-btn">Tout désélectionner</button>
+          <span id="tg-selected-count">0 groupe(s)/canal(aux) sélectionné(s)</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>Nom</th><th>Type</th></tr></thead>
+            <tbody id="tg-groups-body">
+              <tr><td colspan="3" class="empty">Cliquez sur "Lister mes groupes/canaux".</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="warning-box" style="margin-top: 1.5rem;">
+          ⚠️ Respectez un délai d'au moins 10 à 15 secondes entre chaque message pour éviter les limitations
+          anti-flood de Telegram (FloodWaitError), voire une restriction temporaire du compte.
+        </div>
+
+        <div class="field">
+          <label for="tg-message">Message (texte)</label>
+          <textarea id="tg-message" placeholder="Écrivez votre message ici... 😀"></textarea>
+        </div>
+
+        <div class="field">
+          <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF)</label>
+          <div id="tg-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+          <input type="file" id="tg-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+          <p id="tg-file-name" class="empty">Aucun fichier sélectionné.</p>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="tg-batch-size">Nombre de messages par lot</label>
+            <input type="number" id="tg-batch-size" value="5" min="1" />
+          </div>
+          <div class="field">
+            <label for="tg-delay-seconds">Délai d'attente entre chaque message (secondes)</label>
+            <input type="number" id="tg-delay-seconds" value="12" min="1" />
+          </div>
+        </div>
+
+        <button type="button" id="send-tg-campaign-btn" class="send-button">🚀 Lancer l'envoi Telegram</button>
+        <div id="tg-feedback" hidden></div>
+      </div>
+    </section>
+
+    <!-- Onglet Facebook Messenger -->
     <section class="panel" id="panel-facebook">
       <h2>Facebook Messenger</h2>
       <p class="empty">
-        Intégration via l'API officielle Meta Messenger Platform (Page Facebook). Nécessite la variable
-        d'environnement <code>FB_PAGE_ACCESS_TOKEN</code> côté serveur. Contrairement à WhatsApp, il ne s'agit pas
-        ici de "groupes" mais des conversations de la Page avec ses utilisateurs.
+        Intégration via l'API officielle Meta Messenger Platform (Page Facebook). Contrairement à WhatsApp, il ne
+        s'agit pas ici de "groupes" mais des conversations de la Page avec ses utilisateurs.
       </p>
 
       <div class="warning-box">
@@ -358,86 +465,7 @@
       <div id="fb-feedback" hidden></div>
     </section>
 
-    <!-- Section 6 : Telegram -->
-    <section class="panel" id="panel-telegram">
-      <h2>Telegram</h2>
-      <span id="tg-status-badge" class="badge disconnected">Vérification...</span>
-
-      <div id="tg-login-panel" style="margin-top: 1rem;">
-        <div class="field">
-          <label for="tg-phone">Numéro de téléphone (avec indicatif pays)</label>
-          <input type="tel" id="tg-phone" placeholder="+225xxxxxxxxx" />
-        </div>
-        <button type="button" id="tg-start-login-btn">Se connecter</button>
-
-        <div class="field" id="tg-code-field" hidden style="margin-top: 1rem;">
-          <label for="tg-code">Code reçu (SMS ou app Telegram)</label>
-          <input type="text" id="tg-code" placeholder="12345" />
-          <button type="button" id="tg-submit-code-btn">Valider le code</button>
-        </div>
-
-        <div class="field" id="tg-password-field" hidden style="margin-top: 1rem;">
-          <label for="tg-password">Mot de passe de vérification en deux étapes (2FA)</label>
-          <input type="password" id="tg-password" />
-          <button type="button" id="tg-submit-password-btn">Valider le mot de passe</button>
-        </div>
-
-        <p id="tg-login-feedback" class="empty"></p>
-      </div>
-
-      <div id="tg-main-content" hidden>
-        <button type="button" id="load-tg-groups-btn">Lister mes groupes/canaux</button>
-        <input type="text" id="search-tg-groups" placeholder="Rechercher un groupe/canal par nom..." />
-
-        <div class="group-actions">
-          <button type="button" id="tg-select-all-btn">Tout sélectionner</button>
-          <button type="button" id="tg-deselect-all-btn">Tout désélectionner</button>
-          <span id="tg-selected-count">0 groupe(s)/canal(aux) sélectionné(s)</span>
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th></th><th>Nom</th><th>Type</th></tr></thead>
-            <tbody id="tg-groups-body">
-              <tr><td colspan="3" class="empty">Cliquez sur "Lister mes groupes/canaux".</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="warning-box" style="margin-top: 1.5rem;">
-          ⚠️ Respectez un délai d'au moins 10 à 15 secondes entre chaque message pour éviter les limitations
-          anti-flood de Telegram (FloodWaitError), voire une restriction temporaire du compte.
-        </div>
-
-        <div class="field">
-          <label for="tg-message">Message (texte)</label>
-          <textarea id="tg-message" placeholder="Écrivez votre message ici... 😀"></textarea>
-        </div>
-
-        <div class="field">
-          <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF)</label>
-          <div id="tg-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
-          <input type="file" id="tg-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
-          <p id="tg-file-name" class="empty">Aucun fichier sélectionné.</p>
-        </div>
-
-        <div class="row">
-          <div class="field">
-            <label for="tg-batch-size">Nombre de messages par lot</label>
-            <input type="number" id="tg-batch-size" value="5" min="1" />
-          </div>
-          <div class="field">
-            <label for="tg-delay-seconds">Délai d'attente entre chaque message (secondes)</label>
-            <input type="number" id="tg-delay-seconds" value="12" min="1" />
-          </div>
-        </div>
-
-        <button type="button" id="send-tg-campaign-btn" class="send-button">🚀 Lancer l'envoi Telegram</button>
-        <div id="tg-feedback" hidden></div>
-      </div>
-    </section>
-
-    <!-- Section : Studio Auto-Publication (YouTube Shorts, Instagram Reels, TikTok) -->
+    <!-- Onglet Studio Auto-Publication -->
     <section class="panel" id="panel-studio">
       <h2>🎬 Studio Auto-Publication</h2>
       <p class="empty">
@@ -502,50 +530,10 @@
           <strong>TikTok :</strong> <span id="studio-status-tiktok">-</span>
         </div>
       </div>
-    </section>
 
-    <!-- Section 7 : Administration (licences) — visible seulement pour ADMIN_PASSWORD -->
-    <section class="panel" id="panel-admin">
-      <h2>Administration — Clés de licence</h2>
-      <p class="empty">
-        Génère des clés d'accès pour permettre à d'autres utilisateurs d'utiliser ce tableau de bord (WhatsApp,
-        Facebook, Telegram) sans connaître le mot de passe administrateur.
+      <p style="margin-top: 1.5rem;">
+        <button type="button" id="show-last-report-btn-studio" hidden>📋 Exporter le dernier rapport (JSON)</button>
       </p>
-
-      <div class="row">
-        <div class="field">
-          <label for="new-license-expiry">Date d'expiration (optionnel)</label>
-          <input type="date" id="new-license-expiry" />
-        </div>
-        <div class="field">
-          <label for="new-license-note">Note (optionnel)</label>
-          <input type="text" id="new-license-note" placeholder="Ex: client Dupont" />
-        </div>
-      </div>
-
-      <div class="field">
-        <label>Modules inclus dans cette licence</label>
-        <label><input type="checkbox" class="new-license-module" value="whatsapp" /> WhatsApp Automation</label>
-        <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="facebook" /> Facebook Messenger</label>
-        <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="telegram" /> Telegram Engine</label>
-        <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="studio_video" /> Studio Auto-Publication (YouTube, TikTok, Instagram)</label>
-        <br />
-        <button type="button" id="new-license-select-all-btn" style="margin-top: 0.5rem;">Tout sélectionner</button>
-        <button type="button" id="new-license-deselect-all-btn">Tout désélectionner</button>
-      </div>
-
-      <button type="button" id="generate-license-btn">➕ Générer une nouvelle clé</button>
-
-      <div class="table-wrap" style="margin-top: 1.5rem;">
-        <table>
-          <thead>
-            <tr><th>Clé</th><th>Créée le</th><th>Expire le</th><th>Statut</th><th>Modules</th><th>Note</th><th>Action</th></tr>
-          </thead>
-          <tbody id="licenses-body">
-            <tr><td colspan="7" class="empty">Chargement...</td></tr>
-          </tbody>
-        </table>
-      </div>
     </section>
   </div>
 
@@ -587,11 +575,15 @@
     let authRole = null; // 'admin' | 'license'
     let currentAllowedModules = null; // null = tous les modules (admin, ou clé héritée sans restriction)
     const MODULE_TABS = {
-      whatsapp: ['status', 'groups', 'import', 'campaign'],
+      whatsapp: ['whatsapp'],
       facebook: ['facebook'],
       telegram: ['telegram'],
       studio_video: ['studio'],
     };
+
+    function hasModule(moduleName) {
+      return currentAllowedModules === null || currentAllowedModules.includes(moduleName);
+    }
 
     // ---------- Auth ----------
     function getStoredAuth() {
@@ -645,19 +637,20 @@
     function showApp() {
       document.getElementById('login-screen').hidden = true;
       document.getElementById('app').hidden = false;
-      document.getElementById('admin-tab-btn').hidden = authRole !== 'admin';
       applyModuleVisibility();
     }
 
-    // Masque les onglets (et bascule sur le premier onglet encore visible si
-    // l'onglet actif en fait partie) dont le module n'est pas inclus dans la
-    // licence utilisée. currentAllowedModules === null (admin, ou clé créée
-    // avant l'introduction des modules) signifie "aucune restriction".
+    // Masque les onglets métiers (et les blocs de l'onglet "Connexions &
+    // Statuts") dont le module n'est pas inclus dans la licence utilisée.
+    // L'onglet "Connexions & Statuts" lui-même reste toujours visible.
+    // currentAllowedModules === null (admin, ou clé créée avant
+    // l'introduction des modules) signifie "aucune restriction".
     function applyModuleVisibility() {
-      const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]')).filter((btn) => btn.id !== 'admin-tab-btn');
+      const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]')).filter((btn) => btn.dataset.tab !== 'connections');
 
       if (currentAllowedModules === null) {
         tabButtons.forEach((btn) => { btn.hidden = false; });
+        document.querySelectorAll('#panel-connections [data-module]').forEach((block) => { block.hidden = false; });
         return;
       }
 
@@ -675,9 +668,14 @@
         if (visible && btn.classList.contains('active')) activeStillVisible = true;
       });
 
+      document.querySelectorAll('#panel-connections [data-module]').forEach((block) => {
+        block.hidden = !hasModule(block.dataset.module);
+      });
+
       if (!activeStillVisible) {
         const firstVisible = tabButtons.find((btn) => !btn.hidden);
         if (firstVisible) firstVisible.click();
+        else document.querySelector('.tab-btn[data-tab="connections"]').click();
       }
     }
 
@@ -795,17 +793,22 @@
         document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+        if (btn.dataset.tab === 'connections') {
+          if (hasModule('whatsapp')) pollStatus();
+          if (hasModule('telegram')) tgRefreshStatus();
+          if (hasModule('facebook')) fbRefreshStatus();
+          if (hasModule('studio_video')) studioConnRefreshStatus();
+        }
         if (btn.dataset.tab === 'telegram') tgRefreshStatus();
-        if (btn.dataset.tab === 'admin') loadLicenses();
       });
     });
 
-    // ---------- Section 1 : Statut & Connexion (PC / Mobile) ----------
+    // ---------- Connexions : WhatsApp (PC / Mobile) ----------
     let statusInterval = null;
 
-    document.querySelectorAll('.mode-btn').forEach((btn) => {
+    document.querySelectorAll('#connect-mode-toggle .mode-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('.mode-btn').forEach((b) => b.classList.remove('active'));
+        document.querySelectorAll('#connect-mode-toggle .mode-btn').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         const mode = btn.dataset.mode;
         document.getElementById('pc-mode-panel').hidden = mode !== 'pc';
@@ -871,12 +874,46 @@
       }
     }
 
-    // ---------- Section 2 : Groupes & Contacts (multisélection) ----------
+    // ---------- Connexions : Facebook (statut) ----------
+    async function fbRefreshStatus() {
+      try {
+        const res = await apiFetch('/api/facebook/status');
+        const data = await res.json();
+        const badge = document.getElementById('fb-status-badge');
+        if (!data.configured) {
+          badge.textContent = 'Non configuré';
+          badge.className = 'badge disconnected';
+          return;
+        }
+        badge.textContent = data.connected ? 'Connecté' : 'Déconnecté';
+        badge.className = 'badge ' + (data.connected ? 'connected' : 'disconnected');
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    // ---------- Connexions : Studio (statut de liaison des comptes) ----------
+    async function studioConnRefreshStatus() {
+      try {
+        const res = await apiFetch('/api/media/status');
+        const data = await res.json();
+        ['youtube', 'instagram', 'tiktok'].forEach((platform) => {
+          const badge = document.getElementById('studio-conn-status-' + platform);
+          const configured = data[platform] && data[platform].configured;
+          badge.textContent = configured ? 'Configuré' : 'Non configuré';
+          badge.className = 'badge ' + (configured ? 'connected' : 'disconnected');
+        });
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    // ---------- WhatsApp : Groupes & Contacts (multisélection) ----------
     function updateSelectedGroupsUI() {
       const count = state.selectedGroupIds.size;
       document.getElementById('selected-groups-count').textContent = count + ' groupe(s) sélectionné(s)';
       document.getElementById('campaign-groups-count').textContent =
-        count + ' groupe(s) sélectionné(s) dans l\'onglet "Groupes & Contacts".';
+        count + ' groupe(s) sélectionné(s) ci-dessus.';
     }
 
     function renderGroupsTable(groups) {
@@ -953,7 +990,7 @@
       updateSelectedGroupsUI();
     });
 
-    // ---------- Section 3 : Import Excel / CSV ----------
+    // ---------- WhatsApp : Import Excel / CSV ----------
     let selectedImportFile = null;
     const importDropZone = document.getElementById('import-drop-zone');
     const importFileInput = document.getElementById('import-file');
@@ -993,7 +1030,7 @@
 
       document.getElementById('campaign-import-count').textContent = state.importedContacts.length > 0
         ? state.importedContacts.length + ' contact(s) prêt(s) à être utilisés comme cible.'
-        : 'Aucun contact importé pour le moment (onglet "Import Excel/CSV").';
+        : 'Aucun contact importé pour le moment (section "Import Excel/CSV" ci-dessus).';
     }
 
     function showImportResult(message, isError) {
@@ -1027,7 +1064,7 @@
       }
     });
 
-    // ---------- Section 4 : Centre d'Envoi Multi-Médias ----------
+    // ---------- WhatsApp : Centre d'Envoi Multi-Médias ----------
     function toggleTargetMode() {
       const mode = document.querySelector('input[name="target-mode"]:checked').value;
       document.getElementById('campaign-groups-field').hidden = mode !== 'groups';
@@ -1070,11 +1107,11 @@
 
       if (!message) { showCampaignFeedback('Le message ne peut pas être vide.', true); return; }
       if (mode === 'groups' && state.selectedGroupIds.size === 0) {
-        showCampaignFeedback('Sélectionnez au moins un groupe (onglet "Groupes & Contacts").', true);
+        showCampaignFeedback('Sélectionnez au moins un groupe (section "Groupes & Contacts" ci-dessus).', true);
         return;
       }
       if (mode === 'import' && state.importedContacts.length === 0) {
-        showCampaignFeedback('Importez d\'abord une liste de contacts (onglet "Import Excel/CSV").', true);
+        showCampaignFeedback('Importez d\'abord une liste de contacts (section "Import Excel/CSV" ci-dessus).', true);
         return;
       }
 
@@ -1124,7 +1161,7 @@
       }
     });
 
-    // ---------- Suivi en direct + rapport final ----------
+    // ---------- Suivi en direct + rapport final (WhatsApp) ----------
     let campaignInterval = null;
 
     function updateProgressUI(campaign) {
@@ -1265,7 +1302,7 @@
       }
     }
 
-    // ---------- Section 5 : Facebook Messenger ----------
+    // ---------- Facebook Messenger ----------
     const fbState = { conversations: [], selectedIds: new Set() };
     let selectedFbFile = null;
 
@@ -1422,7 +1459,7 @@
       }
     });
 
-    // ---------- Section 6 : Telegram ----------
+    // ---------- Telegram ----------
     const tgState = { groups: [], selectedIds: new Set() };
     let selectedTgFile = null;
 
@@ -1573,12 +1610,14 @@
         const badge = document.getElementById('tg-status-badge');
         const loginPanel = document.getElementById('tg-login-panel');
         const mainContent = document.getElementById('tg-main-content');
+        const notConnectedHint = document.getElementById('tg-not-connected-hint');
 
         if (!data.configured) {
           badge.textContent = 'Non configuré';
           badge.className = 'badge disconnected';
           loginPanel.hidden = false;
           mainContent.hidden = true;
+          notConnectedHint.hidden = false;
           document.getElementById('tg-login-feedback').textContent =
             'TELEGRAM_API_ID / TELEGRAM_API_HASH non définis côté serveur.';
           return;
@@ -1589,11 +1628,13 @@
           badge.className = 'badge connected';
           loginPanel.hidden = true;
           mainContent.hidden = false;
+          notConnectedHint.hidden = true;
         } else {
           badge.textContent = 'Déconnecté';
           badge.className = 'badge disconnected';
           loginPanel.hidden = false;
           mainContent.hidden = true;
+          notConnectedHint.hidden = false;
         }
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
@@ -1682,122 +1723,6 @@
       }
     });
 
-    // ---------- Section 7 : Administration (licences) ----------
-    const MODULE_LABELS = {
-      whatsapp: 'WhatsApp',
-      facebook: 'Facebook',
-      telegram: 'Telegram',
-      studio_video: 'Studio',
-    };
-
-    async function loadLicenses() {
-      if (authRole !== 'admin') return;
-
-      const tbody = document.getElementById('licenses-body');
-      tbody.innerHTML = '<tr><td colspan="7" class="empty">Chargement...</td></tr>';
-
-      try {
-        const res = await apiFetch('/api/admin/licenses');
-        const list = await res.json();
-        tbody.innerHTML = '';
-
-        if (!Array.isArray(list) || list.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="7" class="empty">Aucune clé générée.</td></tr>';
-          return;
-        }
-
-        list.forEach((lic) => {
-          const tr = document.createElement('tr');
-
-          const keyTd = document.createElement('td');
-          keyTd.textContent = lic.key;
-
-          const createdTd = document.createElement('td');
-          createdTd.textContent = new Date(lic.createdAt).toLocaleDateString();
-
-          const expTd = document.createElement('td');
-          expTd.textContent = lic.expiresAt ? new Date(lic.expiresAt).toLocaleDateString() : 'Illimitée';
-
-          const statusTd = document.createElement('td');
-          statusTd.textContent = lic.active ? 'Active' : 'Désactivée';
-          statusTd.className = lic.active ? 'status-delivered' : 'status-failed';
-
-          const modulesTd = document.createElement('td');
-          const modules = Array.isArray(lic.allowedModules) ? lic.allowedModules : [];
-          modulesTd.textContent = modules.length > 0
-            ? modules.map((m) => MODULE_LABELS[m] || m).join(', ')
-            : 'Aucun';
-
-          const noteTd = document.createElement('td');
-          noteTd.textContent = lic.note || '-';
-
-          const actionTd = document.createElement('td');
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.textContent = lic.active ? 'Désactiver' : 'Activer';
-          btn.addEventListener('click', () => toggleLicense(lic.key, !lic.active));
-          actionTd.appendChild(btn);
-
-          tr.appendChild(keyTd);
-          tr.appendChild(createdTd);
-          tr.appendChild(expTd);
-          tr.appendChild(statusTd);
-          tr.appendChild(modulesTd);
-          tr.appendChild(noteTd);
-          tr.appendChild(actionTd);
-          tbody.appendChild(tr);
-        });
-      } catch (err) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty">Erreur lors du chargement des licences.</td></tr>';
-      }
-    }
-
-    async function toggleLicense(key, active) {
-      try {
-        await apiFetch('/api/admin/licenses/' + encodeURIComponent(key) + '/toggle', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ active }),
-        });
-        loadLicenses();
-      } catch (err) {
-        // le tableau reste inchangé, l'utilisateur peut réessayer
-      }
-    }
-
-    document.getElementById('new-license-select-all-btn').addEventListener('click', () => {
-      document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = true; });
-    });
-    document.getElementById('new-license-deselect-all-btn').addEventListener('click', () => {
-      document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = false; });
-    });
-
-    document.getElementById('generate-license-btn').addEventListener('click', async () => {
-      const expiry = document.getElementById('new-license-expiry').value;
-      const note = document.getElementById('new-license-note').value.trim();
-      const allowedModules = Array.from(document.querySelectorAll('.new-license-module:checked')).map((cb) => cb.value);
-
-      try {
-        const res = await apiFetch('/api/admin/licenses', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            expiresAt: expiry ? new Date(expiry).toISOString() : null,
-            note,
-            allowedModules,
-          }),
-        });
-        if (res.ok) {
-          document.getElementById('new-license-note').value = '';
-          document.getElementById('new-license-expiry').value = '';
-          document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = false; });
-          loadLicenses();
-        }
-      } catch (err) {
-        // ignore, l'utilisateur peut réessayer
-      }
-    });
-
     // ---------- Studio Auto-Publication ----------
     let selectedStudioFile = null;
     let studioPollInterval = null;
@@ -1880,11 +1805,18 @@
             `Publication terminée : ${successCount} réussite(s), ${errorCount} échec(s).`,
             errorCount > 0 && successCount === 0,
           );
+          window.__lastPublishReport = data;
+          document.getElementById('show-last-report-btn-studio').hidden = false;
         }
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }
     }
+
+    document.getElementById('show-last-report-btn-studio').addEventListener('click', () => {
+      if (!window.__lastPublishReport) return;
+      downloadBlob(JSON.stringify(window.__lastPublishReport, null, 2), 'rapport-publication.json', 'application/json');
+    });
 
     document.getElementById('studio-publish-btn').addEventListener('click', async () => {
       const title = document.getElementById('studio-title').value.trim();
@@ -1937,12 +1869,16 @@
       updateSelectedGroupsUI();
       fbUpdateSelectedUI();
       tgUpdateSelectedUI();
-      pollStatus();
-      if (statusInterval) clearInterval(statusInterval);
-      statusInterval = setInterval(pollStatus, 4000);
-      pollCampaignStatus();
-      studioPollStatus();
-      if (authRole === 'admin') loadLicenses();
+
+      if (hasModule('whatsapp')) {
+        pollStatus();
+        if (statusInterval) clearInterval(statusInterval);
+        statusInterval = setInterval(pollStatus, 4000);
+        pollCampaignStatus();
+      }
+      if (hasModule('telegram')) tgRefreshStatus();
+      if (hasModule('facebook')) fbRefreshStatus();
+      if (hasModule('studio_video')) { studioConnRefreshStatus(); studioPollStatus(); }
     }
 
     tryAutoLogin().then((ok) => { if (ok) init(); });

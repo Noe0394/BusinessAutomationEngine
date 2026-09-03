@@ -3,6 +3,7 @@ if (!globalThis.crypto) {
   globalThis.crypto = crypto.webcrypto || crypto;
 }
 
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const multer = require('multer');
@@ -33,12 +34,70 @@ const videoUpload = multer({
   },
 });
 const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
+const ADMIN_PORTAL_PATH = path.join(__dirname, 'public', 'admin.html');
 const facebook = new FacebookMessengerAdapter();
 const telegram = new TelegramAdapter();
 const mediaPublisher = new MediaPublisherAdapter();
 
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('ADMIN_PASSWORD non défini : utilisation du mot de passe par défaut codé en dur. Définissez cette variable d\'environnement avant tout déploiement public.');
+}
+
+// ---------- Portail admin : instructions d'accès (console + fichier) ----------
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+const ADMIN_PORTAL_URL = `${PUBLIC_BASE_URL}/admin-secret-portal`;
+
+function printAndWriteAdminAccessInstructions() {
+  const banner = [
+    '========================================================================',
+    '  ACCES ADMINISTRATEUR — Orchestrateur multi-plateformes',
+    '========================================================================',
+    `  URL du portail secret : ${ADMIN_PORTAL_URL}`,
+    `  Mot de passe           : ${ADMIN_PASSWORD}`,
+    '',
+    '  Depuis ce portail : générer des clés de licence (durée + modules),',
+    '  activer/désactiver des clés, consulter la consommation et le nombre',
+    "  d'utilisateurs actuellement connectés.",
+    '',
+    '  SECURITE :',
+    '  - Ne partagez cette URL et ce mot de passe avec personne.',
+    "  - Changez ADMIN_PASSWORD en variable d'environnement dès que possible",
+    '    (la valeur ci-dessus est le mot de passe par défaut codé en dur si',
+    '    ADMIN_PASSWORD n\'est pas définie).',
+    '  - Le fichier ADMIN_ACCESS.md généré à la racine du projet contient ces',
+    '    informations en clair : ne le committez jamais (déjà exclu via',
+    '    .gitignore) et supprimez-le si vous partagez ce dossier.',
+    '========================================================================',
+  ].join('\n');
+
+  console.log(banner);
+
+  const fileContent = `# Accès administrateur
+
+**Généré automatiquement au démarrage du serveur — ne pas committer ce fichier.**
+
+- **URL du portail secret :** ${ADMIN_PORTAL_URL}
+- **Mot de passe :** \`${ADMIN_PASSWORD}\`
+
+## Fonctionnalités du portail
+
+- Génération de clés de licence (durée d'expiration + modules autorisés parmi WhatsApp, Facebook, Telegram, Studio Auto-Publication).
+- Vue d'ensemble des clés actives/désactivées.
+- Surveillance de la consommation (nombre de requêtes) et du nombre d'utilisateurs actuellement connectés.
+
+## Sécurité
+
+- Ne partagez cette URL et ce mot de passe avec personne.
+- Changez \`ADMIN_PASSWORD\` en variable d'environnement dès que possible — la valeur ci-dessus est un mot de passe par défaut codé en dur si \`ADMIN_PASSWORD\` n'est pas définie côté serveur.
+- Ce fichier est exclu de Git via \`.gitignore\`. Supprimez-le si vous partagez ce dossier avec quelqu'un d'autre.
+- Si \`PUBLIC_BASE_URL\` n'est pas définie, l'URL ci-dessus pointe vers \`localhost\` et ne sera valide que sur cette machine.
+`;
+
+  try {
+    fs.writeFileSync(path.join(__dirname, 'ADMIN_ACCESS.md'), fileContent, 'utf8');
+  } catch (err) {
+    console.error('Impossible d\'écrire ADMIN_ACCESS.md :', err.message);
+  }
 }
 
 app.use(express.json());
@@ -77,6 +136,7 @@ function requireAccess(req, res, next) {
       req.isAdmin = false;
       req.licenseKey = providedKey;
       req.allowedModules = result.license.allowedModules;
+      licenses.recordUsage(providedKey);
       return next();
     }
   }
@@ -431,6 +491,13 @@ app.get(['/', '/dashboard'], (req, res) => {
   res.sendFile(DASHBOARD_PATH);
 });
 
+// Route volontairement non référencée dans la navigation du dashboard client
+// ("portail caché") — protégée par mot de passe côté page ET par requireAdmin
+// sur chaque appel API qu'elle déclenche.
+app.get('/admin-secret-portal', (req, res) => {
+  res.sendFile(ADMIN_PORTAL_PATH);
+});
+
 app.post('/api/login', (req, res) => {
   const { password } = req.body || {};
 
@@ -464,7 +531,11 @@ app.post('/api/auth/verify-key', (req, res) => {
 });
 
 app.get('/api/admin/licenses', requireAdmin, (req, res) => {
-  res.status(200).json(licenses.listLicenses());
+  res.status(200).json(licenses.listLicensesWithUsage());
+});
+
+app.get('/api/admin/overview', requireAdmin, (req, res) => {
+  res.status(200).json(licenses.getOverview());
 });
 
 app.post('/api/admin/licenses', requireAdmin, (req, res) => {
@@ -736,6 +807,11 @@ app.post('/api/campaign/excel', requireAccess, requireModule('whatsapp'), upload
   });
 });
 
+app.get('/api/facebook/status', requireAccess, requireModule('facebook'), async (req, res) => {
+  const status = await facebook.checkConnection();
+  res.status(200).json({ configured: facebook.isConfigured(), ...status });
+});
+
 app.get('/api/facebook/groups', requireAccess, requireModule('facebook'), async (req, res) => {
   if (!facebook.isConfigured()) {
     return res.status(503).json({
@@ -948,6 +1024,14 @@ app.get('/api/media/temp/:token', (req, res) => {
   res.send(entry.buffer);
 });
 
+app.get('/api/media/status', requireAccess, requireModule('studio_video'), (req, res) => {
+  res.status(200).json({
+    youtube: { configured: mediaPublisher.isYoutubeConfigured() },
+    instagram: { configured: mediaPublisher.isInstagramConfigured() },
+    tiktok: { configured: mediaPublisher.isTikTokConfigured() },
+  });
+});
+
 app.post('/api/media/publish-all', requireAccess, requireModule('studio_video'), videoUpload.single('video'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Fichier vidéo requis (champ "video", MP4 ou MOV).' });
@@ -1022,6 +1106,7 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
+  printAndWriteAdminAccessInstructions();
 });
 
 whatsapp.connect().catch((err) => {

@@ -54,7 +54,25 @@ class FacebookMessengerAdapter {
       params: { fields: 'id,name', access_token: this.pageAccessToken },
     });
     this.pageId = res.data.id;
+    this.pageName = res.data.name;
     return this.pageId;
+  }
+
+  // Contrairement à WhatsApp/Telegram, il n'y a pas de session persistante à
+  // proprement parler ici : "connecté" signifie que le jeton configuré est
+  // valide et résout bien une Page (vérifié à la demande, pas mis en cache
+  // au-delà de pageId/pageName).
+  async checkConnection() {
+    if (!this.isConfigured()) {
+      return { connected: false };
+    }
+    try {
+      await this.ensurePageId();
+      return { connected: true, pageName: this.pageName };
+    } catch (err) {
+      this.pageId = null;
+      return { connected: false };
+    }
   }
 
   async getConversations() {

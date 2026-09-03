@@ -69,6 +69,58 @@ function listLicenses() {
   return loadLicenses();
 }
 
+// Suivi de consommation en mémoire (pas persisté sur disque) : une clé
+// "connectée" est purement une notion de session vivante ("a fait une
+// requête récemment"), ça n'a pas vocation à survivre à un redémarrage —
+// contrairement aux clés elles-mêmes. Évite aussi une écriture disque à
+// chaque requête authentifiée (les routes de statut sont pollées toutes les
+// quelques secondes par les clients connectés).
+const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+const usageStats = new Map(); // key -> { lastSeenAt: number(ms), requestCount: number }
+
+function recordUsage(key) {
+  const entry = usageStats.get(key) || { lastSeenAt: 0, requestCount: 0 };
+  entry.lastSeenAt = Date.now();
+  entry.requestCount += 1;
+  usageStats.set(key, entry);
+}
+
+function getUsageForKey(key) {
+  return usageStats.get(key) || null;
+}
+
+function listLicensesWithUsage() {
+  const now = Date.now();
+  return loadLicenses().map((license) => {
+    const usage = usageStats.get(license.key);
+    return {
+      ...license,
+      requestCount: usage ? usage.requestCount : 0,
+      lastSeenAt: usage ? new Date(usage.lastSeenAt).toISOString() : null,
+      online: Boolean(usage && (now - usage.lastSeenAt) < ONLINE_WINDOW_MS),
+    };
+  });
+}
+
+function getOverview() {
+  const licensesList = loadLicenses();
+  const now = Date.now();
+  let onlineNow = 0;
+  let totalRequests = 0;
+
+  for (const entry of usageStats.values()) {
+    if (now - entry.lastSeenAt < ONLINE_WINDOW_MS) onlineNow += 1;
+    totalRequests += entry.requestCount;
+  }
+
+  return {
+    totalKeys: licensesList.length,
+    activeKeys: licensesList.filter((l) => l.active).length,
+    onlineNow,
+    totalRequests,
+  };
+}
+
 function setLicenseActive(key, active) {
   const licenses = loadLicenses();
   const license = licenses.find((l) => l.key === key);
@@ -113,6 +165,10 @@ module.exports = {
   ALL_MODULES,
   createLicense,
   listLicenses,
+  listLicensesWithUsage,
   setLicenseActive,
   verifyKey,
+  recordUsage,
+  getUsageForKey,
+  getOverview,
 };

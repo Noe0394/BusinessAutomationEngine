@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Portail Administrateur</title>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { font-family: sans-serif; margin: 0; background: #f2f2f3; color: #1a1a1a; }
+    button, input, select, textarea { font-family: inherit; font-size: 1rem; }
+
+    header { display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: #1a1a2e; color: #fff; flex-wrap: wrap; gap: 0.5rem; }
+    header h1 { margin: 0; font-size: 1.15rem; }
+    header button { background: #fff; color: #1a1a2e; border: none; padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer; min-height: 44px; }
+
+    #login-screen { max-width: 340px; margin: 3rem auto; padding: 2rem 1.5rem; background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); text-align: center; }
+    #login-screen input { width: 100%; padding: 0.75rem; margin-bottom: 1rem; min-height: 44px; border: 1px solid #ccc; border-radius: 6px; }
+    #login-screen button { width: 100%; padding: 0.75rem; background: #1a1a2e; color: #fff; border: none; border-radius: 6px; cursor: pointer; min-height: 44px; }
+    .error { color: #c0392b; }
+
+    main { max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; }
+    section { background: #fff; padding: 1.25rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 1.5rem; }
+
+    .overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; }
+    .overview-card { background: #f7f7fb; border-radius: 8px; padding: 1rem; text-align: center; }
+    .overview-card .value { font-size: 1.8rem; font-weight: bold; color: #1a1a2e; }
+    .overview-card .label { color: #666; font-size: 0.85rem; margin-top: 0.25rem; }
+
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; min-width: 640px; }
+    th, td { border: 1px solid #e0e0e0; padding: 0.6rem 0.75rem; text-align: left; }
+    th { background: #f5f5f5; }
+    button { cursor: pointer; min-height: 40px; }
+    .empty { color: #777; }
+
+    .badge { display: inline-block; padding: 0.3rem 0.8rem; border-radius: 999px; font-weight: bold; font-size: 0.85rem; }
+    .badge.connected { background: #d4f5dd; color: #1a7a3c; }
+    .badge.disconnected { background: #eee; color: #777; }
+    .status-delivered { color: #1a7a3c; font-weight: bold; }
+    .status-failed { color: #c0392b; font-weight: bold; }
+
+    .field { margin-bottom: 1rem; }
+    .field label { display: block; font-weight: bold; margin-bottom: 0.3rem; }
+    .field input[type="text"], .field input[type="date"], .field select {
+      width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 6px; min-height: 44px;
+    }
+    .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .row .field { flex: 1; min-width: 200px; }
+
+    .primary-btn { background: #1a1a2e; color: #fff; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: bold; }
+
+    @media (max-width: 640px) {
+      header { flex-direction: column; align-items: stretch; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <div id="login-screen">
+    <h1>🛡️ Portail Administrateur</h1>
+    <form id="login-form">
+      <input type="password" id="login-password" placeholder="Mot de passe administrateur" required />
+      <button type="submit">Entrer</button>
+    </form>
+    <p id="login-error" class="error" hidden></p>
+  </div>
+
+  <div id="app" hidden>
+    <header>
+      <h1>🛡️ Portail Administrateur</h1>
+      <button id="logout-btn" type="button">Se déconnecter</button>
+    </header>
+
+    <main>
+      <section>
+        <h2>Vue d'ensemble</h2>
+        <div class="overview-grid">
+          <div class="overview-card"><div class="value" id="overview-total">-</div><div class="label">Clés générées</div></div>
+          <div class="overview-card"><div class="value" id="overview-active">-</div><div class="label">Clés actives</div></div>
+          <div class="overview-card"><div class="value" id="overview-online">-</div><div class="label">Connectés maintenant</div></div>
+          <div class="overview-card"><div class="value" id="overview-requests">-</div><div class="label">Requêtes cumulées</div></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Générer une nouvelle clé</h2>
+
+        <div class="row">
+          <div class="field">
+            <label for="new-license-duration">Durée</label>
+            <select id="new-license-duration">
+              <option value="7">7 jours</option>
+              <option value="30" selected>30 jours</option>
+              <option value="90">90 jours</option>
+              <option value="365">1 an</option>
+              <option value="0">Illimitée</option>
+              <option value="custom">Personnalisée...</option>
+            </select>
+          </div>
+          <div class="field" id="new-license-custom-date-field" hidden>
+            <label for="new-license-custom-date">Date d'expiration</label>
+            <input type="date" id="new-license-custom-date" />
+          </div>
+          <div class="field">
+            <label for="new-license-note">Note (optionnel)</label>
+            <input type="text" id="new-license-note" placeholder="Ex: client Dupont" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Modules inclus</label>
+          <label><input type="checkbox" class="new-license-module" value="whatsapp" /> WhatsApp Automation</label>
+          <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="facebook" /> Facebook Messenger</label>
+          <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="telegram" /> Telegram Engine</label>
+          <label style="margin-left: 1.5rem;"><input type="checkbox" class="new-license-module" value="studio_video" /> Studio Auto-Publication (YouTube, TikTok, Instagram)</label>
+          <br />
+          <button type="button" id="select-all-modules-btn" style="margin-top: 0.5rem;">Tout sélectionner</button>
+          <button type="button" id="deselect-all-modules-btn">Tout désélectionner</button>
+        </div>
+
+        <button type="button" id="generate-license-btn" class="primary-btn">➕ Générer une nouvelle clé</button>
+        <p id="generate-feedback" hidden></p>
+      </section>
+
+      <section>
+        <h2>Clés existantes</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Clé</th><th>Créée le</th><th>Expire le</th><th>Statut</th><th>En ligne</th>
+                <th>Requêtes</th><th>Modules</th><th>Note</th><th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="licenses-body">
+              <tr><td colspan="9" class="empty">Chargement...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'admin_portal_password';
+    const MODULE_LABELS = {
+      whatsapp: 'WhatsApp',
+      facebook: 'Facebook',
+      telegram: 'Telegram',
+      studio_video: 'Studio',
+    };
+    let pollInterval = null;
+
+    function getStoredPassword() {
+      try { return localStorage.getItem(STORAGE_KEY) || ''; } catch (err) { return ''; }
+    }
+    function setStoredPassword(pw) {
+      try { localStorage.setItem(STORAGE_KEY, pw); } catch (err) { /* stockage indisponible */ }
+    }
+    function clearStoredPassword() {
+      try { localStorage.removeItem(STORAGE_KEY); } catch (err) { /* stockage indisponible */ }
+    }
+
+    async function apiFetch(url, options) {
+      options = options || {};
+      const headers = Object.assign({}, options.headers || {}, { 'x-admin-password': getStoredPassword() });
+      const res = await fetch(url, Object.assign({}, options, { headers }));
+      if (res.status === 401) {
+        showLogin('Session expirée ou mot de passe invalide.');
+        throw new Error('unauthorized');
+      }
+      return res;
+    }
+
+    function showLogin(errorMessage) {
+      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+      document.getElementById('app').hidden = true;
+      document.getElementById('login-screen').hidden = false;
+      const errEl = document.getElementById('login-error');
+      if (errorMessage) { errEl.textContent = errorMessage; errEl.hidden = false; } else { errEl.hidden = true; }
+    }
+    function showApp() {
+      document.getElementById('login-screen').hidden = true;
+      document.getElementById('app').hidden = false;
+    }
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = document.getElementById('login-password').value;
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.role !== 'admin') {
+          document.getElementById('login-error').textContent = 'Mot de passe incorrect.';
+          document.getElementById('login-error').hidden = false;
+          return;
+        }
+        setStoredPassword(password);
+        showApp();
+        init();
+      } catch (err) {
+        document.getElementById('login-error').textContent = 'Erreur de connexion au serveur.';
+        document.getElementById('login-error').hidden = false;
+      }
+    });
+
+    document.getElementById('logout-btn').addEventListener('click', () => {
+      clearStoredPassword();
+      showLogin();
+    });
+
+    async function tryAutoLogin() {
+      const pw = getStoredPassword();
+      if (!pw) { showLogin(); return false; }
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw }),
+        });
+        const data = await res.json();
+        if (res.ok && data.role === 'admin') { showApp(); return true; }
+      } catch (err) { /* réseau indisponible */ }
+      clearStoredPassword();
+      showLogin();
+      return false;
+    }
+
+    async function loadOverview() {
+      try {
+        const res = await apiFetch('/api/admin/overview');
+        const data = await res.json();
+        document.getElementById('overview-total').textContent = data.totalKeys;
+        document.getElementById('overview-active').textContent = data.activeKeys;
+        document.getElementById('overview-online').textContent = data.onlineNow;
+        document.getElementById('overview-requests').textContent = data.totalRequests;
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    async function loadLicenses() {
+      const tbody = document.getElementById('licenses-body');
+
+      try {
+        const res = await apiFetch('/api/admin/licenses');
+        const list = await res.json();
+        tbody.innerHTML = '';
+
+        if (!Array.isArray(list) || list.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="9" class="empty">Aucune clé générée.</td></tr>';
+          return;
+        }
+
+        list.forEach((lic) => {
+          const tr = document.createElement('tr');
+
+          const keyTd = document.createElement('td');
+          keyTd.textContent = lic.key;
+
+          const createdTd = document.createElement('td');
+          createdTd.textContent = new Date(lic.createdAt).toLocaleDateString();
+
+          const expTd = document.createElement('td');
+          expTd.textContent = lic.expiresAt ? new Date(lic.expiresAt).toLocaleDateString() : 'Illimitée';
+
+          const statusTd = document.createElement('td');
+          statusTd.textContent = lic.active ? 'Active' : 'Désactivée';
+          statusTd.className = lic.active ? 'status-delivered' : 'status-failed';
+
+          const onlineTd = document.createElement('td');
+          const onlineBadge = document.createElement('span');
+          onlineBadge.className = 'badge ' + (lic.online ? 'connected' : 'disconnected');
+          onlineBadge.textContent = lic.online ? 'En ligne' : 'Hors ligne';
+          onlineTd.appendChild(onlineBadge);
+
+          const requestsTd = document.createElement('td');
+          requestsTd.textContent = lic.requestCount || 0;
+
+          const modulesTd = document.createElement('td');
+          const modules = Array.isArray(lic.allowedModules) ? lic.allowedModules : [];
+          modulesTd.textContent = modules.length > 0 ? modules.map((m) => MODULE_LABELS[m] || m).join(', ') : 'Aucun';
+
+          const noteTd = document.createElement('td');
+          noteTd.textContent = lic.note || '-';
+
+          const actionTd = document.createElement('td');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = lic.active ? 'Désactiver' : 'Activer';
+          btn.addEventListener('click', () => toggleLicense(lic.key, !lic.active));
+          actionTd.appendChild(btn);
+
+          [keyTd, createdTd, expTd, statusTd, onlineTd, requestsTd, modulesTd, noteTd, actionTd].forEach((td) => tr.appendChild(td));
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty">Erreur lors du chargement des licences.</td></tr>';
+      }
+    }
+
+    async function toggleLicense(key, active) {
+      try {
+        await apiFetch('/api/admin/licenses/' + encodeURIComponent(key) + '/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ active }),
+        });
+        loadLicenses();
+      } catch (err) {
+        // la liste reste inchangée, l'utilisateur peut réessayer
+      }
+    }
+
+    document.getElementById('new-license-duration').addEventListener('change', (e) => {
+      document.getElementById('new-license-custom-date-field').hidden = e.target.value !== 'custom';
+    });
+
+    document.getElementById('select-all-modules-btn').addEventListener('click', () => {
+      document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = true; });
+    });
+    document.getElementById('deselect-all-modules-btn').addEventListener('click', () => {
+      document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = false; });
+    });
+
+    function computeExpiresAt() {
+      const duration = document.getElementById('new-license-duration').value;
+      if (duration === '0') return null;
+      if (duration === 'custom') {
+        const raw = document.getElementById('new-license-custom-date').value;
+        return raw ? new Date(raw).toISOString() : null;
+      }
+      const days = parseInt(duration, 10);
+      const date = new Date();
+      date.setDate(date.getDate() + days);
+      return date.toISOString();
+    }
+
+    function showGenerateFeedback(message, isError) {
+      const el = document.getElementById('generate-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.style.color = isError ? '#c0392b' : '#1a7a3c';
+    }
+
+    document.getElementById('generate-license-btn').addEventListener('click', async () => {
+      const note = document.getElementById('new-license-note').value.trim();
+      const allowedModules = Array.from(document.querySelectorAll('.new-license-module:checked')).map((cb) => cb.value);
+      const expiresAt = computeExpiresAt();
+
+      try {
+        const res = await apiFetch('/api/admin/licenses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expiresAt, note, allowedModules }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showGenerateFeedback(data.error || 'Échec de la génération.', true);
+          return;
+        }
+        showGenerateFeedback('Clé générée : ' + data.key, false);
+        document.getElementById('new-license-note').value = '';
+        document.querySelectorAll('.new-license-module').forEach((cb) => { cb.checked = false; });
+        loadLicenses();
+        loadOverview();
+      } catch (err) {
+        showGenerateFeedback('Erreur réseau lors de la génération.', true);
+      }
+    });
+
+    function init() {
+      loadOverview();
+      loadLicenses();
+      if (pollInterval) clearInterval(pollInterval);
+      pollInterval = setInterval(() => { loadOverview(); loadLicenses(); }, 8000);
+    }
+
+    tryAutoLogin().then((ok) => { if (ok) init(); });
+  </script>
+</body>
+</html>
