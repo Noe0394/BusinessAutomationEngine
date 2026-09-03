@@ -123,11 +123,22 @@
 </head>
 <body>
   <div id="login-screen">
-    <h1>Connexion administrateur</h1>
-    <form id="login-form">
+    <h1>Connexion</h1>
+    <div class="mode-toggle" id="login-mode-toggle">
+      <button type="button" class="mode-btn active" data-login-mode="admin">🔑 Administrateur</button>
+      <button type="button" class="mode-btn" data-login-mode="license">🎫 Clé de licence</button>
+    </div>
+
+    <form id="login-form-admin">
       <input type="password" id="login-password" placeholder="Mot de passe administrateur" required />
       <button type="submit">Se connecter</button>
     </form>
+
+    <form id="login-form-license" hidden>
+      <input type="text" id="login-license-key" placeholder="Clé de licence (ex: KEY-XXXX-2026)" required />
+      <button type="submit">Débloquer le tableau de bord</button>
+    </form>
+
     <p id="login-error" class="error" hidden></p>
   </div>
 
@@ -143,6 +154,8 @@
       <button type="button" class="tab-btn" data-tab="import">Import Excel/CSV</button>
       <button type="button" class="tab-btn" data-tab="campaign">Centre d'Envoi</button>
       <button type="button" class="tab-btn" data-tab="facebook">Facebook Messenger</button>
+      <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
+      <button type="button" class="tab-btn" data-tab="admin" id="admin-tab-btn" hidden>🛡️ Administration</button>
     </nav>
 
     <!-- Section 1 : Statut & Connexion -->
@@ -343,6 +356,117 @@
       <button type="button" id="send-fb-campaign-btn" class="send-button">🚀 Lancer l'envoi Messenger</button>
       <div id="fb-feedback" hidden></div>
     </section>
+
+    <!-- Section 6 : Telegram -->
+    <section class="panel" id="panel-telegram">
+      <h2>Telegram</h2>
+      <span id="tg-status-badge" class="badge disconnected">Vérification...</span>
+
+      <div id="tg-login-panel" style="margin-top: 1rem;">
+        <div class="field">
+          <label for="tg-phone">Numéro de téléphone (avec indicatif pays)</label>
+          <input type="tel" id="tg-phone" placeholder="+225xxxxxxxxx" />
+        </div>
+        <button type="button" id="tg-start-login-btn">Se connecter</button>
+
+        <div class="field" id="tg-code-field" hidden style="margin-top: 1rem;">
+          <label for="tg-code">Code reçu (SMS ou app Telegram)</label>
+          <input type="text" id="tg-code" placeholder="12345" />
+          <button type="button" id="tg-submit-code-btn">Valider le code</button>
+        </div>
+
+        <div class="field" id="tg-password-field" hidden style="margin-top: 1rem;">
+          <label for="tg-password">Mot de passe de vérification en deux étapes (2FA)</label>
+          <input type="password" id="tg-password" />
+          <button type="button" id="tg-submit-password-btn">Valider le mot de passe</button>
+        </div>
+
+        <p id="tg-login-feedback" class="empty"></p>
+      </div>
+
+      <div id="tg-main-content" hidden>
+        <button type="button" id="load-tg-groups-btn">Lister mes groupes/canaux</button>
+        <input type="text" id="search-tg-groups" placeholder="Rechercher un groupe/canal par nom..." />
+
+        <div class="group-actions">
+          <button type="button" id="tg-select-all-btn">Tout sélectionner</button>
+          <button type="button" id="tg-deselect-all-btn">Tout désélectionner</button>
+          <span id="tg-selected-count">0 groupe(s)/canal(aux) sélectionné(s)</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>Nom</th><th>Type</th></tr></thead>
+            <tbody id="tg-groups-body">
+              <tr><td colspan="3" class="empty">Cliquez sur "Lister mes groupes/canaux".</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="warning-box" style="margin-top: 1.5rem;">
+          ⚠️ Respectez un délai d'au moins 10 à 15 secondes entre chaque message pour éviter les limitations
+          anti-flood de Telegram (FloodWaitError), voire une restriction temporaire du compte.
+        </div>
+
+        <div class="field">
+          <label for="tg-message">Message (texte)</label>
+          <textarea id="tg-message" placeholder="Écrivez votre message ici... 😀"></textarea>
+        </div>
+
+        <div class="field">
+          <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF)</label>
+          <div id="tg-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+          <input type="file" id="tg-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+          <p id="tg-file-name" class="empty">Aucun fichier sélectionné.</p>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="tg-batch-size">Nombre de messages par lot</label>
+            <input type="number" id="tg-batch-size" value="5" min="1" />
+          </div>
+          <div class="field">
+            <label for="tg-delay-seconds">Délai d'attente entre chaque message (secondes)</label>
+            <input type="number" id="tg-delay-seconds" value="12" min="1" />
+          </div>
+        </div>
+
+        <button type="button" id="send-tg-campaign-btn" class="send-button">🚀 Lancer l'envoi Telegram</button>
+        <div id="tg-feedback" hidden></div>
+      </div>
+    </section>
+
+    <!-- Section 7 : Administration (licences) — visible seulement pour ADMIN_PASSWORD -->
+    <section class="panel" id="panel-admin">
+      <h2>Administration — Clés de licence</h2>
+      <p class="empty">
+        Génère des clés d'accès pour permettre à d'autres utilisateurs d'utiliser ce tableau de bord (WhatsApp,
+        Facebook, Telegram) sans connaître le mot de passe administrateur.
+      </p>
+
+      <div class="row">
+        <div class="field">
+          <label for="new-license-expiry">Date d'expiration (optionnel)</label>
+          <input type="date" id="new-license-expiry" />
+        </div>
+        <div class="field">
+          <label for="new-license-note">Note (optionnel)</label>
+          <input type="text" id="new-license-note" placeholder="Ex: client Dupont" />
+        </div>
+      </div>
+      <button type="button" id="generate-license-btn">➕ Générer une nouvelle clé</button>
+
+      <div class="table-wrap" style="margin-top: 1.5rem;">
+        <table>
+          <thead>
+            <tr><th>Clé</th><th>Créée le</th><th>Expire le</th><th>Statut</th><th>Note</th><th>Action</th></tr>
+          </thead>
+          <tbody id="licenses-body">
+            <tr><td colspan="6" class="empty">Chargement...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -374,32 +498,48 @@
   </div>
 
   <script>
-    const STORAGE_KEY = 'admin_password';
+    const AUTH_TYPE_KEY = 'auth_type'; // 'admin' | 'license'
+    const AUTH_VALUE_KEY = 'auth_value';
     const state = { groups: [], selectedGroupIds: new Set(), importedContacts: [] };
     let selectedFile = null;
     let lastReportShownAt = null;
     let observedRunningStartedAt = null;
+    let authRole = null; // 'admin' | 'license'
 
     // ---------- Auth ----------
-    function getStoredPassword() {
-      try { return localStorage.getItem(STORAGE_KEY) || ''; } catch (err) { return ''; }
+    function getStoredAuth() {
+      try {
+        return {
+          type: localStorage.getItem(AUTH_TYPE_KEY) || '',
+          value: localStorage.getItem(AUTH_VALUE_KEY) || '',
+        };
+      } catch (err) {
+        return { type: '', value: '' };
+      }
     }
-    function setStoredPassword(pw) {
-      try { localStorage.setItem(STORAGE_KEY, pw); } catch (err) { /* stockage indisponible */ }
+    function setStoredAuth(type, value) {
+      try {
+        localStorage.setItem(AUTH_TYPE_KEY, type);
+        localStorage.setItem(AUTH_VALUE_KEY, value);
+      } catch (err) { /* stockage indisponible */ }
     }
-    function clearStoredPassword() {
-      try { localStorage.removeItem(STORAGE_KEY); } catch (err) { /* stockage indisponible */ }
+    function clearStoredAuth() {
+      try {
+        localStorage.removeItem(AUTH_TYPE_KEY);
+        localStorage.removeItem(AUTH_VALUE_KEY);
+      } catch (err) { /* stockage indisponible */ }
     }
     function authHeaders() {
-      const pw = getStoredPassword();
-      return pw ? { 'x-admin-password': pw } : {};
+      const { type, value } = getStoredAuth();
+      if (!value) return {};
+      return type === 'admin' ? { 'x-admin-password': value } : { 'x-license-key': value };
     }
     async function apiFetch(url, options) {
       options = options || {};
       const headers = Object.assign({}, options.headers || {}, authHeaders());
       const res = await fetch(url, Object.assign({}, options, { headers }));
       if (res.status === 401) {
-        showLogin('Session expirée ou mot de passe invalide.');
+        showLogin('Session expirée, mot de passe ou clé de licence invalide.');
         throw new Error('unauthorized');
       }
       return res;
@@ -408,6 +548,7 @@
     function showLogin(errorMessage) {
       if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
       if (campaignInterval) { clearInterval(campaignInterval); campaignInterval = null; }
+      authRole = null;
       document.getElementById('app').hidden = true;
       document.getElementById('login-screen').hidden = false;
       const errEl = document.getElementById('login-error');
@@ -416,9 +557,21 @@
     function showApp() {
       document.getElementById('login-screen').hidden = true;
       document.getElementById('app').hidden = false;
+      document.getElementById('admin-tab-btn').hidden = authRole !== 'admin';
     }
 
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
+    document.querySelectorAll('#login-mode-toggle .mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#login-mode-toggle .mode-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const mode = btn.dataset.loginMode;
+        document.getElementById('login-form-admin').hidden = mode !== 'admin';
+        document.getElementById('login-form-license').hidden = mode !== 'license';
+        document.getElementById('login-error').hidden = true;
+      });
+    });
+
+    document.getElementById('login-form-admin').addEventListener('submit', async (e) => {
       e.preventDefault();
       const password = document.getElementById('login-password').value;
       try {
@@ -427,12 +580,39 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password }),
         });
+        const data = await res.json();
         if (!res.ok) {
-          document.getElementById('login-error').textContent = 'Mot de passe incorrect.';
+          document.getElementById('login-error').textContent = data.error || 'Mot de passe incorrect.';
           document.getElementById('login-error').hidden = false;
           return;
         }
-        setStoredPassword(password);
+        setStoredAuth('admin', password);
+        authRole = 'admin';
+        showApp();
+        init();
+      } catch (err) {
+        document.getElementById('login-error').textContent = 'Erreur de connexion au serveur.';
+        document.getElementById('login-error').hidden = false;
+      }
+    });
+
+    document.getElementById('login-form-license').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const key = document.getElementById('login-license-key').value.trim();
+      try {
+        const res = await fetch('/api/auth/verify-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          document.getElementById('login-error').textContent = data.error || 'Clé de licence invalide.';
+          document.getElementById('login-error').hidden = false;
+          return;
+        }
+        setStoredAuth('license', key);
+        authRole = 'license';
         showApp();
         init();
       } catch (err) {
@@ -442,22 +622,33 @@
     });
 
     document.getElementById('logout-btn').addEventListener('click', () => {
-      clearStoredPassword();
+      clearStoredAuth();
       showLogin();
     });
 
     async function tryAutoLogin() {
-      const pw = getStoredPassword();
-      if (!pw) { showLogin(); return false; }
+      const { type, value } = getStoredAuth();
+      if (!value) { showLogin(); return false; }
+
       try {
-        const res = await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: pw }),
-        });
-        if (res.ok) { showApp(); return true; }
+        if (type === 'admin') {
+          const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: value }),
+          });
+          if (res.ok) { authRole = 'admin'; showApp(); return true; }
+        } else {
+          const res = await fetch('/api/auth/verify-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: value }),
+          });
+          if (res.ok) { authRole = 'license'; showApp(); return true; }
+        }
       } catch (err) { /* réseau indisponible */ }
-      clearStoredPassword();
+
+      clearStoredAuth();
       showLogin();
       return false;
     }
@@ -469,6 +660,8 @@
         document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+        if (btn.dataset.tab === 'telegram') tgRefreshStatus();
+        if (btn.dataset.tab === 'admin') loadLicenses();
       });
     });
 
@@ -1094,15 +1287,365 @@
       }
     });
 
+    // ---------- Section 6 : Telegram ----------
+    const tgState = { groups: [], selectedIds: new Set() };
+    let selectedTgFile = null;
+
+    function tgUpdateSelectedUI() {
+      document.getElementById('tg-selected-count').textContent = tgState.selectedIds.size + ' groupe(s)/canal(aux) sélectionné(s)';
+    }
+
+    function tgCurrentFiltered() {
+      const q = document.getElementById('search-tg-groups').value.trim().toLowerCase();
+      return q ? tgState.groups.filter((g) => (g.name || '').toLowerCase().includes(q)) : tgState.groups;
+    }
+
+    function tgRenderTable(groups) {
+      const tbody = document.getElementById('tg-groups-body');
+      tbody.innerHTML = '';
+
+      if (groups.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">Aucun groupe/canal trouvé.</td></tr>';
+        return;
+      }
+
+      groups.forEach((g) => {
+        const tr = document.createElement('tr');
+
+        const checkTd = document.createElement('td');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = tgState.selectedIds.has(g.id);
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) tgState.selectedIds.add(g.id);
+          else tgState.selectedIds.delete(g.id);
+          tgUpdateSelectedUI();
+        });
+        checkTd.appendChild(checkbox);
+
+        const nameTd = document.createElement('td');
+        nameTd.textContent = g.name || g.id;
+
+        const typeTd = document.createElement('td');
+        typeTd.textContent = g.isChannel ? 'Canal' : 'Groupe';
+
+        tr.appendChild(checkTd);
+        tr.appendChild(nameTd);
+        tr.appendChild(typeTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function tgLoadGroups() {
+      const tbody = document.getElementById('tg-groups-body');
+      tbody.innerHTML = '<tr><td colspan="3" class="empty">Chargement...</td></tr>';
+      try {
+        const res = await apiFetch('/api/telegram/groups');
+        const data = await res.json();
+        if (!res.ok) {
+          tbody.innerHTML = '<tr><td colspan="3" class="empty">' + (data.error || 'Erreur lors du chargement.') + '</td></tr>';
+          return;
+        }
+        tgState.groups = Array.isArray(data) ? data : [];
+        tgRenderTable(tgCurrentFiltered());
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">Erreur réseau lors du chargement.</td></tr>';
+      }
+    }
+    document.getElementById('load-tg-groups-btn').addEventListener('click', tgLoadGroups);
+
+    document.getElementById('search-tg-groups').addEventListener('input', () => {
+      tgRenderTable(tgCurrentFiltered());
+    });
+
+    document.getElementById('tg-select-all-btn').addEventListener('click', () => {
+      tgCurrentFiltered().forEach((g) => tgState.selectedIds.add(g.id));
+      tgRenderTable(tgCurrentFiltered());
+      tgUpdateSelectedUI();
+    });
+    document.getElementById('tg-deselect-all-btn').addEventListener('click', () => {
+      tgCurrentFiltered().forEach((g) => tgState.selectedIds.delete(g.id));
+      tgRenderTable(tgCurrentFiltered());
+      tgUpdateSelectedUI();
+    });
+
+    const tgDropZone = document.getElementById('tg-drop-zone');
+    const tgFileInput = document.getElementById('tg-file');
+    tgDropZone.addEventListener('click', () => tgFileInput.click());
+    tgDropZone.addEventListener('dragover', (e) => { e.preventDefault(); tgDropZone.classList.add('dragover'); });
+    tgDropZone.addEventListener('dragleave', () => tgDropZone.classList.remove('dragover'));
+    tgDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      tgDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) tgSetSelectedFile(e.dataTransfer.files[0]);
+    });
+    tgFileInput.addEventListener('change', () => {
+      if (tgFileInput.files && tgFileInput.files[0]) tgSetSelectedFile(tgFileInput.files[0]);
+    });
+    function tgSetSelectedFile(file) {
+      selectedTgFile = file;
+      document.getElementById('tg-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    function tgShowFeedback(message, isError) {
+      const el = document.getElementById('tg-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    document.getElementById('send-tg-campaign-btn').addEventListener('click', async () => {
+      const message = document.getElementById('tg-message').value.trim();
+      const batchSize = document.getElementById('tg-batch-size').value;
+      const delaySeconds = document.getElementById('tg-delay-seconds').value;
+
+      if (!message) { tgShowFeedback('Le message ne peut pas être vide.', true); return; }
+      if (tgState.selectedIds.size === 0) { tgShowFeedback('Sélectionnez au moins un groupe/canal.', true); return; }
+
+      const formData = new FormData();
+      formData.append('message', message);
+      formData.append('batchSize', batchSize);
+      formData.append('delaySeconds', delaySeconds);
+      formData.append('recipients', JSON.stringify(Array.from(tgState.selectedIds)));
+      if (selectedTgFile) formData.append('media', selectedTgFile);
+
+      const sendBtn = document.getElementById('send-tg-campaign-btn');
+      sendBtn.disabled = true;
+
+      try {
+        const res = await apiFetch('/api/telegram/queue', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          tgShowFeedback(data.error || 'Échec du lancement de la campagne Telegram.', true);
+        } else {
+          tgShowFeedback(
+            '🚀 Campagne Telegram lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
+            ', délai ' + data.delaySeconds + 's' + (data.media ? ', pièce jointe : ' + data.media : '') + '.',
+            false,
+          );
+        }
+      } catch (err) {
+        tgShowFeedback('Erreur réseau lors du lancement de la campagne.', true);
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+
+    async function tgRefreshStatus() {
+      try {
+        const res = await apiFetch('/api/telegram/status');
+        const data = await res.json();
+        const badge = document.getElementById('tg-status-badge');
+        const loginPanel = document.getElementById('tg-login-panel');
+        const mainContent = document.getElementById('tg-main-content');
+
+        if (!data.configured) {
+          badge.textContent = 'Non configuré';
+          badge.className = 'badge disconnected';
+          loginPanel.hidden = false;
+          mainContent.hidden = true;
+          document.getElementById('tg-login-feedback').textContent =
+            'TELEGRAM_API_ID / TELEGRAM_API_HASH non définis côté serveur.';
+          return;
+        }
+
+        if (data.connected) {
+          badge.textContent = 'Connecté';
+          badge.className = 'badge connected';
+          loginPanel.hidden = true;
+          mainContent.hidden = false;
+        } else {
+          badge.textContent = 'Déconnecté';
+          badge.className = 'badge disconnected';
+          loginPanel.hidden = false;
+          mainContent.hidden = true;
+        }
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    function tgHandleLoginStep(step, error) {
+      const feedback = document.getElementById('tg-login-feedback');
+      const codeField = document.getElementById('tg-code-field');
+      const passwordField = document.getElementById('tg-password-field');
+
+      if (step === 'code_required') {
+        codeField.hidden = false;
+        passwordField.hidden = true;
+        feedback.textContent = 'Code envoyé. Saisissez-le ci-dessus.';
+      } else if (step === 'password_required') {
+        codeField.hidden = true;
+        passwordField.hidden = false;
+        feedback.textContent = 'Vérification en deux étapes requise. Saisissez votre mot de passe Telegram.';
+      } else if (step === 'connected') {
+        codeField.hidden = true;
+        passwordField.hidden = true;
+        feedback.textContent = 'Connecté avec succès !';
+        tgRefreshStatus();
+      } else if (step === 'error') {
+        feedback.textContent = 'Erreur : ' + (error || 'connexion Telegram échouée.');
+      } else {
+        feedback.textContent = 'Connexion en cours...';
+      }
+    }
+
+    document.getElementById('tg-start-login-btn').addEventListener('click', async () => {
+      const phone = document.getElementById('tg-phone').value.trim();
+      const feedback = document.getElementById('tg-login-feedback');
+      if (!phone) { feedback.textContent = 'Renseignez un numéro de téléphone.'; return; }
+      feedback.textContent = 'Envoi du code en cours...';
+      try {
+        const res = await apiFetch('/api/telegram/login/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumber: phone }),
+        });
+        const data = await res.json();
+        if (!res.ok) { feedback.textContent = data.error || 'Échec de la connexion.'; return; }
+        tgHandleLoginStep(data.step, data.error);
+      } catch (err) {
+        feedback.textContent = 'Erreur réseau.';
+      }
+    });
+
+    document.getElementById('tg-submit-code-btn').addEventListener('click', async () => {
+      const code = document.getElementById('tg-code').value.trim();
+      const feedback = document.getElementById('tg-login-feedback');
+      if (!code) { feedback.textContent = 'Renseignez le code reçu.'; return; }
+      feedback.textContent = 'Validation du code...';
+      try {
+        const res = await apiFetch('/api/telegram/login/code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+        const data = await res.json();
+        if (!res.ok) { feedback.textContent = data.error || 'Code invalide.'; return; }
+        tgHandleLoginStep(data.step, data.error);
+      } catch (err) {
+        feedback.textContent = 'Erreur réseau.';
+      }
+    });
+
+    document.getElementById('tg-submit-password-btn').addEventListener('click', async () => {
+      const password = document.getElementById('tg-password').value;
+      const feedback = document.getElementById('tg-login-feedback');
+      if (!password) { feedback.textContent = 'Renseignez le mot de passe 2FA.'; return; }
+      feedback.textContent = 'Validation du mot de passe...';
+      try {
+        const res = await apiFetch('/api/telegram/login/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        const data = await res.json();
+        if (!res.ok) { feedback.textContent = data.error || 'Mot de passe invalide.'; return; }
+        tgHandleLoginStep(data.step, data.error);
+      } catch (err) {
+        feedback.textContent = 'Erreur réseau.';
+      }
+    });
+
+    // ---------- Section 7 : Administration (licences) ----------
+    async function loadLicenses() {
+      if (authRole !== 'admin') return;
+
+      const tbody = document.getElementById('licenses-body');
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">Chargement...</td></tr>';
+
+      try {
+        const res = await apiFetch('/api/admin/licenses');
+        const list = await res.json();
+        tbody.innerHTML = '';
+
+        if (!Array.isArray(list) || list.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">Aucune clé générée.</td></tr>';
+          return;
+        }
+
+        list.forEach((lic) => {
+          const tr = document.createElement('tr');
+
+          const keyTd = document.createElement('td');
+          keyTd.textContent = lic.key;
+
+          const createdTd = document.createElement('td');
+          createdTd.textContent = new Date(lic.createdAt).toLocaleDateString();
+
+          const expTd = document.createElement('td');
+          expTd.textContent = lic.expiresAt ? new Date(lic.expiresAt).toLocaleDateString() : 'Illimitée';
+
+          const statusTd = document.createElement('td');
+          statusTd.textContent = lic.active ? 'Active' : 'Désactivée';
+          statusTd.className = lic.active ? 'status-delivered' : 'status-failed';
+
+          const noteTd = document.createElement('td');
+          noteTd.textContent = lic.note || '-';
+
+          const actionTd = document.createElement('td');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = lic.active ? 'Désactiver' : 'Activer';
+          btn.addEventListener('click', () => toggleLicense(lic.key, !lic.active));
+          actionTd.appendChild(btn);
+
+          tr.appendChild(keyTd);
+          tr.appendChild(createdTd);
+          tr.appendChild(expTd);
+          tr.appendChild(statusTd);
+          tr.appendChild(noteTd);
+          tr.appendChild(actionTd);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">Erreur lors du chargement des licences.</td></tr>';
+      }
+    }
+
+    async function toggleLicense(key, active) {
+      try {
+        await apiFetch('/api/admin/licenses/' + encodeURIComponent(key) + '/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ active }),
+        });
+        loadLicenses();
+      } catch (err) {
+        // le tableau reste inchangé, l'utilisateur peut réessayer
+      }
+    }
+
+    document.getElementById('generate-license-btn').addEventListener('click', async () => {
+      const expiry = document.getElementById('new-license-expiry').value;
+      const note = document.getElementById('new-license-note').value.trim();
+      try {
+        const res = await apiFetch('/api/admin/licenses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expiresAt: expiry ? new Date(expiry).toISOString() : null, note }),
+        });
+        if (res.ok) {
+          document.getElementById('new-license-note').value = '';
+          document.getElementById('new-license-expiry').value = '';
+          loadLicenses();
+        }
+      } catch (err) {
+        // ignore, l'utilisateur peut réessayer
+      }
+    });
+
     // ---------- Init ----------
     function init() {
       toggleTargetMode();
       updateSelectedGroupsUI();
       fbUpdateSelectedUI();
+      tgUpdateSelectedUI();
       pollStatus();
       if (statusInterval) clearInterval(statusInterval);
       statusInterval = setInterval(pollStatus, 4000);
       pollCampaignStatus();
+      if (authRole === 'admin') loadLicenses();
     }
 
     tryAutoLogin().then((ok) => { if (ok) init(); });

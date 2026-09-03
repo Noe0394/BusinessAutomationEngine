@@ -10,6 +10,8 @@ const XLSX = require('xlsx');
 const QRCode = require('qrcode');
 const whatsapp = require('./adapters/whatsapp');
 const FacebookMessengerAdapter = require('./adapters/facebook');
+const TelegramAdapter = require('./adapters/telegram');
+const licenses = require('./licenses');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -17,6 +19,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '@CYRUS2026';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
 const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
 const facebook = new FacebookMessengerAdapter();
+const telegram = new TelegramAdapter();
 
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('ADMIN_PASSWORD non défini : utilisation du mot de passe par défaut codé en dur. Définissez cette variable d\'environnement avant tout déploiement public.');
@@ -24,14 +27,43 @@ if (!process.env.ADMIN_PASSWORD) {
 
 app.use(express.json());
 
-function requireAdminPassword(req, res, next) {
+// Accès admin strict : réservé au panneau de gestion des licences.
+function requireAdmin(req, res, next) {
   const provided = req.get('x-admin-password') || req.query.password;
 
   if (provided && provided === ADMIN_PASSWORD) {
+    req.isAdmin = true;
     return next();
   }
 
-  return res.status(401).json({ error: 'Mot de passe administrateur invalide ou manquant.' });
+  return res.status(401).json({ error: 'Accès administrateur requis.' });
+}
+
+// Accès aux fonctionnalités du dashboard (WhatsApp/Facebook/Telegram) :
+// accepté soit avec le mot de passe administrateur, soit avec une clé de
+// licence valide, active et non expirée.
+function requireAccess(req, res, next) {
+  const providedPassword = req.get('x-admin-password') || req.query.password;
+
+  if (providedPassword && providedPassword === ADMIN_PASSWORD) {
+    req.isAdmin = true;
+    return next();
+  }
+
+  const providedKey = req.get('x-license-key') || req.query.licenseKey;
+
+  if (providedKey) {
+    const result = licenses.verifyKey(providedKey);
+    if (result.valid) {
+      req.isAdmin = false;
+      req.licenseKey = providedKey;
+      return next();
+    }
+  }
+
+  return res.status(401).json({
+    error: 'Authentification requise (mot de passe administrateur ou clé de licence valide).',
+  });
 }
 
 function replaceVariables(template, row) {
@@ -304,13 +336,59 @@ app.post('/api/login', (req, res) => {
   const { password } = req.body || {};
 
   if (password && password === ADMIN_PASSWORD) {
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ success: true, role: 'admin' });
   }
 
   return res.status(401).json({ error: 'Mot de passe incorrect.' });
 });
 
-app.get('/api/status', requireAdminPassword, async (req, res) => {
+app.post('/api/auth/verify-key', (req, res) => {
+  const { key } = req.body || {};
+  const result = licenses.verifyKey(key);
+
+  if (!result.valid) {
+    const messages = {
+      MISSING_KEY: 'Clé de licence manquante.',
+      NOT_FOUND: 'Clé de licence inconnue.',
+      INACTIVE: 'Cette clé de licence a été désactivée.',
+      EXPIRED: 'Cette clé de licence a expiré.',
+    };
+    return res.status(401).json({ error: messages[result.reason] || 'Clé de licence invalide.' });
+  }
+
+  res.status(200).json({ success: true, role: 'license', expiresAt: result.license.expiresAt });
+});
+
+app.get('/api/admin/licenses', requireAdmin, (req, res) => {
+  res.status(200).json(licenses.listLicenses());
+});
+
+app.post('/api/admin/licenses', requireAdmin, (req, res) => {
+  const { expiresAt, note } = req.body || {};
+
+  if (expiresAt && Number.isNaN(new Date(expiresAt).getTime())) {
+    return res.status(400).json({ error: 'Date d\'expiration invalide.' });
+  }
+
+  const license = licenses.createLicense({ expiresAt: expiresAt || null, note });
+  res.status(201).json(license);
+});
+
+app.post('/api/admin/licenses/:key/toggle', requireAdmin, (req, res) => {
+  const { active } = req.body || {};
+
+  try {
+    const license = licenses.setLicenseActive(req.params.key, Boolean(active));
+    res.status(200).json(license);
+  } catch (err) {
+    if (err.message === 'LICENSE_NOT_FOUND') {
+      return res.status(404).json({ error: 'Clé de licence introuvable.' });
+    }
+    throw err;
+  }
+});
+
+app.get('/api/status', requireAccess, async (req, res) => {
   const connected = whatsapp.isConnected();
   const response = { connected };
 
@@ -328,7 +406,7 @@ app.get('/api/status', requireAdminPassword, async (req, res) => {
   res.status(200).json(response);
 });
 
-app.post('/api/pairing-code', requireAdminPassword, async (req, res) => {
+app.post('/api/pairing-code', requireAccess, async (req, res) => {
   const { phoneNumber } = req.body || {};
 
   if (!phoneNumber || !String(phoneNumber).replace(/\D/g, '')) {
@@ -347,7 +425,7 @@ app.post('/api/pairing-code', requireAdminPassword, async (req, res) => {
   }
 });
 
-app.post('/api/messages', requireAdminPassword, async (req, res) => {
+app.post('/api/messages', requireAccess, async (req, res) => {
   const { to, message } = req.body;
 
   if (!to || !message) {
@@ -363,7 +441,7 @@ app.post('/api/messages', requireAdminPassword, async (req, res) => {
   }
 });
 
-app.get('/api/groups', requireAdminPassword, async (req, res) => {
+app.get('/api/groups', requireAccess, async (req, res) => {
   try {
     const groups = await whatsapp.getGroups();
     res.status(200).json(groups);
@@ -373,7 +451,7 @@ app.get('/api/groups', requireAdminPassword, async (req, res) => {
   }
 });
 
-app.get('/api/groups/:id/participants', requireAdminPassword, async (req, res) => {
+app.get('/api/groups/:id/participants', requireAccess, async (req, res) => {
   try {
     const participants = await whatsapp.getGroupParticipants(req.params.id);
     res.status(200).json(participants);
@@ -383,7 +461,7 @@ app.get('/api/groups/:id/participants', requireAdminPassword, async (req, res) =
   }
 });
 
-app.post('/api/messages/queue', requireAdminPassword, upload.single('media'), async (req, res) => {
+app.post('/api/messages/queue', requireAccess, upload.single('media'), async (req, res) => {
   const { message, groupId, delaySeconds, batchSize } = req.body;
   let { recipients, groupIds } = req.body;
 
@@ -458,7 +536,7 @@ app.post('/api/messages/queue', requireAdminPassword, upload.single('media'), as
   });
 });
 
-app.post('/api/messages/stop', requireAdminPassword, (req, res) => {
+app.post('/api/messages/stop', requireAccess, (req, res) => {
   if (!currentCampaign || currentCampaign.status !== 'running') {
     return res.status(400).json({ error: 'Aucune campagne en cours à interrompre.' });
   }
@@ -467,7 +545,7 @@ app.post('/api/messages/stop', requireAdminPassword, (req, res) => {
   res.status(200).json({ status: 'stop_requested' });
 });
 
-app.get('/api/messages/status', requireAdminPassword, (req, res) => {
+app.get('/api/messages/status', requireAccess, (req, res) => {
   if (!currentCampaign) {
     return res.status(200).json({ exists: false });
   }
@@ -475,7 +553,7 @@ app.get('/api/messages/status', requireAdminPassword, (req, res) => {
   res.status(200).json({ exists: true, ...currentCampaign });
 });
 
-app.post('/api/contacts/import', requireAdminPassword, upload.single('file'), async (req, res) => {
+app.post('/api/contacts/import', requireAccess, upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Aucun fichier fourni (champ "file").' });
   }
@@ -499,7 +577,7 @@ app.post('/api/contacts/import', requireAdminPassword, upload.single('file'), as
   }
 });
 
-app.post('/api/chat-natural', requireAdminPassword, async (req, res) => {
+app.post('/api/chat-natural', requireAccess, async (req, res) => {
   const { message } = req.body || {};
 
   if (!message || typeof message !== 'string') {
@@ -515,7 +593,7 @@ app.post('/api/chat-natural', requireAdminPassword, async (req, res) => {
   }
 });
 
-app.post('/api/campaign/excel', requireAdminPassword, upload.single('file'), async (req, res) => {
+app.post('/api/campaign/excel', requireAccess, upload.single('file'), async (req, res) => {
   let contacts;
 
   try {
@@ -554,7 +632,7 @@ app.post('/api/campaign/excel', requireAdminPassword, upload.single('file'), asy
   });
 });
 
-app.get('/api/facebook/groups', requireAdminPassword, async (req, res) => {
+app.get('/api/facebook/groups', requireAccess, async (req, res) => {
   if (!facebook.isConfigured()) {
     return res.status(503).json({
       error: 'Intégration Facebook Messenger non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
@@ -570,7 +648,7 @@ app.get('/api/facebook/groups', requireAdminPassword, async (req, res) => {
   }
 });
 
-app.post('/api/facebook/queue', requireAdminPassword, upload.single('media'), async (req, res) => {
+app.post('/api/facebook/queue', requireAccess, upload.single('media'), async (req, res) => {
   if (!facebook.isConfigured()) {
     return res.status(503).json({
       error: 'Intégration Facebook Messenger non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
@@ -620,6 +698,135 @@ app.post('/api/facebook/queue', requireAdminPassword, upload.single('media'), as
   });
 });
 
+app.get('/api/telegram/status', requireAccess, (req, res) => {
+  res.status(200).json({
+    configured: telegram.isConfigured(),
+    connected: telegram.isConnected(),
+  });
+});
+
+app.post('/api/telegram/login/start', requireAccess, async (req, res) => {
+  const { phoneNumber } = req.body || {};
+
+  if (!phoneNumber || !String(phoneNumber).replace(/\D/g, '')) {
+    return res.status(400).json({ error: 'Le champ "phoneNumber" est requis (indicatif pays inclus).' });
+  }
+
+  if (!telegram.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Telegram non configurée (variables TELEGRAM_API_ID / TELEGRAM_API_HASH manquantes).',
+    });
+  }
+
+  try {
+    const step = await telegram.startLogin(phoneNumber);
+    res.status(200).json({ step, error: step === 'error' ? telegram.getLoginError() : null });
+  } catch (err) {
+    console.error('Erreur lors du démarrage de la connexion Telegram:', err);
+    res.status(500).json({ error: 'Échec du démarrage de la connexion Telegram.' });
+  }
+});
+
+app.post('/api/telegram/login/code', requireAccess, async (req, res) => {
+  const { code } = req.body || {};
+
+  if (!code) {
+    return res.status(400).json({ error: 'Le champ "code" est requis.' });
+  }
+
+  try {
+    const step = await telegram.submitCode(code);
+    res.status(200).json({ step, error: step === 'error' ? telegram.getLoginError() : null });
+  } catch (err) {
+    if (err.message === 'NO_PENDING_CODE_REQUEST') {
+      return res.status(409).json({ error: 'Aucune demande de code en attente. Relancez /api/telegram/login/start.' });
+    }
+    console.error('Erreur lors de la validation du code Telegram:', err);
+    res.status(500).json({ error: 'Échec de la validation du code.' });
+  }
+});
+
+app.post('/api/telegram/login/password', requireAccess, async (req, res) => {
+  const { password } = req.body || {};
+
+  if (!password) {
+    return res.status(400).json({ error: 'Le champ "password" est requis.' });
+  }
+
+  try {
+    const step = await telegram.submitPassword(password);
+    res.status(200).json({ step, error: step === 'error' ? telegram.getLoginError() : null });
+  } catch (err) {
+    if (err.message === 'NO_PENDING_PASSWORD_REQUEST') {
+      return res.status(409).json({ error: 'Aucune demande de mot de passe 2FA en attente.' });
+    }
+    console.error('Erreur lors de la validation du mot de passe Telegram:', err);
+    res.status(500).json({ error: 'Échec de la validation du mot de passe.' });
+  }
+});
+
+app.get('/api/telegram/groups', requireAccess, async (req, res) => {
+  if (!telegram.isConnected()) {
+    return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant de lister les groupes.' });
+  }
+
+  try {
+    const groups = await telegram.getGroups();
+    res.status(200).json(groups);
+  } catch (err) {
+    console.error('Erreur lors de la récupération des groupes Telegram:', err);
+    res.status(500).json({ error: 'Échec de la récupération des groupes Telegram.' });
+  }
+});
+
+app.post('/api/telegram/queue', requireAccess, upload.single('media'), async (req, res) => {
+  if (!telegram.isConnected()) {
+    return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
+  }
+
+  const { message, delaySeconds, batchSize } = req.body;
+  let { recipients } = req.body;
+
+  if (typeof recipients === 'string') {
+    try {
+      recipients = JSON.parse(recipients);
+    } catch (err) {
+      recipients = recipients.split(/[,\n]/).map((n) => n.trim()).filter(Boolean);
+    }
+  }
+
+  if (!Array.isArray(recipients) || recipients.length === 0 || !message) {
+    return res.status(400).json({
+      error: 'Fournissez "recipients" (tableau des identifiants de groupes/canaux Telegram) et un "message".',
+    });
+  }
+
+  const fixedDelaySeconds = delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined;
+  const parsedBatchSize = batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined;
+  const media = req.file
+    ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
+    : null;
+
+  res.status(202).json({
+    status: 'tg_queue_started',
+    total: recipients.length,
+    delaySeconds: fixedDelaySeconds || '10-15 (aléatoire)',
+    batchSize: parsedBatchSize || recipients.length,
+    media: media ? media.filename : null,
+  });
+
+  telegram.sendBulk(recipients, message, {
+    delaySeconds: fixedDelaySeconds,
+    batchSize: parsedBatchSize,
+    media,
+  }).then((results) => {
+    const success = results.filter((r) => r.status === 'delivered').length;
+    console.log(`Telegram: campagne terminée (${success}/${results.length} réussite(s)).`);
+  }).catch((err) => {
+    console.error('Erreur pendant la campagne Telegram:', err);
+  });
+});
+
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ error: `Erreur de téléversement : ${err.message}` });
@@ -637,4 +844,8 @@ app.listen(PORT, () => {
 
 whatsapp.connect().catch((err) => {
   console.error('Erreur lors de l\'initialisation de l\'adaptateur WhatsApp:', err);
+});
+
+telegram.init().catch((err) => {
+  console.error('Erreur lors de l\'initialisation de l\'adaptateur Telegram:', err);
 });
