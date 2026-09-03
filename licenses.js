@@ -59,6 +59,13 @@ function createLicense({ expiresAt, note, allowedModules } = {}) {
     // modules — comportement de secours, pas le cas normal côté formulaire
     // admin qui envoie toujours une sélection (même vide).
     allowedModules: normalizeModules(allowedModules),
+    // Verrouillage un-appareil-par-clé : vide à la création, rempli au tout
+    // premier usage réussi (voir verifyKey). Un client qui veut utiliser
+    // l'outil sur plusieurs appareils doit acheter une clé par appareil ;
+    // l'admin peut libérer manuellement un appareil (unbindDevice) si besoin
+    // (changement de téléphone, etc.).
+    boundDeviceId: null,
+    boundAt: null,
   };
 
   licenses.push(license);
@@ -135,7 +142,7 @@ function setLicenseActive(key, active) {
   return license;
 }
 
-function verifyKey(key) {
+function verifyKey(key, deviceId) {
   if (!key) {
     return { valid: false, reason: 'MISSING_KEY' };
   }
@@ -155,11 +162,39 @@ function verifyKey(key) {
     return { valid: false, reason: 'EXPIRED' };
   }
 
+  if (!deviceId) {
+    return { valid: false, reason: 'MISSING_DEVICE_ID' };
+  }
+
+  if (!license.boundDeviceId) {
+    // Premier usage réussi de cette clé : on la lie définitivement à cet
+    // appareil (jusqu'à libération manuelle par l'admin).
+    license.boundDeviceId = deviceId;
+    license.boundAt = new Date().toISOString();
+    saveLicenses(licenses);
+  } else if (license.boundDeviceId !== deviceId) {
+    return { valid: false, reason: 'DEVICE_MISMATCH' };
+  }
+
   // Clés créées avant l'introduction des modules : accès complet par défaut
   // (pas de restriction rétroactive sur des clés déjà distribuées).
   const allowedModules = normalizeModules(license.allowedModules ?? ALL_MODULES);
 
   return { valid: true, license: { ...license, allowedModules } };
+}
+
+function unbindDevice(key) {
+  const licenses = loadLicenses();
+  const license = licenses.find((l) => l.key === key);
+
+  if (!license) {
+    throw new Error('LICENSE_NOT_FOUND');
+  }
+
+  license.boundDeviceId = null;
+  license.boundAt = null;
+  saveLicenses(licenses);
+  return license;
 }
 
 module.exports = {
@@ -169,6 +204,7 @@ module.exports = {
   listLicensesWithUsage,
   setLicenseActive,
   verifyKey,
+  unbindDevice,
   recordUsage,
   getUsageForKey,
   getOverview,

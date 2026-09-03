@@ -134,15 +134,21 @@ function requireAccess(req, res, next) {
   }
 
   const providedKey = req.get('x-license-key') || req.query.licenseKey;
+  const deviceId = req.get('x-device-id') || req.query.deviceId;
 
   if (providedKey) {
-    const result = licenses.verifyKey(providedKey);
+    const result = licenses.verifyKey(providedKey, deviceId);
     if (result.valid) {
       req.isAdmin = false;
       req.licenseKey = providedKey;
       req.allowedModules = result.license.allowedModules;
       licenses.recordUsage(providedKey);
       return next();
+    }
+    if (result.reason === 'DEVICE_MISMATCH') {
+      return res.status(403).json({
+        error: 'Cette clé de licence est déjà utilisée sur un autre appareil. Chaque appareil nécessite sa propre clé.',
+      });
     }
   }
 
@@ -548,8 +554,8 @@ app.post('/api/admin/login', (req, res) => {
 });
 
 app.post('/api/auth/verify-key', (req, res) => {
-  const { key } = req.body || {};
-  const result = licenses.verifyKey(key);
+  const { key, deviceId } = req.body || {};
+  const result = licenses.verifyKey(key, deviceId);
 
   if (!result.valid) {
     const messages = {
@@ -557,6 +563,8 @@ app.post('/api/auth/verify-key', (req, res) => {
       NOT_FOUND: 'Clé de licence inconnue.',
       INACTIVE: 'Cette clé de licence a été désactivée.',
       EXPIRED: 'Cette clé de licence a expiré.',
+      MISSING_DEVICE_ID: 'Identifiant d\'appareil manquant — rechargez la page et réessayez.',
+      DEVICE_MISMATCH: 'Cette clé est déjà utilisée sur un autre appareil. Chaque appareil nécessite sa propre clé — contactez l\'administrateur si besoin.',
     };
     return res.status(401).json({ error: messages[result.reason] || 'Clé de licence invalide.' });
   }
@@ -629,6 +637,21 @@ app.post('/api/admin/licenses/:key/toggle', requireAdmin, (req, res) => {
 
   try {
     const license = licenses.setLicenseActive(req.params.key, Boolean(active));
+    res.status(200).json(license);
+  } catch (err) {
+    if (err.message === 'LICENSE_NOT_FOUND') {
+      return res.status(404).json({ error: 'Clé de licence introuvable.' });
+    }
+    throw err;
+  }
+});
+
+// Libère la clé de son appareil actuel : le client pourra la réutiliser sur
+// un nouvel appareil (perte/changement de téléphone, etc.) sans devoir en
+// racheter une.
+app.post('/api/admin/licenses/:key/unbind-device', requireAdmin, (req, res) => {
+  try {
+    const license = licenses.unbindDevice(req.params.key);
     res.status(200).json(license);
   } catch (err) {
     if (err.message === 'LICENSE_NOT_FOUND') {

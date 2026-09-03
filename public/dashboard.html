@@ -426,6 +426,27 @@
       return currentAllowedModules === null || currentAllowedModules.includes(moduleName);
     }
 
+    // ---------- Identifiant d'appareil (verrouillage un-appareil-par-clé) ----------
+    // Généré une fois puis conservé dans localStorage : c'est ce qui permet
+    // au serveur de savoir si cette clé est utilisée depuis le même appareil
+    // qu'au premier usage, ou depuis un appareil différent (dans ce cas, la
+    // clé est refusée — chaque appareil nécessite sa propre clé).
+    const DEVICE_ID_KEY = 'device_id';
+    function getDeviceId() {
+      try {
+        let id = localStorage.getItem(DEVICE_ID_KEY);
+        if (!id) {
+          id = (window.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+          localStorage.setItem(DEVICE_ID_KEY, id);
+        }
+        return id;
+      } catch (err) {
+        return 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      }
+    }
+
     // ---------- Auth ----------
     function getStoredAuth() {
       try {
@@ -454,7 +475,7 @@
     // n'existe que sur le portail admin séparé (/admin-secret-portal).
     function authHeaders() {
       const { value } = getStoredAuth();
-      return value ? { 'x-license-key': value } : {};
+      return value ? { 'x-license-key': value, 'x-device-id': getDeviceId() } : {};
     }
     async function apiFetch(url, options) {
       options = options || {};
@@ -529,7 +550,7 @@
         const res = await fetch('/api/auth/verify-key', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key }),
+          body: JSON.stringify({ key, deviceId: getDeviceId() }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -561,7 +582,7 @@
         const res = await fetch('/api/auth/verify-key', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: value }),
+          body: JSON.stringify({ key: value, deviceId: getDeviceId() }),
         });
         const data = await res.json();
         if (res.ok) {
@@ -569,6 +590,11 @@
           currentAllowedModules = Array.isArray(data.allowedModules) ? data.allowedModules : null;
           showApp();
           return true;
+        }
+        if (data.error) {
+          showLogin(data.error);
+          clearStoredAuth();
+          return false;
         }
       } catch (err) { /* réseau indisponible */ }
 

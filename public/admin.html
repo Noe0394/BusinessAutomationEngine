@@ -133,11 +133,11 @@
             <thead>
               <tr>
                 <th>Clé</th><th>Créée le</th><th>Expire le</th><th>Statut</th><th>En ligne</th>
-                <th>Requêtes</th><th>Modules</th><th>Note</th><th>Action</th>
+                <th>Requêtes</th><th>Modules</th><th>Appareil</th><th>Note</th><th>Action</th>
               </tr>
             </thead>
             <tbody id="licenses-body">
-              <tr><td colspan="9" class="empty">Chargement...</td></tr>
+              <tr><td colspan="10" class="empty">Chargement...</td></tr>
             </tbody>
           </table>
         </div>
@@ -254,7 +254,7 @@
         tbody.innerHTML = '';
 
         if (!Array.isArray(list) || list.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="9" class="empty">Aucune clé générée.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="10" class="empty">Aucune clé générée.</td></tr>';
           return;
         }
 
@@ -287,6 +287,12 @@
           const modules = Array.isArray(lic.allowedModules) ? lic.allowedModules : [];
           modulesTd.textContent = modules.length > 0 ? modules.map((m) => MODULE_LABELS[m] || m).join(', ') : 'Aucun';
 
+          const deviceTd = document.createElement('td');
+          const deviceBadge = document.createElement('span');
+          deviceBadge.className = 'badge ' + (lic.boundDeviceId ? 'connected' : 'disconnected');
+          deviceBadge.textContent = lic.boundDeviceId ? 'Lié' : 'Libre';
+          deviceTd.appendChild(deviceBadge);
+
           const noteTd = document.createElement('td');
           noteTd.textContent = lic.note || '-';
 
@@ -297,11 +303,20 @@
           btn.addEventListener('click', () => toggleLicense(lic.key, !lic.active));
           actionTd.appendChild(btn);
 
-          [keyTd, createdTd, expTd, statusTd, onlineTd, requestsTd, modulesTd, noteTd, actionTd].forEach((td) => tr.appendChild(td));
+          if (lic.boundDeviceId) {
+            const unbindBtn = document.createElement('button');
+            unbindBtn.type = 'button';
+            unbindBtn.style.marginLeft = '0.5rem';
+            unbindBtn.textContent = "Libérer l'appareil";
+            unbindBtn.addEventListener('click', () => unbindDevice(lic.key));
+            actionTd.appendChild(unbindBtn);
+          }
+
+          [keyTd, createdTd, expTd, statusTd, onlineTd, requestsTd, modulesTd, deviceTd, noteTd, actionTd].forEach((td) => tr.appendChild(td));
           tbody.appendChild(tr);
         });
       } catch (err) {
-        tbody.innerHTML = '<tr><td colspan="9" class="empty">Erreur lors du chargement des licences.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">Erreur lors du chargement des licences.</td></tr>';
       }
     }
 
@@ -311,6 +326,24 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ active }),
+        });
+        loadLicenses();
+      } catch (err) {
+        // la liste reste inchangée, l'utilisateur peut réessayer
+      }
+    }
+
+    // Détache la clé de l'appareil sur lequel elle est actuellement liée —
+    // à utiliser quand un client change d'appareil légitimement (perte,
+    // changement de téléphone...). La clé se relie automatiquement au
+    // prochain appareil qui l'utilisera.
+    async function unbindDevice(key) {
+      if (!window.confirm('Libérer cette clé de son appareil actuel ? Elle pourra être réutilisée sur un nouvel appareil.')) {
+        return;
+      }
+      try {
+        await apiFetch('/api/admin/licenses/' + encodeURIComponent(key) + '/unbind-device', {
+          method: 'POST',
         });
         loadLicenses();
       } catch (err) {
