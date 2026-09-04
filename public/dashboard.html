@@ -17,6 +17,7 @@
     #login-screen input { width: 100%; padding: 0.75rem; margin-bottom: 1rem; min-height: 44px; border: 1px solid #ccc; border-radius: 6px; }
     #login-screen button { width: 100%; padding: 0.75rem; background: #075E54; color: #fff; border: none; border-radius: 6px; cursor: pointer; min-height: 44px; }
     .error { color: #c0392b; }
+    .ok { color: #1a7a3c; }
 
     nav#tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.75rem 1rem 0; background: #f2f2f3; position: sticky; top: 0; z-index: 5; }
     nav#tabs button { padding: 0.7rem 1rem; border: none; border-radius: 8px 8px 0 0; background: #ddd; cursor: pointer; font-weight: bold; min-height: 44px; flex: 1 1 auto; }
@@ -151,15 +152,17 @@
     </header>
 
     <nav id="tabs">
-      <button type="button" class="tab-btn active" data-tab="connections">🔌 Connexions &amp; Statuts</button>
+      <button type="button" class="tab-btn active" data-tab="connections">🔌 Connexions &amp; Intégrations</button>
       <button type="button" class="tab-btn" data-tab="whatsapp">WhatsApp</button>
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
       <button type="button" class="tab-btn" data-tab="facebook">Facebook</button>
     </nav>
 
-    <!-- Onglet unifié : Connexions & Statuts -->
+    <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
     <section class="panel active" id="panel-connections">
-      <h2>Connexions &amp; Statuts</h2>
+      <h2>Connexions &amp; Intégrations</h2>
+      <p class="empty">Configurez ici l'ensemble de vos connexions (WhatsApp, Telegram, Facebook, YouTube, TikTok). Les autres onglets ne servent qu'à utiliser les fonctionnalités une fois connecté.</p>
+      <p id="conn-oauth-feedback" hidden></p>
 
       <div class="conn-block" data-module="whatsapp">
         <h3>WhatsApp <span id="status-badge" class="badge disconnected">Vérification...</span></h3>
@@ -210,6 +213,24 @@
 
           <p id="tg-login-feedback" class="empty"></p>
         </div>
+      </div>
+
+      <div class="conn-block" data-module="facebook">
+        <h3>Facebook <span id="fb-status-badge" class="badge disconnected">Vérification...</span></h3>
+        <p class="empty" id="fb-conn-hint"></p>
+        <button type="button" id="fb-connect-btn">Se connecter avec Facebook</button>
+      </div>
+
+      <div class="conn-block" data-module="studio_video">
+        <h3>YouTube <span id="yt-status-badge" class="badge disconnected">Vérification...</span></h3>
+        <p class="empty" id="yt-conn-hint"></p>
+        <button type="button" id="yt-connect-btn">Se connecter avec YouTube</button>
+      </div>
+
+      <div class="conn-block" data-module="studio_video">
+        <h3>TikTok <span id="tt-status-badge" class="badge disconnected">Vérification...</span></h3>
+        <p class="empty" id="tt-conn-hint"></p>
+        <button type="button" id="tt-connect-btn">Se connecter avec TikTok</button>
       </div>
 
     </section>
@@ -329,7 +350,7 @@
     <!-- Onglet Telegram -->
     <section class="panel" id="panel-telegram">
       <h2>Telegram</h2>
-      <p class="empty" id="tg-not-connected-hint">Connectez votre compte Telegram dans l'onglet "Connexions &amp; Statuts" pour utiliser cette section.</p>
+      <p class="empty" id="tg-not-connected-hint">Connectez votre compte Telegram dans l'onglet "Connexions &amp; Intégrations" pour utiliser cette section.</p>
 
       <div id="tg-main-content" hidden>
         <button type="button" id="load-tg-groups-btn">Lister mes groupes/canaux</button>
@@ -452,7 +473,7 @@
     <!-- Onglet Facebook -->
     <section class="panel" id="panel-facebook">
       <h2>Facebook</h2>
-      <p class="empty" id="fb-not-connected-hint">Connectez votre Page Facebook dans l'onglet "Connexions &amp; Statuts" pour utiliser cette section.</p>
+      <p class="empty" id="fb-not-connected-hint">Connectez votre Page Facebook dans l'onglet "Connexions &amp; Intégrations" pour utiliser cette section.</p>
 
       <div id="fb-main-content" hidden>
         <div class="subsection" id="fb-import-section">
@@ -551,6 +572,13 @@
     };
 
     function hasModule(moduleName) {
+      // "facebook" et "studio_video" (YouTube/TikTok) sont forcés disponibles
+      // pour toute clé : licenses.js ne les propose plus à la vente/
+      // attribution (ALL_MODULES ne contient que whatsapp/telegram) depuis
+      // leur retrait du système de licences, ce qui les masquerait pour toute
+      // clé existante sinon — même contournement que requireModule() côté
+      // serveur pour les routes /api/facebook/* et /api/media/*.
+      if (moduleName === 'facebook' || moduleName === 'studio_video') return true;
       return currentAllowedModules === null || currentAllowedModules.includes(moduleName);
     }
 
@@ -605,6 +633,15 @@
       const { value } = getStoredAuth();
       return value ? { 'x-license-key': value, 'x-device-id': getDeviceId() } : {};
     }
+    // Pour une navigation top-level (bouton "Se connecter avec ..." qui doit
+    // rediriger le navigateur vers l'écran officiel du fournisseur), les
+    // en-têtes fetch ne s'appliquent pas : la clé de licence passe donc en
+    // paramètre de requête, déjà supporté par requireAccess côté serveur.
+    function buildAuthedUrl(path) {
+      const { value } = getStoredAuth();
+      const params = new URLSearchParams({ licenseKey: value, deviceId: getDeviceId() });
+      return path + '?' + params.toString();
+    }
     async function apiFetch(url, options) {
       options = options || {};
       const headers = Object.assign({}, options.headers || {}, authHeaders());
@@ -634,7 +671,7 @@
 
     // Masque les onglets métiers (et les blocs de l'onglet "Connexions &
     // Statuts") dont le module n'est pas inclus dans la licence utilisée.
-    // L'onglet "Connexions & Statuts" lui-même reste toujours visible.
+    // L'onglet "Connexions & Intégrations" lui-même reste toujours visible.
     // currentAllowedModules === null (admin, ou clé créée avant
     // l'introduction des modules) signifie "aucune restriction".
     function applyModuleVisibility() {
@@ -648,19 +685,14 @@
 
       const visibleTabs = new Set();
       Object.entries(MODULE_TABS).forEach(([moduleName, tabs]) => {
-        if (currentAllowedModules.includes(moduleName)) {
+        if (hasModule(moduleName)) {
           tabs.forEach((t) => visibleTabs.add(t));
         }
       });
 
       let activeStillVisible = false;
       tabButtons.forEach((btn) => {
-        // "facebook" reste visible pour toute clé, comme l'onglet "connections" :
-        // licenses.js ne le propose plus à la vente/attribution (ALL_MODULES ne
-        // contient que whatsapp/telegram), ce qui le masquerait pour toute clé
-        // existante si on suivait visibleTabs — voir requireModule() côté serveur
-        // pour le même contournement sur les routes /api/facebook/*.
-        const visible = btn.dataset.tab === 'facebook' ? true : visibleTabs.has(btn.dataset.tab);
+        const visible = visibleTabs.has(btn.dataset.tab);
         btn.hidden = !visible;
         if (visible && btn.classList.contains('active')) activeStillVisible = true;
       });
@@ -747,6 +779,7 @@
           if (hasModule('whatsapp')) pollStatus();
           if (hasModule('telegram')) tgRefreshStatus();
           if (hasModule('facebook')) fbRefreshStatus();
+          if (hasModule('studio_video')) mediaRefreshStatus();
         }
         if (btn.dataset.tab === 'telegram') tgRefreshStatus();
         if (btn.dataset.tab === 'facebook') fbRefreshStatus();
@@ -1693,9 +1726,127 @@
           mainContent.hidden = true;
           notConnectedHint.hidden = false;
         }
+
+        // Carte du hub "Connexions & Intégrations"
+        const badge = document.getElementById('fb-status-badge');
+        const hint = document.getElementById('fb-conn-hint');
+        const connectBtn = document.getElementById('fb-connect-btn');
+        if (data.connected) {
+          badge.textContent = 'Connecté' + (data.pageName ? ' (' + data.pageName + ')' : '');
+          badge.className = 'badge connected';
+          hint.textContent = '';
+          connectBtn.textContent = 'Se reconnecter avec Facebook';
+          connectBtn.disabled = false;
+        } else if (data.connectAvailable) {
+          badge.textContent = 'Non connecté';
+          badge.className = 'badge disconnected';
+          hint.textContent = '';
+          connectBtn.textContent = 'Se connecter avec Facebook';
+          connectBtn.disabled = false;
+        } else {
+          badge.textContent = 'Non configuré';
+          badge.className = 'badge disconnected';
+          hint.textContent = 'Configuration requise par l\'administrateur (App ID/App Secret) avant de pouvoir vous connecter.';
+          connectBtn.textContent = 'Se connecter avec Facebook';
+          connectBtn.disabled = true;
+        }
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }
+    }
+
+    document.getElementById('fb-connect-btn').addEventListener('click', () => {
+      window.location.href = buildAuthedUrl('/api/facebook/connect');
+    });
+
+    async function mediaRefreshStatus() {
+      try {
+        const res = await apiFetch('/api/media/status');
+        const data = await res.json();
+
+        const ytBadge = document.getElementById('yt-status-badge');
+        const ytHint = document.getElementById('yt-conn-hint');
+        const ytBtn = document.getElementById('yt-connect-btn');
+        if (data.youtube.configured) {
+          ytBadge.textContent = 'Connecté';
+          ytBadge.className = 'badge connected';
+          ytHint.textContent = '';
+          ytBtn.textContent = 'Se reconnecter avec YouTube';
+          ytBtn.disabled = false;
+        } else if (data.youtube.connectAvailable) {
+          ytBadge.textContent = 'Non connecté';
+          ytBadge.className = 'badge disconnected';
+          ytHint.textContent = '';
+          ytBtn.textContent = 'Se connecter avec YouTube';
+          ytBtn.disabled = false;
+        } else {
+          ytBadge.textContent = 'Non configuré';
+          ytBadge.className = 'badge disconnected';
+          ytHint.textContent = 'Configuration requise par l\'administrateur (Google Client ID/Secret) avant de pouvoir vous connecter.';
+          ytBtn.textContent = 'Se connecter avec YouTube';
+          ytBtn.disabled = true;
+        }
+
+        const ttBadge = document.getElementById('tt-status-badge');
+        const ttHint = document.getElementById('tt-conn-hint');
+        const ttBtn = document.getElementById('tt-connect-btn');
+        if (data.tiktok.configured) {
+          ttBadge.textContent = 'Connecté';
+          ttBadge.className = 'badge connected';
+          ttHint.textContent = '';
+          ttBtn.textContent = 'Se reconnecter avec TikTok';
+          ttBtn.disabled = false;
+        } else if (data.tiktok.connectAvailable) {
+          ttBadge.textContent = 'Non connecté';
+          ttBadge.className = 'badge disconnected';
+          ttHint.textContent = '';
+          ttBtn.textContent = 'Se connecter avec TikTok';
+          ttBtn.disabled = false;
+        } else {
+          ttBadge.textContent = 'Non configuré';
+          ttBadge.className = 'badge disconnected';
+          ttHint.textContent = 'Configuration requise par l\'administrateur (TikTok Client Key/Secret) avant de pouvoir vous connecter.';
+          ttBtn.textContent = 'Se connecter avec TikTok';
+          ttBtn.disabled = true;
+        }
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    document.getElementById('yt-connect-btn').addEventListener('click', () => {
+      window.location.href = buildAuthedUrl('/api/media/youtube/connect');
+    });
+    document.getElementById('tt-connect-btn').addEventListener('click', () => {
+      window.location.href = buildAuthedUrl('/api/media/tiktok/connect');
+    });
+
+    // Les callbacks OAuth (Facebook/YouTube/TikTok) redirigent vers /dashboard
+    // avec un paramètre ?xxxConnect=success|error : on l'affiche une fois,
+    // puis on nettoie l'URL pour ne pas le réafficher à un rechargement.
+    function handleOAuthRedirectFeedback() {
+      const params = new URLSearchParams(window.location.search);
+      const checks = [
+        ['fbConnect', 'Facebook'],
+        ['youtubeConnect', 'YouTube'],
+        ['tiktokConnect', 'TikTok'],
+      ];
+      const found = checks.find(([param]) => params.has(param));
+      if (!found) return;
+
+      const [param, label] = found;
+      const value = params.get(param);
+      const el = document.getElementById('conn-oauth-feedback');
+      el.hidden = false;
+      el.textContent = value === 'success'
+        ? '✅ Connexion ' + label + ' réussie.'
+        : '❌ Échec de la connexion ' + label + '. Réessayez, ou vérifiez la configuration avec l\'administrateur.';
+      el.className = value === 'success' ? 'ok' : 'error';
+
+      params.delete(param);
+      const newSearch = params.toString();
+      const newUrl = window.location.pathname + (newSearch ? '?' + newSearch : '');
+      window.history.replaceState({}, '', newUrl);
     }
 
     async function tgRefreshStatus() {
@@ -1830,6 +1981,8 @@
       }
       if (hasModule('telegram')) tgRefreshStatus();
       if (hasModule('facebook')) fbRefreshStatus();
+      if (hasModule('studio_video')) mediaRefreshStatus();
+      handleOAuthRedirectFeedback();
     }
 
     tryAutoLogin().then((ok) => { if (ok) init(); });
