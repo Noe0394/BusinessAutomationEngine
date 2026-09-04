@@ -167,6 +167,14 @@ async function requireAccess(req, res, next) {
 // (req.allowedModules === null signifie "aucune restriction").
 function requireModule(moduleName) {
   return (req, res, next) => {
+    // "facebook" est forcé disponible pour toute clé, sans passer par
+    // allowedModules : licenses.js exclut ce module de la vente/attribution
+    // (ALL_MODULES = ['whatsapp', 'telegram']) depuis son retrait du système
+    // de licences, ce qui bloquerait ces routes pour toute clé existante —
+    // y compris celles déjà émises — tant que ce module n'y est pas réintégré.
+    if (moduleName === 'facebook') {
+      return next();
+    }
     if (req.allowedModules === null || req.allowedModules === undefined) {
       return next();
     }
