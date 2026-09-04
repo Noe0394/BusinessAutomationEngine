@@ -37,6 +37,9 @@ const videoUpload = multer({
 });
 const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
 const ADMIN_PORTAL_PATH = path.join(__dirname, 'public', 'admin.html');
+const PRIVACY_POLICY_PATH = path.join(__dirname, 'public', 'legal', 'privacy.html');
+const TERMS_OF_SERVICE_PATH = path.join(__dirname, 'public', 'legal', 'terms.html');
+const DATA_DELETION_PATH = path.join(__dirname, 'public', 'legal', 'data-deletion.html');
 const facebook = new FacebookMessengerAdapter();
 const telegram = new TelegramAdapter();
 const mediaPublisher = new MediaPublisherAdapter();
@@ -711,6 +714,22 @@ app.get('/ping', (req, res) => {
 
 app.get(['/', '/dashboard'], (req, res) => {
   res.sendFile(DASHBOARD_PATH);
+});
+
+// Pages légales publiques (Politique de confidentialité, CGU, suppression des
+// données) requises pour la configuration de l'app Meta for Developers
+// (Réglages > Général) et pour toute demande d'Accès avancé (App Review).
+// Aucune authentification : Meta doit pouvoir y accéder librement.
+app.get('/legal/privacy', (req, res) => {
+  res.sendFile(PRIVACY_POLICY_PATH);
+});
+
+app.get('/legal/terms', (req, res) => {
+  res.sendFile(TERMS_OF_SERVICE_PATH);
+});
+
+app.get('/legal/data-deletion', (req, res) => {
+  res.sendFile(DATA_DELETION_PATH);
 });
 
 // Route volontairement non référencée dans la navigation du dashboard client
