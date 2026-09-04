@@ -137,7 +137,7 @@ class FacebookMessengerAdapter {
       client_id: this.getAppId(),
       redirect_uri: redirectUri,
       state,
-      scope: 'pages_show_list,pages_messaging,pages_read_engagement,instagram_basic,instagram_content_publish',
+      scope: 'pages_show_list,pages_messaging,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish',
     });
     return `https://www.facebook.com/${this.apiVersion}/dialog/oauth?${params.toString()}`;
   }
