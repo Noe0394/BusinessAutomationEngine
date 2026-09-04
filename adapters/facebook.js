@@ -223,14 +223,22 @@ class FacebookMessengerAdapter {
 
   // ---------- Publication sur la Page (feed) ----------
   /**
-   * Publie un statut texte, un lien, ou une photo sur la Page officielle
-   * (API Graph officielle — /me/feed ou /me/photos), avec publication
-   * programmée optionnelle (scheduledPublishTime, doit être 10 min à 75
-   * jours dans le futur côté Meta).
+   * Publie un statut texte, un lien, une photo ou une vidéo sur la Page
+   * officielle (API Graph officielle — /me/feed, /me/photos ou /me/videos),
+   * avec publication programmée optionnelle (scheduledPublishTime, doit être
+   * 10 min à 75 jours dans le futur côté Meta).
+   *
+   * Comme pour les Groupes (voir publishToGroup), l'API Graph n'a pas
+   * d'endpoint de dépôt de document : un PDF ne peut pas être joint
+   * nativement à une publication de Page, seuls image/vidéo/lien le
+   * peuvent. Cette limitation est imposée par la plateforme Meta.
    */
-  async publishPost({ message, link, photoBuffer, photoMimetype, scheduledPublishTime }) {
+  async publishPost({ message, link, mediaBuffer, mediaMimetype, mediaFilename, scheduledPublishTime }) {
     if (!this.isConfigured()) {
       throw new Error('FB_NOT_CONFIGURED');
+    }
+    if (mediaMimetype === 'application/pdf') {
+      throw new Error('PAGE_PDF_UPLOAD_UNSUPPORTED');
     }
     await this.ensurePageId();
 
@@ -238,12 +246,13 @@ class FacebookMessengerAdapter {
       ? Math.floor(new Date(scheduledPublishTime).getTime() / 1000)
       : null;
 
-    if (photoBuffer) {
+    if (mediaBuffer) {
+      const isVideo = (mediaMimetype || '').startsWith('video/');
       const form = new FormData();
-      form.append('caption', message || '');
-      form.append('source', photoBuffer, {
-        filename: 'photo.jpg',
-        contentType: photoMimetype || 'image/jpeg',
+      form.append(isVideo ? 'description' : 'caption', message || '');
+      form.append('source', mediaBuffer, {
+        filename: mediaFilename || (isVideo ? 'video.mp4' : 'photo.jpg'),
+        contentType: mediaMimetype || (isVideo ? 'video/mp4' : 'image/jpeg'),
       });
       form.append('access_token', this.getPageAccessToken());
       if (scheduledUnix) {
@@ -251,7 +260,7 @@ class FacebookMessengerAdapter {
         form.append('scheduled_publish_time', String(scheduledUnix));
       }
 
-      const res = await axios.post(`${this.baseUrl}/${this.pageId}/photos`, form, {
+      const res = await axios.post(`${this.baseUrl}/${this.pageId}/${isVideo ? 'videos' : 'photos'}`, form, {
         headers: form.getHeaders(),
         maxContentLength: Infinity,
         maxBodyLength: Infinity,

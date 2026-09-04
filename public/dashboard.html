@@ -69,11 +69,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -531,6 +531,45 @@
           <div id="fb-import-feedback" hidden></div>
         </div>
 
+        <div class="subsection" id="fb-publish-section">
+          <h3>Publication &amp; Programmation sur la Page</h3>
+          <p class="empty">
+            Rédigez une publication, immédiate ou programmée à une date ultérieure, sur votre Page Facebook
+            (API Graph officielle).
+          </p>
+
+          <div class="field">
+            <label for="fb-publish-message">Texte de la publication</label>
+            <textarea id="fb-publish-message" placeholder="Votre publication..."></textarea>
+          </div>
+
+          <div class="field">
+            <label>Média (optionnel — image ou vidéo)</label>
+            <div id="fb-publish-media-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+            <input type="file" id="fb-publish-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+            <p id="fb-publish-media-file-name" class="empty">Aucun fichier sélectionné.</p>
+          </div>
+
+          <div class="warning-box">
+            ⚠️ Un PDF ne peut pas être joint nativement à une publication Facebook (l'API Graph ne le permet pas,
+            ni pour la Page ni pour les Groupes) : hébergez-le ailleurs et collez son lien dans le texte.
+          </div>
+
+          <div class="field">
+            <label for="fb-publish-schedule">Programmer pour plus tard (optionnel — laissez vide pour publier immédiatement)</label>
+            <input type="datetime-local" id="fb-publish-schedule" />
+            <p class="empty">Meta exige une programmation entre 10 minutes et 75 jours dans le futur.</p>
+          </div>
+
+          <div class="field">
+            <label><input type="checkbox" id="fb-publish-broadcast-groups" /> Diffuser également sur mes groupes</label>
+            <p class="empty">Publie la même publication sur tous les Groupes gérés (voir ci-dessous), avec une pause de 10 à 15s entre chaque.</p>
+          </div>
+
+          <button type="button" id="fb-publish-btn" class="send-button">🚀 Publier / Programmer sur la Page</button>
+          <div id="fb-publish-feedback" hidden></div>
+        </div>
+
         <div class="subsection" id="fb-groups-section">
           <h3>Publication programmée sur les Groupes Facebook gérés</h3>
           <p class="empty">
@@ -550,6 +589,7 @@
             </div>
           </div>
           <button type="button" id="fb-group-add-btn">Ajouter le Groupe</button>
+          <button type="button" id="fb-groups-export-btn">📊 Exporter la liste de mes Groupes (Excel)</button>
 
           <div class="table-wrap">
             <table>
@@ -1804,6 +1844,74 @@
       }
     });
 
+    // ---------- Facebook : publication & programmation sur la Page ----------
+    let selectedFbPublishMediaFile = null;
+
+    function fbPublishShowFeedback(message, isError) {
+      const el = document.getElementById('fb-publish-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    const fbPublishMediaDropZone = document.getElementById('fb-publish-media-drop-zone');
+    const fbPublishMediaFileInput = document.getElementById('fb-publish-media-file');
+    fbPublishMediaDropZone.addEventListener('click', () => fbPublishMediaFileInput.click());
+    fbPublishMediaDropZone.addEventListener('dragover', (e) => { e.preventDefault(); fbPublishMediaDropZone.classList.add('dragover'); });
+    fbPublishMediaDropZone.addEventListener('dragleave', () => fbPublishMediaDropZone.classList.remove('dragover'));
+    fbPublishMediaDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      fbPublishMediaDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) fbPublishSetSelectedMediaFile(e.dataTransfer.files[0]);
+    });
+    fbPublishMediaFileInput.addEventListener('change', () => {
+      if (fbPublishMediaFileInput.files && fbPublishMediaFileInput.files[0]) fbPublishSetSelectedMediaFile(fbPublishMediaFileInput.files[0]);
+    });
+    function fbPublishSetSelectedMediaFile(file) {
+      selectedFbPublishMediaFile = file;
+      document.getElementById('fb-publish-media-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    document.getElementById('fb-publish-btn').addEventListener('click', async () => {
+      const message = document.getElementById('fb-publish-message').value.trim();
+      const scheduleValue = document.getElementById('fb-publish-schedule').value;
+      const broadcastToGroups = document.getElementById('fb-publish-broadcast-groups').checked;
+
+      if (!message && !selectedFbPublishMediaFile) {
+        fbPublishShowFeedback('Fournissez un texte et/ou un média à publier.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('message', message);
+      if (scheduleValue) {
+        formData.append('scheduledPublishTime', new Date(scheduleValue).toISOString());
+      }
+      formData.append('broadcastToGroups', String(broadcastToGroups));
+      if (selectedFbPublishMediaFile) formData.append('media', selectedFbPublishMediaFile);
+
+      const publishBtn = document.getElementById('fb-publish-btn');
+      publishBtn.disabled = true;
+
+      try {
+        const res = await apiFetch('/api/facebook/publish', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          fbPublishShowFeedback(data.error || 'Échec de la publication.', true);
+        } else {
+          const scheduledNote = scheduleValue ? ' (programmée pour ' + new Date(scheduleValue).toLocaleString() + ')' : ' (immédiate)';
+          const broadcastNote = data.groupBroadcast
+            ? ', diffusion lancée sur ' + data.groupBroadcast.total + ' Groupe(s) (délai ' + data.groupBroadcast.delaySeconds + 's)'
+            : '';
+          fbPublishShowFeedback('✅ Publication envoyée à la Page' + scheduledNote + broadcastNote + '.', false);
+        }
+      } catch (err) {
+        fbPublishShowFeedback('Erreur réseau lors de la publication.', true);
+      } finally {
+        publishBtn.disabled = false;
+      }
+    });
+
     // ---------- Facebook : publication programmée sur les Groupes gérés ----------
     let selectedFbGroupsMediaFile = null;
 
@@ -1880,6 +1988,10 @@
       } catch (err) {
         fbGroupsShowFeedback('Erreur réseau lors de l\'ajout du Groupe.', true);
       }
+    });
+
+    document.getElementById('fb-groups-export-btn').addEventListener('click', () => {
+      window.location.href = buildAuthedUrl('/api/facebook/groups/export-excel');
     });
 
     const fbGroupsMediaDropZone = document.getElementById('fb-groups-media-drop-zone');

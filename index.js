@@ -1266,32 +1266,78 @@ app.post('/api/facebook/queue', requireAccess, requireModule('facebook'), upload
   });
 });
 
-// ---------- Publication automatique sur la Page (feed) ----------
-app.post('/api/facebook/publish', requireAccess, requireModule('facebook'), upload.single('photo'), async (req, res) => {
+// ---------- Publication automatique sur la Page (feed), avec diffusion
+// optionnelle vers les Groupes gérés ----------
+app.post('/api/facebook/publish', requireAccess, requireModule('facebook'), upload.single('media'), async (req, res) => {
   if (!facebook.isConfigured()) {
     return res.status(503).json({
       error: 'Intégration Facebook non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
     });
   }
 
-  const { message, link, scheduledPublishTime } = req.body;
+  const { message, link, scheduledPublishTime, broadcastToGroups } = req.body;
   if (!message && !req.file) {
-    return res.status(400).json({ error: 'Fournissez un "message" et/ou une photo (champ "photo") à publier.' });
+    return res.status(400).json({ error: 'Fournissez un "message" et/ou un média (champ "media") à publier.' });
+  }
+  if (req.file && req.file.mimetype === 'application/pdf') {
+    return res.status(400).json({
+      error: 'L\'API Graph de Meta ne permet pas de déposer un document PDF sur une publication de Page (seuls '
+        + 'texte/lien, photo et vidéo sont supportés). Hébergez le PDF ailleurs et partagez son lien dans le message.',
+    });
   }
 
+  const shouldBroadcast = broadcastToGroups === 'true' || broadcastToGroups === true;
+  if (shouldBroadcast && facebook.getManagedGroups().length === 0) {
+    return res.status(400).json({ error: 'Aucun Groupe géré. Ajoutez-en avant d\'activer la diffusion vers les Groupes.' });
+  }
+  if (shouldBroadcast && !facebook.getUserAccessToken()) {
+    return res.status(503).json({
+      error: 'Diffusion vers les Groupes indisponible : reconnectez-vous via "Se connecter avec Facebook" '
+        + '(nécessite un jeton utilisateur) et vérifiez que la permission publish_to_groups a été accordée par Meta.',
+    });
+  }
+
+  let result;
   try {
-    const result = await facebook.publishPost({
+    result = await facebook.publishPost({
       message,
       link,
       scheduledPublishTime,
-      photoBuffer: req.file ? req.file.buffer : null,
-      photoMimetype: req.file ? req.file.mimetype : null,
+      mediaBuffer: req.file ? req.file.buffer : null,
+      mediaMimetype: req.file ? req.file.mimetype : null,
+      mediaFilename: req.file ? req.file.originalname : null,
     });
-    res.status(200).json(result);
   } catch (err) {
     console.error('Erreur lors de la publication Facebook:', err?.response?.data || err.message);
-    res.status(500).json({ error: 'Échec de la publication sur la Page Facebook.' });
+    return res.status(500).json({ error: 'Échec de la publication sur la Page Facebook.' });
   }
+
+  if (!shouldBroadcast) {
+    return res.status(200).json({ page: result, groupBroadcast: null });
+  }
+
+  const groups = facebook.getManagedGroups();
+  res.status(200).json({
+    page: result,
+    groupBroadcast: { status: 'started', total: groups.length, delaySeconds: '10-15 (aléatoire)' },
+  });
+
+  // Diffusion vers les Groupes lancée en arrière-plan, indépendamment de la
+  // programmation éventuelle du post de Page (voir cahier des charges :
+  // "publie sur la Page puis programme l'envoi vers les groupes").
+  facebook.publishToManagedGroups({
+    message,
+    mediaBuffer: req.file ? req.file.buffer : null,
+    mediaMimetype: req.file ? req.file.mimetype : null,
+    mediaFilename: req.file ? req.file.originalname : null,
+    minDelaySeconds: 10,
+    maxDelaySeconds: 15,
+  }).then((results) => {
+    const success = results.filter((r) => r.status === 'published').length;
+    console.log(`Facebook: diffusion sur les groupes (depuis la publication de Page) terminée (${success}/${results.length} réussite(s)).`);
+  }).catch((err) => {
+    console.error('Erreur pendant la diffusion sur les groupes Facebook (depuis la publication de Page):', err);
+  });
 });
 
 // ---------- Gestion des commentaires (modération) ----------
@@ -1517,6 +1563,26 @@ app.post('/api/facebook/groups/publish', requireAccess, requireModule('facebook'
   }).catch((err) => {
     console.error('Erreur pendant la diffusion sur les groupes Facebook:', err);
   });
+});
+
+// Export de la liste des Groupes gérés au format Excel — mêmes données que
+// GET /api/facebook/groups, mises en forme pour être partagées/archivées.
+app.get('/api/facebook/groups/export-excel', requireAccess, requireModule('facebook'), (req, res) => {
+  const groups = facebook.getManagedGroups();
+  const sheet = XLSX.utils.json_to_sheet(
+    groups.map((g) => ({
+      Nom: g.name,
+      Identifiant: g.id,
+      'Ajouté le': g.addedAt || '',
+    })),
+  );
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Groupes Facebook');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="groupes_facebook.xlsx"');
+  res.send(buffer);
 });
 
 app.get('/api/telegram/status', requireAccess, requireModule('telegram'), (req, res) => {
