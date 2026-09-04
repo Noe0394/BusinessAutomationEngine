@@ -69,11 +69,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone, #share-import-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone, #share-import-drop-zone, #share-custom-media-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover, #share-import-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover, #share-import-drop-zone.dragover, #share-custom-media-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -845,13 +845,41 @@
 
       <div class="subsection" id="share-post-section">
         <h3>2. Préparer le message à partager</h3>
-        <button type="button" id="share-posts-reload-btn">🔄 Charger mes publications récentes</button>
+
         <div class="field">
-          <label for="share-post-select">Publication à partager (fournit le lien)</label>
-          <select id="share-post-select">
-            <option value="">— Chargez d'abord vos publications —</option>
-          </select>
+          <label><input type="radio" name="share-mode" value="A" checked /> Sélectionner une publication récente de la Page</label>
+          <label><input type="radio" name="share-mode" value="B" /> Rédiger un message personnalisé</label>
         </div>
+
+        <div id="share-mode-a">
+          <button type="button" id="share-posts-reload-btn">🔄 Charger mes publications récentes</button>
+          <div class="field">
+            <label for="share-post-select">Publication à partager (fournit le lien)</label>
+            <select id="share-post-select">
+              <option value="">— Chargez d'abord vos publications —</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="share-mode-b" hidden>
+          <p class="empty">
+            Publie ce contenu sur la Page (comme l'onglet Facebook), pour obtenir un lien réel à partager — la
+            fenêtre de partage Facebook a besoin d'une vraie publication pour générer son aperçu, un simple fichier
+            téléversé n'en a pas.
+          </p>
+          <div class="field">
+            <label>Média (optionnel — image ou vidéo)</label>
+            <div id="share-custom-media-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+            <input type="file" id="share-custom-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+            <p id="share-custom-media-file-name" class="empty">Aucun fichier sélectionné.</p>
+          </div>
+          <div class="warning-box">
+            ⚠️ Un PDF ne peut pas être joint nativement à une publication Facebook — hébergez-le ailleurs et collez
+            son lien dans le message ci-dessous.
+          </div>
+          <button type="button" id="share-generate-btn">⚙️ Générer le contenu à partager</button>
+        </div>
+
         <div class="field">
           <label for="share-message-text">Message à copier dans Facebook</label>
           <textarea id="share-message-text" placeholder="Votre commentaire d'accompagnement..."></textarea>
@@ -861,6 +889,8 @@
           </p>
           <button type="button" id="share-message-copy-btn">📋 Copier le message</button>
         </div>
+
+        <p id="share-active-link" class="empty">Aucun contenu prêt à partager pour le moment.</p>
         <div id="share-feedback" hidden></div>
       </div>
 
@@ -3096,6 +3126,76 @@
     // état gardé côté client seulement, réinitialisé au rechargement.
     const shareSharedGroupIds = new Set();
 
+    // Lien réellement injecté dans le relais de partage (sharer.php),
+    // alimenté soit par la sélection Mode A (publication existante), soit
+    // par la génération Mode B (nouvelle publication créée à la volée).
+    let shareActiveUrl = '';
+
+    function shareSetActiveUrl(url, label) {
+      shareActiveUrl = url || '';
+      const el = document.getElementById('share-active-link');
+      el.textContent = shareActiveUrl ? ('✅ Prêt à partager : ' + (label || shareActiveUrl)) : 'Aucun contenu prêt à partager pour le moment.';
+      el.className = shareActiveUrl ? 'ok' : 'empty';
+    }
+
+    document.querySelectorAll('input[name="share-mode"]').forEach((radio) => {
+      radio.addEventListener('change', () => {
+        const mode = document.querySelector('input[name="share-mode"]:checked').value;
+        document.getElementById('share-mode-a').hidden = mode !== 'A';
+        document.getElementById('share-mode-b').hidden = mode !== 'B';
+        shareSetActiveUrl('');
+      });
+    });
+
+    let selectedShareCustomMediaFile = null;
+    const shareCustomMediaDropZone = document.getElementById('share-custom-media-drop-zone');
+    const shareCustomMediaFileInput = document.getElementById('share-custom-media-file');
+    shareCustomMediaDropZone.addEventListener('click', () => shareCustomMediaFileInput.click());
+    shareCustomMediaDropZone.addEventListener('dragover', (e) => { e.preventDefault(); shareCustomMediaDropZone.classList.add('dragover'); });
+    shareCustomMediaDropZone.addEventListener('dragleave', () => shareCustomMediaDropZone.classList.remove('dragover'));
+    shareCustomMediaDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      shareCustomMediaDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) shareCustomMediaSetSelectedFile(e.dataTransfer.files[0]);
+    });
+    shareCustomMediaFileInput.addEventListener('change', () => {
+      if (shareCustomMediaFileInput.files && shareCustomMediaFileInput.files[0]) shareCustomMediaSetSelectedFile(shareCustomMediaFileInput.files[0]);
+    });
+    function shareCustomMediaSetSelectedFile(file) {
+      selectedShareCustomMediaFile = file;
+      document.getElementById('share-custom-media-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    document.getElementById('share-generate-btn').addEventListener('click', async () => {
+      const message = document.getElementById('share-message-text').value.trim();
+      if (!message && !selectedShareCustomMediaFile) {
+        shareShowFeedback('Rédigez un message et/ou joignez un média avant de générer le contenu.', true);
+        return;
+      }
+      if (selectedShareCustomMediaFile && selectedShareCustomMediaFile.type === 'application/pdf') {
+        shareShowFeedback('Un PDF ne peut pas être joint à une publication Facebook — hébergez-le ailleurs et collez son lien dans le message.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('message', message);
+      if (selectedShareCustomMediaFile) formData.append('media', selectedShareCustomMediaFile);
+
+      const btn = document.getElementById('share-generate-btn');
+      btn.disabled = true;
+      try {
+        const res = await apiFetch('/api/facebook/share/prepare-custom-post', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) { shareShowFeedback(data.error || 'Échec de la génération du contenu.', true); return; }
+        shareSetActiveUrl(data.post.permalink_url, 'contenu personnalisé publié');
+        shareShowFeedback('✅ Contenu publié et prêt à être partagé dans les Groupes.', false);
+      } catch (err) {
+        shareShowFeedback('Erreur réseau lors de la génération du contenu.', true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
     let selectedShareImportFile = null;
     const shareImportDropZone = document.getElementById('share-import-drop-zone');
     const shareImportFileInput = document.getElementById('share-import-file');
@@ -3161,6 +3261,11 @@
       }
     });
 
+    document.getElementById('share-post-select').addEventListener('change', (e) => {
+      const opt = e.target.selectedOptions[0];
+      shareSetActiveUrl(e.target.value, opt ? opt.textContent : '');
+    });
+
     document.getElementById('share-message-copy-btn').addEventListener('click', async () => {
       const text = document.getElementById('share-message-text').value;
       if (!text) { shareShowFeedback('Rien à copier : le message est vide.', true); return; }
@@ -3175,16 +3280,15 @@
     // Ouvre la fenêtre de partage officielle Facebook pour un groupe, puis
     // marque la ligne "Partagé" dans l'interface.
     function shareOpenDialogForGroup(group, rowStatusEl) {
-      const postUrl = document.getElementById('share-post-select').value;
-      if (!postUrl) {
-        shareShowFeedback('Chargez et sélectionnez d\'abord une publication à partager (étape 2).', true);
+      if (!shareActiveUrl) {
+        shareShowFeedback('Préparez d\'abord un contenu à partager (étape 2 — publication existante ou message personnalisé généré).', true);
         return false;
       }
       // Facebook ne permet pas de présélectionner un Groupe destinataire via
       // l'URL du partage officiel : la fenêtre s'ouvre pré-remplie avec le
       // lien de la publication, et le choix du Groupe cible se termine
       // manuellement dans l'interface Facebook (partage assisté).
-      const shareUrl = 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(postUrl);
+      const shareUrl = 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(shareActiveUrl);
       window.open(shareUrl, 'fb-share-' + group.id, 'width=600,height=520');
       shareSharedGroupIds.add(group.id);
       if (rowStatusEl) rowStatusEl.textContent = '✅ Partagé';
@@ -3251,8 +3355,8 @@
         shareShowFeedback('Cochez au moins un Groupe.', true);
         return;
       }
-      if (!document.getElementById('share-post-select').value) {
-        shareShowFeedback('Chargez et sélectionnez d\'abord une publication à partager (étape 2).', true);
+      if (!shareActiveUrl) {
+        shareShowFeedback('Préparez d\'abord un contenu à partager (étape 2 — publication existante ou message personnalisé généré).', true);
         return;
       }
       if (checked.length > 1) {

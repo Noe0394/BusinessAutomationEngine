@@ -1947,6 +1947,15 @@ app.get('/api/facebook/groups', requireAccess, requireModule('facebook'), (req, 
 // Publications récentes de la Page — utilisé par le module "Groupes /
 // Partage" pour choisir quelle publication partager (voir
 // getPagePosts() dans adapters/facebook.js).
+// getPagePosts() (adapters/facebook.js) utilise getPageAccessToken(), pas
+// getUserAccessToken() : lister les publications d'une Page est une action
+// de Page normale, qui n'a jamais eu besoin du jeton utilisateur (celui-ci
+// n'est nécessaire que pour publier dans un Groupe, une action au nom d'un
+// utilisateur — voir publishToGroup). Le message d'erreur renvoyé ici
+// inclut le détail brut retourné par Meta (err?.response?.data?.error?.message,
+// ex : jeton expiré, permission manquante) plutôt qu'un message générique,
+// pour rester diagnosticable sans avoir à lire les logs serveur — et ne
+// fait jamais planter le process, seulement échouer cette requête.
 app.get('/api/facebook/page-posts', requireAccess, requireModule('facebook'), async (req, res) => {
   if (!facebook.isConfigured()) {
     return res.status(503).json({
@@ -1957,8 +1966,68 @@ app.get('/api/facebook/page-posts', requireAccess, requireModule('facebook'), as
     const posts = await facebook.getPagePosts({ limit: 20 });
     res.status(200).json({ posts });
   } catch (err) {
+    const metaMessage = err?.response?.data?.error?.message;
     console.error('Erreur lors de la récupération des publications de la Page:', err?.response?.data || err.message);
-    res.status(500).json({ error: 'Échec de la récupération des publications récentes de la Page.' });
+    res.status(502).json({
+      error: metaMessage
+        ? `Échec de la récupération des publications de la Page (Meta : "${metaMessage}").`
+        : 'Échec de la récupération des publications récentes de la Page. Vérifiez que la connexion Facebook '
+          + '(onglet Connexions) est active et que le jeton n\'a pas expiré.',
+    });
+  }
+});
+
+/**
+ * Mode B ("message personnalisé") du module Groupes / Diffusion : la
+ * fenêtre de partage officielle Facebook (sharer.php) a besoin d'une URL
+ * réelle qu'elle puisse explorer pour générer son aperçu — un simple
+ * fichier téléversé n'en a pas. On publie donc ce texte + média comme une
+ * publication normale sur la Page (comme /api/facebook/publish), et on
+ * réutilise son permalink_url comme lien à partager dans les Groupes —
+ * exactement le même traitement qu'une publication existante choisie en
+ * Mode A, une fois créée.
+ */
+app.post('/api/facebook/share/prepare-custom-post', requireAccess, requireModule('facebook'), upload.single('media'), async (req, res) => {
+  if (!facebook.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Facebook non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
+    });
+  }
+
+  const { message } = req.body;
+  if (!message && !req.file) {
+    return res.status(400).json({ error: 'Fournissez un message et/ou un média à publier.' });
+  }
+  if (req.file && req.file.mimetype === 'application/pdf') {
+    return res.status(400).json({
+      error: 'L\'API Graph de Meta ne permet pas de joindre un PDF à une publication de Page. '
+        + 'Hébergez le PDF ailleurs et collez son lien dans le message.',
+    });
+  }
+
+  try {
+    const created = await facebook.publishPost({
+      message,
+      mediaBuffer: req.file ? req.file.buffer : null,
+      mediaMimetype: req.file ? req.file.mimetype : null,
+      mediaFilename: req.file ? req.file.originalname : null,
+    });
+    // /me/feed renvoie directement {id}, mais /me/photos et /me/videos
+    // renvoient l'id du média — post_id (photos) est l'identifiant du post
+    // réel s'il est présent, sinon on retombe sur id. Ni l'un ni l'autre
+    // endpoint ne renvoie permalink_url directement : un second appel est
+    // nécessaire pour l'obtenir.
+    const postId = created.post_id || created.id;
+    const permalink = await facebook.getPostPermalink(postId);
+    res.status(201).json({ post: { id: postId, permalink_url: permalink } });
+  } catch (err) {
+    const metaMessage = err?.response?.data?.error?.message;
+    console.error('Erreur lors de la création du contenu personnalisé à partager:', err?.response?.data || err.message);
+    res.status(502).json({
+      error: metaMessage
+        ? `Échec de la publication du contenu personnalisé (Meta : "${metaMessage}").`
+        : 'Échec de la publication du contenu personnalisé sur la Page.',
+    });
   }
 });
 

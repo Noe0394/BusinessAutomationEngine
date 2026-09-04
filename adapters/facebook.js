@@ -314,6 +314,23 @@ class FacebookMessengerAdapter {
     return res.data.data || [];
   }
 
+  /**
+   * permalink_url d'un post/média fraîchement créé — publishPost() ne le
+   * renvoie pas directement (POST /me/feed, /me/photos et /me/videos ne
+   * renvoient qu'un id), donc un second appel est nécessaire. Utilisé par
+   * le Mode B ("message personnalisé") du module Groupes / Diffusion pour
+   * obtenir un lien partageable juste après publication.
+   */
+  async getPostPermalink(postId) {
+    if (!this.isConfigured()) {
+      throw new Error('FB_NOT_CONFIGURED');
+    }
+    const res = await axios.get(`${this.baseUrl}/${postId}`, {
+      params: { fields: 'permalink_url', access_token: this.getPageAccessToken() },
+    });
+    return res.data.permalink_url || null;
+  }
+
   // ---------- Publication sur les Groupes Facebook gérés ----------
   /**
    * Contrairement à la Page (un identifiant unique connu via l'OAuth), il
