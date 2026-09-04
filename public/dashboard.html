@@ -158,6 +158,7 @@
       <button type="button" class="tab-btn" data-tab="facebook">Facebook</button>
       <button type="button" class="tab-btn" data-tab="scheduler">🗓️ Programmation / Planning</button>
       <button type="button" class="tab-btn" data-tab="prospects">🎯 Contacts / Prospects</button>
+      <button type="button" class="tab-btn" data-tab="share">🔗 Groupes / Partage</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -819,6 +820,44 @@
       </div>
     </section>
 
+    <!-- Onglet Groupes / Partage (partage assisté) -->
+    <section class="panel" id="panel-share">
+      <h2>Groupes / Partage</h2>
+      <p class="empty">
+        Meta ne permet plus de publier automatiquement dans un Groupe Facebook depuis une application tierce
+        (permission "publish_to_groups" retirée). Cet onglet ouvre la fenêtre de partage officielle de Facebook,
+        pré-remplie avec le lien d'une publication de la Page — le partage effectif vers le groupe choisi se
+        termine manuellement dans l'interface Facebook, comme l'exige Meta.
+      </p>
+
+      <div class="subsection" id="share-post-section">
+        <h3>1. Choisir la publication à partager</h3>
+        <button type="button" id="share-posts-reload-btn">🔄 Charger mes publications récentes</button>
+        <div class="field">
+          <label for="share-post-select">Publication de la Page RIEA AFRIQUE</label>
+          <select id="share-post-select">
+            <option value="">— Chargez d'abord vos publications —</option>
+          </select>
+        </div>
+        <div id="share-feedback" hidden></div>
+      </div>
+
+      <div class="subsection" id="share-groups-section">
+        <h3>2. Partager dans un Groupe</h3>
+        <p class="empty">
+          Pour ajouter ou retirer des Groupes de cette liste, utilisez la section "Groupes" de l'onglet Facebook.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Identifiant</th><th>Lien</th><th></th></tr></thead>
+            <tbody id="share-groups-body">
+              <tr><td colspan="4" class="empty">Aucun Groupe géré.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -974,7 +1013,7 @@
       // "scheduler" filtre lui-même les canaux Telegram/WhatsApp selon
       // hasModule() — pas besoin de masquer ces onglets entiers.
       const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'))
-        .filter((btn) => !['connections', 'scheduler', 'prospects'].includes(btn.dataset.tab));
+        .filter((btn) => !['connections', 'scheduler', 'prospects', 'share'].includes(btn.dataset.tab));
 
       if (currentAllowedModules === null) {
         tabButtons.forEach((btn) => { btn.hidden = false; });
@@ -1084,6 +1123,7 @@
         if (btn.dataset.tab === 'facebook') fbRefreshStatus();
         if (btn.dataset.tab === 'scheduler') { schedInit(); schedRefreshList(); }
         if (btn.dataset.tab === 'prospects') { prospectsLoadRules(); prospectsRefreshList(); }
+        if (btn.dataset.tab === 'share') { shareLoadGroups(); }
       });
     });
 
@@ -3004,6 +3044,96 @@
       if (source) params.set('source', source);
       window.location.href = '/api/facebook/prospects/export-excel?' + params.toString();
     });
+
+    // ---------- Groupes / Partage (partage assisté) ----------
+    function shareShowFeedback(message, isError) {
+      const el = document.getElementById('share-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    document.getElementById('share-posts-reload-btn').addEventListener('click', async () => {
+      try {
+        const res = await apiFetch('/api/facebook/page-posts');
+        const data = await res.json();
+        if (!res.ok) { shareShowFeedback(data.error || 'Échec du chargement des publications.', true); return; }
+        const select = document.getElementById('share-post-select');
+        select.innerHTML = '';
+        const posts = data.posts || [];
+        if (posts.length === 0) {
+          select.innerHTML = '<option value="">Aucune publication trouvée</option>';
+          return;
+        }
+        posts.forEach((p) => {
+          const opt = document.createElement('option');
+          opt.value = p.permalink_url || '';
+          const preview = (p.message || '(sans texte)').slice(0, 70);
+          const date = p.created_time ? new Date(p.created_time).toLocaleDateString() : '';
+          opt.textContent = date + ' — ' + preview;
+          select.appendChild(opt);
+        });
+        shareShowFeedback(posts.length + ' publication(s) chargée(s).', false);
+      } catch (err) {
+        shareShowFeedback('Erreur réseau lors du chargement des publications.', true);
+      }
+    });
+
+    function shareRenderGroupsTable(groups) {
+      const tbody = document.getElementById('share-groups-body');
+      tbody.innerHTML = '';
+      if (!groups || groups.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">Aucun Groupe géré.</td></tr>';
+        return;
+      }
+      groups.forEach((g) => {
+        const tr = document.createElement('tr');
+        const nameTd = document.createElement('td');
+        nameTd.textContent = g.name || '-';
+        const idTd = document.createElement('td');
+        idTd.textContent = g.id;
+        const linkTd = document.createElement('td');
+        const link = document.createElement('a');
+        link.href = g.link;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'Ouvrir le Groupe';
+        linkTd.appendChild(link);
+        const actionTd = document.createElement('td');
+        const shareBtn = document.createElement('button');
+        shareBtn.type = 'button';
+        shareBtn.textContent = 'Partager dans ce groupe';
+        shareBtn.addEventListener('click', () => {
+          const postUrl = document.getElementById('share-post-select').value;
+          if (!postUrl) {
+            shareShowFeedback('Chargez et sélectionnez d\'abord une publication à partager (étape 1).', true);
+            return;
+          }
+          // Facebook ne permet pas de présélectionner un Groupe destinataire
+          // via l'URL du partage officiel : la fenêtre s'ouvre pré-remplie
+          // avec le lien de la publication, et le choix du Groupe cible se
+          // termine manuellement dans l'interface Facebook (partage assisté).
+          const shareUrl = 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(postUrl);
+          window.open(shareUrl, 'fb-share-' + g.id, 'width=600,height=520');
+        });
+        actionTd.appendChild(shareBtn);
+        tr.appendChild(nameTd);
+        tr.appendChild(idTd);
+        tr.appendChild(linkTd);
+        tr.appendChild(actionTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function shareLoadGroups() {
+      try {
+        const res = await apiFetch('/api/facebook/groups');
+        const data = await res.json();
+        shareRenderGroupsTable(data.groups || []);
+      } catch (err) {
+        shareShowFeedback('Erreur réseau lors du chargement des Groupes gérés.', true);
+      }
+    }
 
     // ---------- Init ----------
     function init() {

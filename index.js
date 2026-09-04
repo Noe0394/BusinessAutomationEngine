@@ -1426,7 +1426,14 @@ app.get('/api/facebook/callback', async (req, res) => {
   }
 });
 
-app.get('/api/facebook/groups', requireAccess, requireModule('facebook'), async (req, res) => {
+// Renommée depuis /api/facebook/groups (nom trompeur : ceci renvoie les
+// conversations Messenger de la Page, pas des Groupes Facebook) — cette
+// route entrait en collision avec le GET /api/facebook/groups des Groupes
+// gérés plus bas, qu'elle masquait silencieusement (Express retient le
+// premier handler enregistré sur un chemin donné). Non utilisée par le
+// frontend actuel, conservée par compatibilité au cas où un appelant externe
+// l'utiliserait encore.
+app.get('/api/facebook/conversations', requireAccess, requireModule('facebook'), async (req, res) => {
   if (!facebook.isConfigured()) {
     return res.status(503).json({
       error: 'Intégration Facebook Messenger non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
@@ -1933,7 +1940,26 @@ app.post('/api/facebook/contacts/import', requireAccess, requireModule('facebook
 // la liste des Groupes ciblés est administrée manuellement (pas d'endpoint
 // Graph API pour les découvrir automatiquement à partir d'une Page).
 app.get('/api/facebook/groups', requireAccess, requireModule('facebook'), (req, res) => {
-  res.status(200).json({ groups: facebook.getManagedGroups() });
+  const groups = facebook.getManagedGroups().map((g) => ({ ...g, link: `https://www.facebook.com/groups/${g.id}` }));
+  res.status(200).json({ groups });
+});
+
+// Publications récentes de la Page — utilisé par le module "Groupes /
+// Partage" pour choisir quelle publication partager (voir
+// getPagePosts() dans adapters/facebook.js).
+app.get('/api/facebook/page-posts', requireAccess, requireModule('facebook'), async (req, res) => {
+  if (!facebook.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Facebook non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
+    });
+  }
+  try {
+    const posts = await facebook.getPagePosts({ limit: 20 });
+    res.status(200).json({ posts });
+  } catch (err) {
+    console.error('Erreur lors de la récupération des publications de la Page:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Échec de la récupération des publications récentes de la Page.' });
+  }
 });
 
 app.post('/api/facebook/groups', requireAccess, requireModule('facebook'), (req, res) => {

@@ -144,11 +144,23 @@ class FacebookMessengerAdapter {
       client_id: this.getAppId(),
       redirect_uri: redirectUri,
       state,
-      // publish_to_groups est une permission historique, aujourd'hui restreinte par
-      // Meta (App Review au cas par cas) : la demander ici est nécessaire pour que
-      // publishToGroup/publishToManagedGroups fonctionnent, mais Meta peut la
-      // retirer du consentement même si l'app ne l'a pas (encore) obtenue.
-      scope: 'pages_show_list,pages_messaging,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish,publish_to_groups',
+      // publish_to_groups a été retirée : ce n'est plus une permission valide
+      // pour la fenêtre de connexion Facebook (elle n'apparaît plus dans la
+      // liste des "Login Permissions" officielles de Meta) — la demander
+      // provoque une erreur "Invalid Scopes" qui bloque TOUTE la connexion
+      // Facebook, pas seulement la publication dans les Groupes. Résultat :
+      // publishToGroup/publishToManagedGroups (diffusion API dans des
+      // Groupes) ne peuvent plus fonctionner — voir le module "Groupes /
+      // Partage" (partage assisté via la fenêtre de partage officielle
+      // Facebook) qui les remplace pour cet usage.
+      // pages_messaging/pages_manage_engagement/instagram_basic/
+      // instagram_content_publish restent en revanche des permissions
+      // valides et déjà utilisées ailleurs dans ce module (Messenger,
+      // modération des commentaires + réponses privées de la Capture de
+      // Prospects, publication Instagram) : les retirer casserait ces
+      // fonctionnalités déjà en place, donc conservées au-delà du minimum
+      // demandé.
+      scope: 'public_profile,email,pages_show_list,pages_manage_posts,pages_read_engagement,pages_messaging,pages_manage_engagement,instagram_basic,instagram_content_publish',
       // Force Facebook à réafficher l'écran de sélection de Page à chaque
       // reconnexion (utile si l'utilisateur veut changer de Page, ex. RIEA
       // AFRIQUE), plutôt que de réutiliser silencieusement une autorisation
@@ -277,6 +289,29 @@ class FacebookMessengerAdapter {
 
     const res = await axios.post(`${this.baseUrl}/${this.pageId}/feed`, null, { params });
     return res.data;
+  }
+
+  /**
+   * Publications récentes de la Page (id, message, permalink_url,
+   * created_time) — utilisée par le module "Groupes / Partage" pour choisir
+   * quelle publication partager (voir sendPrivateReply plus bas pour un
+   * autre usage de permalink_url : ouvrir la fenêtre de partage officielle
+   * Facebook, seul mécanisme qui fonctionne encore pour diffuser dans un
+   * Groupe depuis que publish_to_groups n'est plus une permission valide).
+   */
+  async getPagePosts({ limit = 20 } = {}) {
+    if (!this.isConfigured()) {
+      throw new Error('FB_NOT_CONFIGURED');
+    }
+    await this.ensurePageId();
+    const res = await axios.get(`${this.baseUrl}/${this.pageId}/posts`, {
+      params: {
+        fields: 'id,message,permalink_url,created_time',
+        limit,
+        access_token: this.getPageAccessToken(),
+      },
+    });
+    return res.data.data || [];
   }
 
   // ---------- Publication sur les Groupes Facebook gérés ----------
