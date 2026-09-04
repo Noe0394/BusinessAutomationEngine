@@ -68,11 +68,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #fb-import-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #fb-import-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -154,6 +154,7 @@
       <button type="button" class="tab-btn active" data-tab="connections">🔌 Connexions &amp; Statuts</button>
       <button type="button" class="tab-btn" data-tab="whatsapp">WhatsApp</button>
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
+      <button type="button" class="tab-btn" data-tab="facebook">Facebook</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Statuts -->
@@ -448,6 +449,62 @@
       </div>
     </section>
 
+    <!-- Onglet Facebook -->
+    <section class="panel" id="panel-facebook">
+      <h2>Facebook</h2>
+      <p class="empty" id="fb-not-connected-hint">Connectez votre Page Facebook dans l'onglet "Connexions &amp; Statuts" pour utiliser cette section.</p>
+
+      <div id="fb-main-content" hidden>
+        <div class="subsection" id="fb-import-section">
+          <h3>Importation &amp; Relance de la Base Contacts Qualifiés (.csv / .xlsx)</h3>
+          <p class="empty">
+            Importez votre registre de contacts déjà connus (anciens clients, abonnés, prospects avec historique de
+            discussion). Seuls les contacts ayant une conversation Messenger existante avec la Page peuvent être
+            relancés : l'API Facebook ne permet pas d'écrire à un inconnu importé sans conversation préalable.
+          </p>
+
+          <div id="fb-import-drop-zone">Glissez-déposez un fichier .csv/.xlsx ici, ou touchez pour parcourir</div>
+          <input type="file" id="fb-import-file" accept=".csv,.xlsx" hidden />
+          <p id="fb-import-file-name" class="empty">Aucun fichier sélectionné.</p>
+          <button type="button" id="fb-import-btn">Importer</button>
+          <p id="fb-import-count" class="empty">Aucun contact importé.</p>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>PSID / Identifiant</th><th>Nom</th><th>Statut</th></tr></thead>
+              <tbody id="fb-import-contacts-body">
+                <tr><td colspan="3" class="empty">Aucun contact importé.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="field">
+            <label for="fb-import-message">Message de relance</label>
+            <textarea id="fb-import-message" placeholder="Bonjour {prenom}, ..."></textarea>
+          </div>
+
+          <div class="warning-box">
+            ⚠️ Seuls les contacts marqués "Conversation existante" ci-dessus seront réellement contactés — Meta
+            rejette tout message vers un destinataire sans conversation Messenger active avec la Page.
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label for="fb-import-min-delay">Délai minimum (secondes)</label>
+              <input type="number" id="fb-import-min-delay" value="5" min="1" />
+            </div>
+            <div class="field">
+              <label for="fb-import-max-delay">Délai maximum (secondes)</label>
+              <input type="number" id="fb-import-max-delay" value="10" min="1" />
+            </div>
+          </div>
+
+          <button type="button" id="fb-import-send-btn" class="send-button">🚀 Lancer la relance</button>
+          <div id="fb-import-feedback" hidden></div>
+        </div>
+      </div>
+    </section>
+
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -490,6 +547,7 @@
     const MODULE_TABS = {
       whatsapp: ['whatsapp'],
       telegram: ['telegram'],
+      facebook: ['facebook'],
     };
 
     function hasModule(moduleName) {
@@ -683,8 +741,10 @@
         if (btn.dataset.tab === 'connections') {
           if (hasModule('whatsapp')) pollStatus();
           if (hasModule('telegram')) tgRefreshStatus();
+          if (hasModule('facebook')) fbRefreshStatus();
         }
         if (btn.dataset.tab === 'telegram') tgRefreshStatus();
+        if (btn.dataset.tab === 'facebook') fbRefreshStatus();
       });
     });
 
@@ -1497,6 +1557,142 @@
       }
     });
 
+    // ---------- Facebook : import & relance CRM (contacts qualifiés) ----------
+    let fbImportedContacts = [];
+    let selectedFbImportFile = null;
+
+    const fbImportDropZone = document.getElementById('fb-import-drop-zone');
+    const fbImportFileInput = document.getElementById('fb-import-file');
+    fbImportDropZone.addEventListener('click', () => fbImportFileInput.click());
+    fbImportDropZone.addEventListener('dragover', (e) => { e.preventDefault(); fbImportDropZone.classList.add('dragover'); });
+    fbImportDropZone.addEventListener('dragleave', () => fbImportDropZone.classList.remove('dragover'));
+    fbImportDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      fbImportDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) fbImportSetSelectedFile(e.dataTransfer.files[0]);
+    });
+    fbImportFileInput.addEventListener('change', () => {
+      if (fbImportFileInput.files && fbImportFileInput.files[0]) fbImportSetSelectedFile(fbImportFileInput.files[0]);
+    });
+    function fbImportSetSelectedFile(file) {
+      selectedFbImportFile = file;
+      document.getElementById('fb-import-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    function fbImportShowFeedback(message, isError) {
+      const el = document.getElementById('fb-import-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    function fbImportRenderContactsPreview() {
+      const tbody = document.getElementById('fb-import-contacts-body');
+      tbody.innerHTML = '';
+
+      if (fbImportedContacts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">Aucun contact importé.</td></tr>';
+        return;
+      }
+
+      fbImportedContacts.forEach((c) => {
+        const tr = document.createElement('tr');
+        const idTd = document.createElement('td');
+        idTd.textContent = c.recipientId || c.psid || '-';
+        const nameTd = document.createElement('td');
+        nameTd.textContent = c.name || '-';
+        const statusTd = document.createElement('td');
+        statusTd.textContent = c.matched ? '✅ Conversation existante' : '⚠️ Pas de conversation';
+        tr.appendChild(idTd);
+        tr.appendChild(nameTd);
+        tr.appendChild(statusTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById('fb-import-btn').addEventListener('click', async () => {
+      if (!selectedFbImportFile) { fbImportShowFeedback('Sélectionnez d\'abord un fichier .csv ou .xlsx.', true); return; }
+
+      const formData = new FormData();
+      formData.append('file', selectedFbImportFile);
+
+      try {
+        const res = await apiFetch('/api/facebook/contacts/import', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          fbImportShowFeedback(data.error || 'Échec de l\'import.', true);
+          return;
+        }
+        fbImportedContacts = data.contacts || [];
+        const matchedCount = data.matched || 0;
+        document.getElementById('fb-import-count').textContent = fbImportedContacts.length > 0
+          ? fbImportedContacts.length + ' contact(s) importé(s), dont ' + matchedCount + ' joignable(s) (conversation existante).'
+          : 'Aucun contact valide trouvé dans le fichier (colonnes psid/nom attendues).';
+        fbImportRenderContactsPreview();
+        fbImportShowFeedback(fbImportedContacts.length + ' contact(s) importé(s), ' + matchedCount + ' joignable(s).', false);
+      } catch (err) {
+        fbImportShowFeedback('Erreur réseau lors de l\'import.', true);
+      }
+    });
+
+    document.getElementById('fb-import-send-btn').addEventListener('click', async () => {
+      const message = document.getElementById('fb-import-message').value.trim();
+      const minDelaySeconds = document.getElementById('fb-import-min-delay').value;
+      const maxDelaySeconds = document.getElementById('fb-import-max-delay').value;
+      const matchedContacts = fbImportedContacts.filter((c) => c.matched && c.recipientId);
+
+      if (!message) { fbImportShowFeedback('Le message ne peut pas être vide.', true); return; }
+      if (matchedContacts.length === 0) {
+        fbImportShowFeedback('Aucun contact joignable (avec conversation existante) dans la liste importée.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('message', message);
+      formData.append('minDelaySeconds', minDelaySeconds);
+      formData.append('maxDelaySeconds', maxDelaySeconds);
+      formData.append('recipients', JSON.stringify(matchedContacts.map((c) => c.recipientId)));
+
+      const sendBtn = document.getElementById('fb-import-send-btn');
+      sendBtn.disabled = true;
+
+      try {
+        const res = await apiFetch('/api/facebook/queue', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          fbImportShowFeedback(data.error || 'Échec du lancement de la relance.', true);
+        } else {
+          fbImportShowFeedback(
+            '🚀 Relance lancée : ' + data.total + ' contact(s) en file d\'attente (délai ' + data.delaySeconds + 's).',
+            false,
+          );
+        }
+      } catch (err) {
+        fbImportShowFeedback('Erreur réseau lors du lancement de la relance.', true);
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+
+    async function fbRefreshStatus() {
+      try {
+        const res = await apiFetch('/api/facebook/status');
+        const data = await res.json();
+        const mainContent = document.getElementById('fb-main-content');
+        const notConnectedHint = document.getElementById('fb-not-connected-hint');
+
+        if (data.configured && data.connected) {
+          mainContent.hidden = false;
+          notConnectedHint.hidden = true;
+        } else {
+          mainContent.hidden = true;
+          notConnectedHint.hidden = false;
+        }
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
     async function tgRefreshStatus() {
       try {
         const res = await apiFetch('/api/telegram/status');
@@ -1628,6 +1824,7 @@
         pollCampaignStatus();
       }
       if (hasModule('telegram')) tgRefreshStatus();
+      if (hasModule('facebook')) fbRefreshStatus();
     }
 
     tryAutoLogin().then((ok) => { if (ok) init(); });

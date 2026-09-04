@@ -106,7 +106,10 @@ function printAndWriteAdminAccessInstructions() {
   }
 }
 
-app.use(express.json());
+// verify: capture le corps brut pour la vérification de signature HMAC des
+// webhooks Meta (X-Hub-Signature-256, voir POST /api/facebook/webhook) sans
+// ajouter un second parseur JSON dédié sur cette seule route.
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // Accès admin strict : réservé au panneau de gestion des licences.
 function requireAdmin(req, res, next) {
@@ -1185,7 +1188,7 @@ app.post('/api/facebook/queue', requireAccess, requireModule('facebook'), upload
     });
   }
 
-  const { message, delaySeconds, batchSize } = req.body;
+  const { message, delaySeconds, minDelaySeconds, maxDelaySeconds, batchSize } = req.body;
   let { recipients } = req.body;
 
   if (typeof recipients === 'string') {
@@ -1203,6 +1206,11 @@ app.post('/api/facebook/queue', requireAccess, requireModule('facebook'), upload
   }
 
   const fixedDelaySeconds = delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined;
+  // Fenêtre de temporisation par défaut : 5 à 10s aléatoires entre chaque
+  // envoi (cf. cahier des charges), surchageable via minDelaySeconds/
+  // maxDelaySeconds, ou fixée précisément via delaySeconds.
+  const parsedMinDelay = minDelaySeconds !== undefined && minDelaySeconds !== '' ? parseFloat(minDelaySeconds) : 5;
+  const parsedMaxDelay = maxDelaySeconds !== undefined && maxDelaySeconds !== '' ? parseFloat(maxDelaySeconds) : 10;
   const parsedBatchSize = batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined;
   const media = req.file
     ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
@@ -1211,13 +1219,15 @@ app.post('/api/facebook/queue', requireAccess, requireModule('facebook'), upload
   res.status(202).json({
     status: 'fb_queue_started',
     total: recipients.length,
-    delaySeconds: fixedDelaySeconds || '10-15 (aléatoire)',
+    delaySeconds: fixedDelaySeconds || `${parsedMinDelay}-${parsedMaxDelay} (aléatoire)`,
     batchSize: parsedBatchSize || recipients.length,
     media: media ? media.filename : null,
   });
 
   facebook.sendBulk(recipients, message, {
     delaySeconds: fixedDelaySeconds,
+    minDelaySeconds: fixedDelaySeconds ? undefined : parsedMinDelay,
+    maxDelaySeconds: fixedDelaySeconds ? undefined : parsedMaxDelay,
     batchSize: parsedBatchSize,
     media,
   }).then((results) => {
@@ -1226,6 +1236,187 @@ app.post('/api/facebook/queue', requireAccess, requireModule('facebook'), upload
   }).catch((err) => {
     console.error('Erreur pendant la campagne Facebook Messenger:', err);
   });
+});
+
+// ---------- Publication automatique sur la Page (feed) ----------
+app.post('/api/facebook/publish', requireAccess, requireModule('facebook'), upload.single('photo'), async (req, res) => {
+  if (!facebook.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Facebook non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
+    });
+  }
+
+  const { message, link, scheduledPublishTime } = req.body;
+  if (!message && !req.file) {
+    return res.status(400).json({ error: 'Fournissez un "message" et/ou une photo (champ "photo") à publier.' });
+  }
+
+  try {
+    const result = await facebook.publishPost({
+      message,
+      link,
+      scheduledPublishTime,
+      photoBuffer: req.file ? req.file.buffer : null,
+      photoMimetype: req.file ? req.file.mimetype : null,
+    });
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('Erreur lors de la publication Facebook:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Échec de la publication sur la Page Facebook.' });
+  }
+});
+
+// ---------- Gestion des commentaires (modération) ----------
+app.get('/api/facebook/posts/:postId/comments', requireAccess, requireModule('facebook'), async (req, res) => {
+  if (!facebook.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Facebook non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
+    });
+  }
+
+  try {
+    const comments = await facebook.getPostComments(req.params.postId);
+    res.status(200).json(comments);
+  } catch (err) {
+    console.error('Erreur lors de la récupération des commentaires Facebook:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Échec de la récupération des commentaires.' });
+  }
+});
+
+app.post('/api/facebook/comments/:commentId/reply', requireAccess, requireModule('facebook'), async (req, res) => {
+  if (!facebook.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Facebook non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
+    });
+  }
+
+  const { message } = req.body;
+  if (!message) {
+    return res.status(400).json({ error: 'Le champ "message" est requis.' });
+  }
+
+  try {
+    const result = await facebook.replyToComment(req.params.commentId, message);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('Erreur lors de la réponse au commentaire Facebook:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Échec de la réponse au commentaire.' });
+  }
+});
+
+app.post('/api/facebook/comments/:commentId/moderate', requireAccess, requireModule('facebook'), async (req, res) => {
+  if (!facebook.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Facebook non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
+    });
+  }
+
+  try {
+    const result = await facebook.moderateComment(req.params.commentId, { hide: req.body.hide !== false });
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('Erreur lors de la modération du commentaire Facebook:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Échec de la modération du commentaire.' });
+  }
+});
+
+app.delete('/api/facebook/comments/:commentId', requireAccess, requireModule('facebook'), async (req, res) => {
+  if (!facebook.isConfigured()) {
+    return res.status(503).json({
+      error: 'Intégration Facebook non configurée (variable FB_PAGE_ACCESS_TOKEN manquante).',
+    });
+  }
+
+  try {
+    const result = await facebook.deleteComment(req.params.commentId);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('Erreur lors de la suppression du commentaire Facebook:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Échec de la suppression du commentaire.' });
+  }
+});
+
+// ---------- Webhooks Meta (nouveaux commentaires, messages, etc.) ----------
+// Validation initiale de l'abonnement (Meta App Dashboard > Webhooks).
+// FB_WEBHOOK_VERIFY_TOKEN est une chaîne arbitraire choisie par l'exploitant,
+// à saisir aussi côté Meta lors de la configuration du webhook.
+app.get('/api/facebook/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token && token === process.env.FB_WEBHOOK_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// Réception des évènements. Le payload est déjà parsé par le express.json()
+// global (voir plus haut) qui capture aussi req.rawBody pour la vérification
+// de signature HMAC — indispensable ici puisque cette route est publique par
+// nature (appelée par les serveurs de Meta, sans notre authentification).
+app.post('/api/facebook/webhook', (req, res) => {
+  const signature = req.get('x-hub-signature-256');
+  if (!facebook.verifyWebhookSignature(req.rawBody, signature)) {
+    return res.sendStatus(403);
+  }
+
+  (req.body.entry || []).forEach((entry) => {
+    (entry.changes || []).forEach((change) => {
+      console.log('Facebook webhook — évènement reçu:', change.field, JSON.stringify(change.value));
+    });
+  });
+
+  res.sendStatus(200);
+});
+
+// ---------- Import du registre de contacts (.xlsx/.csv) ----------
+// Ne renvoie comme destinataires exploitables (recipientId/matched=true) que
+// les contacts déjà en conversation Messenger avec la Page — voir le
+// commentaire de resolveRecipientsFromConversations() dans adapters/facebook.js
+// pour la raison (règle des 24h/message tags de l'API Graph).
+app.post('/api/facebook/contacts/import', requireAccess, requireModule('facebook'), upload.single('file'), async (req, res) => {
+  let rows;
+
+  try {
+    if (req.file) {
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(sheet);
+    } else if (Array.isArray(req.body?.contacts)) {
+      rows = req.body.contacts;
+    } else {
+      return res.status(400).json({
+        error: 'Fournissez un fichier CSV/Excel (champ "file") ou un tableau JSON "contacts".',
+      });
+    }
+  } catch (err) {
+    console.error('Erreur lors de la lecture du fichier de contacts Facebook:', err);
+    return res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .csv ou .xlsx.' });
+  }
+
+  const contacts = rows
+    .map((row) => ({
+      psid: String(row.psid || row.PSID || row.recipientId || row.id || '').trim() || null,
+      name: String(row.prenom || row.Prenom || row.nom || row.Nom || row.name || row.Name || '').trim(),
+    }))
+    .filter((c) => c.psid || c.name);
+
+  if (!facebook.isConfigured()) {
+    return res.status(200).json({ contacts, total: contacts.length, matched: 0 });
+  }
+
+  try {
+    const resolved = await facebook.resolveRecipientsFromConversations(contacts);
+    res.status(200).json({
+      contacts: resolved,
+      total: resolved.length,
+      matched: resolved.filter((c) => c.matched).length,
+    });
+  } catch (err) {
+    console.error('Erreur lors de la résolution des contacts Facebook:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Échec de la résolution des contacts par rapport aux conversations Messenger existantes.' });
+  }
 });
 
 app.get('/api/telegram/status', requireAccess, requireModule('telegram'), (req, res) => {

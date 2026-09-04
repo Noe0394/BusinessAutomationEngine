@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const axios = require('axios');
 const FormData = require('form-data');
 const oauthConfig = require('../oauth_config');
@@ -68,11 +69,14 @@ class FacebookMessengerAdapter {
   // soit via variable d'environnement, soit collé dans le portail admin
   // (oauth_config.js) — les utilisateurs de la licence ne voient jamais ça.
   getAppId() {
-    return process.env.FB_APP_ID || oauthConfig.get('facebook')?.appId || null;
+    // FACEBOOK_APP_ID est acceptée en alias de FB_APP_ID (nom historique
+    // utilisé partout ailleurs dans ce module) pour coller au nommage du
+    // cahier des charges (CLAUDE.md) sans casser les déploiements existants.
+    return process.env.FB_APP_ID || process.env.FACEBOOK_APP_ID || oauthConfig.get('facebook')?.appId || null;
   }
 
   getAppSecret() {
-    return process.env.FB_APP_SECRET || oauthConfig.get('facebook')?.appSecret || null;
+    return process.env.FB_APP_SECRET || process.env.FACEBOOK_APP_SECRET || oauthConfig.get('facebook')?.appSecret || null;
   }
 
   isConnectAvailable() {
@@ -84,7 +88,8 @@ class FacebookMessengerAdapter {
   }
 
   getPageAccessToken() {
-    return process.env.FB_PAGE_ACCESS_TOKEN || this.getStoredToken()?.pageAccessToken || null;
+    return process.env.FB_PAGE_ACCESS_TOKEN || process.env.FACEBOOK_PAGE_ACCESS_TOKEN
+      || this.getStoredToken()?.pageAccessToken || null;
   }
 
   isConfigured() {
@@ -195,6 +200,152 @@ class FacebookMessengerAdapter {
     this.pageName = page.name;
   }
 
+  // ---------- Publication sur la Page (feed) ----------
+  /**
+   * Publie un statut texte, un lien, ou une photo sur la Page officielle
+   * (API Graph officielle — /me/feed ou /me/photos), avec publication
+   * programmée optionnelle (scheduledPublishTime, doit être 10 min à 75
+   * jours dans le futur côté Meta).
+   */
+  async publishPost({ message, link, photoBuffer, photoMimetype, scheduledPublishTime }) {
+    if (!this.isConfigured()) {
+      throw new Error('FB_NOT_CONFIGURED');
+    }
+    await this.ensurePageId();
+
+    const scheduledUnix = scheduledPublishTime
+      ? Math.floor(new Date(scheduledPublishTime).getTime() / 1000)
+      : null;
+
+    if (photoBuffer) {
+      const form = new FormData();
+      form.append('caption', message || '');
+      form.append('source', photoBuffer, {
+        filename: 'photo.jpg',
+        contentType: photoMimetype || 'image/jpeg',
+      });
+      form.append('access_token', this.getPageAccessToken());
+      if (scheduledUnix) {
+        form.append('published', 'false');
+        form.append('scheduled_publish_time', String(scheduledUnix));
+      }
+
+      const res = await axios.post(`${this.baseUrl}/${this.pageId}/photos`, form, {
+        headers: form.getHeaders(),
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      });
+      return res.data;
+    }
+
+    const params = { message, access_token: this.getPageAccessToken() };
+    if (link) params.link = link;
+    if (scheduledUnix) {
+      params.published = false;
+      params.scheduled_publish_time = scheduledUnix;
+    }
+
+    const res = await axios.post(`${this.baseUrl}/${this.pageId}/feed`, null, { params });
+    return res.data;
+  }
+
+  // ---------- Gestion des commentaires (modération) ----------
+  async getPostComments(postId, { limit = 50 } = {}) {
+    if (!this.isConfigured()) {
+      throw new Error('FB_NOT_CONFIGURED');
+    }
+    const res = await axios.get(`${this.baseUrl}/${postId}/comments`, {
+      params: {
+        fields: 'id,message,from,created_time,like_count,is_hidden',
+        limit,
+        access_token: this.getPageAccessToken(),
+      },
+    });
+    return res.data.data || [];
+  }
+
+  async replyToComment(commentId, message) {
+    if (!this.isConfigured()) {
+      throw new Error('FB_NOT_CONFIGURED');
+    }
+    const res = await axios.post(`${this.baseUrl}/${commentId}/comments`, null, {
+      params: { message, access_token: this.getPageAccessToken() },
+    });
+    return res.data;
+  }
+
+  // is_hidden=true masque le commentaire (réversible) sans le supprimer —
+  // préférable à deleteComment() pour la modération courante.
+  async moderateComment(commentId, { hide }) {
+    if (!this.isConfigured()) {
+      throw new Error('FB_NOT_CONFIGURED');
+    }
+    const res = await axios.post(`${this.baseUrl}/${commentId}`, null, {
+      params: { is_hidden: Boolean(hide), access_token: this.getPageAccessToken() },
+    });
+    return res.data;
+  }
+
+  async deleteComment(commentId) {
+    if (!this.isConfigured()) {
+      throw new Error('FB_NOT_CONFIGURED');
+    }
+    const res = await axios.delete(`${this.baseUrl}/${commentId}`, {
+      params: { access_token: this.getPageAccessToken() },
+    });
+    return res.data;
+  }
+
+  // ---------- Webhooks (validation + intégrité des évènements reçus) ----------
+  // Meta signe chaque notification webhook avec HMAC-SHA256 sur le corps brut
+  // de la requête, via l'App Secret. À vérifier avant de faire confiance à
+  // tout payload reçu sur POST /api/facebook/webhook (voir index.js).
+  verifyWebhookSignature(rawBody, signatureHeader) {
+    const appSecret = this.getAppSecret();
+    if (!appSecret || !signatureHeader || !rawBody) {
+      return false;
+    }
+    const expected = `sha256=${crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex')}`;
+    const expectedBuf = Buffer.from(expected);
+    const receivedBuf = Buffer.from(signatureHeader);
+    if (expectedBuf.length !== receivedBuf.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(expectedBuf, receivedBuf);
+  }
+
+  /**
+   * Fait correspondre une liste de contacts importés (CSV/Excel : colonnes
+   * psid et/ou nom) aux conversations Messenger déjà existantes sur la Page.
+   * L'API Graph n'expose aucun moyen d'envoyer un premier message à un
+   * inconnu à partir d'un simple email/téléphone importé : seuls les PSID
+   * (Page-Scoped ID) d'utilisateurs ayant déjà engagé la conversation avec la
+   * Page sont des destinataires valides pour /me/messages (cf. règle des 24h
+   * documentée plus haut). Cette fonction ne contourne pas cette règle, elle
+   * se contente d'identifier, parmi les contacts importés, ceux qui sont
+   * effectivement joignables.
+   */
+  async resolveRecipientsFromConversations(importedContacts) {
+    const conversations = await this.getConversations();
+    const byId = new Map(conversations.map((c) => [String(c.recipientId), c.recipientId]));
+    const byName = new Map(
+      conversations
+        .filter((c) => c.name)
+        .map((c) => [c.name.trim().toLowerCase(), c.recipientId]),
+    );
+
+    return importedContacts.map((contact) => {
+      const providedId = contact.psid || contact.recipientId || contact.id;
+      if (providedId && byId.has(String(providedId))) {
+        return { ...contact, recipientId: String(providedId), matched: true };
+      }
+
+      const key = String(contact.name || '').trim().toLowerCase();
+      const matchedId = key ? byName.get(key) : null;
+      return { ...contact, recipientId: matchedId || null, matched: Boolean(matchedId) };
+    });
+  }
+
   async getConversations() {
     if (!this.isConfigured()) {
       throw new Error('FB_NOT_CONFIGURED');
@@ -279,7 +430,7 @@ class FacebookMessengerAdapter {
    * toutes les `batchSize` messages pour ne pas saturer l'API.
    */
   async sendBulk(recipientIds, message, options = {}) {
-    const { delaySeconds, batchSize, media, onProgress } = options;
+    const { delaySeconds, minDelaySeconds, maxDelaySeconds, batchSize, media, onProgress } = options;
     const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipientIds.length;
     const results = [];
 
@@ -308,7 +459,11 @@ class FacebookMessengerAdapter {
       }
 
       if (i < recipientIds.length - 1) {
-        const baseDelayMs = delaySeconds ? delaySeconds * 1000 : randomDelay(10000, 15000);
+        const baseDelayMs = delaySeconds
+          ? delaySeconds * 1000
+          : (minDelaySeconds && maxDelaySeconds)
+            ? randomDelay(minDelaySeconds * 1000, maxDelaySeconds * 1000)
+            : randomDelay(10000, 15000);
         const endOfBatch = (i + 1) % batch === 0;
         const delayMs = endOfBatch ? baseDelayMs * 3 : baseDelayMs;
         await sleep(delayMs);
