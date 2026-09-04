@@ -69,11 +69,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone, #share-import-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover, #share-import-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -158,7 +158,7 @@
       <button type="button" class="tab-btn" data-tab="facebook">Facebook</button>
       <button type="button" class="tab-btn" data-tab="scheduler">🗓️ Programmation / Planning</button>
       <button type="button" class="tab-btn" data-tab="prospects">🎯 Contacts / Prospects</button>
-      <button type="button" class="tab-btn" data-tab="share">🔗 Groupes / Partage</button>
+      <button type="button" class="tab-btn" data-tab="share">🔗 Groupes / Diffusion</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -822,36 +822,66 @@
 
     <!-- Onglet Groupes / Partage (partage assisté) -->
     <section class="panel" id="panel-share">
-      <h2>Groupes / Partage</h2>
+      <h2>Groupes / Diffusion</h2>
       <p class="empty">
         Meta ne permet plus de publier automatiquement dans un Groupe Facebook depuis une application tierce
         (permission "publish_to_groups" retirée). Cet onglet ouvre la fenêtre de partage officielle de Facebook,
-        pré-remplie avec le lien d'une publication de la Page — le partage effectif vers le groupe choisi se
-        termine manuellement dans l'interface Facebook, comme l'exige Meta.
+        pré-remplie avec le lien d'une publication — le partage effectif vers le groupe choisi se termine
+        manuellement dans l'interface Facebook, comme l'exige Meta.
       </p>
 
+      <div class="subsection" id="share-import-section">
+        <h3>1. Importer des Groupes (Excel)</h3>
+        <p class="empty">
+          Colonnes attendues : "Nom du Groupe" et "Lien du Groupe" (ou directement "ID"). Vient s'ajouter à la
+          liste des Groupes gérés, partagée avec l'onglet Facebook.
+        </p>
+        <div id="share-import-drop-zone">Glissez-déposez un fichier .xlsx/.csv ici, ou touchez pour parcourir</div>
+        <input type="file" id="share-import-file" accept=".csv,.xlsx" hidden />
+        <p id="share-import-file-name" class="empty">Aucun fichier sélectionné.</p>
+        <button type="button" id="share-import-btn">Importer</button>
+        <div id="share-import-feedback" hidden></div>
+      </div>
+
       <div class="subsection" id="share-post-section">
-        <h3>1. Choisir la publication à partager</h3>
+        <h3>2. Préparer le message à partager</h3>
         <button type="button" id="share-posts-reload-btn">🔄 Charger mes publications récentes</button>
         <div class="field">
-          <label for="share-post-select">Publication de la Page RIEA AFRIQUE</label>
+          <label for="share-post-select">Publication à partager (fournit le lien)</label>
           <select id="share-post-select">
             <option value="">— Chargez d'abord vos publications —</option>
           </select>
+        </div>
+        <div class="field">
+          <label for="share-message-text">Message à copier dans Facebook</label>
+          <textarea id="share-message-text" placeholder="Votre commentaire d'accompagnement..."></textarea>
+          <p class="empty">
+            ⚠️ Facebook ne permet plus de pré-remplir ce texte dans la fenêtre de partage (anti-spam) : copiez-le
+            puis collez-le vous-même dans la zone de commentaire du groupe après ouverture de la fenêtre.
+          </p>
+          <button type="button" id="share-message-copy-btn">📋 Copier le message</button>
         </div>
         <div id="share-feedback" hidden></div>
       </div>
 
       <div class="subsection" id="share-groups-section">
-        <h3>2. Partager dans un Groupe</h3>
+        <h3>3. Sélectionner et partager</h3>
         <p class="empty">
-          Pour ajouter ou retirer des Groupes de cette liste, utilisez la section "Groupes" de l'onglet Facebook.
+          Pour retirer un Groupe de cette liste, utilisez la section "Groupes" de l'onglet Facebook. "Partagé"
+          signifie que la fenêtre de partage a été ouverte pour ce groupe — Facebook ne renvoie aucune confirmation
+          que le partage a bien été validé à l'intérieur de sa propre fenêtre.
         </p>
+        <button type="button" id="share-selected-btn">🚀 Partager sur les groupes sélectionnés</button>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Nom</th><th>Identifiant</th><th>Lien</th><th></th></tr></thead>
+            <thead>
+              <tr>
+                <th><input type="checkbox" id="share-select-all" /></th>
+                <th>Nom</th><th>Identifiant</th><th>Lien</th><th>Statut</th><th></th>
+              </tr>
+            </thead>
             <tbody id="share-groups-body">
-              <tr><td colspan="4" class="empty">Aucun Groupe géré.</td></tr>
+              <tr><td colspan="6" class="empty">Aucun Groupe géré.</td></tr>
             </tbody>
           </table>
         </div>
@@ -3045,13 +3075,65 @@
       window.location.href = '/api/facebook/prospects/export-excel?' + params.toString();
     });
 
-    // ---------- Groupes / Partage (partage assisté) ----------
+    // ---------- Groupes / Diffusion (import Excel + partage assisté) ----------
     function shareShowFeedback(message, isError) {
       const el = document.getElementById('share-feedback');
       el.hidden = false;
       el.textContent = message;
       el.className = isError ? 'error' : 'ok';
     }
+
+    function shareImportShowFeedback(message, isError) {
+      const el = document.getElementById('share-import-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    // "Partagé" = fenêtre de partage ouverte pour ce groupe, pas confirmation
+    // que le partage a été validé à l'intérieur (Facebook ne renvoie rien à
+    // notre page depuis sa fenêtre, pour des raisons d'origine croisée) —
+    // état gardé côté client seulement, réinitialisé au rechargement.
+    const shareSharedGroupIds = new Set();
+
+    let selectedShareImportFile = null;
+    const shareImportDropZone = document.getElementById('share-import-drop-zone');
+    const shareImportFileInput = document.getElementById('share-import-file');
+    shareImportDropZone.addEventListener('click', () => shareImportFileInput.click());
+    shareImportDropZone.addEventListener('dragover', (e) => { e.preventDefault(); shareImportDropZone.classList.add('dragover'); });
+    shareImportDropZone.addEventListener('dragleave', () => shareImportDropZone.classList.remove('dragover'));
+    shareImportDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      shareImportDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) shareImportSetSelectedFile(e.dataTransfer.files[0]);
+    });
+    shareImportFileInput.addEventListener('change', () => {
+      if (shareImportFileInput.files && shareImportFileInput.files[0]) shareImportSetSelectedFile(shareImportFileInput.files[0]);
+    });
+    function shareImportSetSelectedFile(file) {
+      selectedShareImportFile = file;
+      document.getElementById('share-import-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    document.getElementById('share-import-btn').addEventListener('click', async () => {
+      if (!selectedShareImportFile) { shareImportShowFeedback('Sélectionnez d\'abord un fichier .xlsx ou .csv.', true); return; }
+
+      const formData = new FormData();
+      formData.append('file', selectedShareImportFile);
+
+      try {
+        const res = await apiFetch('/api/facebook/groups/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) { shareImportShowFeedback(data.error || 'Échec de l\'import.', true); return; }
+        shareRenderGroupsTable(data.groups || []);
+        shareImportShowFeedback(
+          data.imported + ' groupe(s) importé(s)' + (data.skipped > 0 ? ', ' + data.skipped + ' ligne(s) ignorée(s) (ni ID ni lien exploitable).' : '.'),
+          false,
+        );
+      } catch (err) {
+        shareImportShowFeedback('Erreur réseau lors de l\'import.', true);
+      }
+    });
 
     document.getElementById('share-posts-reload-btn').addEventListener('click', async () => {
       try {
@@ -3079,15 +3161,54 @@
       }
     });
 
+    document.getElementById('share-message-copy-btn').addEventListener('click', async () => {
+      const text = document.getElementById('share-message-text').value;
+      if (!text) { shareShowFeedback('Rien à copier : le message est vide.', true); return; }
+      try {
+        await navigator.clipboard.writeText(text);
+        shareShowFeedback('📋 Message copié — collez-le dans la fenêtre Facebook après ouverture.', false);
+      } catch (err) {
+        shareShowFeedback('Impossible de copier automatiquement : sélectionnez et copiez le texte manuellement.', true);
+      }
+    });
+
+    // Ouvre la fenêtre de partage officielle Facebook pour un groupe, puis
+    // marque la ligne "Partagé" dans l'interface.
+    function shareOpenDialogForGroup(group, rowStatusEl) {
+      const postUrl = document.getElementById('share-post-select').value;
+      if (!postUrl) {
+        shareShowFeedback('Chargez et sélectionnez d\'abord une publication à partager (étape 2).', true);
+        return false;
+      }
+      // Facebook ne permet pas de présélectionner un Groupe destinataire via
+      // l'URL du partage officiel : la fenêtre s'ouvre pré-remplie avec le
+      // lien de la publication, et le choix du Groupe cible se termine
+      // manuellement dans l'interface Facebook (partage assisté).
+      const shareUrl = 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(postUrl);
+      window.open(shareUrl, 'fb-share-' + group.id, 'width=600,height=520');
+      shareSharedGroupIds.add(group.id);
+      if (rowStatusEl) rowStatusEl.textContent = '✅ Partagé';
+      return true;
+    }
+
     function shareRenderGroupsTable(groups) {
       const tbody = document.getElementById('share-groups-body');
       tbody.innerHTML = '';
+      document.getElementById('share-select-all').checked = false;
       if (!groups || groups.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="empty">Aucun Groupe géré.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">Aucun Groupe géré.</td></tr>';
         return;
       }
       groups.forEach((g) => {
         const tr = document.createElement('tr');
+
+        const checkTd = document.createElement('td');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'share-group-checkbox';
+        checkbox.value = g.id;
+        checkTd.appendChild(checkbox);
+
         const nameTd = document.createElement('td');
         nameTd.textContent = g.name || '-';
         const idTd = document.createElement('td');
@@ -3099,31 +3220,60 @@
         link.rel = 'noopener noreferrer';
         link.textContent = 'Ouvrir le Groupe';
         linkTd.appendChild(link);
+
+        const statusTd = document.createElement('td');
+        statusTd.textContent = shareSharedGroupIds.has(g.id) ? '✅ Partagé' : '—';
+
         const actionTd = document.createElement('td');
         const shareBtn = document.createElement('button');
         shareBtn.type = 'button';
         shareBtn.textContent = 'Partager dans ce groupe';
-        shareBtn.addEventListener('click', () => {
-          const postUrl = document.getElementById('share-post-select').value;
-          if (!postUrl) {
-            shareShowFeedback('Chargez et sélectionnez d\'abord une publication à partager (étape 1).', true);
-            return;
-          }
-          // Facebook ne permet pas de présélectionner un Groupe destinataire
-          // via l'URL du partage officiel : la fenêtre s'ouvre pré-remplie
-          // avec le lien de la publication, et le choix du Groupe cible se
-          // termine manuellement dans l'interface Facebook (partage assisté).
-          const shareUrl = 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(postUrl);
-          window.open(shareUrl, 'fb-share-' + g.id, 'width=600,height=520');
-        });
+        shareBtn.addEventListener('click', () => shareOpenDialogForGroup(g, statusTd));
         actionTd.appendChild(shareBtn);
+
+        tr.appendChild(checkTd);
         tr.appendChild(nameTd);
         tr.appendChild(idTd);
         tr.appendChild(linkTd);
+        tr.appendChild(statusTd);
         tr.appendChild(actionTd);
         tbody.appendChild(tr);
       });
     }
+
+    document.getElementById('share-select-all').addEventListener('change', (e) => {
+      document.querySelectorAll('.share-group-checkbox').forEach((cb) => { cb.checked = e.target.checked; });
+    });
+
+    document.getElementById('share-selected-btn').addEventListener('click', async () => {
+      const checked = Array.from(document.querySelectorAll('.share-group-checkbox:checked'));
+      if (checked.length === 0) {
+        shareShowFeedback('Cochez au moins un Groupe.', true);
+        return;
+      }
+      if (!document.getElementById('share-post-select').value) {
+        shareShowFeedback('Chargez et sélectionnez d\'abord une publication à partager (étape 2).', true);
+        return;
+      }
+      if (checked.length > 1) {
+        shareShowFeedback(
+          'Ouverture de ' + checked.length + ' fenêtre(s) de partage — votre navigateur peut bloquer les popups '
+          + 'au-delà de la première : autorisez les popups pour ce site si besoin.',
+          false,
+        );
+      }
+      // Léger décalage entre chaque ouverture : réduit (sans l'éliminer) le
+      // risque que le bloqueur de popups du navigateur les groupe et les
+      // bloque toutes sauf la première.
+      checked.forEach((cb, i) => {
+        setTimeout(() => {
+          const row = cb.closest('tr');
+          const statusEl = row ? row.children[4] : null;
+          const group = { id: cb.value };
+          shareOpenDialogForGroup(group, statusEl);
+        }, i * 400);
+      });
+    });
 
     async function shareLoadGroups() {
       try {

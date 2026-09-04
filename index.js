@@ -1976,6 +1976,60 @@ app.delete('/api/facebook/groups/:id', requireAccess, requireModule('facebook'),
   res.status(200).json({ groups });
 });
 
+// Import en masse de Groupes depuis un fichier Excel/CSV — alimente la même
+// liste persistée que l'ajout un par un ci-dessus (facebook_groups.json),
+// pas un stockage "session" séparé : ce projet n'a pas de notion de session
+// utilisateur (dashboard mono-opérateur, voir CLAUDE.md), et dupliquer la
+// liste entre deux stockages aurait désynchronisé l'onglet Facebook et
+// l'onglet Groupes / Partage. Colonnes attendues : "Nom du Groupe" et
+// "Lien du Groupe" (l'identifiant est alors extrait du lien) ou "ID"
+// directement.
+app.post('/api/facebook/groups/upload', requireAccess, requireModule('facebook'), upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Aucun fichier fourni (champ "file").' });
+  }
+
+  let rows;
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(sheet);
+  } catch (err) {
+    console.error('Erreur lors de la lecture du fichier de Groupes Facebook:', err);
+    return res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .xlsx ou .csv.' });
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  let groups = facebook.getManagedGroups();
+
+  rows.forEach((row) => {
+    const name = String(row['Nom du Groupe'] || row.Nom || row.nom || row.name || row.Name || '').trim();
+    const link = String(row['Lien du Groupe'] || row.Lien || row.lien || row.link || row.Link || '').trim();
+    const idColumn = String(row.ID || row.Id || row.id || '').trim();
+
+    let id = idColumn;
+    if (!id && link) {
+      const match = link.match(/groups\/([^/?]+)/);
+      id = match ? match[1] : '';
+    }
+
+    if (!id) {
+      skipped += 1;
+      return;
+    }
+
+    groups = facebook.addManagedGroup(id, name || id);
+    imported += 1;
+  });
+
+  res.status(200).json({
+    groups: groups.map((g) => ({ ...g, link: `https://www.facebook.com/groups/${g.id}` })),
+    imported,
+    skipped,
+  });
+});
+
 app.post('/api/facebook/groups/publish', requireAccess, requireModule('facebook'), upload.single('media'), async (req, res) => {
   if (!facebook.getUserAccessToken()) {
     return res.status(503).json({
