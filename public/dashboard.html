@@ -911,6 +911,11 @@
               <option value="">— Chargez d'abord vos publications —</option>
             </select>
           </div>
+          <div class="field">
+            <label for="share-manual-link">Ou collez directement le lien d'une publication (si le chargement automatique échoue)</label>
+            <input type="text" id="share-manual-link" placeholder="https://www.facebook.com/..." />
+            <button type="button" id="share-manual-link-use-btn">Utiliser ce lien</button>
+          </div>
         </div>
 
         <div id="share-mode-b" hidden>
@@ -3463,6 +3468,17 @@
     document.getElementById('share-post-select').addEventListener('change', (e) => {
       const opt = e.target.selectedOptions[0];
       shareSetActiveUrl(e.target.value, opt ? opt.textContent : '');
+    });
+
+    // Mode de secours : si le chargement automatique des publications
+    // échoue (permission Facebook manquante/pas encore approuvée — voir le
+    // message d'erreur détaillé de /api/facebook/page-posts), l'utilisateur
+    // peut coller le lien lui-même sans que l'interface reste bloquée.
+    document.getElementById('share-manual-link-use-btn').addEventListener('click', () => {
+      const url = document.getElementById('share-manual-link').value.trim();
+      if (!url) { shareShowFeedback('Collez d\'abord un lien.', true); return; }
+      shareSetActiveUrl(url, 'lien collé manuellement');
+      shareShowFeedback('✅ Lien pris en compte.', false);
     });
 
     document.getElementById('share-message-copy-btn').addEventListener('click', async () => {

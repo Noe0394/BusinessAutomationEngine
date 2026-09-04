@@ -160,7 +160,17 @@ class FacebookMessengerAdapter {
       // Prospects, publication Instagram) : les retirer casserait ces
       // fonctionnalités déjà en place, donc conservées au-delà du minimum
       // demandé.
-      scope: 'public_profile,email,pages_show_list,pages_manage_posts,pages_read_engagement,pages_messaging,pages_manage_engagement,instagram_basic,instagram_content_publish',
+      // pages_read_engagement était déjà présente ; pages_read_user_content
+      // est ajoutée ici — permission valide (contrairement à
+      // publish_to_groups) nécessaire pour lire de façon fiable le contenu
+      // des publications de la Page (voir getPagePosts). Sa présence dans le
+      // scope ne suffit pas forcément à elle seule : Meta peut aussi exiger
+      // que l'app soit passée en App Review pour un "Advanced Access" sur
+      // ces permissions avant de les honorer pour un compte autre que les
+      // administrateurs/testeurs de l'app — d'où le mode de secours ajouté
+      // côté dashboard (coller un lien manuellement) si l'appel échoue quand
+      // même malgré le scope correct.
+      scope: 'public_profile,email,pages_show_list,pages_manage_posts,pages_read_engagement,pages_read_user_content,pages_messaging,pages_manage_engagement,instagram_basic,instagram_content_publish',
       // Force Facebook à réafficher l'écran de sélection de Page à chaque
       // reconnexion (utile si l'utilisateur veut changer de Page, ex. RIEA
       // AFRIQUE), plutôt que de réutiliser silencieusement une autorisation

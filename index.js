@@ -1966,11 +1966,30 @@ app.get('/api/facebook/page-posts', requireAccess, requireModule('facebook'), as
     const posts = await facebook.getPagePosts({ limit: 20 });
     res.status(200).json({ posts });
   } catch (err) {
-    const metaMessage = err?.response?.data?.error?.message;
+    const metaError = err?.response?.data?.error;
     console.error('Erreur lors de la récupération des publications de la Page:', err?.response?.data || err.message);
+
+    // Code 10 = permission manquante côté Meta. Le scope peut être correct
+    // (pages_read_engagement/pages_read_user_content demandés — voir
+    // getAuthUrl) sans que Meta honore pour autant l'appel : ça arrive tant
+    // que l'app n'est pas passée en App Review pour un "Advanced Access" sur
+    // ces permissions, ce qu'aucun changement de code ne peut contourner —
+    // d'où le message explicite plutôt qu'une erreur générique, et le mode
+    // de secours côté dashboard (lien collé manuellement).
+    if (metaError?.code === 10) {
+      return res.status(502).json({
+        error: 'Permission Facebook manquante ou pas encore approuvée par Meta (pages_read_engagement / '
+          + 'pages_read_user_content). Reconnectez-vous via "Se connecter avec Facebook" pour accorder ces '
+          + 'permissions ; si l\'erreur persiste, l\'app doit être validée par Meta (App Review) pour un accès '
+          + '"Advanced Access" à ces permissions. En attendant, collez manuellement le lien de la publication '
+          + 'ci-dessous.',
+        code: 10,
+      });
+    }
+
     res.status(502).json({
-      error: metaMessage
-        ? `Échec de la récupération des publications de la Page (Meta : "${metaMessage}").`
+      error: metaError?.message
+        ? `Échec de la récupération des publications de la Page (Meta : "${metaError.message}").`
         : 'Échec de la récupération des publications récentes de la Page. Vérifiez que la connexion Facebook '
           + '(onglet Connexions) est active et que le jeton n\'a pas expiré.',
     });
