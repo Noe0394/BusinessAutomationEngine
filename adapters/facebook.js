@@ -138,6 +138,11 @@ class FacebookMessengerAdapter {
       redirect_uri: redirectUri,
       state,
       scope: 'pages_show_list,pages_messaging,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish',
+      // Force Facebook à réafficher l'écran de sélection de Page à chaque
+      // reconnexion (utile si l'utilisateur veut changer de Page, ex. RIEA
+      // AFRIQUE), plutôt que de réutiliser silencieusement une autorisation
+      // déjà accordée.
+      auth_type: 'rerequest',
     });
     return `https://www.facebook.com/${this.apiVersion}/dialog/oauth?${params.toString()}`;
   }
