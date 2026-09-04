@@ -26,6 +26,7 @@ function writeJsonFile(filePath, data) {
 }
 
 const FACEBOOK_TOKEN_PATH = process.env.FB_TOKEN_PATH || path.join(__dirname, '..', 'facebook_token.json');
+const FACEBOOK_GROUPS_PATH = process.env.FB_GROUPS_PATH || path.join(__dirname, '..', 'facebook_groups.json');
 
 /**
  * Adaptateur Facebook Messenger basé sur l'API officielle Meta Messenger
@@ -92,6 +93,12 @@ class FacebookMessengerAdapter {
       || this.getStoredToken()?.pageAccessToken || null;
   }
 
+  // Voir le commentaire dans handleOAuthCallback : les publications dans des
+  // Groupes utilisent ce jeton utilisateur, jamais le jeton de Page.
+  getUserAccessToken() {
+    return process.env.FB_USER_ACCESS_TOKEN || this.getStoredToken()?.userAccessToken || null;
+  }
+
   isConfigured() {
     return Boolean(this.getPageAccessToken());
   }
@@ -137,7 +144,11 @@ class FacebookMessengerAdapter {
       client_id: this.getAppId(),
       redirect_uri: redirectUri,
       state,
-      scope: 'pages_show_list,pages_messaging,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish',
+      // publish_to_groups est une permission historique, aujourd'hui restreinte par
+      // Meta (App Review au cas par cas) : la demander ici est nécessaire pour que
+      // publishToGroup/publishToManagedGroups fonctionnent, mais Meta peut la
+      // retirer du consentement même si l'app ne l'a pas (encore) obtenue.
+      scope: 'pages_show_list,pages_messaging,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish,publish_to_groups',
       // Force Facebook à réafficher l'écran de sélection de Page à chaque
       // reconnexion (utile si l'utilisateur veut changer de Page, ex. RIEA
       // AFRIQUE), plutôt que de réutiliser silencieusement une autorisation
@@ -198,6 +209,11 @@ class FacebookMessengerAdapter {
       pageId: page.id,
       pageName: page.name,
       igUserId,
+      // Jeton utilisateur longue durée : nécessaire pour publier dans des
+      // Groupes Facebook (POST /{group-id}/feed|photos|videos), qui exigent
+      // un jeton utilisateur avec la permission publish_to_groups — le jeton
+      // de Page ci-dessus ne fonctionne pas pour ces endpoints.
+      userAccessToken: longLivedRes.data.access_token,
       connectedAt: new Date().toISOString(),
     });
 
@@ -252,6 +268,129 @@ class FacebookMessengerAdapter {
 
     const res = await axios.post(`${this.baseUrl}/${this.pageId}/feed`, null, { params });
     return res.data;
+  }
+
+  // ---------- Publication sur les Groupes Facebook gérés ----------
+  /**
+   * Contrairement à la Page (un identifiant unique connu via l'OAuth), il
+   * n'existe aucun endpoint Graph API listant "les Groupes associés à une
+   * Page" — les Groupes Facebook sont des entités indépendantes des Pages,
+   * rattachées à des comptes utilisateur qui en sont membres/admin. La seule
+   * façon fiable de les cibler est donc que l'exploitant renseigne
+   * lui-même la liste des Groupes à administrer (ID + nom), un peu comme il
+   * renseigne son App ID/App Secret. Cette liste est persistée ici, à côté
+   * du jeton, plutôt que redemandée à chaque publication.
+   */
+  getManagedGroups() {
+    const stored = readJsonFile(FACEBOOK_GROUPS_PATH);
+    return Array.isArray(stored?.groups) ? stored.groups : [];
+  }
+
+  addManagedGroup(groupId, name) {
+    const id = String(groupId || '').trim();
+    if (!id) {
+      throw new Error('GROUP_ID_REQUIRED');
+    }
+    const groups = this.getManagedGroups().filter((g) => g.id !== id);
+    groups.push({ id, name: String(name || '').trim() || id, addedAt: new Date().toISOString() });
+    writeJsonFile(FACEBOOK_GROUPS_PATH, { groups });
+    return groups;
+  }
+
+  removeManagedGroup(groupId) {
+    const groups = this.getManagedGroups().filter((g) => g.id !== String(groupId || '').trim());
+    writeJsonFile(FACEBOOK_GROUPS_PATH, { groups });
+    return groups;
+  }
+
+  /**
+   * Publie dans un Groupe précis. Nécessite un jeton utilisateur (voir
+   * getUserAccessToken) muni de la permission publish_to_groups, accordée
+   * par Meta uniquement après App Review pour ce cas d'usage précis — et
+   * l'utilisateur propriétaire du jeton doit être membre/admin du Groupe
+   * ciblé. Ce n'est pas une contrainte technique de ce module : c'est une
+   * restriction imposée par la plateforme Meta elle-même.
+   *
+   * Contrairement à Messenger (voir sendMedia), l'API Graph n'expose aucun
+   * endpoint de dépôt de document (PDF) sur un Groupe : seuls texte/lien,
+   * photo et vidéo sont supportés nativement. Pour un PDF, la solution est
+   * d'héberger le fichier ailleurs et de partager son lien dans le message.
+   */
+  async publishToGroup(groupId, { message, mediaBuffer, mediaMimetype, mediaFilename } = {}) {
+    const userAccessToken = this.getUserAccessToken();
+    if (!userAccessToken) {
+      throw new Error('FB_USER_TOKEN_MISSING');
+    }
+    if (!message && !mediaBuffer) {
+      throw new Error('EMPTY_POST');
+    }
+
+    if (mediaMimetype === 'application/pdf') {
+      throw new Error('GROUP_PDF_UPLOAD_UNSUPPORTED');
+    }
+
+    if (mediaBuffer) {
+      const isVideo = (mediaMimetype || '').startsWith('video/');
+      const form = new FormData();
+      form.append(isVideo ? 'description' : 'caption', message || '');
+      form.append('source', mediaBuffer, {
+        filename: mediaFilename || (isVideo ? 'video.mp4' : 'photo.jpg'),
+        contentType: mediaMimetype || (isVideo ? 'video/mp4' : 'image/jpeg'),
+      });
+      form.append('access_token', userAccessToken);
+
+      const res = await axios.post(`${this.baseUrl}/${groupId}/${isVideo ? 'videos' : 'photos'}`, form, {
+        headers: form.getHeaders(),
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      });
+      return res.data;
+    }
+
+    const res = await axios.post(`${this.baseUrl}/${groupId}/feed`, null, {
+      params: { message, access_token: userAccessToken },
+    });
+    return res.data;
+  }
+
+  /**
+   * Diffuse la même publication (texte + média optionnel) sur tous les
+   * Groupes gérés, avec une pause aléatoire entre chaque diffusion (5 à 10s
+   * par défaut, paramétrable) pour respecter les quotas de l'API Meta —
+   * même régulateur de débit que sendBulk() pour Messenger.
+   */
+  async publishToManagedGroups({ message, mediaBuffer, mediaMimetype, mediaFilename, minDelaySeconds = 5, maxDelaySeconds = 10, onProgress } = {}) {
+    const groups = this.getManagedGroups();
+    if (groups.length === 0) {
+      throw new Error('NO_MANAGED_GROUPS');
+    }
+
+    const results = [];
+    for (let i = 0; i < groups.length; i += 1) {
+      const group = groups[i];
+      let status = 'failed';
+      let errorReason = null;
+
+      try {
+        await this.publishToGroup(group.id, { message, mediaBuffer, mediaMimetype, mediaFilename });
+        status = 'published';
+      } catch (err) {
+        errorReason = err?.response?.data?.error?.message || err.message;
+        console.error(`Facebook: échec de la publication sur le groupe ${group.name} (${group.id}):`, errorReason);
+      }
+
+      results.push({ groupId: group.id, groupName: group.name, status, error: errorReason, timestamp: new Date().toISOString() });
+
+      if (typeof onProgress === 'function') {
+        onProgress({ sent: results.length, total: groups.length, status });
+      }
+
+      if (i < groups.length - 1) {
+        await sleep(randomDelay(minDelaySeconds * 1000, maxDelaySeconds * 1000));
+      }
+    }
+
+    return results;
   }
 
   // ---------- Gestion des commentaires (modération) ----------

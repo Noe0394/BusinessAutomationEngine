@@ -69,11 +69,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #fb-import-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #fb-import-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -429,6 +429,13 @@
             <textarea id="tg-dm-message" placeholder="Bonjour {prenom}, ..."></textarea>
           </div>
 
+          <div class="field">
+            <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF)</label>
+            <div id="tg-dm-file-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+            <input type="file" id="tg-dm-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+            <p id="tg-dm-media-file-name" class="empty">Aucun fichier sélectionné.</p>
+          </div>
+
           <div class="warning-box">
             ⚠️ Le délai entre chaque envoi est automatiquement maintenu entre 30 et 60 secondes pour rester dans un
             usage raisonnable de l'API Telegram — non réductible en dessous de ce seuil.
@@ -522,6 +529,68 @@
 
           <button type="button" id="fb-import-send-btn" class="send-button">🚀 Lancer la relance</button>
           <div id="fb-import-feedback" hidden></div>
+        </div>
+
+        <div class="subsection" id="fb-groups-section">
+          <h3>Publication programmée sur les Groupes Facebook gérés</h3>
+          <p class="empty">
+            L'API Graph de Meta n'offre aucun moyen de lister automatiquement "les Groupes d'une Page" : renseignez
+            ci-dessous les Groupes à administrer (dont vous êtes membre/admin avec le compte connecté), puis
+            diffusez-y la même publication.
+          </p>
+
+          <div class="row">
+            <div class="field">
+              <label for="fb-group-id-input">Identifiant du Groupe Facebook</label>
+              <input type="text" id="fb-group-id-input" placeholder="ex : 123456789012345" />
+            </div>
+            <div class="field">
+              <label for="fb-group-name-input">Nom (repère)</label>
+              <input type="text" id="fb-group-name-input" placeholder="ex : RIEA AFRIQUE" />
+            </div>
+          </div>
+          <button type="button" id="fb-group-add-btn">Ajouter le Groupe</button>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Nom</th><th>Identifiant</th><th></th></tr></thead>
+              <tbody id="fb-groups-body">
+                <tr><td colspan="3" class="empty">Aucun Groupe géré.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="field">
+            <label for="fb-groups-message">Message à publier</label>
+            <textarea id="fb-groups-message" placeholder="Votre publication..."></textarea>
+          </div>
+
+          <div class="field">
+            <label>Média (optionnel — image ou vidéo)</label>
+            <div id="fb-groups-media-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+            <input type="file" id="fb-groups-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+            <p id="fb-groups-media-file-name" class="empty">Aucun fichier sélectionné.</p>
+          </div>
+
+          <div class="warning-box">
+            ⚠️ Un PDF ne peut pas être déposé directement dans un Groupe (l'API Graph ne le permet pas) : hébergez-le
+            ailleurs et collez son lien dans le message. Seules les images et vidéos sont envoyées comme pièce jointe
+            native.
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label for="fb-groups-min-delay">Délai minimum entre chaque Groupe (secondes)</label>
+              <input type="number" id="fb-groups-min-delay" value="5" min="1" />
+            </div>
+            <div class="field">
+              <label for="fb-groups-max-delay">Délai maximum entre chaque Groupe (secondes)</label>
+              <input type="number" id="fb-groups-max-delay" value="10" min="1" />
+            </div>
+          </div>
+
+          <button type="button" id="fb-groups-publish-btn" class="send-button">🚀 Publier sur les Groupes</button>
+          <div id="fb-groups-feedback" hidden></div>
         </div>
       </div>
     </section>
@@ -1419,6 +1488,28 @@
       document.getElementById('tg-dm-import-file-name').textContent = 'Fichier sélectionné : ' + file.name;
     }
 
+    // Pièce jointe (image/vidéo/PDF) envoyée avec le message à chaque
+    // destinataire de la liste importée — distincte du fichier .csv/.xlsx
+    // d'import ci-dessus.
+    let selectedTgDmMediaFile = null;
+    const tgDmFileDropZone = document.getElementById('tg-dm-file-drop-zone');
+    const tgDmMediaFileInput = document.getElementById('tg-dm-media-file');
+    tgDmFileDropZone.addEventListener('click', () => tgDmMediaFileInput.click());
+    tgDmFileDropZone.addEventListener('dragover', (e) => { e.preventDefault(); tgDmFileDropZone.classList.add('dragover'); });
+    tgDmFileDropZone.addEventListener('dragleave', () => tgDmFileDropZone.classList.remove('dragover'));
+    tgDmFileDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      tgDmFileDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) tgDmSetSelectedMediaFile(e.dataTransfer.files[0]);
+    });
+    tgDmMediaFileInput.addEventListener('change', () => {
+      if (tgDmMediaFileInput.files && tgDmMediaFileInput.files[0]) tgDmSetSelectedMediaFile(tgDmMediaFileInput.files[0]);
+    });
+    function tgDmSetSelectedMediaFile(file) {
+      selectedTgDmMediaFile = file;
+      document.getElementById('tg-dm-media-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
     function tgDmShowFeedback(message, isError) {
       const el = document.getElementById('tg-dm-feedback');
       el.hidden = false;
@@ -1547,6 +1638,7 @@
       formData.append('maxDelaySeconds', maxDelaySeconds);
       formData.append('maxPerCycle', maxPerCycle);
       formData.append('recipients', JSON.stringify(tgDmImportedContacts.map((c) => c.identifier)));
+      if (selectedTgDmMediaFile) formData.append('media', selectedTgDmMediaFile);
 
       const sendBtn = document.getElementById('tg-dm-send-btn');
       sendBtn.disabled = true;
@@ -1712,6 +1804,139 @@
       }
     });
 
+    // ---------- Facebook : publication programmée sur les Groupes gérés ----------
+    let selectedFbGroupsMediaFile = null;
+
+    function fbGroupsShowFeedback(message, isError) {
+      const el = document.getElementById('fb-groups-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    function fbRenderGroups(groups) {
+      const tbody = document.getElementById('fb-groups-body');
+      tbody.innerHTML = '';
+
+      if (!groups || groups.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">Aucun Groupe géré.</td></tr>';
+        return;
+      }
+
+      groups.forEach((g) => {
+        const tr = document.createElement('tr');
+        const nameTd = document.createElement('td');
+        nameTd.textContent = g.name || '-';
+        const idTd = document.createElement('td');
+        idTd.textContent = g.id;
+        const actionTd = document.createElement('td');
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.textContent = 'Retirer';
+        removeBtn.addEventListener('click', async () => {
+          try {
+            const res = await apiFetch('/api/facebook/groups/' + encodeURIComponent(g.id), { method: 'DELETE' });
+            const data = await res.json();
+            fbRenderGroups(data.groups || []);
+          } catch (err) {
+            fbGroupsShowFeedback('Erreur réseau lors du retrait du Groupe.', true);
+          }
+        });
+        actionTd.appendChild(removeBtn);
+        tr.appendChild(nameTd);
+        tr.appendChild(idTd);
+        tr.appendChild(actionTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function fbLoadGroups() {
+      try {
+        const res = await apiFetch('/api/facebook/groups');
+        const data = await res.json();
+        fbRenderGroups(data.groups || []);
+      } catch (err) {
+        // silencieux : la liste reste vide, l'utilisateur peut réessayer via l'onglet
+      }
+    }
+
+    document.getElementById('fb-group-add-btn').addEventListener('click', async () => {
+      const id = document.getElementById('fb-group-id-input').value.trim();
+      const name = document.getElementById('fb-group-name-input').value.trim();
+      if (!id) { fbGroupsShowFeedback('Renseignez l\'identifiant du Groupe.', true); return; }
+
+      try {
+        const res = await apiFetch('/api/facebook/groups', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, name }),
+        });
+        const data = await res.json();
+        if (!res.ok) { fbGroupsShowFeedback(data.error || 'Échec de l\'ajout du Groupe.', true); return; }
+        fbRenderGroups(data.groups || []);
+        document.getElementById('fb-group-id-input').value = '';
+        document.getElementById('fb-group-name-input').value = '';
+        fbGroupsShowFeedback('Groupe ajouté.', false);
+      } catch (err) {
+        fbGroupsShowFeedback('Erreur réseau lors de l\'ajout du Groupe.', true);
+      }
+    });
+
+    const fbGroupsMediaDropZone = document.getElementById('fb-groups-media-drop-zone');
+    const fbGroupsMediaFileInput = document.getElementById('fb-groups-media-file');
+    fbGroupsMediaDropZone.addEventListener('click', () => fbGroupsMediaFileInput.click());
+    fbGroupsMediaDropZone.addEventListener('dragover', (e) => { e.preventDefault(); fbGroupsMediaDropZone.classList.add('dragover'); });
+    fbGroupsMediaDropZone.addEventListener('dragleave', () => fbGroupsMediaDropZone.classList.remove('dragover'));
+    fbGroupsMediaDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      fbGroupsMediaDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) fbGroupsSetSelectedMediaFile(e.dataTransfer.files[0]);
+    });
+    fbGroupsMediaFileInput.addEventListener('change', () => {
+      if (fbGroupsMediaFileInput.files && fbGroupsMediaFileInput.files[0]) fbGroupsSetSelectedMediaFile(fbGroupsMediaFileInput.files[0]);
+    });
+    function fbGroupsSetSelectedMediaFile(file) {
+      selectedFbGroupsMediaFile = file;
+      document.getElementById('fb-groups-media-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    document.getElementById('fb-groups-publish-btn').addEventListener('click', async () => {
+      const message = document.getElementById('fb-groups-message').value.trim();
+      const minDelaySeconds = document.getElementById('fb-groups-min-delay').value;
+      const maxDelaySeconds = document.getElementById('fb-groups-max-delay').value;
+
+      if (!message && !selectedFbGroupsMediaFile) {
+        fbGroupsShowFeedback('Fournissez un message et/ou un média à publier.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('message', message);
+      formData.append('minDelaySeconds', minDelaySeconds);
+      formData.append('maxDelaySeconds', maxDelaySeconds);
+      if (selectedFbGroupsMediaFile) formData.append('media', selectedFbGroupsMediaFile);
+
+      const publishBtn = document.getElementById('fb-groups-publish-btn');
+      publishBtn.disabled = true;
+
+      try {
+        const res = await apiFetch('/api/facebook/groups/publish', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          fbGroupsShowFeedback(data.error || 'Échec du lancement de la diffusion.', true);
+        } else {
+          fbGroupsShowFeedback(
+            '🚀 Diffusion lancée sur ' + data.total + ' Groupe(s) (délai ' + data.delaySeconds + 's).',
+            false,
+          );
+        }
+      } catch (err) {
+        fbGroupsShowFeedback('Erreur réseau lors du lancement de la diffusion.', true);
+      } finally {
+        publishBtn.disabled = false;
+      }
+    });
+
     async function fbRefreshStatus() {
       try {
         const res = await apiFetch('/api/facebook/status');
@@ -1722,6 +1947,7 @@
         if (data.configured && data.connected) {
           mainContent.hidden = false;
           notConnectedHint.hidden = true;
+          fbLoadGroups();
         } else {
           mainContent.hidden = true;
           notConnectedHint.hidden = false;

@@ -1447,6 +1447,78 @@ app.post('/api/facebook/contacts/import', requireAccess, requireModule('facebook
   }
 });
 
+// ---------- Publication programmée sur les Groupes Facebook gérés ----------
+// Voir le commentaire au-dessus de getManagedGroups() dans adapters/facebook.js :
+// la liste des Groupes ciblés est administrée manuellement (pas d'endpoint
+// Graph API pour les découvrir automatiquement à partir d'une Page).
+app.get('/api/facebook/groups', requireAccess, requireModule('facebook'), (req, res) => {
+  res.status(200).json({ groups: facebook.getManagedGroups() });
+});
+
+app.post('/api/facebook/groups', requireAccess, requireModule('facebook'), (req, res) => {
+  const { id, name } = req.body || {};
+  if (!id) {
+    return res.status(400).json({ error: 'Le champ "id" (identifiant du Groupe Facebook) est requis.' });
+  }
+  const groups = facebook.addManagedGroup(id, name);
+  res.status(200).json({ groups });
+});
+
+app.delete('/api/facebook/groups/:id', requireAccess, requireModule('facebook'), (req, res) => {
+  const groups = facebook.removeManagedGroup(req.params.id);
+  res.status(200).json({ groups });
+});
+
+app.post('/api/facebook/groups/publish', requireAccess, requireModule('facebook'), upload.single('media'), async (req, res) => {
+  if (!facebook.getUserAccessToken()) {
+    return res.status(503).json({
+      error: 'Publication sur les Groupes indisponible : reconnectez-vous via "Se connecter avec Facebook" '
+        + '(nécessite un jeton utilisateur, pas seulement le jeton de Page) et vérifiez que la permission '
+        + 'publish_to_groups a été accordée par Meta.',
+    });
+  }
+
+  const { message, minDelaySeconds, maxDelaySeconds } = req.body;
+  const groups = facebook.getManagedGroups();
+
+  if (!message && !req.file) {
+    return res.status(400).json({ error: 'Fournissez un "message" et/ou un média (champ "media") à publier.' });
+  }
+  if (groups.length === 0) {
+    return res.status(400).json({ error: 'Aucun Groupe géré. Ajoutez-en via POST /api/facebook/groups avant de publier.' });
+  }
+  if (req.file && req.file.mimetype === 'application/pdf') {
+    return res.status(400).json({
+      error: 'L\'API Graph de Meta ne permet pas de déposer un document PDF dans un Groupe (seuls texte/lien, '
+        + 'photo et vidéo sont supportés). Hébergez le PDF ailleurs et partagez son lien dans le message.',
+    });
+  }
+
+  const parsedMinDelay = minDelaySeconds !== undefined && minDelaySeconds !== '' ? parseFloat(minDelaySeconds) : 5;
+  const parsedMaxDelay = maxDelaySeconds !== undefined && maxDelaySeconds !== '' ? parseFloat(maxDelaySeconds) : 10;
+
+  res.status(202).json({
+    status: 'fb_group_broadcast_started',
+    total: groups.length,
+    delaySeconds: `${parsedMinDelay}-${parsedMaxDelay} (aléatoire)`,
+    media: req.file ? req.file.originalname : null,
+  });
+
+  facebook.publishToManagedGroups({
+    message,
+    mediaBuffer: req.file ? req.file.buffer : null,
+    mediaMimetype: req.file ? req.file.mimetype : null,
+    mediaFilename: req.file ? req.file.originalname : null,
+    minDelaySeconds: parsedMinDelay,
+    maxDelaySeconds: parsedMaxDelay,
+  }).then((results) => {
+    const success = results.filter((r) => r.status === 'published').length;
+    console.log(`Facebook: diffusion sur les groupes terminée (${success}/${results.length} réussite(s)).`);
+  }).catch((err) => {
+    console.error('Erreur pendant la diffusion sur les groupes Facebook:', err);
+  });
+});
+
 app.get('/api/telegram/status', requireAccess, requireModule('telegram'), (req, res) => {
   res.status(200).json({
     configured: telegram.isConfigured(),
