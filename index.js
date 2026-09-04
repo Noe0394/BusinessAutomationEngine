@@ -17,6 +17,8 @@ const MediaPublisherAdapter = require('./adapters/media_publisher');
 const licenses = require('./licenses');
 const oauthConfig = require('./oauth_config');
 const scheduledMessages = require('./queues/scheduled_messages');
+const contactsStore = require('./models/contact');
+const keywordRules = require('./models/keyword_rules');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -52,6 +54,12 @@ const mediaPublisher = new MediaPublisherAdapter();
 // redéploiement/redémarrage sauf disque persistant monté sur ce chemin.
 const SCHEDULED_MEDIA_DIR = process.env.SCHEDULED_MEDIA_DIR || path.join(__dirname, 'scheduled_media');
 fs.mkdirSync(SCHEDULED_MEDIA_DIR, { recursive: true });
+
+// Même principe pour les médias joints aux règles de mots-clés du module de
+// Capture Automatique de Prospects (voir plus bas, handleFacebookFeedChange/
+// handleFacebookMessagingEvent).
+const KEYWORD_MEDIA_DIR = process.env.KEYWORD_MEDIA_DIR || path.join(__dirname, 'keyword_media');
+fs.mkdirSync(KEYWORD_MEDIA_DIR, { recursive: true });
 
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('ADMIN_PASSWORD non défini : utilisation du mot de passe par défaut codé en dur. Définissez cette variable d\'environnement avant tout déploiement public.');
@@ -558,41 +566,52 @@ function startTelegramDmCampaign(recipients, message, options = {}) {
 // réutiliser les créneaux interactifs existants.
 
 // mediaUrl vaut soit un lien externe (http/https, fourni par l'exploitant),
-// soit "local:<nom de fichier>" pour un média envoyé depuis le formulaire du
-// dashboard et sauvegardé dans SCHEDULED_MEDIA_DIR — pas d'endpoint HTTP
-// public exposé pour ces fichiers, ils ne sont lus que côté serveur au
-// moment de l'envoi.
-async function resolveScheduledMedia(entry) {
-  if (!entry.mediaUrl) {
+// soit "local:<nom de fichier>" pour un média envoyé depuis un formulaire du
+// dashboard et sauvegardé dans mediaDir (SCHEDULED_MEDIA_DIR ou
+// KEYWORD_MEDIA_DIR selon l'appelant) — pas d'endpoint HTTP public exposé
+// pour ces fichiers, ils ne sont lus que côté serveur au moment de l'envoi.
+// Fonction générique réutilisée par la programmation multi-canal
+// (resolveScheduledMedia) et par les règles de mots-clés de la Capture
+// Automatique de Prospects (resolveKeywordRuleMedia).
+async function resolveMediaReference(ref, mediaDir) {
+  if (!ref || !ref.mediaUrl) {
     return null;
   }
 
-  if (entry.mediaUrl.startsWith('local:')) {
-    const fileName = entry.mediaUrl.slice('local:'.length);
-    const filePath = path.join(SCHEDULED_MEDIA_DIR, fileName);
+  if (ref.mediaUrl.startsWith('local:')) {
+    const fileName = ref.mediaUrl.slice('local:'.length);
+    const filePath = path.join(mediaDir, fileName);
     const buffer = fs.readFileSync(filePath);
     return {
       buffer,
-      mimetype: entry.mediaMimetype || 'application/octet-stream',
-      filename: entry.mediaFilename || fileName,
+      mimetype: ref.mediaMimetype || 'application/octet-stream',
+      filename: ref.mediaFilename || fileName,
     };
   }
 
-  const res = await axios.get(entry.mediaUrl, {
+  const res = await axios.get(ref.mediaUrl, {
     responseType: 'arraybuffer',
     maxContentLength: 200 * 1024 * 1024,
     timeout: 30000,
   });
-  const mimetype = res.headers['content-type'] || entry.mediaMimetype || 'application/octet-stream';
-  let filename = entry.mediaFilename;
+  const mimetype = res.headers['content-type'] || ref.mediaMimetype || 'application/octet-stream';
+  let filename = ref.mediaFilename;
   if (!filename) {
     try {
-      filename = path.basename(new URL(entry.mediaUrl).pathname) || 'fichier';
+      filename = path.basename(new URL(ref.mediaUrl).pathname) || 'fichier';
     } catch (err) {
       filename = 'fichier';
     }
   }
   return { buffer: Buffer.from(res.data), mimetype, filename };
+}
+
+function resolveScheduledMedia(entry) {
+  return resolveMediaReference(entry, SCHEDULED_MEDIA_DIR);
+}
+
+function resolveKeywordRuleMedia(rule) {
+  return resolveMediaReference(rule, KEYWORD_MEDIA_DIR);
 }
 
 async function dispatchScheduledWhatsapp(entry, media) {
@@ -1624,7 +1643,7 @@ app.delete('/api/facebook/comments/:commentId', requireAccess, requireModule('fa
   }
 });
 
-// ---------- Webhooks Meta (nouveaux commentaires, messages, etc.) ----------
+// ---------- Webhooks Meta : Capture Automatique de Prospects ----------
 // Validation initiale de l'abonnement (Meta App Dashboard > Webhooks).
 // FB_WEBHOOK_VERIFY_TOKEN est une chaîne arbitraire choisie par l'exploitant,
 // à saisir aussi côté Meta lors de la configuration du webhook.
@@ -1639,6 +1658,121 @@ app.get('/api/facebook/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
+// Heuristique simple "prénom nom" à partir d'un nom complet — utilisée pour
+// les commentaires, dont le webhook "feed" fournit directement from.name
+// (pas de champs prénom/nom séparés côté Meta pour un commentateur).
+function splitDisplayName(fullName) {
+  if (!fullName) return { firstName: null, lastName: null };
+  const parts = String(fullName).trim().split(/\s+/);
+  if (parts.length === 1) return { firstName: parts[0], lastName: null };
+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+}
+
+// Envoie la réponse automatique (texte via réponse privée + média éventuel
+// en message Messenger de suivi) associée à une règle de mot-clé détectée
+// sur un commentaire, puis marque le contact comme "répondu".
+async function autoReplyToComment(rule, contact, commentId, psid) {
+  if (rule.replyMessage) {
+    await facebook.sendPrivateReply(commentId, rule.replyMessage);
+  }
+  if (rule.mediaUrl) {
+    const media = await resolveKeywordRuleMedia(rule);
+    if (media) {
+      await facebook.sendMedia(psid, media);
+    }
+  }
+  contactsStore.markAutoReplied(contact.id);
+  console.log(`Prospect: réponse automatique envoyée (commentaire, mot-clé "${rule.keyword}") à PSID ${psid}.`);
+}
+
+// Même chose pour un message Messenger entrant contenant un mot-clé — pas de
+// réponse privée nécessaire ici, la conversation est déjà ouverte.
+async function autoReplyToMessage(rule, contact, psid) {
+  if (rule.replyMessage) {
+    await facebook.sendMessage(psid, rule.replyMessage);
+  }
+  if (rule.mediaUrl) {
+    const media = await resolveKeywordRuleMedia(rule);
+    if (media) {
+      await facebook.sendMedia(psid, media);
+    }
+  }
+  contactsStore.markAutoReplied(contact.id);
+  console.log(`Prospect: réponse automatique envoyée (message, mot-clé "${rule.keyword}") à PSID ${psid}.`);
+}
+
+// Nouveau commentaire sur un post/pub de la Page (abonnement "feed", champ
+// "feed", value.item === "comment"). Capture le contact puis, si le texte
+// contient un mot-clé configuré, déclenche la réponse automatique.
+async function handleFacebookFeedChange(value) {
+  if (value.item !== 'comment' || value.verb !== 'add') {
+    return;
+  }
+
+  const psid = value.from && value.from.id;
+  if (!psid) {
+    return;
+  }
+
+  const commentText = value.message || '';
+  const { firstName, lastName } = splitDisplayName(value.from.name);
+  const rule = keywordRules.findMatch(commentText);
+
+  const contact = contactsStore.upsertFromLead({
+    psid,
+    firstName,
+    lastName,
+    name: value.from.name,
+    source: 'comment',
+    sourceText: commentText,
+    postId: value.post_id || null,
+    keyword: rule ? rule.keyword : null,
+  });
+
+  if (!rule) {
+    return;
+  }
+
+  try {
+    await autoReplyToComment(rule, contact, value.comment_id, psid);
+  } catch (err) {
+    console.error(`Prospect: échec de la réponse automatique (commentaire) pour PSID ${psid}:`, err?.response?.data || err.message);
+  }
+}
+
+// Message Messenger entrant (entry.messaging[], pas entry.changes[]).
+async function handleFacebookMessagingEvent(event) {
+  const psid = event.sender && event.sender.id;
+  const text = event.message && event.message.text;
+  if (!psid || !text) {
+    return;
+  }
+
+  const rule = keywordRules.findMatch(text);
+  const profile = await facebook.getUserProfile(psid);
+
+  const contact = contactsStore.upsertFromLead({
+    psid,
+    firstName: profile.first_name || null,
+    lastName: profile.last_name || null,
+    name: profile.name || null,
+    source: 'message',
+    sourceText: text,
+    postId: null,
+    keyword: rule ? rule.keyword : null,
+  });
+
+  if (!rule) {
+    return;
+  }
+
+  try {
+    await autoReplyToMessage(rule, contact, psid);
+  } catch (err) {
+    console.error(`Prospect: échec de la réponse automatique (message) pour PSID ${psid}:`, err?.response?.data || err.message);
+  }
+}
+
 // Réception des évènements. Le payload est déjà parsé par le express.json()
 // global (voir plus haut) qui capture aussi req.rawBody pour la vérification
 // de signature HMAC — indispensable ici puisque cette route est publique par
@@ -1649,13 +1783,100 @@ app.post('/api/facebook/webhook', (req, res) => {
     return res.sendStatus(403);
   }
 
+  // Accusé de réception immédiat (Meta exige une réponse rapide) : le
+  // traitement de la capture/réponse automatique continue en arrière-plan.
+  res.sendStatus(200);
+
   (req.body.entry || []).forEach((entry) => {
     (entry.changes || []).forEach((change) => {
-      console.log('Facebook webhook — évènement reçu:', change.field, JSON.stringify(change.value));
+      if (change.field === 'feed') {
+        handleFacebookFeedChange(change.value).catch((err) => {
+          console.error('Erreur lors du traitement d\'un évènement feed Facebook:', err);
+        });
+      }
+    });
+
+    (entry.messaging || []).forEach((event) => {
+      handleFacebookMessagingEvent(event).catch((err) => {
+        console.error('Erreur lors du traitement d\'un évènement Messenger:', err);
+      });
     });
   });
+});
 
-  res.sendStatus(200);
+// ---------- Règles de mots-clés (réponse automatique aux prospects) ----------
+app.get('/api/facebook/keyword-rules', requireAccess, requireModule('facebook'), (req, res) => {
+  res.status(200).json({ rules: keywordRules.list() });
+});
+
+app.post('/api/facebook/keyword-rules', requireAccess, requireModule('facebook'), upload.single('media'), (req, res) => {
+  const { keyword, replyMessage, mediaUrl } = req.body;
+  if (!keyword || !keyword.trim()) {
+    return res.status(400).json({ error: 'Le champ "keyword" est requis.' });
+  }
+  if (!replyMessage && !req.file && !mediaUrl) {
+    return res.status(400).json({ error: 'Fournissez un "replyMessage" et/ou un média (fichier joint ou "mediaUrl").' });
+  }
+
+  let storedMediaUrl = mediaUrl || null;
+  let mediaMimetype = null;
+  let mediaFilename = null;
+
+  if (req.file) {
+    const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    fs.writeFileSync(path.join(KEYWORD_MEDIA_DIR, safeName), req.file.buffer);
+    storedMediaUrl = `local:${safeName}`;
+    mediaMimetype = req.file.mimetype;
+    mediaFilename = req.file.originalname;
+  }
+
+  const rule = keywordRules.create({
+    keyword,
+    replyMessage,
+    mediaUrl: storedMediaUrl,
+    mediaMimetype,
+    mediaFilename,
+  });
+  res.status(201).json({ rule });
+});
+
+app.delete('/api/facebook/keyword-rules/:id', requireAccess, requireModule('facebook'), (req, res) => {
+  const rules = keywordRules.remove(req.params.id);
+  res.status(200).json({ rules });
+});
+
+// ---------- Prospects capturés (commentaires + messages Messenger) ----------
+app.get('/api/facebook/prospects', requireAccess, requireModule('facebook'), (req, res) => {
+  const { keyword, source } = req.query;
+  res.status(200).json({ contacts: contactsStore.list({ keyword: keyword || undefined, source: source || undefined }) });
+});
+
+app.get('/api/facebook/prospects/export-excel', requireAccess, requireModule('facebook'), (req, res) => {
+  const { keyword, source } = req.query;
+  const contacts = contactsStore.list({ keyword: keyword || undefined, source: source || undefined });
+
+  const sheet = XLSX.utils.json_to_sheet(
+    contacts.map((c) => ({
+      Prénom: c.firstName || '',
+      Nom: c.lastName || '',
+      'Nom complet': c.name || '',
+      'PSID (Facebook)': c.psid,
+      Source: c.source === 'comment' ? 'Commentaire' : 'Message Messenger',
+      Thématique: c.keyword || '',
+      'Dernier texte': c.lastText || '',
+      'ID du post': c.postId || '',
+      'Réponse automatique envoyée': c.autoReplied ? 'Oui' : 'Non',
+      'Capturé le': c.createdAt,
+      'Mis à jour le': c.updatedAt,
+    })),
+  );
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Prospects');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="prospects_facebook.xlsx"');
+  res.send(buffer);
 });
 
 // ---------- Import du registre de contacts (.xlsx/.csv) ----------

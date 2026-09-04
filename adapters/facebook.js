@@ -402,6 +402,50 @@ class FacebookMessengerAdapter {
     return results;
   }
 
+  // ---------- Capture de prospects (commentaires → réponse privée) ----------
+  /**
+   * "Réponse privée" à un commentaire : POST /{comment-id}/private_replies,
+   * le seul mécanisme Graph API prévu par Meta pour envoyer un premier
+   * message Messenger à quelqu'un qui vient de commenter un post/pub de la
+   * Page, sans jeton "message tag" spécial ni violer la règle des 24h (voir
+   * sendMessage plus bas) — répondre ainsi ouvre une fenêtre de messagerie
+   * standard avec ce PSID, comme s'il avait lui-même écrit à la Page.
+   * Disponible jusqu'à 7 jours après le commentaire, une seule fois par
+   * commentaire côté Meta.
+   */
+  async sendPrivateReply(commentId, message) {
+    if (!this.isConfigured()) {
+      throw new Error('FB_NOT_CONFIGURED');
+    }
+    const res = await axios.post(`${this.baseUrl}/${commentId}/private_replies`, null, {
+      params: { message, access_token: this.getPageAccessToken() },
+    });
+    return res.data;
+  }
+
+  /**
+   * Profil basique d'un utilisateur Messenger (prénom/nom) via son PSID —
+   * uniquement fiable pour quelqu'un ayant déjà engagé une conversation
+   * Messenger avec la Page (c'est le cas d'usage documenté par Meta pour cet
+   * appel ; en dehors de ce contexte, Meta restreint fortement l'accès à ces
+   * champs depuis 2018/Cambridge Analytica). Pour un commentateur, le nom est
+   * disponible directement dans le payload du webhook "feed" (from.name) —
+   * pas besoin de cet appel, voir handleFacebookFeedChange() dans index.js.
+   */
+  async getUserProfile(psid) {
+    if (!this.isConfigured()) {
+      throw new Error('FB_NOT_CONFIGURED');
+    }
+    try {
+      const res = await axios.get(`${this.baseUrl}/${psid}`, {
+        params: { fields: 'first_name,last_name,name', access_token: this.getPageAccessToken() },
+      });
+      return res.data || {};
+    } catch (err) {
+      return {};
+    }
+  }
+
   // ---------- Gestion des commentaires (modération) ----------
   async getPostComments(postId, { limit = 50 } = {}) {
     if (!this.isConfigured()) {

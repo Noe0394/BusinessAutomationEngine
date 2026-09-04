@@ -10,3 +10,6 @@ facebook_groups.json
 oauth_config.json
 scheduled_messages.json
 scheduled_media/
+contacts.json
+keyword_rules.json
+keyword_media/

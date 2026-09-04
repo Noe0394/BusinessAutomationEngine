@@ -69,11 +69,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -157,6 +157,7 @@
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
       <button type="button" class="tab-btn" data-tab="facebook">Facebook</button>
       <button type="button" class="tab-btn" data-tab="scheduler">🗓️ Programmation / Planning</button>
+      <button type="button" class="tab-btn" data-tab="prospects">🎯 Contacts / Prospects</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -736,6 +737,88 @@
       </div>
     </section>
 
+    <!-- Onglet Contacts / Prospects (Capture Automatique de Prospects) -->
+    <section class="panel" id="panel-prospects">
+      <h2>Contacts / Prospects</h2>
+      <p class="empty">
+        Capture automatiquement les commentaires sur vos posts/pubs et les messages Messenger reçus sur la Page,
+        et répond automatiquement quand un mot-clé configuré est détecté.
+      </p>
+
+      <div class="subsection" id="prospects-rules-section">
+        <h3>Règles de mots-clés</h3>
+        <p class="empty">
+          Ex : un commentaire contenant "RECETTE" déclenche l'envoi automatique du message et du fichier
+          configurés ici, en réponse privée sur Messenger.
+        </p>
+
+        <div class="row">
+          <div class="field">
+            <label for="rule-keyword-input">Mot-clé (ex : RECETTE, INFO, GUIDE)</label>
+            <input type="text" id="rule-keyword-input" placeholder="RECETTE" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="rule-message-input">Message de réponse</label>
+          <textarea id="rule-message-input" placeholder="Merci pour votre intérêt ! Voici..."></textarea>
+        </div>
+
+        <div class="field">
+          <label>Média joint (optionnel — image, vidéo ou PDF)</label>
+          <div id="rule-media-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+          <input type="file" id="rule-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+          <p id="rule-media-file-name" class="empty">Aucun fichier sélectionné.</p>
+        </div>
+
+        <button type="button" id="rule-add-btn">Ajouter la règle</button>
+        <div id="rule-feedback" hidden></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Mot-clé</th><th>Message</th><th>Média</th><th></th></tr></thead>
+            <tbody id="rules-body">
+              <tr><td colspan="4" class="empty">Aucune règle configurée.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="subsection" id="prospects-list-section">
+        <h3>Prospects capturés</h3>
+
+        <div class="row">
+          <div class="field">
+            <label for="prospects-filter-keyword">Filtrer par thématique (mot-clé)</label>
+            <select id="prospects-filter-keyword">
+              <option value="">Toutes</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="prospects-filter-source">Filtrer par source</label>
+            <select id="prospects-filter-source">
+              <option value="">Toutes</option>
+              <option value="comment">Commentaire Post</option>
+              <option value="message">Message Messenger</option>
+            </select>
+          </div>
+        </div>
+
+        <button type="button" id="prospects-refresh-btn">🔄 Actualiser</button>
+        <button type="button" id="prospects-export-btn">📊 Exporter la liste des prospects (Excel)</button>
+        <div id="prospects-feedback" hidden></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Source</th><th>Thématique</th><th>Dernier texte</th><th>Répondu</th><th>Capturé le</th></tr></thead>
+            <tbody id="prospects-body">
+              <tr><td colspan="6" class="empty">Aucun prospect capturé.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -885,12 +968,13 @@
     // currentAllowedModules === null (admin, ou clé créée avant
     // l'introduction des modules) signifie "aucune restriction".
     function applyModuleVisibility() {
-      // "scheduler" reste toujours visible comme "connections" : le canal
-      // Facebook y est toujours autorisé (voir channelAllowed() côté
-      // serveur), et le formulaire filtre lui-même les canaux Telegram/
-      // WhatsApp selon hasModule() — pas besoin de masquer l'onglet entier.
+      // "scheduler" et "prospects" restent toujours visibles comme
+      // "connections" : le module Facebook y est toujours autorisé (voir
+      // requireModule('facebook')/channelAllowed() côté serveur), et
+      // "scheduler" filtre lui-même les canaux Telegram/WhatsApp selon
+      // hasModule() — pas besoin de masquer ces onglets entiers.
       const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'))
-        .filter((btn) => btn.dataset.tab !== 'connections' && btn.dataset.tab !== 'scheduler');
+        .filter((btn) => !['connections', 'scheduler', 'prospects'].includes(btn.dataset.tab));
 
       if (currentAllowedModules === null) {
         tabButtons.forEach((btn) => { btn.hidden = false; });
@@ -999,6 +1083,7 @@
         if (btn.dataset.tab === 'telegram') tgRefreshStatus();
         if (btn.dataset.tab === 'facebook') fbRefreshStatus();
         if (btn.dataset.tab === 'scheduler') { schedInit(); schedRefreshList(); }
+        if (btn.dataset.tab === 'prospects') { prospectsLoadRules(); prospectsRefreshList(); }
       });
     });
 
@@ -2721,6 +2806,205 @@
 
     document.getElementById('sched-refresh-btn').addEventListener('click', schedRefreshList);
 
+    // ---------- Contacts / Prospects (Capture Automatique de Prospects) ----------
+    let selectedRuleMediaFile = null;
+
+    function ruleShowFeedback(message, isError) {
+      const el = document.getElementById('rule-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    function prospectsShowFeedback(message, isError) {
+      const el = document.getElementById('prospects-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    const ruleMediaDropZone = document.getElementById('rule-media-drop-zone');
+    const ruleMediaFileInput = document.getElementById('rule-media-file');
+    ruleMediaDropZone.addEventListener('click', () => ruleMediaFileInput.click());
+    ruleMediaDropZone.addEventListener('dragover', (e) => { e.preventDefault(); ruleMediaDropZone.classList.add('dragover'); });
+    ruleMediaDropZone.addEventListener('dragleave', () => ruleMediaDropZone.classList.remove('dragover'));
+    ruleMediaDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      ruleMediaDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) ruleSetSelectedMediaFile(e.dataTransfer.files[0]);
+    });
+    ruleMediaFileInput.addEventListener('change', () => {
+      if (ruleMediaFileInput.files && ruleMediaFileInput.files[0]) ruleSetSelectedMediaFile(ruleMediaFileInput.files[0]);
+    });
+    function ruleSetSelectedMediaFile(file) {
+      selectedRuleMediaFile = file;
+      document.getElementById('rule-media-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    function prospectsRenderRuleOptions(rules) {
+      const select = document.getElementById('prospects-filter-keyword');
+      const current = select.value;
+      select.innerHTML = '<option value="">Toutes</option>';
+      const seen = new Set();
+      rules.forEach((r) => {
+        if (seen.has(r.keyword)) return;
+        seen.add(r.keyword);
+        const opt = document.createElement('option');
+        opt.value = r.keyword;
+        opt.textContent = r.keyword;
+        select.appendChild(opt);
+      });
+      if (Array.from(select.options).some((o) => o.value === current)) select.value = current;
+    }
+
+    function prospectsRenderRulesTable(rules) {
+      const tbody = document.getElementById('rules-body');
+      tbody.innerHTML = '';
+      if (!rules || rules.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">Aucune règle configurée.</td></tr>';
+        return;
+      }
+      rules.forEach((r) => {
+        const tr = document.createElement('tr');
+        const keywordTd = document.createElement('td');
+        keywordTd.textContent = r.keyword;
+        const messageTd = document.createElement('td');
+        messageTd.textContent = r.replyMessage || '-';
+        const mediaTd = document.createElement('td');
+        mediaTd.textContent = r.mediaFilename || (r.mediaUrl ? 'Lien externe' : '-');
+        const actionTd = document.createElement('td');
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.textContent = 'Retirer';
+        removeBtn.addEventListener('click', async () => {
+          try {
+            const res = await apiFetch('/api/facebook/keyword-rules/' + encodeURIComponent(r.id), { method: 'DELETE' });
+            const data = await res.json();
+            prospectsRenderRulesTable(data.rules || []);
+            prospectsRenderRuleOptions(data.rules || []);
+          } catch (err) {
+            ruleShowFeedback('Erreur réseau lors du retrait de la règle.', true);
+          }
+        });
+        actionTd.appendChild(removeBtn);
+        tr.appendChild(keywordTd);
+        tr.appendChild(messageTd);
+        tr.appendChild(mediaTd);
+        tr.appendChild(actionTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function prospectsLoadRules() {
+      try {
+        const res = await apiFetch('/api/facebook/keyword-rules');
+        const data = await res.json();
+        prospectsRenderRulesTable(data.rules || []);
+        prospectsRenderRuleOptions(data.rules || []);
+      } catch (err) {
+        // silencieux : l'utilisateur peut rouvrir l'onglet pour réessayer
+      }
+    }
+
+    document.getElementById('rule-add-btn').addEventListener('click', async () => {
+      const keyword = document.getElementById('rule-keyword-input').value.trim();
+      const replyMessage = document.getElementById('rule-message-input').value.trim();
+
+      if (!keyword) { ruleShowFeedback('Le mot-clé est requis.', true); return; }
+      if (!replyMessage && !selectedRuleMediaFile) {
+        ruleShowFeedback('Fournissez un message de réponse et/ou un média.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('keyword', keyword);
+      formData.append('replyMessage', replyMessage);
+      if (selectedRuleMediaFile) formData.append('media', selectedRuleMediaFile);
+
+      try {
+        const res = await apiFetch('/api/facebook/keyword-rules', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) { ruleShowFeedback(data.error || 'Échec de l\'ajout de la règle.', true); return; }
+        document.getElementById('rule-keyword-input').value = '';
+        document.getElementById('rule-message-input').value = '';
+        selectedRuleMediaFile = null;
+        document.getElementById('rule-media-file-name').textContent = 'Aucun fichier sélectionné.';
+        document.getElementById('rule-media-file-name').className = 'empty';
+        ruleShowFeedback('✅ Règle ajoutée.', false);
+        prospectsLoadRules();
+      } catch (err) {
+        ruleShowFeedback('Erreur réseau lors de l\'ajout de la règle.', true);
+      }
+    });
+
+    function prospectsSourceLabel(source) {
+      return source === 'comment' ? 'Commentaire Post' : (source === 'message' ? 'Message Messenger' : source);
+    }
+
+    async function prospectsRefreshList() {
+      const keyword = document.getElementById('prospects-filter-keyword').value;
+      const source = document.getElementById('prospects-filter-source').value;
+      const params = new URLSearchParams();
+      if (keyword) params.set('keyword', keyword);
+      if (source) params.set('source', source);
+
+      try {
+        const res = await apiFetch('/api/facebook/prospects' + (params.toString() ? '?' + params.toString() : ''));
+        const data = await res.json();
+        const tbody = document.getElementById('prospects-body');
+        tbody.innerHTML = '';
+        const contacts = data.contacts || [];
+
+        if (contacts.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">Aucun prospect capturé.</td></tr>';
+          return;
+        }
+
+        contacts.forEach((c) => {
+          const tr = document.createElement('tr');
+          const nameTd = document.createElement('td');
+          nameTd.textContent = c.name || c.psid;
+          const sourceTd = document.createElement('td');
+          sourceTd.textContent = prospectsSourceLabel(c.source);
+          const keywordTd = document.createElement('td');
+          keywordTd.textContent = c.keyword || '-';
+          const textTd = document.createElement('td');
+          const preview = (c.lastText || '').slice(0, 60);
+          textTd.textContent = preview + ((c.lastText || '').length > 60 ? '…' : '');
+          const repliedTd = document.createElement('td');
+          repliedTd.textContent = c.autoReplied ? '✅' : '—';
+          const dateTd = document.createElement('td');
+          dateTd.textContent = new Date(c.createdAt).toLocaleString();
+          tr.appendChild(nameTd);
+          tr.appendChild(sourceTd);
+          tr.appendChild(keywordTd);
+          tr.appendChild(textTd);
+          tr.appendChild(repliedTd);
+          tr.appendChild(dateTd);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        prospectsShowFeedback('Erreur réseau lors du chargement des prospects.', true);
+      }
+    }
+
+    document.getElementById('prospects-filter-keyword').addEventListener('change', prospectsRefreshList);
+    document.getElementById('prospects-filter-source').addEventListener('change', prospectsRefreshList);
+    document.getElementById('prospects-refresh-btn').addEventListener('click', prospectsRefreshList);
+
+    document.getElementById('prospects-export-btn').addEventListener('click', () => {
+      // Ne réutilise pas buildAuthedUrl() ici : elle ajoute "?licenseKey=..."
+      // sans tenir compte d'une query string déjà présente (voir keyword/
+      // source ci-dessous) — on construit donc l'URL complète nous-mêmes.
+      const keyword = document.getElementById('prospects-filter-keyword').value;
+      const source = document.getElementById('prospects-filter-source').value;
+      const { value } = getStoredAuth();
+      const params = new URLSearchParams({ licenseKey: value, deviceId: getDeviceId() });
+      if (keyword) params.set('keyword', keyword);
+      if (source) params.set('source', source);
+      window.location.href = '/api/facebook/prospects/export-excel?' + params.toString();
+    });
+
     // ---------- Init ----------
     function init() {
       toggleTargetMode();
@@ -2737,6 +3021,7 @@
       if (hasModule('facebook')) fbRefreshStatus();
       if (hasModule('studio_video')) mediaRefreshStatus();
       schedInit();
+      prospectsLoadRules();
       handleOAuthRedirectFeedback();
     }
 
