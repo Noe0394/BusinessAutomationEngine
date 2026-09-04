@@ -69,11 +69,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -156,6 +156,7 @@
       <button type="button" class="tab-btn" data-tab="whatsapp">WhatsApp</button>
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
       <button type="button" class="tab-btn" data-tab="facebook">Facebook</button>
+      <button type="button" class="tab-btn" data-tab="scheduler">🗓️ Programmation / Planning</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -635,6 +636,106 @@
       </div>
     </section>
 
+    <!-- Onglet Programmation / Planning (multi-canal) -->
+    <section class="panel" id="panel-scheduler">
+      <h2>Programmation / Planning</h2>
+      <p class="empty">
+        Programmez un envoi (texte + média) sur Telegram, la Page Facebook ou WhatsApp, à une date et heure choisies
+        — ou publiez immédiatement en laissant la date vide.
+      </p>
+
+      <div class="subsection" id="sched-form-section">
+        <h3>Nouvelle programmation</h3>
+
+        <div class="field">
+          <label for="sched-channel">Canal</label>
+          <select id="sched-channel">
+            <option value="telegram">Telegram</option>
+            <option value="facebook_page">Facebook (Page)</option>
+            <option value="whatsapp">WhatsApp</option>
+          </select>
+        </div>
+
+        <div class="field" id="sched-recipient-type-field">
+          <label>Destinataires</label>
+          <label><input type="radio" name="sched-recipient-type" value="groups" checked /> Groupes/Canaux déjà connectés</label>
+          <label><input type="radio" name="sched-recipient-type" value="contacts" /> Liste importée (Excel/CSV)</label>
+        </div>
+
+        <div id="sched-groups-picker">
+          <button type="button" id="sched-groups-reload-btn">🔄 Charger mes groupes/canaux</button>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th></th><th>Nom</th><th>Identifiant</th></tr></thead>
+              <tbody id="sched-groups-body">
+                <tr><td colspan="3" class="empty">Aucun groupe chargé.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="sched-contacts-picker" hidden>
+          <div id="sched-contacts-drop-zone">Glissez-déposez un fichier .csv/.xlsx ici, ou touchez pour parcourir</div>
+          <input type="file" id="sched-contacts-file" accept=".csv,.xlsx" hidden />
+          <p id="sched-contacts-file-name" class="empty">Aucun fichier sélectionné.</p>
+          <button type="button" id="sched-contacts-import-btn">Importer</button>
+          <p id="sched-contacts-count" class="empty">Aucun contact importé.</p>
+        </div>
+
+        <div id="sched-fb-groups-picker" hidden>
+          <p class="empty">Optionnel : diffuser aussi cette publication dans certains de vos Groupes gérés (en plus de la Page).</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th></th><th>Nom</th><th>Identifiant</th></tr></thead>
+              <tbody id="sched-fb-groups-body">
+                <tr><td colspan="3" class="empty">Aucun Groupe géré (voir l'onglet Facebook).</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="sched-message">Texte</label>
+          <textarea id="sched-message" placeholder="Votre message..."></textarea>
+        </div>
+
+        <div class="field">
+          <label>Média (optionnel — image, vidéo ou PDF)</label>
+          <div id="sched-media-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+          <input type="file" id="sched-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+          <p id="sched-media-file-name" class="empty">Aucun fichier sélectionné.</p>
+        </div>
+
+        <div class="warning-box" id="sched-pdf-warning" hidden>
+          ⚠️ Un PDF ne peut pas être joint nativement à une publication Facebook (Page ou Groupe). Pour ce canal,
+          hébergez le PDF ailleurs et partagez son lien dans le texte — Telegram et WhatsApp acceptent eux le PDF
+          en pièce jointe directe.
+        </div>
+
+        <div class="field">
+          <label for="sched-datetime">Date et heure d'envoi (laissez vide pour envoyer dès le prochain cycle, sous 1 minute)</label>
+          <input type="datetime-local" id="sched-datetime" />
+        </div>
+
+        <button type="button" id="sched-submit-btn" class="send-button">🚀 Programmer l'envoi</button>
+        <div id="sched-feedback" hidden></div>
+      </div>
+
+      <div class="subsection" id="sched-list-section">
+        <h3>Programmations</h3>
+        <button type="button" id="sched-refresh-btn">🔄 Actualiser</button>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Canal</th><th>Destinataires</th><th>Message</th><th>Prévu le</th><th>Statut</th><th></th></tr></thead>
+            <tbody id="sched-list-body">
+              <tr><td colspan="6" class="empty">Aucune programmation.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -784,7 +885,12 @@
     // currentAllowedModules === null (admin, ou clé créée avant
     // l'introduction des modules) signifie "aucune restriction".
     function applyModuleVisibility() {
-      const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]')).filter((btn) => btn.dataset.tab !== 'connections');
+      // "scheduler" reste toujours visible comme "connections" : le canal
+      // Facebook y est toujours autorisé (voir channelAllowed() côté
+      // serveur), et le formulaire filtre lui-même les canaux Telegram/
+      // WhatsApp selon hasModule() — pas besoin de masquer l'onglet entier.
+      const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'))
+        .filter((btn) => btn.dataset.tab !== 'connections' && btn.dataset.tab !== 'scheduler');
 
       if (currentAllowedModules === null) {
         tabButtons.forEach((btn) => { btn.hidden = false; });
@@ -892,6 +998,7 @@
         }
         if (btn.dataset.tab === 'telegram') tgRefreshStatus();
         if (btn.dataset.tab === 'facebook') fbRefreshStatus();
+        if (btn.dataset.tab === 'scheduler') { schedInit(); schedRefreshList(); }
       });
     });
 
@@ -2305,6 +2412,315 @@
       }
     });
 
+    // ---------- Programmation / Planning (multi-canal) ----------
+    let schedImportedContacts = [];
+    let selectedSchedContactsFile = null;
+    let selectedSchedMediaFile = null;
+
+    function schedShowFeedback(message, isError) {
+      const el = document.getElementById('sched-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    function schedCurrentChannel() {
+      return document.getElementById('sched-channel').value;
+    }
+
+    function schedCurrentRecipientType() {
+      const checked = document.querySelector('input[name="sched-recipient-type"]:checked');
+      return checked ? checked.value : 'groups';
+    }
+
+    function schedContactIdentifier(contact) {
+      // Telegram (/api/telegram/contacts/import) renvoie "identifier",
+      // WhatsApp (/api/contacts/import) renvoie "telephone" — deux formats
+      // différents pour la même notion de "liste importée".
+      return contact.identifier || contact.telephone || '';
+    }
+
+    function schedRenderGroupsTable(tbodyId, groups) {
+      const tbody = document.getElementById(tbodyId);
+      tbody.innerHTML = '';
+      if (!groups || groups.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">Aucun groupe disponible.</td></tr>';
+        return;
+      }
+      groups.forEach((g) => {
+        const tr = document.createElement('tr');
+        const checkTd = document.createElement('td');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = g.id;
+        checkTd.appendChild(checkbox);
+        const nameTd = document.createElement('td');
+        nameTd.textContent = g.name || g.subject || '-';
+        const idTd = document.createElement('td');
+        idTd.textContent = g.id;
+        tr.appendChild(checkTd);
+        tr.appendChild(nameTd);
+        tr.appendChild(idTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function schedLoadChannelGroups() {
+      const channel = schedCurrentChannel();
+      const endpoint = channel === 'telegram' ? '/api/telegram/groups' : '/api/groups';
+      try {
+        const res = await apiFetch(endpoint);
+        const data = await res.json();
+        schedRenderGroupsTable('sched-groups-body', Array.isArray(data) ? data : (data.groups || []));
+      } catch (err) {
+        schedShowFeedback('Erreur lors du chargement des groupes/canaux.', true);
+      }
+    }
+
+    async function schedLoadFbGroups() {
+      try {
+        const res = await apiFetch('/api/facebook/groups');
+        const data = await res.json();
+        schedRenderGroupsTable('sched-fb-groups-body', data.groups || []);
+      } catch (err) {
+        schedShowFeedback('Erreur lors du chargement des Groupes Facebook gérés.', true);
+      }
+    }
+
+    function schedUpdateChannelUI() {
+      const channel = schedCurrentChannel();
+      const recipientTypeField = document.getElementById('sched-recipient-type-field');
+      const groupsPicker = document.getElementById('sched-groups-picker');
+      const contactsPicker = document.getElementById('sched-contacts-picker');
+      const fbGroupsPicker = document.getElementById('sched-fb-groups-picker');
+      const pdfWarning = document.getElementById('sched-pdf-warning');
+
+      if (channel === 'facebook_page') {
+        recipientTypeField.hidden = true;
+        groupsPicker.hidden = true;
+        contactsPicker.hidden = true;
+        fbGroupsPicker.hidden = false;
+        schedLoadFbGroups();
+      } else {
+        recipientTypeField.hidden = false;
+        fbGroupsPicker.hidden = true;
+        const recipientType = schedCurrentRecipientType();
+        groupsPicker.hidden = recipientType !== 'groups';
+        contactsPicker.hidden = recipientType !== 'contacts';
+        if (recipientType === 'groups') schedLoadChannelGroups();
+      }
+
+      pdfWarning.hidden = channel !== 'facebook_page';
+    }
+
+    function schedInit() {
+      const channelSelect = document.getElementById('sched-channel');
+      Array.from(channelSelect.options).forEach((opt) => {
+        opt.hidden = opt.value === 'facebook_page' ? false : !hasModule(opt.value);
+      });
+      const currentOption = channelSelect.selectedOptions[0];
+      if (currentOption && currentOption.hidden) {
+        const firstVisible = Array.from(channelSelect.options).find((opt) => !opt.hidden);
+        if (firstVisible) channelSelect.value = firstVisible.value;
+      }
+      schedUpdateChannelUI();
+    }
+
+    document.getElementById('sched-channel').addEventListener('change', schedUpdateChannelUI);
+    document.querySelectorAll('input[name="sched-recipient-type"]').forEach((radio) => {
+      radio.addEventListener('change', schedUpdateChannelUI);
+    });
+    document.getElementById('sched-groups-reload-btn').addEventListener('click', schedLoadChannelGroups);
+
+    const schedContactsDropZone = document.getElementById('sched-contacts-drop-zone');
+    const schedContactsFileInput = document.getElementById('sched-contacts-file');
+    schedContactsDropZone.addEventListener('click', () => schedContactsFileInput.click());
+    schedContactsDropZone.addEventListener('dragover', (e) => { e.preventDefault(); schedContactsDropZone.classList.add('dragover'); });
+    schedContactsDropZone.addEventListener('dragleave', () => schedContactsDropZone.classList.remove('dragover'));
+    schedContactsDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      schedContactsDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) schedSetSelectedContactsFile(e.dataTransfer.files[0]);
+    });
+    schedContactsFileInput.addEventListener('change', () => {
+      if (schedContactsFileInput.files && schedContactsFileInput.files[0]) schedSetSelectedContactsFile(schedContactsFileInput.files[0]);
+    });
+    function schedSetSelectedContactsFile(file) {
+      selectedSchedContactsFile = file;
+      document.getElementById('sched-contacts-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    document.getElementById('sched-contacts-import-btn').addEventListener('click', async () => {
+      if (!selectedSchedContactsFile) { schedShowFeedback('Sélectionnez d\'abord un fichier .csv ou .xlsx.', true); return; }
+      const channel = schedCurrentChannel();
+      const endpoint = channel === 'telegram' ? '/api/telegram/contacts/import' : '/api/contacts/import';
+      const formData = new FormData();
+      formData.append('file', selectedSchedContactsFile);
+      try {
+        const res = await apiFetch(endpoint, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) { schedShowFeedback(data.error || 'Échec de l\'import.', true); return; }
+        schedImportedContacts = data.contacts || [];
+        document.getElementById('sched-contacts-count').textContent = schedImportedContacts.length + ' contact(s) importé(s).';
+        schedShowFeedback(schedImportedContacts.length + ' contact(s) importé(s).', false);
+      } catch (err) {
+        schedShowFeedback('Erreur réseau lors de l\'import.', true);
+      }
+    });
+
+    const schedMediaDropZone = document.getElementById('sched-media-drop-zone');
+    const schedMediaFileInput = document.getElementById('sched-media-file');
+    schedMediaDropZone.addEventListener('click', () => schedMediaFileInput.click());
+    schedMediaDropZone.addEventListener('dragover', (e) => { e.preventDefault(); schedMediaDropZone.classList.add('dragover'); });
+    schedMediaDropZone.addEventListener('dragleave', () => schedMediaDropZone.classList.remove('dragover'));
+    schedMediaDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      schedMediaDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) schedSetSelectedMediaFile(e.dataTransfer.files[0]);
+    });
+    schedMediaFileInput.addEventListener('change', () => {
+      if (schedMediaFileInput.files && schedMediaFileInput.files[0]) schedSetSelectedMediaFile(schedMediaFileInput.files[0]);
+    });
+    function schedSetSelectedMediaFile(file) {
+      selectedSchedMediaFile = file;
+      document.getElementById('sched-media-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    document.getElementById('sched-submit-btn').addEventListener('click', async () => {
+      const channel = schedCurrentChannel();
+      const message = document.getElementById('sched-message').value.trim();
+      const datetimeValue = document.getElementById('sched-datetime').value;
+      const recipientType = schedCurrentRecipientType();
+
+      let recipients = [];
+      if (channel === 'facebook_page') {
+        recipients = Array.from(document.querySelectorAll('#sched-fb-groups-body input[type="checkbox"]:checked')).map((cb) => cb.value);
+      } else if (recipientType === 'groups') {
+        recipients = Array.from(document.querySelectorAll('#sched-groups-body input[type="checkbox"]:checked')).map((cb) => cb.value);
+      } else {
+        recipients = schedImportedContacts.map(schedContactIdentifier).filter(Boolean);
+      }
+
+      if (!message && !selectedSchedMediaFile) {
+        schedShowFeedback('Fournissez un texte et/ou un média.', true);
+        return;
+      }
+      if (channel !== 'facebook_page' && recipients.length === 0) {
+        schedShowFeedback('Sélectionnez au moins un destinataire (groupe/canal ou contact importé).', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('channel', channel);
+      if (channel !== 'facebook_page') formData.append('recipientType', recipientType);
+      formData.append('recipients', JSON.stringify(recipients));
+      formData.append('message', message);
+      formData.append('scheduledAt', datetimeValue ? new Date(datetimeValue).toISOString() : new Date().toISOString());
+      if (selectedSchedMediaFile) formData.append('media', selectedSchedMediaFile);
+
+      const btn = document.getElementById('sched-submit-btn');
+      btn.disabled = true;
+      try {
+        const res = await apiFetch('/api/scheduled-messages', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          schedShowFeedback(data.error || 'Échec de la programmation.', true);
+        } else {
+          schedShowFeedback('✅ Programmation enregistrée.', false);
+          document.getElementById('sched-message').value = '';
+          selectedSchedMediaFile = null;
+          document.getElementById('sched-media-file-name').textContent = 'Aucun fichier sélectionné.';
+          document.getElementById('sched-media-file-name').className = 'empty';
+          schedRefreshList();
+        }
+      } catch (err) {
+        schedShowFeedback('Erreur réseau lors de la programmation.', true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    function schedStatusLabel(status) {
+      return {
+        pending: '⏳ En attente',
+        sending: '🔄 Envoi en cours',
+        sent: '✅ Envoyé',
+        failed: '❌ Échec',
+        cancelled: '🚫 Annulé',
+      }[status] || status;
+    }
+
+    function schedChannelLabel(channel) {
+      return { telegram: 'Telegram', facebook_page: 'Facebook (Page)', whatsapp: 'WhatsApp' }[channel] || channel;
+    }
+
+    async function schedRefreshList() {
+      try {
+        const res = await apiFetch('/api/scheduled-messages');
+        const data = await res.json();
+        const tbody = document.getElementById('sched-list-body');
+        tbody.innerHTML = '';
+        const messages = data.messages || [];
+
+        if (messages.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">Aucune programmation.</td></tr>';
+          return;
+        }
+
+        messages.forEach((m) => {
+          const tr = document.createElement('tr');
+
+          const channelTd = document.createElement('td');
+          channelTd.textContent = schedChannelLabel(m.channel);
+
+          const recipientsTd = document.createElement('td');
+          recipientsTd.textContent = m.channel === 'facebook_page'
+            ? (m.recipients.length > 0 ? 'Page + ' + m.recipients.length + ' Groupe(s)' : 'Page uniquement')
+            : m.recipients.length + ' destinataire(s) (' + (m.recipientType === 'contacts' ? 'liste importée' : 'groupes/canaux') + ')';
+
+          const messageTd = document.createElement('td');
+          const preview = (m.message || '').slice(0, 60) + ((m.message || '').length > 60 ? '…' : '');
+          messageTd.textContent = preview + (m.mediaUrl ? ' 📎' : '');
+
+          const scheduledTd = document.createElement('td');
+          scheduledTd.textContent = new Date(m.scheduledAt).toLocaleString();
+
+          const statusTd = document.createElement('td');
+          statusTd.textContent = schedStatusLabel(m.status) + (m.status === 'failed' && m.lastError ? ' (' + m.lastError + ')' : '');
+
+          const actionTd = document.createElement('td');
+          if (m.status === 'pending') {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.textContent = 'Annuler';
+            cancelBtn.addEventListener('click', async () => {
+              try {
+                const delRes = await apiFetch('/api/scheduled-messages/' + encodeURIComponent(m.id), { method: 'DELETE' });
+                const delData = await delRes.json();
+                if (!delRes.ok) { schedShowFeedback(delData.error || 'Échec de l\'annulation.', true); return; }
+                schedRefreshList();
+              } catch (err) {
+                schedShowFeedback('Erreur réseau lors de l\'annulation.', true);
+              }
+            });
+            actionTd.appendChild(cancelBtn);
+          }
+
+          tr.appendChild(channelTd);
+          tr.appendChild(recipientsTd);
+          tr.appendChild(messageTd);
+          tr.appendChild(scheduledTd);
+          tr.appendChild(statusTd);
+          tr.appendChild(actionTd);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        // silencieux : l'utilisateur peut cliquer sur "Actualiser"
+      }
+    }
+
+    document.getElementById('sched-refresh-btn').addEventListener('click', schedRefreshList);
+
     // ---------- Init ----------
     function init() {
       toggleTargetMode();
@@ -2320,6 +2736,7 @@
       if (hasModule('telegram')) tgRefreshStatus();
       if (hasModule('facebook')) fbRefreshStatus();
       if (hasModule('studio_video')) mediaRefreshStatus();
+      schedInit();
       handleOAuthRedirectFeedback();
     }
 

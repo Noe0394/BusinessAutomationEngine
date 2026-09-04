@@ -16,6 +16,7 @@ const TelegramAdapter = require('./adapters/telegram');
 const MediaPublisherAdapter = require('./adapters/media_publisher');
 const licenses = require('./licenses');
 const oauthConfig = require('./oauth_config');
+const scheduledMessages = require('./queues/scheduled_messages');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -43,6 +44,14 @@ const DATA_DELETION_PATH = path.join(__dirname, 'public', 'legal', 'data-deletio
 const facebook = new FacebookMessengerAdapter();
 const telegram = new TelegramAdapter();
 const mediaPublisher = new MediaPublisherAdapter();
+
+// Fichiers média joints à une programmation multi-canal (module Programmation
+// / Planning) : sauvegardés ici plutôt que gardés en mémoire, puisqu'une
+// programmation peut attendre plusieurs jours avant son envoi. Même limite
+// que les autres dossiers de données locales sur Render : effacé à chaque
+// redéploiement/redémarrage sauf disque persistant monté sur ce chemin.
+const SCHEDULED_MEDIA_DIR = process.env.SCHEDULED_MEDIA_DIR || path.join(__dirname, 'scheduled_media');
+fs.mkdirSync(SCHEDULED_MEDIA_DIR, { recursive: true });
 
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('ADMIN_PASSWORD non défini : utilisation du mot de passe par défaut codé en dur. Définissez cette variable d\'environnement avant tout déploiement public.');
@@ -539,6 +548,211 @@ function startTelegramDmCampaign(recipients, message, options = {}) {
 
   return campaign;
 }
+
+// ---------- Programmation multi-canal (module Programmation / Planning) ----------
+// Contrairement aux campagnes interactives ci-dessus (currentCampaign,
+// currentTelegramDmCampaign — un seul créneau global partagé avec le
+// dashboard), une programmation est indépendante : elle doit pouvoir
+// s'exécuter sans écraser une campagne manuelle en cours, ni en être bloquée.
+// Chaque canal a donc sa propre boucle d'envoi séquentielle ici plutôt que de
+// réutiliser les créneaux interactifs existants.
+
+// mediaUrl vaut soit un lien externe (http/https, fourni par l'exploitant),
+// soit "local:<nom de fichier>" pour un média envoyé depuis le formulaire du
+// dashboard et sauvegardé dans SCHEDULED_MEDIA_DIR — pas d'endpoint HTTP
+// public exposé pour ces fichiers, ils ne sont lus que côté serveur au
+// moment de l'envoi.
+async function resolveScheduledMedia(entry) {
+  if (!entry.mediaUrl) {
+    return null;
+  }
+
+  if (entry.mediaUrl.startsWith('local:')) {
+    const fileName = entry.mediaUrl.slice('local:'.length);
+    const filePath = path.join(SCHEDULED_MEDIA_DIR, fileName);
+    const buffer = fs.readFileSync(filePath);
+    return {
+      buffer,
+      mimetype: entry.mediaMimetype || 'application/octet-stream',
+      filename: entry.mediaFilename || fileName,
+    };
+  }
+
+  const res = await axios.get(entry.mediaUrl, {
+    responseType: 'arraybuffer',
+    maxContentLength: 200 * 1024 * 1024,
+    timeout: 30000,
+  });
+  const mimetype = res.headers['content-type'] || entry.mediaMimetype || 'application/octet-stream';
+  let filename = entry.mediaFilename;
+  if (!filename) {
+    try {
+      filename = path.basename(new URL(entry.mediaUrl).pathname) || 'fichier';
+    } catch (err) {
+      filename = 'fichier';
+    }
+  }
+  return { buffer: Buffer.from(res.data), mimetype, filename };
+}
+
+async function dispatchScheduledWhatsapp(entry, media) {
+  let recipients = entry.recipients;
+
+  if (entry.recipientType === 'groups') {
+    const merged = new Set();
+    for (const groupId of entry.recipients) {
+      const participants = await whatsapp.getGroupParticipants(groupId);
+      (participants || []).forEach((p) => merged.add(p.id));
+    }
+    recipients = Array.from(merged);
+  }
+
+  const results = [];
+  for (let i = 0; i < recipients.length; i += 1) {
+    const to = normalizeJid(recipients[i]);
+    try {
+      if (media) {
+        await whatsapp.sendMedia(to, { ...media, caption: entry.message });
+      } else {
+        await whatsapp.sendMessage(to, entry.message);
+      }
+      results.push({ to, status: 'delivered' });
+    } catch (err) {
+      results.push({ to, status: 'failed', error: err.message || String(err) });
+    }
+    if (i < recipients.length - 1) {
+      await sleep(randomDelay(8000, 15000));
+    }
+  }
+  return results;
+}
+
+async function dispatchScheduledTelegram(entry, media) {
+  const targets = entry.recipients;
+  const results = [];
+
+  for (let i = 0; i < targets.length; i += 1) {
+    try {
+      // 'contacts' : identifiants importés (username/téléphone) à résoudre —
+      // voir resolveRecipient(). 'groups' : identifiants de groupes/canaux
+      // déjà connus (getGroups()), utilisables directement.
+      const destination = entry.recipientType === 'contacts'
+        ? await telegram.resolveRecipient(targets[i])
+        : targets[i];
+
+      if (media) {
+        await telegram.sendMedia(destination, { ...media, caption: entry.message });
+      } else {
+        await telegram.sendMessage(destination, entry.message);
+      }
+      results.push({ to: String(targets[i]), status: 'delivered' });
+    } catch (err) {
+      results.push({ to: String(targets[i]), status: 'failed', error: err.message || String(err) });
+    }
+    if (i < targets.length - 1) {
+      await sleep(randomDelay(10000, 15000));
+    }
+  }
+  return results;
+}
+
+async function dispatchScheduledFacebookPage(entry, media) {
+  const pageResult = await facebook.publishPost({
+    message: entry.message,
+    mediaBuffer: media ? media.buffer : null,
+    mediaMimetype: media ? media.mimetype : null,
+    mediaFilename: media ? media.filename : null,
+  });
+
+  const groupResults = [];
+  const groupIds = Array.isArray(entry.recipients) ? entry.recipients : [];
+  for (let i = 0; i < groupIds.length; i += 1) {
+    try {
+      await facebook.publishToGroup(groupIds[i], {
+        message: entry.message,
+        mediaBuffer: media ? media.buffer : null,
+        mediaMimetype: media ? media.mimetype : null,
+        mediaFilename: media ? media.filename : null,
+      });
+      groupResults.push({ to: groupIds[i], status: 'published' });
+    } catch (err) {
+      groupResults.push({ to: groupIds[i], status: 'failed', error: err.message || String(err) });
+    }
+    if (i < groupIds.length - 1) {
+      await sleep(randomDelay(10000, 15000));
+    }
+  }
+
+  return { page: pageResult, groups: groupResults };
+}
+
+let scheduledMessagesTickRunning = false;
+
+// Cycle périodique (toutes les 60s) : repère les programmations "pending"
+// dont la date est atteinte et déclenche leur envoi via le contrôleur du
+// canal concerné. Un échec (compteur "attempts") est retenté au cycle
+// suivant jusqu'à MAX_ATTEMPTS, puis marqué "failed" définitivement.
+async function runScheduledMessagesTick() {
+  if (scheduledMessagesTickRunning) {
+    return;
+  }
+  scheduledMessagesTickRunning = true;
+
+  try {
+    const due = scheduledMessages.getDuePending();
+
+    for (const entry of due) {
+      scheduledMessages.update(entry.id, { status: 'sending' });
+
+      try {
+        const media = await resolveScheduledMedia(entry);
+        let result;
+
+        if (entry.channel === 'whatsapp') {
+          result = await dispatchScheduledWhatsapp(entry, media);
+        } else if (entry.channel === 'telegram') {
+          result = await dispatchScheduledTelegram(entry, media);
+        } else if (entry.channel === 'facebook_page') {
+          result = await dispatchScheduledFacebookPage(entry, media);
+        } else {
+          throw new Error(`Canal de programmation inconnu : ${entry.channel}`);
+        }
+
+        scheduledMessages.update(entry.id, {
+          status: 'sent',
+          sentAt: new Date().toISOString(),
+          result,
+          lastError: null,
+        });
+        console.log(`Programmation ${entry.id} (${entry.channel}) : envoyée.`);
+      } catch (err) {
+        const attempts = (entry.attempts || 0) + 1;
+        const failed = attempts >= scheduledMessages.MAX_ATTEMPTS;
+        scheduledMessages.update(entry.id, {
+          status: failed ? 'failed' : 'pending',
+          attempts,
+          lastError: err.message || String(err),
+        });
+        console.error(
+          `Programmation ${entry.id} (${entry.channel}) : échec (tentative ${attempts}/${scheduledMessages.MAX_ATTEMPTS}) —`,
+          err.message || err,
+        );
+      }
+    }
+  } finally {
+    scheduledMessagesTickRunning = false;
+  }
+}
+
+const SCHEDULED_MESSAGES_TICK_MS = 60 * 1000;
+const scheduledMessagesInterval = setInterval(() => {
+  runScheduledMessagesTick().catch((err) => {
+    console.error('Erreur pendant le cycle de programmation multi-canal:', err);
+  });
+}, SCHEDULED_MESSAGES_TICK_MS);
+// Ne bloque jamais l'arrêt propre du process (même principe que les autres
+// setInterval de ce fichier/des adaptateurs).
+if (scheduledMessagesInterval.unref) scheduledMessagesInterval.unref();
 
 async function findGroupByName(name) {
   const groups = await whatsapp.getGroups();
@@ -1976,6 +2190,111 @@ app.get('/api/media/publish-status', requireAccess, requireModule('studio_video'
   }
 
   res.status(200).json({ exists: true, ...currentPublishJob });
+});
+
+// ---------- Programmation multi-canal (module Programmation / Planning) ----------
+// Accessible sans requireModule() statique : le canal choisi n'est connu
+// qu'au moment de la requête (corps du formulaire), donc la vérification se
+// fait à la main ci-dessous, avec la même règle que requireModule('...') —
+// 'facebook_page' toujours autorisé, 'telegram'/'whatsapp' soumis à
+// allowedModules pour une clé de licence restreinte.
+function channelAllowed(req, channel) {
+  if (channel === 'facebook_page') return true;
+  if (req.allowedModules === null || req.allowedModules === undefined) return true;
+  return Array.isArray(req.allowedModules) && req.allowedModules.includes(channel);
+}
+
+app.get('/api/scheduled-messages', requireAccess, (req, res) => {
+  const all = scheduledMessages.list();
+  const visible = req.allowedModules === null || req.allowedModules === undefined
+    ? all
+    : all.filter((m) => channelAllowed(req, m.channel));
+  res.status(200).json({ messages: visible });
+});
+
+app.post(
+  '/api/scheduled-messages',
+  requireAccess,
+  upload.single('media'),
+  async (req, res) => {
+    const { channel, recipientType, message, mediaUrl, scheduledAt } = req.body;
+    let { recipients } = req.body;
+
+    if (typeof recipients === 'string') {
+      try {
+        recipients = JSON.parse(recipients);
+      } catch (err) {
+        recipients = recipients.split(/[,\n]/).map((r) => r.trim()).filter(Boolean);
+      }
+    }
+
+    if (!['telegram', 'facebook_page', 'whatsapp'].includes(channel)) {
+      return res.status(400).json({ error: 'Le champ "channel" doit valoir "telegram", "facebook_page" ou "whatsapp".' });
+    }
+    if (!channelAllowed(req, channel)) {
+      return res.status(403).json({ error: `Votre clé de licence n'inclut pas le module "${channel}".` });
+    }
+    if (!scheduledAt || Number.isNaN(new Date(scheduledAt).getTime())) {
+      return res.status(400).json({ error: 'Le champ "scheduledAt" (date/heure d\'envoi ISO) est requis et doit être une date valide.' });
+    }
+    if (!message && !req.file && !mediaUrl) {
+      return res.status(400).json({ error: 'Fournissez un "message" et/ou un média (fichier joint ou "mediaUrl").' });
+    }
+    if (channel !== 'facebook_page' && (!Array.isArray(recipients) || recipients.length === 0)) {
+      return res.status(400).json({ error: 'Fournissez "recipients" (destinataires ou groupes ciblés) pour ce canal.' });
+    }
+    if (req.file && req.file.mimetype === 'application/pdf' && channel === 'facebook_page') {
+      return res.status(400).json({
+        error: 'L\'API Graph de Meta ne permet pas de joindre un PDF à une publication de Page ou de Groupe. '
+          + 'Hébergez le PDF ailleurs et partagez son lien dans le message.',
+      });
+    }
+
+    let storedMediaUrl = mediaUrl || null;
+    let mediaMimetype = null;
+    let mediaFilename = null;
+
+    if (req.file) {
+      const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), req.file.buffer);
+      storedMediaUrl = `local:${safeName}`;
+      mediaMimetype = req.file.mimetype;
+      mediaFilename = req.file.originalname;
+    }
+
+    const entry = scheduledMessages.create({
+      channel,
+      recipientType: recipientType || null,
+      recipients: Array.isArray(recipients) ? recipients : [],
+      message,
+      mediaUrl: storedMediaUrl,
+      mediaMimetype,
+      mediaFilename,
+      scheduledAt: new Date(scheduledAt).toISOString(),
+    });
+
+    res.status(201).json({ message: entry });
+  },
+);
+
+app.delete('/api/scheduled-messages/:id', requireAccess, (req, res) => {
+  const entry = scheduledMessages.get(req.params.id);
+  if (!entry) {
+    return res.status(404).json({ error: 'Programmation introuvable.' });
+  }
+  if (!channelAllowed(req, entry.channel)) {
+    return res.status(403).json({ error: `Votre clé de licence n'inclut pas le module "${entry.channel}".` });
+  }
+
+  try {
+    const cancelled = scheduledMessages.cancel(req.params.id);
+    res.status(200).json({ message: cancelled });
+  } catch (err) {
+    if (err.message === 'ONLY_PENDING_CAN_BE_CANCELLED') {
+      return res.status(409).json({ error: 'Seule une programmation "en attente" peut être annulée.' });
+    }
+    throw err;
+  }
 });
 
 app.use((err, req, res, next) => {
