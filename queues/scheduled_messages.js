@@ -24,8 +24,12 @@ function writeAll(list) {
   fs.writeFileSync(STORE_PATH, JSON.stringify(list, null, 2), 'utf8');
 }
 
-function list() {
-  return readAll().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+function list({ channel } = {}) {
+  let all = readAll().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (channel) {
+    all = all.filter((m) => m.channel === channel);
+  }
+  return all;
 }
 
 function get(id) {
@@ -44,7 +48,7 @@ function get(id) {
  *     Groupes gérés (voir adapters/facebook.js) à qui diffuser en plus de
  *     la Page elle-même ; peut être vide (Page uniquement).
  */
-function create({ channel, recipientType, recipients, message, mediaUrl, mediaMimetype, mediaFilename, scheduledAt }) {
+function create({ channel, recipientType, recipients, message, mediaUrl, mediaMimetype, mediaFilename, scheduledAt, keyword }) {
   const entry = {
     id: `sched_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     channel,
@@ -54,6 +58,12 @@ function create({ channel, recipientType, recipients, message, mediaUrl, mediaMi
     mediaUrl: mediaUrl || null,
     mediaMimetype: mediaMimetype || null,
     mediaFilename: mediaFilename || null,
+    // Étiquette purement informative (ex : "RECETTE") pour repérer un post
+    // programmé dans le tableau récapitulatif — contrairement aux mots-clés
+    // du module de Capture de Prospects (models/keyword_rules.js), celle-ci
+    // ne déclenche aucune action automatique : c'est un contenu sortant
+    // qu'on programme, pas un texte entrant qu'on filtre.
+    keyword: keyword || null,
     scheduledAt,
     status: 'pending',
     attempts: 0,

@@ -2667,6 +2667,98 @@ app.delete('/api/scheduled-messages/:id', requireAccess, (req, res) => {
   }
 });
 
+// ---------- Programmation de Contenu sur la Page Facebook ----------
+// Sous-ensemble dédié de la Programmation multi-canal ci-dessus : mêmes
+// modèle (queues/scheduled_messages.js) et cycle d'envoi toutes les 60s
+// (runScheduledMessagesTick/dispatchScheduledFacebookPage) — un moteur
+// séparé aurait dupliqué toute la logique de publication déjà en place
+// (POST /{page-id}/feed|photos|videos) sans rien apporter de plus. Ces
+// routes ne font qu'imposer channel="facebook_page" et n'exposer que ce
+// sous-ensemble, avec l'étiquette "keyword" en plus.
+//
+// À noter pour choisir entre ce module et "Publication & Programmation sur
+// la Page" (POST /api/facebook/publish, plus haut) : celui-ci utilise la
+// programmation native de Meta (scheduled_publish_time), gérée par les
+// serveurs de Facebook eux-mêmes — fiable même si ce serveur est hors ligne
+// au moment prévu. Le module ci-dessous dépend au contraire de ce process
+// Node (cycle toutes les 60s) : si le serveur est arrêté ou redémarre au
+// mauvais moment, l'envoi est simplement retardé au prochain cycle après
+// redémarrage, jamais perdu (statut "pending" persisté), mais moins
+// immédiat que la programmation native. Son intérêt : un tableau
+// récapitulatif unifié, l'étiquette mot-clé, et la diffusion combinée vers
+// des Groupes au même moment que la Page.
+app.get('/api/facebook/schedule-post', requireAccess, requireModule('facebook'), (req, res) => {
+  res.status(200).json({ posts: scheduledMessages.list({ channel: 'facebook_page' }) });
+});
+
+app.post('/api/facebook/schedule-post', requireAccess, requireModule('facebook'), upload.single('media'), (req, res) => {
+  const { message, mediaUrl, scheduledAt, keyword } = req.body;
+  let { recipients } = req.body;
+
+  if (typeof recipients === 'string') {
+    try {
+      recipients = JSON.parse(recipients);
+    } catch (err) {
+      recipients = recipients.split(/[,\n]/).map((r) => r.trim()).filter(Boolean);
+    }
+  }
+
+  if (!scheduledAt || Number.isNaN(new Date(scheduledAt).getTime())) {
+    return res.status(400).json({ error: 'Le champ "scheduledAt" (date/heure de diffusion ISO) est requis et doit être une date valide.' });
+  }
+  if (!message && !req.file && !mediaUrl) {
+    return res.status(400).json({ error: 'Fournissez un "message" et/ou un média (fichier joint ou "mediaUrl").' });
+  }
+  if (req.file && req.file.mimetype === 'application/pdf') {
+    return res.status(400).json({
+      error: 'L\'API Graph de Meta ne permet pas de joindre un PDF à une publication de Page. '
+        + 'Hébergez le PDF ailleurs et partagez son lien dans le message.',
+    });
+  }
+
+  let storedMediaUrl = mediaUrl || null;
+  let mediaMimetype = null;
+  let mediaFilename = null;
+
+  if (req.file) {
+    const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), req.file.buffer);
+    storedMediaUrl = `local:${safeName}`;
+    mediaMimetype = req.file.mimetype;
+    mediaFilename = req.file.originalname;
+  }
+
+  const entry = scheduledMessages.create({
+    channel: 'facebook_page',
+    recipients: Array.isArray(recipients) ? recipients : [],
+    message,
+    mediaUrl: storedMediaUrl,
+    mediaMimetype,
+    mediaFilename,
+    keyword,
+    scheduledAt: new Date(scheduledAt).toISOString(),
+  });
+
+  res.status(201).json({ post: entry });
+});
+
+app.delete('/api/facebook/schedule-post/:id', requireAccess, requireModule('facebook'), (req, res) => {
+  const entry = scheduledMessages.get(req.params.id);
+  if (!entry || entry.channel !== 'facebook_page') {
+    return res.status(404).json({ error: 'Publication programmée introuvable.' });
+  }
+
+  try {
+    const cancelled = scheduledMessages.cancel(req.params.id);
+    res.status(200).json({ post: cancelled });
+  } catch (err) {
+    if (err.message === 'ONLY_PENDING_CAN_BE_CANCELLED') {
+      return res.status(409).json({ error: 'Seule une programmation "en attente" peut être annulée.' });
+    }
+    throw err;
+  }
+});
+
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ error: `Erreur de téléversement : ${err.message}` });

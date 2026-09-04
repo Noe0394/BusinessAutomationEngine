@@ -69,11 +69,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone, #share-import-drop-zone, #share-custom-media-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone, #share-import-drop-zone, #share-custom-media-drop-zone, #fb-sched-media-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover, #share-import-drop-zone.dragover, #share-custom-media-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover, #share-import-drop-zone.dragover, #share-custom-media-drop-zone.dragover, #fb-sched-media-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -571,6 +571,58 @@
 
           <button type="button" id="fb-publish-btn" class="send-button">🚀 Publier / Programmer sur la Page</button>
           <div id="fb-publish-feedback" hidden></div>
+        </div>
+
+        <div class="subsection" id="fb-schedule-section">
+          <h3>Planificateur de Contenu (mots-clés &amp; suivi)</h3>
+          <p class="empty">
+            Alternative à la programmation ci-dessus : passe par notre propre planificateur (vérifié toutes les
+            60 secondes par ce serveur) plutôt que par la programmation native de Meta. Avantage : étiquette
+            mot-clé et tableau de suivi unifiés avec les autres canaux. Contrepoint : dépend de ce serveur —
+            un post "en attente" reste en sécurité et part au redémarrage s'il a été interrompu, mais sans la
+            garantie d'un service géré directement par Facebook.
+          </p>
+
+          <div class="field">
+            <label for="fb-sched-message">Texte de la publication</label>
+            <textarea id="fb-sched-message" placeholder="Votre publication..."></textarea>
+          </div>
+
+          <div class="field">
+            <label for="fb-sched-keyword">Mot-clé d'accroche (optionnel, ex : RECETTE)</label>
+            <input type="text" id="fb-sched-keyword" placeholder="RECETTE" />
+          </div>
+
+          <div class="field">
+            <label>Média (optionnel — image ou vidéo, en fichier ou en lien)</label>
+            <div id="fb-sched-media-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+            <input type="file" id="fb-sched-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+            <p id="fb-sched-media-file-name" class="empty">Aucun fichier sélectionné.</p>
+            <label for="fb-sched-media-url">Ou lien direct vers une image/vidéo (ignoré si un fichier est choisi ci-dessus)</label>
+            <input type="text" id="fb-sched-media-url" placeholder="https://..." />
+          </div>
+
+          <div class="warning-box">
+            ⚠️ Un PDF ne peut pas être joint nativement à une publication Facebook : hébergez-le ailleurs et collez
+            son lien dans le texte.
+          </div>
+
+          <div class="field">
+            <label for="fb-sched-datetime">Date et heure de diffusion</label>
+            <input type="datetime-local" id="fb-sched-datetime" />
+          </div>
+
+          <button type="button" id="fb-sched-submit-btn" class="send-button">🗓️ Programmer la publication</button>
+          <div id="fb-sched-feedback" hidden></div>
+
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Mot-clé</th><th>Aperçu</th><th>Prévu le</th><th>Statut</th><th></th></tr></thead>
+              <tbody id="fb-sched-list-body">
+                <tr><td colspan="5" class="empty">Aucune publication programmée.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div class="subsection" id="fb-groups-section">
@@ -2204,6 +2256,152 @@
       }
     });
 
+    // ---------- Facebook : Planificateur de Contenu (mots-clés & suivi) ----------
+    let selectedFbSchedMediaFile = null;
+
+    function fbSchedShowFeedback(message, isError) {
+      const el = document.getElementById('fb-sched-feedback');
+      el.hidden = false;
+      el.textContent = message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    const fbSchedMediaDropZone = document.getElementById('fb-sched-media-drop-zone');
+    const fbSchedMediaFileInput = document.getElementById('fb-sched-media-file');
+    fbSchedMediaDropZone.addEventListener('click', () => fbSchedMediaFileInput.click());
+    fbSchedMediaDropZone.addEventListener('dragover', (e) => { e.preventDefault(); fbSchedMediaDropZone.classList.add('dragover'); });
+    fbSchedMediaDropZone.addEventListener('dragleave', () => fbSchedMediaDropZone.classList.remove('dragover'));
+    fbSchedMediaDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      fbSchedMediaDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) fbSchedSetSelectedMediaFile(e.dataTransfer.files[0]);
+    });
+    fbSchedMediaFileInput.addEventListener('change', () => {
+      if (fbSchedMediaFileInput.files && fbSchedMediaFileInput.files[0]) fbSchedSetSelectedMediaFile(fbSchedMediaFileInput.files[0]);
+    });
+    function fbSchedSetSelectedMediaFile(file) {
+      selectedFbSchedMediaFile = file;
+      document.getElementById('fb-sched-media-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    }
+
+    function fbSchedStatusLabel(status) {
+      return {
+        pending: '⏳ En attente',
+        sending: '🔄 Envoi en cours',
+        sent: '✅ Publié',
+        failed: '❌ Échec',
+        cancelled: '🚫 Annulé',
+      }[status] || status;
+    }
+
+    async function fbSchedRefreshList() {
+      try {
+        const res = await apiFetch('/api/facebook/schedule-post');
+        const data = await res.json();
+        const tbody = document.getElementById('fb-sched-list-body');
+        tbody.innerHTML = '';
+        const posts = data.posts || [];
+
+        if (posts.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" class="empty">Aucune publication programmée.</td></tr>';
+          return;
+        }
+
+        posts.forEach((p) => {
+          const tr = document.createElement('tr');
+
+          const keywordTd = document.createElement('td');
+          keywordTd.textContent = p.keyword || '-';
+
+          const previewTd = document.createElement('td');
+          const preview = (p.message || '').slice(0, 50);
+          previewTd.textContent = preview + ((p.message || '').length > 50 ? '…' : '') + (p.mediaUrl ? ' 📎' : '');
+
+          const scheduledTd = document.createElement('td');
+          scheduledTd.textContent = new Date(p.scheduledAt).toLocaleString();
+
+          const statusTd = document.createElement('td');
+          statusTd.textContent = fbSchedStatusLabel(p.status) + (p.status === 'failed' && p.lastError ? ' (' + p.lastError + ')' : '');
+
+          const actionTd = document.createElement('td');
+          if (p.status === 'pending') {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.textContent = 'Annuler';
+            cancelBtn.addEventListener('click', async () => {
+              try {
+                const delRes = await apiFetch('/api/facebook/schedule-post/' + encodeURIComponent(p.id), { method: 'DELETE' });
+                const delData = await delRes.json();
+                if (!delRes.ok) { fbSchedShowFeedback(delData.error || 'Échec de l\'annulation.', true); return; }
+                fbSchedRefreshList();
+              } catch (err) {
+                fbSchedShowFeedback('Erreur réseau lors de l\'annulation.', true);
+              }
+            });
+            actionTd.appendChild(cancelBtn);
+          }
+
+          tr.appendChild(keywordTd);
+          tr.appendChild(previewTd);
+          tr.appendChild(scheduledTd);
+          tr.appendChild(statusTd);
+          tr.appendChild(actionTd);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        fbSchedShowFeedback('Erreur réseau lors du chargement des publications programmées.', true);
+      }
+    }
+
+    document.getElementById('fb-sched-submit-btn').addEventListener('click', async () => {
+      const message = document.getElementById('fb-sched-message').value.trim();
+      const keyword = document.getElementById('fb-sched-keyword').value.trim();
+      const mediaUrl = document.getElementById('fb-sched-media-url').value.trim();
+      const scheduledAt = document.getElementById('fb-sched-datetime').value;
+
+      if (!message && !selectedFbSchedMediaFile && !mediaUrl) {
+        fbSchedShowFeedback('Fournissez un texte et/ou un média à programmer.', true);
+        return;
+      }
+      if (!scheduledAt) {
+        fbSchedShowFeedback('Choisissez une date et une heure de diffusion.', true);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('message', message);
+      formData.append('keyword', keyword);
+      formData.append('scheduledAt', new Date(scheduledAt).toISOString());
+      if (selectedFbSchedMediaFile) {
+        formData.append('media', selectedFbSchedMediaFile);
+      } else if (mediaUrl) {
+        formData.append('mediaUrl', mediaUrl);
+      }
+
+      const btn = document.getElementById('fb-sched-submit-btn');
+      btn.disabled = true;
+      try {
+        const res = await apiFetch('/api/facebook/schedule-post', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          fbSchedShowFeedback(data.error || 'Échec de la programmation.', true);
+        } else {
+          fbSchedShowFeedback('🗓️ Publication programmée pour ' + new Date(scheduledAt).toLocaleString() + '.', false);
+          document.getElementById('fb-sched-message').value = '';
+          document.getElementById('fb-sched-keyword').value = '';
+          document.getElementById('fb-sched-media-url').value = '';
+          selectedFbSchedMediaFile = null;
+          document.getElementById('fb-sched-media-file-name').textContent = 'Aucun fichier sélectionné.';
+          document.getElementById('fb-sched-media-file-name').className = 'empty';
+          fbSchedRefreshList();
+        }
+      } catch (err) {
+        fbSchedShowFeedback('Erreur réseau lors de la programmation.', true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
     // ---------- Facebook : publication programmée sur les Groupes gérés ----------
     let selectedFbGroupsMediaFile = null;
 
@@ -2352,6 +2550,7 @@
           mainContent.hidden = false;
           notConnectedHint.hidden = true;
           fbLoadGroups();
+          fbSchedRefreshList();
         } else {
           mainContent.hidden = true;
           notConnectedHint.hidden = false;
