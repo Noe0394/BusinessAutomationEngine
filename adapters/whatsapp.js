@@ -58,6 +58,15 @@ function createSession(tenantId) {
   let reconnectTimer = null;
   let syncStarted = false;
   let heartbeatTimer = null;
+  // Nombre d'échecs consécutifs (close sans jamais atteindre 'open' entre
+  // deux) — remis à zéro dès qu'une connexion réussit. Sert de base au
+  // backoff exponentiel de scheduleReconnect ci-dessous : un problème
+  // persistant (identifiants revoqués, ou pire, un blocage réseau/anti-abus
+  // WhatsApp) ne doit jamais déclencher de nouvelles tentatives toutes les
+  // 3 secondes indéfiniment — observé en production après le correctif du
+  // 401 (voir plus bas) : sans ce frein, deux tenants ont martelé les
+  // serveurs WhatsApp en continu pendant plusieurs minutes.
+  let consecutiveFailures = 0;
 
   // Compteur de génération : incrémenté à chaque connect(). Les écouteurs
   // d'événements d'un socket capturent la génération au moment de leur
@@ -162,10 +171,20 @@ function createSession(tenantId) {
     return connected;
   }
 
-  function scheduleReconnect(delayMs = 3000) {
+  const BASE_RECONNECT_DELAY_MS = 3000;
+  const MAX_RECONNECT_DELAY_MS = 5 * 60 * 1000;
+
+  // Backoff exponentiel (3s, 6s, 12s, ... plafonné à 5 min) basé sur
+  // consecutiveFailures : protège contre un martèlement des serveurs
+  // WhatsApp en cas d'échec persistant, quelle qu'en soit la cause (session
+  // révoquée, coupure réseau, ou blocage anti-abus WhatsApp). Remis à zéro
+  // sur une connexion réussie (voir connection === 'open' plus bas).
+  function scheduleReconnect() {
     if (reconnectTimer) {
       return;
     }
+    const delayMs = Math.min(BASE_RECONNECT_DELAY_MS * (2 ** consecutiveFailures), MAX_RECONNECT_DELAY_MS);
+    consecutiveFailures += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect().catch((err) => {
@@ -290,6 +309,7 @@ function createSession(tenantId) {
       } else if (connection === 'open') {
         connected = true;
         latestQR = null;
+        consecutiveFailures = 0;
         if (reconnectTimer) {
           clearTimeout(reconnectTimer);
           reconnectTimer = null;
