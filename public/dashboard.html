@@ -306,7 +306,7 @@
         <div class="table-wrap">
           <table style="margin-top: 1rem;">
             <thead>
-              <tr><th>Téléphone</th><th>Prénom</th></tr>
+              <tr><th>Téléphone</th><th>Nom</th></tr>
             </thead>
             <tbody id="import-body">
               <tr><td colspan="2" class="empty">Aucun contact importé.</td></tr>
@@ -1521,16 +1521,48 @@
           return;
         }
         const blob = await res.blob();
+        const suggestedName = 'membres_groupes_whatsapp.xlsx';
+
+        // File System Access API (Chrome/Edge) : ouvre la boîte de dialogue
+        // native "Enregistrer sous" pour laisser choisir l'emplacement.
+        // Absente sur Firefox/Safari — dans ce cas (ou si l'utilisateur
+        // annule), on retombe sur le téléchargement automatique classique,
+        // avec un message explicite plutôt qu'un silence ambigu.
+        if (window.showSaveFilePicker) {
+          try {
+            const handle = await window.showSaveFilePicker({
+              suggestedName,
+              types: [{
+                description: 'Fichier Excel',
+                accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] },
+              }],
+            });
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            feedback.className = 'ok';
+            feedback.textContent = 'Fichier enregistré.';
+            return;
+          } catch (err) {
+            if (err.name === 'AbortError') {
+              feedback.hidden = true;
+              return; // l'utilisateur a annulé la boîte de dialogue
+            }
+            // Sinon (API indisponible en pratique malgré la détection, etc.),
+            // on retombe sur le téléchargement automatique ci-dessous.
+          }
+        }
+
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'membres_groupes_whatsapp.xlsx';
+        a.download = suggestedName;
         document.body.appendChild(a);
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
         feedback.className = 'ok';
-        feedback.textContent = 'Fichier téléchargé.';
+        feedback.textContent = '📥 Fichier enregistré dans votre dossier Téléchargements / Downloads.';
       } catch (err) {
         feedback.className = 'error';
         feedback.textContent = 'Erreur réseau lors de l\'export.';
@@ -1568,7 +1600,7 @@
           const telTd = document.createElement('td');
           telTd.textContent = c.telephone;
           const nameTd = document.createElement('td');
-          nameTd.textContent = c.prenom || '-';
+          nameTd.textContent = c.nom || c.prenom || '-';
           tr.appendChild(telTd);
           tr.appendChild(nameTd);
           tbody.appendChild(tr);
@@ -1750,8 +1782,11 @@
       if (mode === 'groups') {
         formData.append('groupIds', JSON.stringify(Array.from(state.selectedGroupIds)));
       } else {
-        const numbers = state.importedContacts.map((c) => c.telephone);
-        formData.append('recipients', JSON.stringify(numbers));
+        // { telephone, nom } plutôt qu'un simple numéro : "nom" alimente la
+        // variable de personnalisation {nom} dans les messages (voir
+        // replaceVariables côté serveur).
+        const contacts = state.importedContacts.map((c) => ({ telephone: c.telephone, nom: c.nom || c.prenom || '' }));
+        formData.append('recipients', JSON.stringify(contacts));
       }
 
       const sendBtn = document.getElementById('send-campaign-btn');
@@ -3363,6 +3398,14 @@
         recipients = Array.from(document.querySelectorAll('#sched-fb-groups-body input[type="checkbox"]:checked')).map((cb) => cb.value);
       } else if (recipientType === 'groups') {
         recipients = Array.from(document.querySelectorAll('#sched-groups-body input[type="checkbox"]:checked')).map((cb) => cb.value);
+      } else if (channel === 'whatsapp') {
+        // { telephone, nom } plutôt qu'un simple identifiant : "nom" alimente
+        // la variable de personnalisation {nom} dans les messages (voir
+        // replaceVariables côté serveur) — spécifique à WhatsApp, Telegram
+        // garde un identifiant simple ci-dessous.
+        recipients = schedImportedContacts
+          .map((c) => ({ telephone: schedContactIdentifier(c), nom: c.nom || c.prenom || '' }))
+          .filter((c) => c.telephone);
       } else {
         recipients = schedImportedContacts.map(schedContactIdentifier).filter(Boolean);
       }

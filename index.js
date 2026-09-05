@@ -228,10 +228,15 @@ function consumeOAuthState(state) {
   return Boolean(expiresAt) && expiresAt > Date.now();
 }
 
+// Variables de personnalisation ({nom}, etc.) : une clé absente ou nulle est
+// remplacée par une chaîne vide plutôt que de laisser le texte "{nom}" tel
+// quel ou d'y insérer le mot "null" — un message "Bonjour {nom}," sans nom
+// connu doit devenir "Bonjour," et non un texte visiblement cassé.
 function replaceVariables(template, row) {
-  return String(template).replace(/{(\w+)}/g, (match, key) => (
-    row[key] !== undefined && row[key] !== null ? String(row[key]) : match
-  ));
+  return String(template).replace(/{(\w+)}/g, (match, key) => {
+    const value = row[key];
+    return value !== undefined && value !== null ? String(value) : '';
+  });
 }
 
 function normalizeJid(telephone) {
@@ -241,6 +246,36 @@ function normalizeJid(telephone) {
   }
   const digits = raw.replace(/\D/g, '');
   return `${digits}@s.whatsapp.net`;
+}
+
+// Format E.164 (ex: +2250700000000) à partir d'un JID WhatsApp
+// (2250700000000@s.whatsapp.net) — utilisé pour l'export Excel. Les JID au
+// format @lid (identité anonyme récente de WhatsApp, sans numéro réel
+// exploitable) ne portent pas un vrai numéro : les chiffres qui précèdent
+// "@lid" ne sont pas un numéro de téléphone valide, mais on les renvoie quand
+// même préfixés d'un "+" plutôt que de faire échouer l'export pour ces
+// quelques participants.
+function jidToE164(jid) {
+  const digits = String(jid || '').split('@')[0].replace(/\D/g, '');
+  return digits ? `+${digits}` : '';
+}
+
+// Représentation normalisée d'un destinataire WhatsApp pour l'envoi : un JID
+// résolu ("to") et un nom de personnalisation ("nom", jamais undefined/null).
+// Accepte soit un identifiant simple (chaîne — résolution de groupe, ou liste
+// importée à l'ancien format), soit un contact enrichi { telephone, nom }
+// (liste importée avec colonne "nom", voir /api/contacts/import). Dans le
+// premier cas, on retombe sur le cache opportuniste de noms publics
+// (pushName/notify) constitué par l'adaptateur au fil des messages/contacts
+// vus — qui peut rester vide si ce contact n'a jamais été "rencontré".
+function normalizeRecipientEntry(recipient) {
+  if (recipient && typeof recipient === 'object') {
+    const telephone = recipient.telephone || recipient.to || recipient.phone || '';
+    const to = normalizeJid(telephone);
+    return { to, nom: recipient.nom || recipient.prenom || whatsapp.getContactName(to) || '' };
+  }
+  const to = normalizeJid(recipient);
+  return { to, nom: whatsapp.getContactName(to) || '' };
 }
 
 function randomDelay(minMs, maxMs) {
@@ -270,7 +305,7 @@ async function interruptibleSleep(ms, shouldStop) {
 function markRemainingInterrupted(campaign, recipients, fromIndex) {
   for (let j = fromIndex; j < recipients.length; j += 1) {
     campaign.results.push({
-      to: normalizeJid(recipients[j]),
+      to: normalizeRecipientEntry(recipients[j]).to,
       status: 'interrupted',
       timestamp: new Date().toISOString(),
     });
@@ -328,7 +363,7 @@ async function runCampaignQueue(campaign, recipients, options = {}) {
       return;
     }
 
-    const to = normalizeJid(recipients[i]);
+    const { to, nom } = normalizeRecipientEntry(recipients[i]);
     let status = 'failed';
 
     try {
@@ -337,7 +372,7 @@ async function runCampaignQueue(campaign, recipients, options = {}) {
         if (step.type === 'media') {
           await whatsapp.sendMedia(to, step);
         } else {
-          await whatsapp.sendMessage(to, step.text);
+          await whatsapp.sendMessage(to, replaceVariables(step.text, { nom }));
         }
         if (s < sequence.length - 1) {
           await sleep(randomDelay(seqMinMs, seqMaxMs));
@@ -680,7 +715,7 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
 
   const results = [];
   for (let i = 0; i < recipients.length; i += 1) {
-    const to = normalizeJid(recipients[i]);
+    const { to, nom } = normalizeRecipientEntry(recipients[i]);
     try {
       if (sequence) {
         // Séquençage / Envoi Multi-Messages : chaque étape part comme un
@@ -691,7 +726,7 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
           if (step.type === 'media') {
             await whatsapp.sendMedia(to, step);
           } else {
-            await whatsapp.sendMessage(to, step.text);
+            await whatsapp.sendMessage(to, replaceVariables(step.text, { nom }));
           }
           if (s < sequence.length - 1) {
             await sleep(randomDelay(seqMinMs, seqMaxMs));
@@ -701,11 +736,12 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
         // Rafale de pièces jointes au même destinataire (voir
         // runCampaignQueue pour la même logique côté envoi immédiat) : la
         // légende n'est portée que par la première.
+        const caption = replaceVariables(entry.message, { nom });
         for (let m = 0; m < mediaList.length; m += 1) {
-          await whatsapp.sendMedia(to, { ...mediaList[m], caption: m === 0 ? entry.message : undefined });
+          await whatsapp.sendMedia(to, { ...mediaList[m], caption: m === 0 ? caption : undefined });
         }
       } else {
-        await whatsapp.sendMessage(to, entry.message);
+        await whatsapp.sendMessage(to, replaceVariables(entry.message, { nom }));
       }
       results.push({ to, status: 'delivered' });
     } catch (err) {
@@ -1308,25 +1344,22 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
   }
 
   try {
-    const groups = await whatsapp.getGroups();
-    const groupNameById = new Map(groups.map((g) => [g.id, g.subject || g.id]));
-    const merged = new Map(); // jid -> { telephone, groupes: Set<string>, admin: bool }
-
+    // Un même membre présent dans plusieurs groupes cochés n'apparaît qu'une
+    // fois (Map indexée par JID). "nom" vient du cache opportuniste de noms
+    // publics (pushName/notify) constitué par l'adaptateur au fil des
+    // messages/contacts déjà vus par ce compte (voir
+    // adapters/whatsapp.js#getContactName) — WhatsApp n'expose aucune API
+    // pour récupérer le nom public d'un numéro qu'on n'a jamais "rencontré",
+    // donc ce champ peut rester vide pour certains participants.
+    const merged = new Set();
     for (const groupId of groupIds) {
       const participants = await whatsapp.getGroupParticipants(groupId);
-      const groupName = groupNameById.get(groupId) || groupId;
-      (participants || []).forEach((p) => {
-        const existing = merged.get(p.id) || { telephone: (p.id || '').split('@')[0], groupes: new Set(), admin: false };
-        existing.groupes.add(groupName);
-        if (p.admin) existing.admin = true;
-        merged.set(p.id, existing);
-      });
+      (participants || []).forEach((p) => merged.add(p.id));
     }
 
-    const rows = Array.from(merged.values()).map((m) => ({
-      telephone: m.telephone,
-      groupes: Array.from(m.groupes).join(', '),
-      admin: m.admin ? 'Oui' : 'Non',
+    const rows = Array.from(merged).map((jid) => ({
+      telephone: jidToE164(jid),
+      nom: whatsapp.getContactName(jid) || '',
     }));
 
     const sheet = XLSX.utils.json_to_sheet(rows);
@@ -1500,11 +1533,21 @@ app.post('/api/contacts/import', requireAccess, requireModule('whatsapp'), uploa
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet);
 
+    // "nom" (variable de personnalisation {nom}, voir replaceVariables) est
+    // reconnu depuis une colonne "nom"/"Nom" dédiée (produite par
+    // /api/groups/export-members) et, à défaut, depuis les mêmes colonnes que
+    // "prenom" (rétrocompatibilité avec d'anciens fichiers importés) —
+    // "prenom" reste renseigné séparément pour ne rien casser côté appelants
+    // existants qui le lisent encore.
     const contacts = rows
-      .map((row) => ({
-        telephone: String(row.telephone || row.Telephone || row.phone || row.Phone || row.numero || row.Numero || '').trim(),
-        prenom: String(row.prenom || row.Prenom || row.name || row.Name || '').trim(),
-      }))
+      .map((row) => {
+        const prenom = String(row.prenom || row.Prenom || row.name || row.Name || '').trim();
+        return {
+          telephone: String(row.telephone || row.Telephone || row.phone || row.Phone || row.numero || row.Numero || '').trim(),
+          prenom,
+          nom: String(row.nom || row.Nom || prenom || '').trim(),
+        };
+      })
       .filter((c) => c.telephone);
 
     res.status(200).json({ contacts, total: contacts.length });

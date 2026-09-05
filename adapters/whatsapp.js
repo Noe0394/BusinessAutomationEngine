@@ -52,6 +52,26 @@ let heartbeatTimer = null;
 // Déconnecté mais requestPairingCode répond ALREADY_CONNECTED".
 let connectGeneration = 0;
 
+// Cache opportuniste des noms publics (pushName/notify du profil WhatsApp,
+// PAS le nom privé qu'on aurait soi-même enregistré dans ses contacts) —
+// alimenté au fil des messages reçus et des événements de synchronisation de
+// contacts. WhatsApp n'expose aucune API pour demander le nom public d'un
+// numéro qu'on n'a jamais "rencontré" (aucun message échangé, aucune
+// synchronisation de contact) : ce cache reste donc incomplet par nature,
+// et vide après une déconnexion (voir logout()) pour ne pas faire fuiter les
+// noms d'un compte vers le suivant sur le même serveur.
+const contactNames = new Map();
+
+function rememberContactName(jid, name) {
+  if (jid && name) {
+    contactNames.set(jid, name);
+  }
+}
+
+function getContactName(jid) {
+  return contactNames.get(jid) || null;
+}
+
 // Signal de présence périodique : sans trafic, certains réseaux/proxies
 // intermédiaires (et parfois WhatsApp lui-même) peuvent considérer la
 // connexion inactive et la couper. sendPresenceUpdate('available') est un
@@ -186,7 +206,25 @@ async function connect() {
 
   sock.ev.on('messages.upsert', (m) => {
     if (isStale()) return;
+    (m.messages || []).forEach((msg) => {
+      const jid = msg.key?.participant || msg.key?.remoteJid;
+      if (msg.pushName) rememberContactName(jid, msg.pushName);
+    });
     console.log('Nouveau message reçu:', JSON.stringify(m, null, 2));
+  });
+
+  // "notify" = nom public affiché par le contact lui-même sur WhatsApp (par
+  // opposition à "name", le nom qu'on lui aurait soi-même attribué dans son
+  // répertoire) — c'est la seule source fiable pour la colonne "nom" de
+  // l'export (voir /api/groups/export-members).
+  sock.ev.on('contacts.upsert', (contacts) => {
+    if (isStale()) return;
+    (contacts || []).forEach((c) => rememberContactName(c.id, c.notify));
+  });
+
+  sock.ev.on('contacts.update', (updates) => {
+    if (isStale()) return;
+    (updates || []).forEach((c) => rememberContactName(c.id, c.notify));
   });
 
   return sock;
@@ -304,6 +342,7 @@ async function logout() {
   latestQR = null;
   authState = null;
   sock = null;
+  contactNames.clear();
 
   fs.rmSync(AUTH_DIR, { recursive: true, force: true });
   await whatsappAuthStore.clearRemote();
@@ -322,6 +361,7 @@ module.exports = {
   getGroupMetadata,
   getGroups,
   getGroupParticipants,
+  getContactName,
   logout,
   getStorageStatus: whatsappAuthStore.getStatus,
 };
