@@ -68,6 +68,15 @@ function rememberContactName(jid, name) {
   }
 }
 
+// Priorité : "notify" (nom que le contact a lui-même choisi, public — voir
+// pushName sur les messages) > "verifiedName" (compte professionnel vérifié)
+// > "name" (nom qu'on aurait NOUS-MÊMES enregistré pour ce contact dans le
+// répertoire synchronisé sur ce compte WhatsApp — moins "public", mais reste
+// une source légitime pour un usage interne de gestion de contacts).
+function bestContactName(c) {
+  return c.notify || c.verifiedName || c.name || null;
+}
+
 function getContactName(jid) {
   return contactNames.get(jid) || null;
 }
@@ -147,6 +156,14 @@ async function connect() {
   sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
+    // Sans ça, Baileys ne demande pas la synchronisation complète de
+    // l'historique (dont la liste de contacts synchronisés sur ce compte)
+    // au moment de l'appairage — la seule vraie source de noms de profil
+    // pour des contacts qu'on n'a pas encore soi-même "rencontrés" via un
+    // message (voir messaging-history.set ci-dessous). Ne prend effet qu'au
+    // prochain appairage complet (QR/code d'association) : une session déjà
+    // connectée ne le déclenche pas rétroactivement.
+    syncFullHistory: true,
   });
 
   sock.ev.on('creds.update', async () => {
@@ -213,18 +230,24 @@ async function connect() {
     console.log('Nouveau message reçu:', JSON.stringify(m, null, 2));
   });
 
-  // "notify" = nom public affiché par le contact lui-même sur WhatsApp (par
-  // opposition à "name", le nom qu'on lui aurait soi-même attribué dans son
-  // répertoire) — c'est la seule source fiable pour la colonne "nom" de
-  // l'export (voir /api/groups/export-members).
   sock.ev.on('contacts.upsert', (contacts) => {
     if (isStale()) return;
-    (contacts || []).forEach((c) => rememberContactName(c.id, c.notify));
+    (contacts || []).forEach((c) => rememberContactName(c.id, bestContactName(c)));
   });
 
   sock.ev.on('contacts.update', (updates) => {
     if (isStale()) return;
-    (updates || []).forEach((c) => rememberContactName(c.id, c.notify));
+    (updates || []).forEach((c) => rememberContactName(c.id, bestContactName(c)));
+  });
+
+  // Synchronisation initiale de l'historique (voir syncFullHistory ci-dessus,
+  // ne se déclenche qu'après un appairage complet) : porte notamment la
+  // liste des contacts déjà synchronisés sur ce compte WhatsApp — la
+  // meilleure source disponible pour peupler la colonne "nom" de l'export
+  // au-delà des seuls contacts déjà "rencontrés" via un message.
+  sock.ev.on('messaging-history.set', ({ contacts }) => {
+    if (isStale()) return;
+    (contacts || []).forEach((c) => rememberContactName(c.id, bestContactName(c)));
   });
 
   return sock;
