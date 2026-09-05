@@ -235,6 +235,142 @@ async function listDirectory(dirPath) {
   });
 }
 
+// ---------- Stockage de gros fichiers (Git Data API) ----------
+// createStore()/pushRemote() ci-dessus passent par l'API "Contents" de
+// GitHub, limitée à 1 Mo de contenu inline en LECTURE COMME EN ÉCRITURE
+// (déjà observé en production, voir fetchRemote) — inutilisable pour des
+// pièces jointes de campagne (images, vidéos compressées à ~15 Mo, voir
+// adapters/videoCompressor.js). L'API Git Data (blobs/trees/commits), plus
+// bas niveau, n'a pas cette limite (jusqu'à ~100 Mo par fichier, largement
+// suffisant ici) : on y accède directement pour les médias plutôt que
+// d'exiger un disque persistant payant sur Render.
+function gitApiRequest(method, apiPath, body) {
+  return new Promise((resolve, reject) => {
+    const data = body ? JSON.stringify(body) : null;
+    const req = https.request(
+      {
+        hostname: 'api.github.com',
+        path: `/repos/${REPO}${apiPath}`,
+        method,
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'BusinessAutomationEngine',
+          'Content-Type': 'application/json',
+          ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+        },
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (chunk) => {
+          raw += chunk;
+        });
+        res.on('end', () => {
+          let parsed = null;
+          try {
+            parsed = raw ? JSON.parse(raw) : null;
+          } catch (err) {
+            parsed = null;
+          }
+          resolve({ status: res.statusCode, body: parsed });
+        });
+      },
+    );
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+// Un blob créé via l'API Git Data est immédiatement lisible par son sha,
+// mais reste un objet "flottant" (non rattaché à l'historique) tant qu'il
+// n'est référencé par aucun commit — GitHub peut le garbage-collecter s'il
+// reste ainsi trop longtemps. commitBlobToPath() ci-dessous le rattache tout
+// de suite à un vrai commit sur BRANCH pour qu'il persiste durablement,
+// exactement comme un fichier normal du repo.
+async function createBlob(buffer) {
+  const { status, body } = await gitApiRequest('POST', '/git/blobs', {
+    content: buffer.toString('base64'),
+    encoding: 'base64',
+  });
+  if (status !== 201 || !body || !body.sha) {
+    throw new Error(`Échec de la création du blob GitHub (statut ${status})`);
+  }
+  return body.sha;
+}
+
+async function fetchBlobBySha(sha) {
+  const { status, body } = await gitApiRequest('GET', `/git/blobs/${sha}`, null);
+  if (status !== 200 || !body || !body.content) {
+    throw new Error(`Échec de la lecture du blob GitHub (statut ${status})`);
+  }
+  return Buffer.from(body.content, 'base64');
+}
+
+// Ajoute un blob déjà créé à l'arborescence du repo, au chemin donné, via un
+// nouveau commit sur BRANCH. Un seul nouvel essai si la branche a avancé
+// entre-temps (ex: un autre tenant pousse sa propre pièce jointe en
+// parallèle) — reprend alors depuis le nouvel état de la branche.
+async function commitBlobToPath(filePath, blobSha, commitMessage, isRetry = false) {
+  const refRes = await gitApiRequest('GET', `/git/ref/heads/${encodeURIComponent(BRANCH)}`, null);
+  if (refRes.status !== 200 || !refRes.body) {
+    throw new Error(`Impossible de lire la référence de branche GitHub (statut ${refRes.status})`);
+  }
+  const parentCommitSha = refRes.body.object.sha;
+
+  const commitRes = await gitApiRequest('GET', `/git/commits/${parentCommitSha}`, null);
+  if (commitRes.status !== 200 || !commitRes.body) {
+    throw new Error(`Impossible de lire le commit GitHub ${parentCommitSha} (statut ${commitRes.status})`);
+  }
+  const baseTreeSha = commitRes.body.tree.sha;
+
+  const treeRes = await gitApiRequest('POST', '/git/trees', {
+    base_tree: baseTreeSha,
+    tree: [{ path: filePath, mode: '100644', type: 'blob', sha: blobSha }],
+  });
+  if (treeRes.status !== 201 || !treeRes.body) {
+    throw new Error(`Échec de la création de l'arborescence GitHub (statut ${treeRes.status})`);
+  }
+
+  const newCommitRes = await gitApiRequest('POST', '/git/commits', {
+    message: commitMessage,
+    tree: treeRes.body.sha,
+    parents: [parentCommitSha],
+  });
+  if (newCommitRes.status !== 201 || !newCommitRes.body) {
+    throw new Error(`Échec de la création du commit GitHub (statut ${newCommitRes.status})`);
+  }
+
+  const updateRefRes = await gitApiRequest('PATCH', `/git/refs/heads/${encodeURIComponent(BRANCH)}`, {
+    sha: newCommitRes.body.sha,
+  });
+
+  if (updateRefRes.status === 200) return;
+
+  if (!isRetry) {
+    return commitBlobToPath(filePath, blobSha, commitMessage, true);
+  }
+
+  throw new Error(`Échec de la mise à jour de la branche GitHub (statut ${updateRefRes.status})`);
+}
+
+// Sauvegarde durablement un gros fichier (pièce jointe de campagne) sur
+// GitHub : retourne le sha du blob à conserver (voir
+// queues/campaignEngine.js) pour pouvoir le relire plus tard via
+// fetchLargeFile(), y compris depuis un conteneur qui n'a jamais vu ce
+// fichier localement (redéploiement Render sans disque persistant).
+async function pushLargeFile(filePath, buffer) {
+  if (!enabled) return null;
+  const sha = await createBlob(buffer);
+  await commitBlobToPath(filePath, sha, `Ajout média de campagne : ${filePath}`);
+  return sha;
+}
+
+async function fetchLargeFile(sha) {
+  if (!enabled || !sha) return null;
+  return fetchBlobBySha(sha);
+}
+
 // Instance par défaut : conserve le comportement historique de ce module
 // (un seul fichier, "licenses.json" sauf GITHUB_DATA_PATH personnalisé) pour
 // ne rien casser chez les appelants existants qui font
@@ -245,4 +381,6 @@ module.exports = {
   ...defaultStore,
   createStore,
   listDirectory,
+  pushLargeFile,
+  fetchLargeFile,
 };

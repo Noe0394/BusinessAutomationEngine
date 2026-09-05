@@ -804,7 +804,7 @@ async function handleNaturalMessage(message, session, campaignEngine) {
     const delaySeconds = delaySecondsRaw ? parseFloat(delaySecondsRaw) : undefined;
 
     try {
-      campaignEngine.start(recipients, { sequence: [{ type: 'text', text: campaignMessage.trim() }], delaySeconds });
+      await campaignEngine.start(recipients, { sequence: [{ type: 'text', text: campaignMessage.trim() }], delaySeconds });
     } catch (err) {
       if (err.message === 'CAMPAIGN_IN_PROGRESS') {
         return 'Une campagne est déjà en cours. Attendez sa fin ou interrompez-la avant d\'en lancer une nouvelle.';
@@ -1388,7 +1388,7 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
 
   let campaign;
   try {
-    campaign = req.campaignEngine.start(recipients, {
+    campaign = await req.campaignEngine.start(recipients, {
       delaySeconds: fixedDelaySeconds,
       batchSize: parsedBatchSize,
       sequence: resolvedSequence,

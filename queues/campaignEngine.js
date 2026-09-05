@@ -16,16 +16,13 @@ const { replaceVariables, normalizeRecipientEntry } = require('../lib/whatsappRe
 // GitHub prend le relais quand le disque local a été vidé par un vrai
 // redéploiement Render (aucun disque persistant n'est requis).
 //
-// LIMITE CONNUE : seul l'état (destinataires, progression, résultats) est
-// sauvegardé sur GitHub — jamais les pièces jointes (buffers média), qui
-// dépasseraient largement la limite de 1 Mo de contenu inline de l'API
-// Contents de GitHub (même raison que pour les creds WhatsApp, voir
-// adapters/whatsappAuthStore.js). Une campagne SANS pièce jointe reprend donc
-// intégralement après un redéploiement ; une campagne AVEC pièce jointe ne
-// peut reprendre que tant que le conteneur d'origine est toujours vivant (le
-// fichier média local existe encore) — après un vrai redéploiement, elle est
-// marquée "stopped" avec une erreur explicite plutôt que de planter ou
-// d'envoyer des messages sans le média attendu.
+// Les pièces jointes (buffers média) sont sauvegardées sur GitHub elles
+// aussi, mais PAS via l'API "Contents" (limitée à 1 Mo) : voir
+// githubStore.js#pushLargeFile/fetchLargeFile, qui passent par l'API Git Data
+// (blobs) de GitHub — jusqu'à ~100 Mo par fichier, largement suffisant pour
+// une vidéo compressée à ~15 Mo (voir adapters/videoCompressor.js). Le sha du
+// blob est conservé dans l'état de la campagne pour pouvoir le relire même
+// depuis un conteneur qui n'a jamais vu ce fichier localement.
 //
 // IMPORTANT (limite connue, indépendante de GitHub) : l'état est persisté
 // APRÈS l'envoi effectif de chaque destinataire, pas avant — un crash
@@ -40,6 +37,7 @@ const MEDIA_DIR = path.join(CAMPAIGNS_DIR, 'media');
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 const REMOTE_CAMPAIGNS_DIR = process.env.GITHUB_CAMPAIGNS_DIR || 'campaigns_state';
+const MEDIA_REMOTE_DIR = `${REMOTE_CAMPAIGNS_DIR}/media`;
 
 if (!process.env.CAMPAIGNS_DIR && !githubStore.enabled) {
   console.warn(
@@ -82,46 +80,90 @@ async function interruptibleSleep(ms, shouldStop) {
 // campagne peut durer des heures (des milliers de destinataires avec délai),
 // il faut que ces fichiers survivent à un redémarrage du process pour que la
 // reprise (resumeIfPending) puisse les relire sans redemander l'upload
-// original à l'utilisateur.
-function persistSequenceMedia(tenantId, sequence) {
-  return sequence.map((step, index) => {
-    if (step.type !== 'media') return step;
+// original à l'utilisateur. Poussé aussi sur GitHub (mediaBlobSha) quand
+// activé, pour survivre à un redéploiement qui viderait le disque local —
+// fait une seule fois par pièce jointe (pas par destinataire), le coût
+// (upload potentiellement de quelques Mo) est donc négligeable sur la durée
+// totale d'une campagne.
+async function persistSequenceMedia(tenantId, sequence) {
+  const result = [];
+  for (let index = 0; index < sequence.length; index += 1) {
+    const step = sequence[index];
+    if (step.type !== 'media') {
+      result.push(step);
+      continue;
+    }
+
     const mediaFile = `${tenantId}_${index}.bin`;
     fs.writeFileSync(path.join(MEDIA_DIR, mediaFile), step.buffer);
-    return {
+
+    let mediaBlobSha = null;
+    if (githubStore.enabled) {
+      try {
+        mediaBlobSha = await githubStore.pushLargeFile(`${MEDIA_REMOTE_DIR}/${mediaFile}`, step.buffer);
+      } catch (err) {
+        console.error(`Échec de la sauvegarde GitHub de la pièce jointe "${mediaFile}" :`, err.message);
+      }
+    }
+
+    result.push({
       type: 'media',
       mediaFile,
+      mediaBlobSha,
       mimetype: step.mimetype,
       filename: step.filename,
       forceDocument: Boolean(step.forceDocument),
-    };
-  });
+    });
+  }
+  return result;
 }
 
-// Inverse de persistSequenceMedia : relit les buffers depuis le disque, à
-// l'initialisation d'une campagne (immédiat) ou à la reprise après
-// redémarrage (resumeIfPending) — dans les deux cas, le moteur d'envoi a
-// besoin des vrais buffers, jamais du chemin de fichier. Lève une erreur
-// explicite (plutôt que de planter avec ENOENT) si le fichier est absent —
-// cas attendu après un vrai redéploiement Render sans disque persistant : les
-// pièces jointes ne sont pas sauvegardées sur GitHub (voir plus haut), donc
-// un fichier local disparu après redéploiement est normal, pas un bug.
-function resolveSequenceMedia(sequence) {
-  return sequence.map((step) => {
-    if (step.type !== 'media') return step;
+// Inverse de persistSequenceMedia : relit les buffers pour l'envoi, à
+// l'initialisation d'une campagne (immédiat, toujours depuis le disque local
+// qu'on vient d'écrire) ou à la reprise après redémarrage (resumeIfPending).
+// Essaie le disque local en premier (rapide) ; si le fichier est absent
+// (redéploiement ayant vidé le disque éphémère) et qu'un mediaBlobSha existe,
+// le retélécharge depuis GitHub et le réécrit localement avant de continuer.
+// Lève une erreur explicite seulement si aucune des deux sources ne
+// fonctionne (pièce jointe irrécupérable).
+async function resolveSequenceMedia(sequence) {
+  const result = [];
+  for (const step of sequence) {
+    if (step.type !== 'media') {
+      result.push(step);
+      continue;
+    }
+
     const filePath = path.join(MEDIA_DIR, step.mediaFile);
-    if (!fs.existsSync(filePath)) {
+    let buffer;
+    if (fs.existsSync(filePath)) {
+      buffer = fs.readFileSync(filePath);
+    } else if (step.mediaBlobSha && githubStore.enabled) {
+      try {
+        buffer = await githubStore.fetchLargeFile(step.mediaBlobSha);
+      } catch (err) {
+        throw new Error(`MEDIA_FILE_MISSING: ${step.mediaFile} (échec de restauration GitHub : ${err.message})`);
+      }
+      if (!buffer) {
+        throw new Error(`MEDIA_FILE_MISSING: ${step.mediaFile} (introuvable sur GitHub)`);
+      }
+      // Réécrit en local pour que les prochains accès (même process) restent
+      // rapides et ne retéléchargent pas à chaque fois.
+      fs.writeFileSync(filePath, buffer);
+      console.log(`Pièce jointe "${step.mediaFile}" restaurée depuis GitHub (disque local vidé par un redéploiement).`);
+    } else {
       throw new Error(`MEDIA_FILE_MISSING: ${step.mediaFile}`);
     }
-    const buffer = fs.readFileSync(filePath);
-    return {
+
+    result.push({
       type: 'media',
       buffer,
       mimetype: step.mimetype,
       filename: step.filename,
       forceDocument: step.forceDocument,
-    };
-  });
+    });
+  }
+  return result;
 }
 
 function removeSequenceMedia(sequence) {
@@ -317,13 +359,19 @@ class CampaignEngine {
     console.log(`Campagne (tenant "${this.tenantId}"): terminée.`);
   }
 
-  start(recipients, options = {}) {
+  // async : le lancement attend que chaque pièce jointe soit sauvegardée sur
+  // GitHub (voir persistSequenceMedia) avant de considérer la campagne comme
+  // démarrée — évite qu'un crash survenant juste après le lancement laisse
+  // une campagne "en cours" dont la pièce jointe ne serait pas encore
+  // durable. Négligeable en pratique : upload unique par pièce jointe, pas
+  // par destinataire.
+  async start(recipients, options = {}) {
     if (this.campaign && this.campaign.status === 'running') {
       throw new Error('CAMPAIGN_IN_PROGRESS');
     }
 
-    this.persistableSequence = persistSequenceMedia(this.tenantId, options.sequence || []);
-    this.resolvedSequence = resolveSequenceMedia(this.persistableSequence);
+    this.persistableSequence = await persistSequenceMedia(this.tenantId, options.sequence || []);
+    this.resolvedSequence = await resolveSequenceMedia(this.persistableSequence);
 
     this.campaign = {
       total: recipients.length,
@@ -408,16 +456,16 @@ class CampaignEngine {
     this.persistableSequence = record.options.sequence || [];
 
     try {
-      this.resolvedSequence = resolveSequenceMedia(this.persistableSequence);
+      this.resolvedSequence = await resolveSequenceMedia(this.persistableSequence);
     } catch (err) {
-      // Pièce jointe introuvable : arrivé après un vrai redéploiement Render
-      // (aucun disque persistant), puisque les buffers média ne sont jamais
-      // sauvegardés sur GitHub (limite de 1 Mo, voir en tête de fichier).
+      // Pièce jointe irrécupérable : ni le disque local (vidé par le
+      // redéploiement) ni GitHub (blob manquant/échec de restauration, ou
+      // sauvegarde désactivée) n'ont pu la fournir — voir resolveSequenceMedia.
       // On arrête proprement plutôt que de planter ou d'envoyer sans média —
       // le tenant devra relancer sa campagne en réimportant la pièce jointe.
       console.error(
         `Campagne (tenant "${this.tenantId}"): reprise impossible — ${err.message}. ` +
-        'Pièce jointe perdue lors du redéploiement (non sauvegardée sur GitHub) — campagne marquée "stopped", à relancer manuellement.',
+        'Pièce jointe irrécupérable — campagne marquée "stopped", à relancer manuellement.',
       );
       this.campaign = {
         total: record.total,
