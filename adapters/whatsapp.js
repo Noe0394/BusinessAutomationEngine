@@ -77,6 +77,23 @@ function bestContactName(c) {
   return c.notify || c.verifiedName || c.name || null;
 }
 
+// Un même Contact (voir Types/Contact.d.ts) peut porter jusqu'à 3
+// identifiants différents pour la même personne : .id (soit un @lid, soit un
+// JID téléphone selon le contexte), .jid (toujours le JID téléphone quand
+// connu) et .lid (toujours le @lid quand connu). Sans mémoriser le nom sous
+// LES TROIS clés disponibles, une recherche ultérieure sous une clé
+// différente de celle utilisée à l'enregistrement (typiquement : le nom
+// synchronisé sous le @lid, mais l'export qui cherche sous le JID téléphone
+// résolu via participant.jid — voir /api/groups/export-members) échouerait
+// alors que le nom est bel et bien connu.
+function rememberContact(c) {
+  const name = bestContactName(c);
+  if (!name) return;
+  rememberContactName(c.id, name);
+  rememberContactName(c.jid, name);
+  rememberContactName(c.lid, name);
+}
+
 function getContactName(jid) {
   return contactNames.get(jid) || null;
 }
@@ -224,20 +241,27 @@ async function connect() {
   sock.ev.on('messages.upsert', (m) => {
     if (isStale()) return;
     (m.messages || []).forEach((msg) => {
-      const jid = msg.key?.participant || msg.key?.remoteJid;
-      if (msg.pushName) rememberContactName(jid, msg.pushName);
+      if (!msg.pushName) return;
+      // Même cas que pour les participants de groupe (voir
+      // /api/groups/export-members) : .participant/.remoteJid peuvent être
+      // un @lid pour un expéditeur ayant activé la confidentialité "masquer
+      // mon numéro" — .participantPn/.senderPn portent alors le vrai JID
+      // téléphone en plus. On mémorise sous les deux quand ils diffèrent,
+      // pour que la recherche par JID téléphone (export) le retrouve.
+      rememberContactName(msg.key?.participant || msg.key?.remoteJid, msg.pushName);
+      rememberContactName(msg.key?.participantPn || msg.key?.senderPn, msg.pushName);
     });
     console.log('Nouveau message reçu:', JSON.stringify(m, null, 2));
   });
 
   sock.ev.on('contacts.upsert', (contacts) => {
     if (isStale()) return;
-    (contacts || []).forEach((c) => rememberContactName(c.id, bestContactName(c)));
+    (contacts || []).forEach((c) => rememberContact(c));
   });
 
   sock.ev.on('contacts.update', (updates) => {
     if (isStale()) return;
-    (updates || []).forEach((c) => rememberContactName(c.id, bestContactName(c)));
+    (updates || []).forEach((c) => rememberContact(c));
   });
 
   // Synchronisation initiale de l'historique (voir syncFullHistory ci-dessus,
@@ -247,7 +271,7 @@ async function connect() {
   // au-delà des seuls contacts déjà "rencontrés" via un message.
   sock.ev.on('messaging-history.set', ({ contacts }) => {
     if (isStale()) return;
-    (contacts || []).forEach((c) => rememberContactName(c.id, bestContactName(c)));
+    (contacts || []).forEach((c) => rememberContact(c));
   });
 
   return sock;
