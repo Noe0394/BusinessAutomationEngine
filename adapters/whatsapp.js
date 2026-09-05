@@ -250,14 +250,26 @@ function createSession(tenantId) {
         stopHeartbeat();
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const loggedOut = statusCode === DisconnectReason.loggedOut;
+        // Un code 401 (loggedOut) reçu AVANT toute inscription complète
+        // (creds.registered jamais passé à true) n'est presque jamais un
+        // "l'utilisateur a choisi de se déconnecter" : c'est le symptôme
+        // habituel d'un QR périmé/pas scanné à temps ou d'un conflit de
+        // scan — arrêter toute reconnexion dans ce cas laissait le tenant
+        // bloqué indéfiniment sans jamais regénérer de nouveau QR (observé en
+        // production : plusieurs 408 suivis d'un 401 définitif). On ne
+        // considère la déconnexion comme définitive que si ce compte avait
+        // déjà été inscrit avec succès par le passé — un vrai "se
+        // déconnecter" ne peut survenir que sur une session déjà appairée.
+        const wasEverRegistered = Boolean(authState?.creds?.registered);
+        const stopReconnecting = loggedOut && wasEverRegistered;
 
         console.log(
           `Connexion WhatsApp fermée (tenant "${tenantId}").`,
           statusCode ? `(code: ${statusCode})` : '',
-          loggedOut ? '— déconnexion volontaire, pas de reconnexion.' : '— reconnexion automatique planifiée.',
+          stopReconnecting ? '— déconnexion volontaire, pas de reconnexion.' : '— reconnexion automatique planifiée.',
         );
 
-        if (!loggedOut) {
+        if (!stopReconnecting) {
           scheduleReconnect();
         }
       } else if (connection === 'open') {

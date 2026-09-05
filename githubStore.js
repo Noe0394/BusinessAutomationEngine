@@ -39,7 +39,14 @@ function createStore(filePath) {
       const req = https.request(
         {
           hostname: 'api.github.com',
-          path: `/repos/${REPO}/contents/${encodeURIComponent(filePath)}${qs}`,
+          // encodeURIComponent(filePath) échouerait pour un chemin imbriqué
+          // (ex: "whatsapp_auth/KEY-XXXX.json", utilisé depuis l'isolation
+          // par tenant) : il échapperait aussi le "/" en "%2F", que l'API
+          // Contents de GitHub interprète comme un nom de fichier invalide
+          // au lieu d'un vrai sous-dossier — d'où un 422 systématique observé
+          // en production pour tout chemin à plusieurs segments. Chaque
+          // segment doit être encodé séparément, en gardant les "/" intacts.
+          path: `/repos/${REPO}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}${qs}`,
           method,
           headers: {
             Authorization: `Bearer ${TOKEN}`,
