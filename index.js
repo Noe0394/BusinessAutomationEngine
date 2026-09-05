@@ -1345,24 +1345,63 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
 
   try {
     // Un même membre présent dans plusieurs groupes cochés n'apparaît qu'une
-    // fois (Map indexée par JID). "nom" vient du cache opportuniste de noms
-    // publics (pushName/notify) constitué par l'adaptateur au fil des
-    // messages/contacts déjà vus par ce compte (voir
-    // adapters/whatsapp.js#getContactName) — WhatsApp n'expose aucune API
-    // pour récupérer le nom public d'un numéro qu'on n'a jamais "rencontré",
-    // donc ce champ peut rester vide pour certains participants.
-    const merged = new Set();
+    // fois (Map indexée par le vrai JID téléphone). "telephone" est extrait
+    // de participant.jid, PAS participant.id : pour un participant ayant
+    // activé la confidentialité WhatsApp "masquer mon numéro", .id porte un
+    // identifiant anonyme (@lid) sans rapport avec son numéro réel — voir
+    // extractGroupMetadata() dans Baileys (lib/Socket/groups.js), qui
+    // distingue explicitement .id (adressage, peut être un @lid) de .jid (le
+    // vrai numéro, dérivé de l'attribut phone_number quand .id est un @lid).
+    // Un participant dont le numéro réel reste indérivable (confidentialité +
+    // jamais "rencontré" par ce compte) est omis du fichier plutôt que d'y
+    // laisser une ligne avec un téléphone vide ou erroné.
+    //
+    // "nom" vient du cache opportuniste de noms publics (pushName/notify)
+    // constitué par l'adaptateur au fil des messages/contacts déjà vus par ce
+    // compte (voir adapters/whatsapp.js#getContactName), cherché sous le JID
+    // téléphone puis, à défaut, sous le @lid observé pour ce même
+    // participant — WhatsApp n'expose aucune API pour récupérer le nom
+    // public d'un numéro qu'on n'a jamais "rencontré", donc ce champ peut
+    // rester vide.
+    const merged = new Map(); // phoneJid -> lidJid (repli pour la recherche du nom)
     for (const groupId of groupIds) {
       const participants = await whatsapp.getGroupParticipants(groupId);
-      (participants || []).forEach((p) => merged.add(p.id));
+      (participants || []).forEach((p) => {
+        const phoneJid = p.jid && !p.jid.endsWith('@lid')
+          ? p.jid
+          : (p.id && !p.id.endsWith('@lid') ? p.id : null);
+        if (phoneJid) {
+          merged.set(phoneJid, p.lid || (p.id !== phoneJid ? p.id : null));
+        }
+      });
     }
 
-    const rows = Array.from(merged).map((jid) => ({
-      telephone: jidToE164(jid),
-      nom: whatsapp.getContactName(jid) || '',
+    const rows = Array.from(merged.entries()).map(([phoneJid, lidJid]) => ({
+      telephone: jidToE164(phoneJid),
+      nom: whatsapp.getContactName(phoneJid) || (lidJid ? whatsapp.getContactName(lidJid) : '') || '',
     }));
 
     const sheet = XLSX.utils.json_to_sheet(rows);
+
+    // Force la colonne "telephone" (A) en TEXTE (format '@') : sans ça,
+    // Excel peut réinterpréter un numéro à 11-12 chiffres comme un nombre et
+    // l'afficher en notation scientifique (ex: "1,92595E+14") — les chiffres
+    // affichés sont alors tronqués/arrondis à l'écran (pas les données du
+    // fichier lui-même, mais c'est trompeur pour quiconque relit ou recopie
+    // cette valeur).
+    if (sheet['!ref']) {
+      const range = XLSX.utils.decode_range(sheet['!ref']);
+      for (let r = range.s.r + 1; r <= range.e.r; r += 1) {
+        const cellRef = XLSX.utils.encode_cell({ r, c: 0 });
+        const cell = sheet[cellRef];
+        if (cell) {
+          cell.t = 's';
+          cell.z = '@';
+          cell.v = String(cell.v);
+        }
+      }
+    }
+
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, sheet, 'Membres');
     const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
