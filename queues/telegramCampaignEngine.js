@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
+const { resolveSpintax } = require('../lib/spintax');
 
 // Persistance de la progression d'une campagne Telegram (messages directs
 // vers une liste de contacts importée), tenant par tenant — même principe
@@ -255,10 +256,14 @@ class TelegramCampaignEngine {
 
       try {
         const entity = await this.session.resolveRecipient(identifier);
+        // Résolu à chaque destinataire (voir lib/spintax.js) : deux
+        // destinataires reçoivent alors rarement le texte identique mot pour
+        // mot, même à partir du même modèle.
+        const personalizedMessage = resolveSpintax(campaign.message);
         if (this.resolvedMedia) {
-          await this.session.sendMedia(entity, { ...this.resolvedMedia, caption: campaign.message });
+          await this.session.sendMedia(entity, { ...this.resolvedMedia, caption: personalizedMessage });
         } else {
-          await this.session.sendMessage(entity, campaign.message);
+          await this.session.sendMessage(entity, personalizedMessage);
         }
         status = 'delivered';
         campaign.success += 1;

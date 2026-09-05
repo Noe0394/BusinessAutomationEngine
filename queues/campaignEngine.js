@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
 const { replaceVariables, normalizeRecipientEntry } = require('../lib/whatsappRecipients');
+const { resolveSpintax } = require('../lib/spintax');
 
 // Persistance de la progression d'une campagne WhatsApp, tenant par tenant
 // (voir adapters/whatsappManager.js) : sur un environnement Docker/Render où
@@ -327,7 +328,11 @@ class CampaignEngine {
           if (step.type === 'media') {
             await this.session.sendMedia(to, step);
           } else {
-            await this.session.sendMessage(to, replaceVariables(step.text, { nom }));
+            // Spintax résolu APRÈS les variables (voir lib/spintax.js) et
+            // À CHAQUE destinataire (pas une seule fois pour toute la
+            // campagne) : deux destinataires reçoivent alors rarement le
+            // texte identique mot pour mot, même à partir du même modèle.
+            await this.session.sendMessage(to, resolveSpintax(replaceVariables(step.text, { nom })));
           }
           if (s < sequence.length - 1) {
             await sleep(randomDelay(seqMinMs, seqMaxMs));

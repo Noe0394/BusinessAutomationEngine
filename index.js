@@ -22,6 +22,7 @@ const scheduledMessages = require('./queues/scheduled_messages');
 const contactsStore = require('./models/contact');
 const keywordRules = require('./models/keyword_rules');
 const { replaceVariables, normalizeJid, jidToE164, normalizeRecipientEntry } = require('./lib/whatsappRecipients');
+const { resolveSpintax } = require('./lib/spintax');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -462,7 +463,7 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
           if (step.type === 'media') {
             await session.sendMedia(to, step);
           } else {
-            await session.sendMessage(to, replaceVariables(step.text, { nom }));
+            await session.sendMessage(to, resolveSpintax(replaceVariables(step.text, { nom })));
           }
           if (s < sequence.length - 1) {
             await sleep(randomDelay(seqMinMs, seqMaxMs));
@@ -472,12 +473,12 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
         // Rafale de pièces jointes au même destinataire (voir
         // queues/campaignEngine.js pour la même logique côté envoi
         // immédiat) : la légende n'est portée que par la première.
-        const caption = replaceVariables(entry.message, { nom });
+        const caption = resolveSpintax(replaceVariables(entry.message, { nom }));
         for (let m = 0; m < mediaList.length; m += 1) {
           await session.sendMedia(to, { ...mediaList[m], caption: m === 0 ? caption : undefined });
         }
       } else {
-        await session.sendMessage(to, replaceVariables(entry.message, { nom }));
+        await session.sendMessage(to, resolveSpintax(replaceVariables(entry.message, { nom })));
       }
       results.push({ to, status: 'delivered' });
     } catch (err) {
@@ -507,11 +508,12 @@ async function dispatchScheduledTelegram(entry, media) {
       const destination = entry.recipientType === 'contacts'
         ? await session.resolveRecipient(targets[i])
         : targets[i];
+      const personalizedMessage = resolveSpintax(entry.message);
 
       if (media) {
-        await session.sendMedia(destination, { ...media, caption: entry.message });
+        await session.sendMedia(destination, { ...media, caption: personalizedMessage });
       } else {
-        await session.sendMessage(destination, entry.message);
+        await session.sendMessage(destination, personalizedMessage);
       }
       results.push({ to: String(targets[i]), status: 'delivered' });
     } catch (err) {

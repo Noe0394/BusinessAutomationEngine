@@ -5,6 +5,7 @@ const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
 const githubStore = require('../githubStore');
 const telegramAuthStore = require('./telegramAuthStore');
+const { resolveSpintax } = require('../lib/spintax');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -516,12 +517,16 @@ function createSession(tenantId) {
     for (let i = 0; i < chatIds.length; i += 1) {
       const chatId = chatIds[i];
       let status = 'failed';
+      // Résolu à chaque destinataire (voir lib/spintax.js) : deux
+      // destinataires reçoivent alors rarement le texte identique mot pour
+      // mot, même à partir du même modèle.
+      const personalizedMessage = resolveSpintax(message);
 
       try {
         if (media) {
-          await sendMedia(chatId, { ...media, caption: message });
+          await sendMedia(chatId, { ...media, caption: personalizedMessage });
         } else {
-          await sendMessage(chatId, message);
+          await sendMessage(chatId, personalizedMessage);
         }
         status = 'delivered';
       } catch (err) {
