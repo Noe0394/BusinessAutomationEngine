@@ -204,6 +204,13 @@ function createSession(tenantId) {
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     authState = state;
+    // Capturé UNE FOIS ici, avant toute tentative de connexion : Baileys peut
+    // remettre creds.registered à false en interne dès qu'il détecte un rejet
+    // (le close handler ci-dessous verrait alors toujours "jamais enregistré"
+    // même pour un compte qui l'était il y a une seconde, si on relisait
+    // authState.creds.registered en direct au moment du close). Cette valeur
+    // figée reflète fidèlement l'état AVANT cette tentative précise.
+    const wasRegisteredBeforeThisAttempt = Boolean(state?.creds?.registered);
 
     sock = makeWASocket({
       auth: state,
@@ -250,26 +257,34 @@ function createSession(tenantId) {
         stopHeartbeat();
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const loggedOut = statusCode === DisconnectReason.loggedOut;
-        // Un code 401 (loggedOut) reçu AVANT toute inscription complète
-        // (creds.registered jamais passé à true) n'est presque jamais un
-        // "l'utilisateur a choisi de se déconnecter" : c'est le symptôme
-        // habituel d'un QR périmé/pas scanné à temps ou d'un conflit de
-        // scan — arrêter toute reconnexion dans ce cas laissait le tenant
-        // bloqué indéfiniment sans jamais regénérer de nouveau QR (observé en
-        // production : plusieurs 408 suivis d'un 401 définitif). On ne
-        // considère la déconnexion comme définitive que si ce compte avait
-        // déjà été inscrit avec succès par le passé — un vrai "se
-        // déconnecter" ne peut survenir que sur une session déjà appairée.
-        const wasEverRegistered = Boolean(authState?.creds?.registered);
-        const stopReconnecting = loggedOut && wasEverRegistered;
 
-        console.log(
-          `Connexion WhatsApp fermée (tenant "${tenantId}").`,
-          statusCode ? `(code: ${statusCode})` : '',
-          stopReconnecting ? '— déconnexion volontaire, pas de reconnexion.' : '— reconnexion automatique planifiée.',
-        );
-
-        if (!stopReconnecting) {
+        if (loggedOut && wasRegisteredBeforeThisAttempt) {
+          // Un compte déjà appairé avec succès qui reçoit un 401 signifie que
+          // WhatsApp a révoqué ce lien (déconnexion depuis le téléphone,
+          // conflit d'appairage...) : retenter avec les MÊMES identifiants
+          // échouerait indéfiniment puisqu'ils sont désormais invalides côté
+          // WhatsApp — les laisser en l'état bloquait le tenant sans jamais
+          // regénérer de QR (l'ancien bug), et les réutiliser en boucle
+          // martèlerait inutilement les serveurs WhatsApp avec un identifiant
+          // mort. On purge et relance une connexion fraîche pour régénérer un
+          // QR exploitable, exactement comme logout() le ferait.
+          console.log(
+            `Connexion WhatsApp fermée (tenant "${tenantId}"). (code: ${statusCode}) — session révoquée par WhatsApp, régénération d'un identifiant frais.`,
+          );
+          fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+          contactNames.clear();
+          authStore.clearRemote().catch(() => {});
+          scheduleReconnect();
+        } else {
+          // Tout autre cas (coupure réseau, timeout de QR non scanné à
+          // temps, 401 pendant un appairage jamais finalisé...) : on relance
+          // normalement avec les identifiants existants, encore valides ou
+          // pas encore validés par WhatsApp — pas besoin de les purger.
+          console.log(
+            `Connexion WhatsApp fermée (tenant "${tenantId}").`,
+            statusCode ? `(code: ${statusCode})` : '',
+            '— reconnexion automatique planifiée.',
+          );
           scheduleReconnect();
         }
       } else if (connection === 'open') {
