@@ -234,6 +234,19 @@ function createSession(tenantId) {
     sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
+      // Par défaut, Baileys ne laisse vivre un QR que 60s pour le premier,
+      // puis seulement 20s pour chaque QR suivant avant de fermer la
+      // connexion et d'en régénérer un autre (code 408) — bien trop court
+      // pour qu'un utilisateur ait le temps de sortir son téléphone et
+      // scanner sereinement. Observé en production : ce cycle de 20s a
+      // tourné en boucle pendant plusieurs minutes (QR jamais scanné à
+      // temps), et WhatsApp a fini par considérer ces régénérations
+      // répétées comme suspectes et bloquer temporairement l'appairage de ce
+      // compte (fermeture avec code 401 en pleine tentative de connexion,
+      // avant même tout enregistrement réussi). 120s laisse largement le
+      // temps de scanner sans multiplier les régénérations qui déclenchent
+      // ce blocage anti-abus.
+      qrTimeout: 120_000,
       // Sans ça, Baileys ne demande pas la synchronisation complète de
       // l'historique (dont la liste de contacts synchronisés sur ce compte)
       // au moment de l'appairage — la seule vraie source de noms de profil
