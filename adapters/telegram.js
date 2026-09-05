@@ -54,6 +54,12 @@ class TelegramAdapter {
     this._loginError = null;
     this._heartbeatTimer = null;
     this._syncStarted = false;
+    // Incrémenté à chaque logout()/startLogin() : les callbacks asynchrones
+    // liés à un client remplacé entre-temps (heartbeat en vol, résolution
+    // tardive de client.start()) se désactivent au lieu de muter
+    // this.connected avec un état périmé — même principe que
+    // connectGeneration dans adapters/whatsapp.js.
+    this._sessionGeneration = 0;
 
     if (!this.apiId || !this.apiHash) {
       console.warn(
@@ -78,12 +84,14 @@ class TelegramAdapter {
   // aucun effet de bord.
   startHeartbeat() {
     this.stopHeartbeat();
+    const myGeneration = this._sessionGeneration;
     const HEARTBEAT_INTERVAL_MS = 10 * 60 * 1000;
     this._heartbeatTimer = setInterval(async () => {
-      if (!this.client) return;
+      if (!this.client || myGeneration !== this._sessionGeneration) return;
       try {
         await this.client.getMe();
       } catch (err) {
+        if (myGeneration !== this._sessionGeneration) return;
         console.warn('Heartbeat Telegram: vérification de session échouée —', err.message);
         this.connected = false;
       }
@@ -130,6 +138,7 @@ class TelegramAdapter {
   // une nouvelle connexion (même numéro ou un autre) via
   // POST /api/telegram/login/start, sans redémarrage du serveur.
   async logout() {
+    this._sessionGeneration += 1;
     this.stopHeartbeat();
 
     if (this.client) {
@@ -199,6 +208,8 @@ class TelegramAdapter {
       throw new Error('TELEGRAM_NOT_CONFIGURED');
     }
 
+    this._sessionGeneration += 1;
+    const myGeneration = this._sessionGeneration;
     this.stopHeartbeat();
 
     if (this.client) {
@@ -227,6 +238,10 @@ class TelegramAdapter {
         console.error('Telegram: erreur pendant la connexion:', err);
       },
     }).then(() => {
+      // Ce login a été remplacé entre-temps (nouvel appel startLogin() ou
+      // logout()) : ne pas ressusciter un état "connecté" périmé sur le
+      // client actuellement actif.
+      if (myGeneration !== this._sessionGeneration) return;
       this.saveSessionString(this.client.session.save());
       this.connected = true;
       this.startHeartbeat();
@@ -241,6 +256,7 @@ class TelegramAdapter {
       telegramAuthStore.pushSnapshot(SESSION_PATH);
       console.log('Telegram: connexion établie et session sauvegardée.');
     }).catch((err) => {
+      if (myGeneration !== this._sessionGeneration) return;
       this._loginError = err;
       console.error('Telegram: échec de connexion:', err);
     });

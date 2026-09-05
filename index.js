@@ -1228,21 +1228,21 @@ app.post('/api/pairing-code', requireAccess, requireModule('whatsapp'), async (r
   }
 
   try {
+    // requestPairingCode purge et relance une connexion fraîche en interne si
+    // besoin (voir adapters/whatsapp.js) — une demande explicite de code ne
+    // doit jamais rester bloquée par un état "déjà connecté".
     const code = await whatsapp.requestPairingCode(phoneNumber);
     res.status(200).json({ code });
   } catch (err) {
-    if (err.message === 'ALREADY_REGISTERED' || err.message === 'ALREADY_CONNECTED') {
-      return res.status(409).json({ error: 'Un appareil est déjà connecté à WhatsApp. Déconnectez-vous d\'abord pour en lier un autre.' });
-    }
     console.error('Erreur lors de la génération du code d\'association:', err);
     res.status(500).json({ error: 'Échec de la génération du code d\'association.' });
   }
 });
 
-// Déconnexion manuelle (bouton "Se déconnecter" du dashboard) : contrainte
-// "une seule session active à la fois" — l'utilisateur doit explicitement se
-// déconnecter avant de pouvoir lier un nouvel appareil/numéro (voir la garde
-// ALREADY_CONNECTED ci-dessus dans requestPairingCode).
+// Déconnexion manuelle, ou réinitialisation de secours si la session semble
+// bloquée (bouton "Réinitialiser / Se déconnecter de WhatsApp" du dashboard,
+// toujours accessible quel que soit le statut affiché) : ferme le socket,
+// purge la session locale et distante, puis relance une connexion fraîche.
 app.post('/api/whatsapp/logout', requireAccess, requireModule('whatsapp'), async (req, res) => {
   try {
     await whatsapp.logout();

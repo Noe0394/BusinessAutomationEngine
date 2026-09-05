@@ -41,6 +41,17 @@ let reconnectTimer = null;
 let syncStarted = false;
 let heartbeatTimer = null;
 
+// Compteur de génération : incrémenté à chaque connect(). Les écouteurs
+// d'événements d'un socket capturent la génération au moment de leur
+// création et se désactivent (voir isStale ci-dessous) si un connect()
+// plus récent les a entre-temps remplacés — sans ça, un ancien socket pas
+// encore complètement fermé (ex: événement 'close'/'open' réseau en retard)
+// peut continuer à écrire sur les variables partagées (connected, latestQR)
+// après coup et désynchroniser l'état rapporté par isConnected()/getQRCode()
+// de la réalité du socket actif, avec des symptômes comme "l'UI affiche
+// Déconnecté mais requestPairingCode répond ALREADY_CONNECTED".
+let connectGeneration = 0;
+
 // Signal de présence périodique : sans trafic, certains réseaux/proxies
 // intermédiaires (et parfois WhatsApp lui-même) peuvent considérer la
 // connexion inactive et la couper. sendPresenceUpdate('available') est un
@@ -88,6 +99,26 @@ function scheduleReconnect(delayMs = 3000) {
 }
 
 async function connect() {
+  // Un socket précédent encore vivant (ex: connect() rappelé pendant qu'un
+  // ancien socket termine sa fermeture) est explicitement détaché et fermé
+  // avant d'en créer un nouveau — voir le commentaire sur connectGeneration.
+  if (sock) {
+    try {
+      sock.ev.removeAllListeners();
+    } catch (err) {
+      // ignore
+    }
+    try {
+      sock.end(new Error('Superseded by a new connect() call.'));
+    } catch (err) {
+      // ignore
+    }
+  }
+
+  connectGeneration += 1;
+  const myGeneration = connectGeneration;
+  const isStale = () => myGeneration !== connectGeneration;
+
   fs.mkdirSync(AUTH_DIR, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -99,6 +130,7 @@ async function connect() {
   });
 
   sock.ev.on('creds.update', async () => {
+    if (isStale()) return;
     await saveCreds();
     // Les créds changent surtout au moment de l'appairage (QR/pairing code) :
     // on pousse immédiatement plutôt que d'attendre le prochain instantané
@@ -113,6 +145,7 @@ async function connect() {
   }
 
   sock.ev.on('connection.update', (update) => {
+    if (isStale()) return;
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
@@ -152,6 +185,7 @@ async function connect() {
   });
 
   sock.ev.on('messages.upsert', (m) => {
+    if (isStale()) return;
     console.log('Nouveau message reçu:', JSON.stringify(m, null, 2));
   });
 
@@ -191,25 +225,26 @@ async function sendMedia(to, { buffer, mimetype, filename, caption }) {
 }
 
 async function requestPairingCode(phoneNumber) {
-  if (!sock) {
-    throw new Error('Adaptateur WhatsApp non initialisé.');
-  }
-
-  // Une seule session active à la fois : si un appareil est déjà connecté, il
-  // faut d'abord se déconnecter explicitement (voir logout()) avant de pouvoir
-  // en appairer un autre — évite qu'une seconde tentative de code d'association
-  // ne vienne perturber la session déjà établie.
-  if (connected) {
-    throw new Error('ALREADY_CONNECTED');
-  }
-
-  if (authState?.creds?.registered) {
-    throw new Error('ALREADY_REGISTERED');
-  }
-
   const digits = String(phoneNumber).replace(/\D/g, '');
   if (!digits) {
     throw new Error('INVALID_PHONE_NUMBER');
+  }
+
+  // Une demande explicite de code signifie que l'utilisateur veut repartir
+  // de zéro : si le backend pense qu'un appareil est déjà connecté, ou que
+  // l'identité locale est déjà enregistrée sur un autre numéro, on purge
+  // (voir logout()) et on relance une connexion fraîche plutôt que de
+  // bloquer avec une erreur — qui créerait une impasse si "connected" est un
+  // instant en retard sur la réalité du socket (ex: session corrompue qui
+  // s'ouvre puis se referme en boucle, ou double-appel concurrent).
+  if (connected || authState?.creds?.registered) {
+    await logout();
+  } else if (!sock) {
+    await connect();
+  }
+
+  if (!sock) {
+    throw new Error('Adaptateur WhatsApp non initialisé.');
   }
 
   const rawCode = await sock.requestPairingCode(digits);

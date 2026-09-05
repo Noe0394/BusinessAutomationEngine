@@ -202,9 +202,9 @@
           <div id="pairing-result"></div>
         </div>
 
-        <div id="whatsapp-connected-actions" hidden style="margin-top: 1rem;">
-          <p class="empty">Un seul appareil peut être connecté à la fois. Pour changer d'appareil ou de numéro, déconnectez-vous d'abord.</p>
-          <button type="button" id="whatsapp-logout-btn" class="stop-button">🔌 Se déconnecter de WhatsApp</button>
+        <div id="whatsapp-connected-actions" style="margin-top: 1rem;">
+          <p class="empty">Un seul appareil peut être connecté à la fois. Ce bouton est toujours disponible, même si le statut affiché semble incohérent — il ferme la session en cours, purge la session locale et distante, et prépare une connexion neuve (même numéro ou un autre).</p>
+          <button type="button" id="whatsapp-logout-btn" class="stop-button">🔄 Réinitialiser / Se déconnecter de WhatsApp</button>
         </div>
         <p id="whatsapp-logout-feedback" hidden></p>
       </div>
@@ -1364,17 +1364,14 @@
         const badge = document.getElementById('status-badge');
         const qrContainer = document.getElementById('qr-container');
         const qrImage = document.getElementById('qr-image');
-        const connectedActions = document.getElementById('whatsapp-connected-actions');
 
         if (data.connected) {
           badge.textContent = 'Connecté';
           badge.className = 'badge connected';
           qrContainer.hidden = true;
-          connectedActions.hidden = false;
         } else {
           badge.textContent = 'Déconnecté';
           badge.className = 'badge disconnected';
-          connectedActions.hidden = true;
           if (data.qr) {
             qrImage.src = data.qr;
             qrContainer.hidden = false;
