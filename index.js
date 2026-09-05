@@ -10,7 +10,7 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const QRCode = require('qrcode');
 const axios = require('axios');
-const whatsapp = require('./adapters/whatsapp');
+const whatsappManager = require('./adapters/whatsappManager');
 const FacebookMessengerAdapter = require('./adapters/facebook');
 const TelegramAdapter = require('./adapters/telegram');
 const MediaPublisherAdapter = require('./adapters/media_publisher');
@@ -20,6 +20,7 @@ const oauthConfig = require('./oauth_config');
 const scheduledMessages = require('./queues/scheduled_messages');
 const contactsStore = require('./models/contact');
 const keywordRules = require('./models/keyword_rules');
+const { replaceVariables, normalizeJid, jidToE164, normalizeRecipientEntry } = require('./lib/whatsappRecipients');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -216,6 +217,18 @@ function requireModule(moduleName) {
   };
 }
 
+// À utiliser après requireAccess (et requireModule('whatsapp')) sur toute
+// route WhatsApp : attache l'instance isolée du tenant courant (admin ou clé
+// de licence — voir adapters/whatsappManager.js) à req.whatsapp/req.campaign,
+// pour qu'aucun handler ne puisse jamais toucher, même par erreur, au socket
+// ou aux données d'un autre tenant.
+function attachWhatsapp(req, res, next) {
+  const entry = whatsappManager.getSessionForRequest(req);
+  req.whatsapp = entry.session;
+  req.campaignEngine = entry.campaignEngine;
+  next();
+}
+
 // ---------- Anti-CSRF pour les flux OAuth (Google/TikTok/Facebook) ----------
 // Le paramètre "state" standard OAuth : généré au moment où l'utilisateur
 // clique sur "Se connecter", vérifié quand le fournisseur redirige vers notre
@@ -236,55 +249,8 @@ function consumeOAuthState(state) {
   return Boolean(expiresAt) && expiresAt > Date.now();
 }
 
-// Variables de personnalisation ({nom}, etc.) : une clé absente ou nulle est
-// remplacée par une chaîne vide plutôt que de laisser le texte "{nom}" tel
-// quel ou d'y insérer le mot "null" — un message "Bonjour {nom}," sans nom
-// connu doit devenir "Bonjour," et non un texte visiblement cassé.
-function replaceVariables(template, row) {
-  return String(template).replace(/{(\w+)}/g, (match, key) => {
-    const value = row[key];
-    return value !== undefined && value !== null ? String(value) : '';
-  });
-}
-
-function normalizeJid(telephone) {
-  const raw = String(telephone).trim();
-  if (raw.includes('@')) {
-    return raw;
-  }
-  const digits = raw.replace(/\D/g, '');
-  return `${digits}@s.whatsapp.net`;
-}
-
-// Format E.164 (ex: +2250700000000) à partir d'un JID WhatsApp
-// (2250700000000@s.whatsapp.net) — utilisé pour l'export Excel. Les JID au
-// format @lid (identité anonyme récente de WhatsApp, sans numéro réel
-// exploitable) ne portent pas un vrai numéro : les chiffres qui précèdent
-// "@lid" ne sont pas un numéro de téléphone valide, mais on les renvoie quand
-// même préfixés d'un "+" plutôt que de faire échouer l'export pour ces
-// quelques participants.
-function jidToE164(jid) {
-  const digits = String(jid || '').split('@')[0].replace(/\D/g, '');
-  return digits ? `+${digits}` : '';
-}
-
-// Représentation normalisée d'un destinataire WhatsApp pour l'envoi : un JID
-// résolu ("to") et un nom de personnalisation ("nom", jamais undefined/null).
-// Accepte soit un identifiant simple (chaîne — résolution de groupe, ou liste
-// importée à l'ancien format), soit un contact enrichi { telephone, nom }
-// (liste importée avec colonne "nom", voir /api/contacts/import). Dans le
-// premier cas, on retombe sur le cache opportuniste de noms publics
-// (pushName/notify) constitué par l'adaptateur au fil des messages/contacts
-// vus — qui peut rester vide si ce contact n'a jamais été "rencontré".
-function normalizeRecipientEntry(recipient) {
-  if (recipient && typeof recipient === 'object') {
-    const telephone = recipient.telephone || recipient.to || recipient.phone || '';
-    const to = normalizeJid(telephone);
-    return { to, nom: recipient.nom || recipient.prenom || whatsapp.getContactName(to) || '' };
-  }
-  const to = normalizeJid(recipient);
-  return { to, nom: whatsapp.getContactName(to) || '' };
-}
+// replaceVariables/normalizeJid/jidToE164/normalizeRecipientEntry : voir
+// lib/whatsappRecipients.js (partagées avec queues/campaignEngine.js).
 
 // Convertit un fichier "média" issu de multer en étape prête à l'envoi
 // WhatsApp, en compressant automatiquement une vidéo trop lourde (voir
@@ -317,155 +283,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-let currentCampaign = null;
-
-async function interruptibleSleep(ms, shouldStop) {
-  const tickMs = 300;
-  let elapsed = 0;
-  while (elapsed < ms) {
-    if (shouldStop()) return;
-    const step = Math.min(tickMs, ms - elapsed);
-    await sleep(step);
-    elapsed += step;
-  }
-}
-
-function markRemainingInterrupted(campaign, recipients, fromIndex) {
-  for (let j = fromIndex; j < recipients.length; j += 1) {
-    campaign.results.push({
-      to: normalizeRecipientEntry(recipients[j]).to,
-      status: 'interrupted',
-      timestamp: new Date().toISOString(),
-    });
-  }
-  campaign.status = 'stopped';
-  campaign.paused = false;
-  campaign.finishedAt = new Date().toISOString();
-}
-
-// En cas de coupure réseau/Baileys en pleine campagne, on ne marque pas les
-// destinataires restants comme échoués : on met la campagne en pause (le
-// statut public reste "running" pour ne pas casser le suivi côté client) et
-// on attend que la connexion revienne avant de reprendre l'envoi.
-async function waitForConnection(campaign) {
-  if (whatsapp.isConnected()) {
-    return;
-  }
-
-  campaign.paused = true;
-  console.log('Campagne: mise en pause — connexion WhatsApp perdue, en attente de reconnexion...');
-
-  while (!whatsapp.isConnected() && !campaign.stopRequested) {
-    await sleep(1000);
-  }
-
-  campaign.paused = false;
-  if (!campaign.stopRequested) {
-    console.log('Campagne: reprise après reconnexion WhatsApp.');
-  }
-}
-
-// sequence (tableau) porte la campagne à envoyer : chaque étape est soit
-// { type: 'text', text } soit { type: 'media', buffer, mimetype, filename },
-// envoyée dans l'ordre à chaque destinataire avec un court délai (2-5s par
-// défaut, paramétrable) entre chaque étape — pour simuler une frappe
-// naturelle, distinct du délai (8-15s) appliqué entre deux destinataires.
-async function runCampaignQueue(campaign, recipients, options = {}) {
-  const { delaySeconds, batchSize, sequence, sequenceDelayMinMs, sequenceDelayMaxMs } = options;
-  const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipients.length;
-  const seqMinMs = Number.isFinite(sequenceDelayMinMs) ? sequenceDelayMinMs : 2000;
-  const seqMaxMs = Number.isFinite(sequenceDelayMaxMs) ? Math.max(seqMinMs, sequenceDelayMaxMs) : Math.max(seqMinMs, 5000);
-
-  for (let i = 0; i < recipients.length; i += 1) {
-    if (campaign.stopRequested) {
-      markRemainingInterrupted(campaign, recipients, i);
-      console.log('Campagne: interrompue par l\'utilisateur.');
-      return;
-    }
-
-    await waitForConnection(campaign);
-
-    if (campaign.stopRequested) {
-      markRemainingInterrupted(campaign, recipients, i);
-      console.log('Campagne: interrompue par l\'utilisateur.');
-      return;
-    }
-
-    const { to, nom } = normalizeRecipientEntry(recipients[i]);
-    let status = 'failed';
-
-    try {
-      for (let s = 0; s < sequence.length; s += 1) {
-        const step = sequence[s];
-        if (step.type === 'media') {
-          await whatsapp.sendMedia(to, step);
-        } else {
-          await whatsapp.sendMessage(to, replaceVariables(step.text, { nom }));
-        }
-        if (s < sequence.length - 1) {
-          await sleep(randomDelay(seqMinMs, seqMaxMs));
-        }
-      }
-      status = 'delivered';
-      campaign.success += 1;
-      console.log(`Campagne: séquence envoyée à ${to} (${i + 1}/${recipients.length}).`);
-    } catch (err) {
-      campaign.failed += 1;
-      console.error(`Campagne: échec de l'envoi à ${to}:`, err);
-    }
-
-    campaign.sent += 1;
-    campaign.results.push({ to, status, timestamp: new Date().toISOString() });
-
-    if (i < recipients.length - 1 && !campaign.stopRequested) {
-      const baseDelayMs = delaySeconds ? delaySeconds * 1000 : randomDelay(8000, 15000);
-      const endOfBatch = (i + 1) % batch === 0;
-      const delayMs = endOfBatch ? baseDelayMs * 3 : baseDelayMs;
-      await interruptibleSleep(delayMs, () => campaign.stopRequested);
-    }
-  }
-
-  if (campaign.status === 'running') {
-    campaign.status = 'completed';
-    campaign.finishedAt = new Date().toISOString();
-  }
-
-  console.log('Campagne: terminée.');
-}
-
-function startCampaign(recipients, options = {}) {
-  if (currentCampaign && currentCampaign.status === 'running') {
-    throw new Error('CAMPAIGN_IN_PROGRESS');
-  }
-
-  currentCampaign = {
-    total: recipients.length,
-    sent: 0,
-    success: 0,
-    failed: 0,
-    status: 'running',
-    paused: false,
-    stopRequested: false,
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
-    results: [],
-  };
-
-  const campaign = currentCampaign;
-
-  runCampaignQueue(campaign, recipients, options).catch((err) => {
-    console.error('Erreur pendant la campagne:', err);
-    campaign.status = 'stopped';
-    campaign.paused = false;
-    campaign.finishedAt = new Date().toISOString();
-  });
-
-  return campaign;
-}
+// La campagne WhatsApp interactive (pause/stop/reprise, persistance,
+// isolation par tenant) vit maintenant entièrement dans
+// queues/campaignEngine.js (une instance par tenant, voir
+// adapters/whatsappManager.js) — plus aucun état de campagne global ici.
 
 // Campagne de messages directs Telegram vers une liste de contacts importée
-// (usernames et/ou numéros de téléphone), distincte de currentCampaign
-// (WhatsApp) et de la diffusion groupe/canal existante (/api/telegram/queue)
+// (usernames et/ou numéros de téléphone), distincte de la campagne WhatsApp
+// (voir queues/campaignEngine.js) et de la diffusion groupe/canal existante
+// (/api/telegram/queue)
 // : ici chaque destinataire est résolu individuellement via
 // telegram.resolveRecipient avant l'envoi. Même modèle stoppable que la
 // campagne WhatsApp (pause/stop, suivi de progression).
@@ -634,12 +460,16 @@ function startTelegramDmCampaign(recipients, message, options = {}) {
 }
 
 // ---------- Programmation multi-canal (module Programmation / Planning) ----------
-// Contrairement aux campagnes interactives ci-dessus (currentCampaign,
-// currentTelegramDmCampaign — un seul créneau global partagé avec le
+// Contrairement aux campagnes interactives ci-dessus (le moteur par tenant de
+// queues/campaignEngine.js pour WhatsApp, currentTelegramDmCampaign pour
+// Telegram — un seul créneau à la fois par tenant, partagé avec le
 // dashboard), une programmation est indépendante : elle doit pouvoir
 // s'exécuter sans écraser une campagne manuelle en cours, ni en être bloquée.
 // Chaque canal a donc sa propre boucle d'envoi séquentielle ici plutôt que de
-// réutiliser les créneaux interactifs existants.
+// réutiliser les créneaux interactifs existants. Note : cette programmation
+// n'a pas de notion de tenant (voir dispatchScheduledWhatsapp) — hors du
+// périmètre de l'isolation par clé mise en place pour les campagnes
+// interactives.
 
 // mediaUrl vaut soit un lien externe (http/https, fourni par l'exploitant),
 // soit "local:<nom de fichier>" pour un média envoyé depuis un formulaire du
@@ -704,7 +534,7 @@ function resolveKeywordRuleMedia(rule) {
 }
 
 // entry.sequence (tableau, voir queues/scheduled_messages.js et
-// runCampaignQueue pour l'équivalent côté envoi immédiat) : résout chaque
+// queues/campaignEngine.js pour l'équivalent côté envoi immédiat) : résout chaque
 // étape média en buffer, en conservant l'ordre et les étapes texte telles
 // quelles. Retourne null si l'entrée ne porte pas de séquence (programmation
 // classique message + médias, voir resolveScheduledMediaList).
@@ -725,13 +555,21 @@ async function resolveScheduledSequence(entry) {
   return resolved;
 }
 
+// La programmation multi-canal (voir queues/scheduled_messages.js) n'a
+// aujourd'hui aucune notion de tenant/propriétaire (accessible via
+// /api/scheduled-messages par n'importe quelle clé valide) : hors du
+// périmètre de cette refonte (isolation de l'instance WhatsApp interactive,
+// des campagnes et de contactNames). En attendant une éventuelle isolation
+// complète de ce module, les envois programmés WhatsApp passent par
+// l'instance du tenant admin plutôt que par une session partagée fantôme.
 async function dispatchScheduledWhatsapp(entry, mediaList) {
+  const session = whatsappManager.getOrCreate(whatsappManager.ADMIN_TENANT_ID).session;
   let recipients = entry.recipients;
 
   if (entry.recipientType === 'groups') {
     const merged = new Set();
     for (const groupId of entry.recipients) {
-      const participants = await whatsapp.getGroupParticipants(groupId);
+      const participants = await session.getGroupParticipants(groupId);
       (participants || []).forEach((p) => merged.add(p.id));
     }
     recipients = Array.from(merged);
@@ -743,7 +581,7 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
 
   const results = [];
   for (let i = 0; i < recipients.length; i += 1) {
-    const { to, nom } = normalizeRecipientEntry(recipients[i]);
+    const { to, nom } = normalizeRecipientEntry(recipients[i], session.getContactName);
     try {
       if (sequence) {
         // Séquençage / Envoi Multi-Messages : chaque étape part comme un
@@ -752,9 +590,9 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
         for (let s = 0; s < sequence.length; s += 1) {
           const step = sequence[s];
           if (step.type === 'media') {
-            await whatsapp.sendMedia(to, step);
+            await session.sendMedia(to, step);
           } else {
-            await whatsapp.sendMessage(to, replaceVariables(step.text, { nom }));
+            await session.sendMessage(to, replaceVariables(step.text, { nom }));
           }
           if (s < sequence.length - 1) {
             await sleep(randomDelay(seqMinMs, seqMaxMs));
@@ -762,14 +600,14 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
         }
       } else if (Array.isArray(mediaList) && mediaList.length > 0) {
         // Rafale de pièces jointes au même destinataire (voir
-        // runCampaignQueue pour la même logique côté envoi immédiat) : la
-        // légende n'est portée que par la première.
+        // queues/campaignEngine.js pour la même logique côté envoi
+        // immédiat) : la légende n'est portée que par la première.
         const caption = replaceVariables(entry.message, { nom });
         for (let m = 0; m < mediaList.length; m += 1) {
-          await whatsapp.sendMedia(to, { ...mediaList[m], caption: m === 0 ? caption : undefined });
+          await session.sendMedia(to, { ...mediaList[m], caption: m === 0 ? caption : undefined });
         }
       } else {
-        await whatsapp.sendMessage(to, replaceVariables(entry.message, { nom }));
+        await session.sendMessage(to, replaceVariables(entry.message, { nom }));
       }
       results.push({ to, status: 'delivered' });
     } catch (err) {
@@ -909,18 +747,20 @@ const scheduledMessagesInterval = setInterval(() => {
 // setInterval de ce fichier/des adaptateurs).
 if (scheduledMessagesInterval.unref) scheduledMessagesInterval.unref();
 
-async function findGroupByName(name) {
-  const groups = await whatsapp.getGroups();
+async function findGroupByName(session, name) {
+  const groups = await session.getGroups();
   const needle = name.trim().toLowerCase();
   return groups.find((g) => (g.subject || '').toLowerCase().includes(needle));
 }
 
-async function handleNaturalMessage(message) {
+// session/campaignEngine : instance isolée du tenant qui a envoyé le message
+// (voir attachWhatsapp) — jamais celles d'un autre tenant.
+async function handleNaturalMessage(message, session, campaignEngine) {
   const text = message.trim();
   const lowered = text.toLowerCase();
 
   if (/liste\s+mes\s+groupes|affiche\s+(les\s+)?groupes|montre\s+(moi\s+)?(les\s+)?groupes|quels?\s+sont\s+mes\s+groupes/.test(lowered)) {
-    const groups = await whatsapp.getGroups();
+    const groups = await session.getGroups();
     if (groups.length === 0) {
       return 'Aucun groupe trouvé. Le compte WhatsApp est peut-être encore en cours de synchronisation.';
     }
@@ -933,11 +773,11 @@ async function handleNaturalMessage(message) {
   );
   if (participantsMatch) {
     const groupName = participantsMatch[1].replace(/[?.!]+$/, '').trim();
-    const group = await findGroupByName(groupName);
+    const group = await findGroupByName(session, groupName);
     if (!group) {
       return `Aucun groupe correspondant à "${groupName}" n'a été trouvé.`;
     }
-    const participants = await whatsapp.getGroupParticipants(group.id);
+    const participants = await session.getGroupParticipants(group.id);
     if (!participants || participants.length === 0) {
       return `Aucun participant trouvé pour le groupe "${group.subject}".`;
     }
@@ -951,11 +791,11 @@ async function handleNaturalMessage(message) {
   if (campaignMatch) {
     const [, campaignMessage, groupNameRaw, delaySecondsRaw] = campaignMatch;
     const groupName = groupNameRaw.replace(/[?.!]+$/, '').trim();
-    const group = await findGroupByName(groupName);
+    const group = await findGroupByName(session, groupName);
     if (!group) {
       return `Aucun groupe correspondant à "${groupName}" n'a été trouvé.`;
     }
-    const participants = await whatsapp.getGroupParticipants(group.id);
+    const participants = await session.getGroupParticipants(group.id);
     if (!participants || participants.length === 0) {
       return `Le groupe "${group.subject}" ne contient aucun participant à contacter.`;
     }
@@ -964,7 +804,7 @@ async function handleNaturalMessage(message) {
     const delaySeconds = delaySecondsRaw ? parseFloat(delaySecondsRaw) : undefined;
 
     try {
-      startCampaign(recipients, { sequence: [{ type: 'text', text: campaignMessage.trim() }], delaySeconds });
+      campaignEngine.start(recipients, { sequence: [{ type: 'text', text: campaignMessage.trim() }], delaySeconds });
     } catch (err) {
       if (err.message === 'CAMPAIGN_IN_PROGRESS') {
         return 'Une campagne est déjà en cours. Attendez sa fin ou interrompez-la avant d\'en lancer une nouvelle.';
@@ -979,7 +819,7 @@ async function handleNaturalMessage(message) {
   return 'Je n\'ai pas compris cette demande. Essayez par exemple : "liste mes groupes", "participants du groupe Famille", ou "envoie Bonjour ! au groupe Famille avec un délai de 10 secondes".';
 }
 
-async function runCampaign(contacts, minDelayMs, maxDelayMs) {
+async function runCampaign(session, contacts, minDelayMs, maxDelayMs) {
   for (let i = 0; i < contacts.length; i += 1) {
     const row = contacts[i];
 
@@ -992,7 +832,7 @@ async function runCampaign(contacts, minDelayMs, maxDelayMs) {
     const text = replaceVariables(row.message, row);
 
     try {
-      await whatsapp.sendMessage(to, text);
+      await session.sendMessage(to, text);
       console.log(`Campagne: message envoyé à ${to} (${i + 1}/${contacts.length}).`);
     } catch (err) {
       console.error(`Campagne: échec de l'envoi à ${to}:`, err);
@@ -1163,7 +1003,7 @@ app.get('/api/admin/licenses', requireAdmin, (req, res) => {
 app.get('/api/admin/storage-status', requireAdmin, (req, res) => {
   res.status(200).json({
     licenses: licenses.getStorageStatus(),
-    whatsapp: whatsapp.getStorageStatus(),
+    whatsapp: whatsappManager.getStorageStatus(),
     telegram: telegram.getStorageStatus(),
   });
 });
@@ -1266,12 +1106,12 @@ app.delete('/api/admin/licenses/:key', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/status', requireAccess, requireModule('whatsapp'), async (req, res) => {
-  const connected = whatsapp.isConnected();
+app.get('/api/status', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
+  const connected = req.whatsapp.isConnected();
   const response = { connected };
 
   if (!connected) {
-    const qr = whatsapp.getQRCode();
+    const qr = req.whatsapp.getQRCode();
     if (qr) {
       try {
         response.qr = await QRCode.toDataURL(qr);
@@ -1284,7 +1124,7 @@ app.get('/api/status', requireAccess, requireModule('whatsapp'), async (req, res
   res.status(200).json(response);
 });
 
-app.post('/api/pairing-code', requireAccess, requireModule('whatsapp'), async (req, res) => {
+app.post('/api/pairing-code', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   const { phoneNumber } = req.body || {};
 
   if (!phoneNumber || !String(phoneNumber).replace(/\D/g, '')) {
@@ -1295,7 +1135,7 @@ app.post('/api/pairing-code', requireAccess, requireModule('whatsapp'), async (r
     // requestPairingCode purge et relance une connexion fraîche en interne si
     // besoin (voir adapters/whatsapp.js) — une demande explicite de code ne
     // doit jamais rester bloquée par un état "déjà connecté".
-    const code = await whatsapp.requestPairingCode(phoneNumber);
+    const code = await req.whatsapp.requestPairingCode(phoneNumber);
     res.status(200).json({ code });
   } catch (err) {
     console.error('Erreur lors de la génération du code d\'association:', err);
@@ -1307,9 +1147,9 @@ app.post('/api/pairing-code', requireAccess, requireModule('whatsapp'), async (r
 // bloquée (bouton "Réinitialiser / Se déconnecter de WhatsApp" du dashboard,
 // toujours accessible quel que soit le statut affiché) : ferme le socket,
 // purge la session locale et distante, puis relance une connexion fraîche.
-app.post('/api/whatsapp/logout', requireAccess, requireModule('whatsapp'), async (req, res) => {
+app.post('/api/whatsapp/logout', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
-    await whatsapp.logout();
+    await req.whatsapp.logout();
     res.status(200).json({ status: 'logged_out' });
   } catch (err) {
     console.error('Erreur lors de la déconnexion WhatsApp:', err);
@@ -1317,7 +1157,7 @@ app.post('/api/whatsapp/logout', requireAccess, requireModule('whatsapp'), async
   }
 });
 
-app.post('/api/messages', requireAccess, requireModule('whatsapp'), async (req, res) => {
+app.post('/api/messages', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   const { to, message } = req.body;
 
   if (!to || !message) {
@@ -1325,7 +1165,7 @@ app.post('/api/messages', requireAccess, requireModule('whatsapp'), async (req, 
   }
 
   try {
-    await whatsapp.sendMessage(to, message);
+    await req.whatsapp.sendMessage(to, message);
     res.status(200).json({ status: 'sent' });
   } catch (err) {
     console.error('Erreur lors de l\'envoi du message:', err);
@@ -1333,9 +1173,9 @@ app.post('/api/messages', requireAccess, requireModule('whatsapp'), async (req, 
   }
 });
 
-app.get('/api/groups', requireAccess, requireModule('whatsapp'), async (req, res) => {
+app.get('/api/groups', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
-    const groups = await whatsapp.getGroups();
+    const groups = await req.whatsapp.getGroups();
     res.status(200).json(groups);
   } catch (err) {
     console.error('Erreur lors de la récupération des groupes:', err);
@@ -1343,9 +1183,9 @@ app.get('/api/groups', requireAccess, requireModule('whatsapp'), async (req, res
   }
 });
 
-app.get('/api/groups/:id/participants', requireAccess, requireModule('whatsapp'), async (req, res) => {
+app.get('/api/groups/:id/participants', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
-    const participants = await whatsapp.getGroupParticipants(req.params.id);
+    const participants = await req.whatsapp.getGroupParticipants(req.params.id);
     res.status(200).json(participants);
   } catch (err) {
     console.error('Erreur lors de la récupération des participants:', err);
@@ -1357,7 +1197,7 @@ app.get('/api/groups/:id/participants', requireAccess, requireModule('whatsapp')
 // vers un unique fichier Excel téléchargeable (module de gestion des
 // contacts) : un même membre présent dans plusieurs groupes cochés n'apparaît
 // qu'une fois, avec la liste de ces groupes en colonne "groupes".
-app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'), async (req, res) => {
+app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   let { groupIds } = req.body || {};
   if (typeof groupIds === 'string') {
     try {
@@ -1393,7 +1233,7 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
     // rester vide.
     const merged = new Map(); // phoneJid -> lidJid (repli pour la recherche du nom)
     for (const groupId of groupIds) {
-      const participants = await whatsapp.getGroupParticipants(groupId);
+      const participants = await req.whatsapp.getGroupParticipants(groupId);
       (participants || []).forEach((p) => {
         const phoneJid = p.jid && !p.jid.endsWith('@lid')
           ? p.jid
@@ -1406,7 +1246,7 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
 
     const rows = Array.from(merged.entries()).map(([phoneJid, lidJid]) => ({
       telephone: jidToE164(phoneJid),
-      nom: whatsapp.getContactName(phoneJid) || (lidJid ? whatsapp.getContactName(lidJid) : '') || '',
+      nom: req.whatsapp.getContactName(phoneJid) || (lidJid ? req.whatsapp.getContactName(lidJid) : '') || '',
     }));
 
     const sheet = XLSX.utils.json_to_sheet(rows);
@@ -1443,7 +1283,7 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
   }
 });
 
-app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), whatsappMediaUpload.array('media', 10), async (req, res) => {
+app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attachWhatsapp, whatsappMediaUpload.array('media', 10), async (req, res) => {
   const { message, groupId, delaySeconds, batchSize, sequenceDelayMin, sequenceDelayMax } = req.body;
   let { recipients, groupIds, sequence } = req.body;
 
@@ -1471,7 +1311,7 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), whatsa
     try {
       const merged = new Set();
       for (const gId of targetGroupIds) {
-        const participants = await whatsapp.getGroupParticipants(gId);
+        const participants = await req.whatsapp.getGroupParticipants(gId);
         (participants || []).forEach((p) => merged.add(p.id));
       }
       recipients = Array.from(merged);
@@ -1548,7 +1388,7 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), whatsa
 
   let campaign;
   try {
-    campaign = startCampaign(recipients, {
+    campaign = req.campaignEngine.start(recipients, {
       delaySeconds: fixedDelaySeconds,
       batchSize: parsedBatchSize,
       sequence: resolvedSequence,
@@ -1573,21 +1413,25 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), whatsa
   });
 });
 
-app.post('/api/messages/stop', requireAccess, requireModule('whatsapp'), (req, res) => {
-  if (!currentCampaign || currentCampaign.status !== 'running') {
-    return res.status(400).json({ error: 'Aucune campagne en cours à interrompre.' });
+app.post('/api/messages/stop', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+  try {
+    req.campaignEngine.stop();
+    res.status(200).json({ status: 'stop_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(400).json({ error: 'Aucune campagne en cours à interrompre.' });
+    }
+    throw err;
   }
-
-  currentCampaign.stopRequested = true;
-  res.status(200).json({ status: 'stop_requested' });
 });
 
-app.get('/api/messages/status', requireAccess, requireModule('whatsapp'), (req, res) => {
-  if (!currentCampaign) {
+app.get('/api/messages/status', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+  const status = req.campaignEngine.getStatus();
+  if (!status) {
     return res.status(200).json({ exists: false });
   }
 
-  res.status(200).json({ exists: true, ...currentCampaign });
+  res.status(200).json({ exists: true, ...status });
 });
 
 app.post('/api/contacts/import', requireAccess, requireModule('whatsapp'), upload.single('file'), async (req, res) => {
@@ -1624,7 +1468,7 @@ app.post('/api/contacts/import', requireAccess, requireModule('whatsapp'), uploa
   }
 });
 
-app.post('/api/chat-natural', requireAccess, requireModule('whatsapp'), async (req, res) => {
+app.post('/api/chat-natural', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   const { message } = req.body || {};
 
   if (!message || typeof message !== 'string') {
@@ -1632,7 +1476,7 @@ app.post('/api/chat-natural', requireAccess, requireModule('whatsapp'), async (r
   }
 
   try {
-    const reply = await handleNaturalMessage(message);
+    const reply = await handleNaturalMessage(message, req.whatsapp, req.campaignEngine);
     res.status(200).json({ reply });
   } catch (err) {
     console.error('Erreur lors du traitement du message en langage naturel:', err);
@@ -1640,7 +1484,7 @@ app.post('/api/chat-natural', requireAccess, requireModule('whatsapp'), async (r
   }
 });
 
-app.post('/api/campaign/excel', requireAccess, requireModule('whatsapp'), upload.single('file'), async (req, res) => {
+app.post('/api/campaign/excel', requireAccess, requireModule('whatsapp'), attachWhatsapp, upload.single('file'), async (req, res) => {
   let contacts;
 
   try {
@@ -1674,7 +1518,7 @@ app.post('/api/campaign/excel', requireAccess, requireModule('whatsapp'), upload
     maxDelaySeconds,
   });
 
-  runCampaign(contacts, minDelaySeconds * 1000, maxDelaySeconds * 1000).catch((err) => {
+  runCampaign(req.whatsapp, contacts, minDelaySeconds * 1000, maxDelaySeconds * 1000).catch((err) => {
     console.error('Erreur pendant l\'exécution de la campagne:', err);
   });
 });
@@ -3222,14 +3066,21 @@ licenses
     });
   });
 
-whatsapp
-  .restoreSessionFromRemote()
+// initAdminSession() : migre puis connecte le tenant admin (comportement
+// historique préservé — seul tenant démarré automatiquement, sans attendre
+// une première requête ; voir adapters/whatsappManager.js). Une fois cela
+// lancé, bootResumePendingCampaigns() reprend, pour chaque clé de licence
+// dont l'état persisté indique une campagne encore en cours au moment de
+// l'arrêt précédent du process (redéploiement, crash), l'envoi en
+// arrière-plan exactement là où il s'était arrêté.
+whatsappManager
+  .initAdminSession()
   .catch((err) => {
-    console.error('Erreur lors de la restauration de la session WhatsApp depuis GitHub :', err);
+    console.error('Erreur lors de l\'initialisation de la session WhatsApp admin:', err);
   })
   .finally(() => {
-    whatsapp.connect().catch((err) => {
-      console.error('Erreur lors de l\'initialisation de l\'adaptateur WhatsApp:', err);
+    whatsappManager.bootResumePendingCampaigns().catch((err) => {
+      console.error('Erreur lors de la reprise des campagnes WhatsApp interrompues :', err);
     });
   });
 
