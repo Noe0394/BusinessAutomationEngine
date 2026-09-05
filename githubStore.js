@@ -186,6 +186,55 @@ function createStore(filePath) {
   };
 }
 
+// Liste les fichiers d'un DOSSIER du repo (pas un fichier précis) — utilisé
+// par queues/campaignEngine.js pour retrouver, au démarrage du process après
+// un redéploiement (disque local vidé), quels tenants avaient une campagne
+// en cours sans avoir à connaître leurs clés à l'avance. Retourne un tableau
+// de noms de fichiers (pas de chemins complets), vide si le dossier n'existe
+// pas encore ou si la persistance est désactivée.
+async function listDirectory(dirPath) {
+  if (!enabled) return [];
+
+  return new Promise((resolve) => {
+    const req = https.request(
+      {
+        hostname: 'api.github.com',
+        path: `/repos/${REPO}/contents/${dirPath.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(BRANCH)}`,
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'BusinessAutomationEngine',
+        },
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (chunk) => {
+          raw += chunk;
+        });
+        res.on('end', () => {
+          // 404 = dossier pas encore créé (aucun fichier poussé pour l'instant) —
+          // pas une erreur, juste "rien à lister".
+          if (res.statusCode !== 200) return resolve([]);
+          let body;
+          try {
+            body = JSON.parse(raw);
+          } catch (err) {
+            return resolve([]);
+          }
+          if (!Array.isArray(body)) return resolve([]);
+          resolve(body.filter((item) => item.type === 'file').map((item) => item.name));
+        });
+      },
+    );
+    // Erreur réseau : traitée comme "rien à lister" plutôt que de faire
+    // planter l'appelant — le pire cas est de ne pas reprendre une campagne
+    // distante, pas un crash au démarrage du serveur.
+    req.on('error', () => resolve([]));
+    req.end();
+  });
+}
+
 // Instance par défaut : conserve le comportement historique de ce module
 // (un seul fichier, "licenses.json" sauf GITHUB_DATA_PATH personnalisé) pour
 // ne rien casser chez les appelants existants qui font
@@ -195,4 +244,5 @@ const defaultStore = createStore(process.env.GITHUB_DATA_PATH || 'licenses.json'
 module.exports = {
   ...defaultStore,
   createStore,
+  listDirectory,
 };

@@ -125,11 +125,15 @@ async function initAdminSession() {
 // process (redéploiement, crash), l'envoi en arrière-plan exactement là où
 // il s'était arrêté — sans action requise de l'utilisateur.
 async function bootResumePendingCampaigns() {
-  const tenantIds = listTenantsWithPendingCampaigns();
+  // listTenantsWithPendingCampaigns() et resumeIfPending() vérifient GitHub
+  // en plus du disque local (voir queues/campaignEngine.js) : nécessaire
+  // pour retrouver les campagnes en cours après un vrai redéploiement Render,
+  // qui vide le disque éphémère avant que ce code ne s'exécute.
+  const tenantIds = await listTenantsWithPendingCampaigns();
   for (const tenantId of tenantIds) {
     const entry = getOrCreate(tenantId);
     ensureConnected(entry);
-    entry.campaignEngine.resumeIfPending();
+    await entry.campaignEngine.resumeIfPending();
   }
   if (tenantIds.length > 0) {
     console.log(`Reprise automatique de ${tenantIds.length} campagne(s) WhatsApp interrompue(s) par le redémarrage.`);

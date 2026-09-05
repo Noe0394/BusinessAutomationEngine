@@ -1,36 +1,59 @@
 const fs = require('fs');
 const path = require('path');
+const githubStore = require('../githubStore');
 const { replaceVariables, normalizeRecipientEntry } = require('../lib/whatsappRecipients');
 
 // Persistance de la progression d'une campagne WhatsApp, tenant par tenant
 // (voir adapters/whatsappManager.js) : sur un environnement Docker/Render où
 // le conteneur est éphémère, un redéploiement/crash ne doit ni perdre la
 // progression déjà envoyée, ni renvoyer les messages déjà livrés au
-// redémarrage. Chaque tenant a son propre fichier d'état
-// (CAMPAIGNS_DIR/<tenantId>.json) — jamais partagé, comme le reste de la
-// session WhatsApp de ce tenant.
+// redémarrage. Chaque tenant a son propre fichier d'état local
+// (CAMPAIGNS_DIR/<tenantId>.json), ET son propre fichier sur GitHub
+// (REMOTE_CAMPAIGNS_DIR/<tenantId>.json, même principe que licenses.js et
+// adapters/whatsappAuthStore.js) — jamais partagés, comme le reste de la
+// session WhatsApp de ce tenant. Le disque local reste la source rapide pour
+// une reprise après crash SANS redéploiement (même conteneur, même fichiers) ;
+// GitHub prend le relais quand le disque local a été vidé par un vrai
+// redéploiement Render (aucun disque persistant n'est requis).
 //
-// IMPORTANT (limite connue) : l'état est persisté sur disque APRÈS l'envoi
-// effectif de chaque destinataire, pas avant — un crash survenant pile entre
-// l'envoi réel et l'écriture du fichier peut donc faire renvoyer UN SEUL
-// message (celui en cours au moment du crash) à la reprise. Un envoi WhatsApp
-// ne pouvant pas être annulé une fois parti, une garantie "exactement une
-// fois" est impossible sans changer la sémantique de livraison elle-même ;
-// cette fenêtre de risque est réduite au minimum (un seul message, pas toute
-// la file) plutôt qu'ignorée.
+// LIMITE CONNUE : seul l'état (destinataires, progression, résultats) est
+// sauvegardé sur GitHub — jamais les pièces jointes (buffers média), qui
+// dépasseraient largement la limite de 1 Mo de contenu inline de l'API
+// Contents de GitHub (même raison que pour les creds WhatsApp, voir
+// adapters/whatsappAuthStore.js). Une campagne SANS pièce jointe reprend donc
+// intégralement après un redéploiement ; une campagne AVEC pièce jointe ne
+// peut reprendre que tant que le conteneur d'origine est toujours vivant (le
+// fichier média local existe encore) — après un vrai redéploiement, elle est
+// marquée "stopped" avec une erreur explicite plutôt que de planter ou
+// d'envoyer des messages sans le média attendu.
+//
+// IMPORTANT (limite connue, indépendante de GitHub) : l'état est persisté
+// APRÈS l'envoi effectif de chaque destinataire, pas avant — un crash
+// survenant pile entre l'envoi réel et l'écriture du fichier peut donc faire
+// renvoyer UN SEUL message (celui en cours au moment du crash) à la reprise.
+// Un envoi WhatsApp ne pouvant pas être annulé une fois parti, une garantie
+// "exactement une fois" est impossible sans changer la sémantique de
+// livraison elle-même ; cette fenêtre de risque est réduite au minimum (un
+// seul message, pas toute la file) plutôt qu'ignorée.
 const CAMPAIGNS_DIR = process.env.CAMPAIGNS_DIR || path.join(__dirname, '..', 'campaigns_state');
 const MEDIA_DIR = path.join(CAMPAIGNS_DIR, 'media');
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
-if (!process.env.CAMPAIGNS_DIR) {
+const REMOTE_CAMPAIGNS_DIR = process.env.GITHUB_CAMPAIGNS_DIR || 'campaigns_state';
+
+if (!process.env.CAMPAIGNS_DIR && !githubStore.enabled) {
   console.warn(
-    `CAMPAIGNS_DIR non défini : la progression des campagnes WhatsApp est stockée dans "${CAMPAIGNS_DIR}" sur le disque local uniquement. ` +
-    'Sur Render/Docker, ce dossier est effacé à chaque redéploiement/redémarrage sauf disque persistant (volume Docker monté sur ce chemin).',
+    `CAMPAIGNS_DIR non défini et sauvegarde GitHub désactivée : la progression des campagnes WhatsApp est stockée dans "${CAMPAIGNS_DIR}" sur le disque local uniquement. ` +
+    'Sur Render/Docker, ce dossier est effacé à chaque redéploiement/redémarrage sauf disque persistant (volume Docker monté sur ce chemin) ou GITHUB_TOKEN/GITHUB_DATA_REPO configurés.',
   );
 }
 
 function statePath(tenantId) {
   return path.join(CAMPAIGNS_DIR, `${tenantId}.json`);
+}
+
+function remoteFilePath(tenantId) {
+  return `${REMOTE_CAMPAIGNS_DIR}/${tenantId}.json`;
 }
 
 function sleep(ms) {
@@ -78,11 +101,19 @@ function persistSequenceMedia(tenantId, sequence) {
 // Inverse de persistSequenceMedia : relit les buffers depuis le disque, à
 // l'initialisation d'une campagne (immédiat) ou à la reprise après
 // redémarrage (resumeIfPending) — dans les deux cas, le moteur d'envoi a
-// besoin des vrais buffers, jamais du chemin de fichier.
+// besoin des vrais buffers, jamais du chemin de fichier. Lève une erreur
+// explicite (plutôt que de planter avec ENOENT) si le fichier est absent —
+// cas attendu après un vrai redéploiement Render sans disque persistant : les
+// pièces jointes ne sont pas sauvegardées sur GitHub (voir plus haut), donc
+// un fichier local disparu après redéploiement est normal, pas un bug.
 function resolveSequenceMedia(sequence) {
   return sequence.map((step) => {
     if (step.type !== 'media') return step;
-    const buffer = fs.readFileSync(path.join(MEDIA_DIR, step.mediaFile));
+    const filePath = path.join(MEDIA_DIR, step.mediaFile);
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`MEDIA_FILE_MISSING: ${step.mediaFile}`);
+    }
+    const buffer = fs.readFileSync(filePath);
     return {
       type: 'media',
       buffer,
@@ -111,11 +142,11 @@ class CampaignEngine {
     this.campaign = null; // état en mémoire de la campagne en cours/dernière
     this.persistableSequence = null; // forme sérialisable (mediaFile au lieu de buffer)
     this.resolvedSequence = null; // forme utilisable pour l'envoi (buffer réel)
+    this.remoteStore = githubStore.createStore(remoteFilePath(tenantId));
   }
 
-  _persist() {
-    if (!this.campaign) return;
-    const record = {
+  _buildRecord() {
+    return {
       tenantId: this.tenantId,
       status: this.campaign.status,
       paused: this.campaign.paused,
@@ -137,11 +168,24 @@ class CampaignEngine {
         sequence: this.persistableSequence,
       },
     };
-    // Écriture synchrone volontaire : le volume (une campagne à la fois par
-    // tenant, un seul destinataire toutes les quelques secondes) reste
-    // négligeable, et ça garantit que l'état sur disque est à jour avant que
-    // la boucle d'envoi ne poursuive vers le destinataire suivant.
-    fs.writeFileSync(statePath(this.tenantId), JSON.stringify(record, null, 2), 'utf8');
+  }
+
+  _persist() {
+    if (!this.campaign) return;
+    const record = this._buildRecord();
+    const content = JSON.stringify(record, null, 2);
+    // Écriture locale synchrone volontaire : le volume (une campagne à la
+    // fois par tenant, un seul destinataire toutes les quelques secondes)
+    // reste négligeable, et ça garantit que l'état sur disque est à jour
+    // avant que la boucle d'envoi ne poursuive vers le destinataire suivant.
+    fs.writeFileSync(statePath(this.tenantId), content, 'utf8');
+    // Sauvegarde GitHub en fire-and-forget (comme whatsappAuthStore.js) :
+    // jamais bloquant pour la boucle d'envoi, un échec ponctuel n'interrompt
+    // pas la campagne — seule la reprise après un vrai redéploiement en
+    // pâtirait, pas l'envoi en cours.
+    this.remoteStore.pushRemote(content).catch((err) => {
+      console.error(`Échec de la sauvegarde de la campagne sur GitHub pour le tenant "${this.tenantId}" :`, err.message);
+    });
   }
 
   // Forme volontairement alignée sur l'ancien objet "currentCampaign" global
@@ -152,8 +196,9 @@ class CampaignEngine {
   // longue n'a rien à y faire.
   getStatus() {
     if (!this.campaign) return null;
-    const { total, sent, success, failed, status, paused, stopRequested, startedAt, finishedAt, results } = this.campaign;
-    return { total, sent, success, failed, status, paused, stopRequested, startedAt, finishedAt, results };
+    const { total, sent, success, failed, status, paused, stopRequested, startedAt, finishedAt, results, resumeError } = this.campaign;
+    const base = { total, sent, success, failed, status, paused, stopRequested, startedAt, finishedAt, results };
+    return resumeError ? { ...base, resumeError } : base;
   }
 
   // En cas de coupure réseau/Baileys en pleine campagne, on ne marque pas les
@@ -321,26 +366,78 @@ class CampaignEngine {
     this._persist();
   }
 
-  // Appelée une fois par tenant au démarrage du process (voir
-  // adapters/whatsappManager.js#bootResumePendingCampaigns) si un fichier
-  // d'état persisté indique une campagne encore "running"/"paused" au moment
-  // où le conteneur s'est arrêté (redéploiement, crash) — reprend l'envoi
-  // exactement au destinataire suivant (nextIndex), sans redemander à
-  // l'utilisateur de relancer quoi que ce soit.
-  resumeIfPending() {
-    let record;
+  // Essaie le disque local en premier (rapide, source normale après un
+  // simple crash/redémarrage du même conteneur), puis GitHub si le fichier
+  // local est absent (cas d'un vrai redéploiement Render ayant vidé le
+  // disque éphémère) — restaure alors une copie locale avant de continuer.
+  async _loadRecord() {
     try {
-      record = JSON.parse(fs.readFileSync(statePath(this.tenantId), 'utf8'));
+      return JSON.parse(fs.readFileSync(statePath(this.tenantId), 'utf8'));
     } catch (err) {
-      return false;
+      // Pas de fichier local : tenter GitHub avant d'abandonner.
     }
+
+    if (!this.remoteStore.enabled) return null;
+
+    try {
+      const remote = await this.remoteStore.fetchRemote();
+      if (!remote || !remote.content) return null;
+      fs.writeFileSync(statePath(this.tenantId), remote.content, 'utf8');
+      console.log(`Campagne (tenant "${this.tenantId}"): état restauré depuis GitHub (disque local vidé par un redéploiement).`);
+      return JSON.parse(remote.content);
+    } catch (err) {
+      console.error(`Campagne (tenant "${this.tenantId}"): échec de restauration depuis GitHub :`, err.message);
+      return null;
+    }
+  }
+
+  // Appelée une fois par tenant au démarrage du process (voir
+  // adapters/whatsappManager.js#bootResumePendingCampaigns) si un état
+  // persisté (local ou distant) indique une campagne encore
+  // "running"/"paused" au moment où le conteneur s'est arrêté (redéploiement,
+  // crash) — reprend l'envoi exactement au destinataire suivant (nextIndex),
+  // sans redemander à l'utilisateur de relancer quoi que ce soit.
+  async resumeIfPending() {
+    const record = await this._loadRecord();
+    if (!record) return false;
 
     if (record.status !== 'running' && record.status !== 'paused') {
       return false;
     }
 
     this.persistableSequence = record.options.sequence || [];
-    this.resolvedSequence = resolveSequenceMedia(this.persistableSequence);
+
+    try {
+      this.resolvedSequence = resolveSequenceMedia(this.persistableSequence);
+    } catch (err) {
+      // Pièce jointe introuvable : arrivé après un vrai redéploiement Render
+      // (aucun disque persistant), puisque les buffers média ne sont jamais
+      // sauvegardés sur GitHub (limite de 1 Mo, voir en tête de fichier).
+      // On arrête proprement plutôt que de planter ou d'envoyer sans média —
+      // le tenant devra relancer sa campagne en réimportant la pièce jointe.
+      console.error(
+        `Campagne (tenant "${this.tenantId}"): reprise impossible — ${err.message}. ` +
+        'Pièce jointe perdue lors du redéploiement (non sauvegardée sur GitHub) — campagne marquée "stopped", à relancer manuellement.',
+      );
+      this.campaign = {
+        total: record.total,
+        sent: record.sent,
+        success: record.success,
+        failed: record.failed,
+        status: 'stopped',
+        paused: false,
+        stopRequested: true,
+        startedAt: record.startedAt,
+        finishedAt: new Date().toISOString(),
+        nextIndex: record.nextIndex,
+        recipients: record.recipients,
+        results: record.results,
+        options: record.options,
+        resumeError: 'Pièce jointe introuvable après redéploiement — relancez la campagne.',
+      };
+      this._persist();
+      return false;
+    }
 
     this.campaign = {
       total: record.total,
@@ -381,30 +478,65 @@ class CampaignEngine {
 // avancer nextIndex, donc voir ce statut au démarrage signifie forcément que
 // le process précédent s'est arrêté en pleine campagne) — utilisé une seule
 // fois au démarrage du serveur pour savoir quelles instances WhatsApp
-// relancer automatiquement.
-function listTenantsWithPendingCampaigns() {
-  let files;
+// relancer automatiquement. Cherche d'abord sur le disque local (rapide,
+// couvre un simple crash/redémarrage du même conteneur), puis complète avec
+// GitHub pour les tenants absents localement (cas d'un vrai redéploiement
+// Render ayant vidé le disque éphémère) — sans ce second passage, un
+// redéploiement perdrait la trace de toute campagne en cours dès que le
+// disque local ne la porte plus.
+async function listTenantsWithPendingCampaigns() {
+  const tenantsFromLocal = [];
+  let localFiles = [];
   try {
-    files = fs.readdirSync(CAMPAIGNS_DIR);
+    localFiles = fs.readdirSync(CAMPAIGNS_DIR);
   } catch (err) {
-    return [];
+    // Dossier absent : rien en local, on continue quand même vers GitHub.
   }
 
-  const tenants = [];
-  for (const file of files) {
+  for (const file of localFiles) {
     if (!file.endsWith('.json')) continue;
     try {
       const record = JSON.parse(fs.readFileSync(path.join(CAMPAIGNS_DIR, file), 'utf8'));
+      const tenantId = record.tenantId || file.replace(/\.json$/, '');
       if (record.status === 'running' || record.status === 'paused') {
-        tenants.push(record.tenantId || file.replace(/\.json$/, ''));
+        tenantsFromLocal.push(tenantId);
       }
     } catch (err) {
       // Fichier corrompu/illisible : ignoré plutôt que de bloquer le
       // démarrage du serveur pour les autres tenants.
-      console.error(`État de campagne illisible (${file}) :`, err.message);
+      console.error(`État de campagne local illisible (${file}) :`, err.message);
     }
   }
-  return tenants;
+
+  if (!githubStore.enabled) {
+    return tenantsFromLocal;
+  }
+
+  const knownLocally = new Set(tenantsFromLocal);
+  const remoteFiles = await githubStore.listDirectory(REMOTE_CAMPAIGNS_DIR);
+  const tenantsFromRemote = [];
+
+  for (const filename of remoteFiles) {
+    if (!filename.endsWith('.json')) continue;
+    const tenantId = filename.replace(/\.json$/, '');
+    // Déjà couvert par le disque local (source plus rapide et forcément à
+    // jour dans ce cas) : inutile d'aller vérifier GitHub pour ce tenant.
+    if (knownLocally.has(tenantId)) continue;
+
+    try {
+      const store = githubStore.createStore(`${REMOTE_CAMPAIGNS_DIR}/${filename}`);
+      const remote = await store.fetchRemote();
+      if (!remote || !remote.content) continue;
+      const record = JSON.parse(remote.content);
+      if (record.status === 'running' || record.status === 'paused') {
+        tenantsFromRemote.push(tenantId);
+      }
+    } catch (err) {
+      console.error(`État de campagne distant illisible (${filename}) :`, err.message);
+    }
+  }
+
+  return [...tenantsFromLocal, ...tenantsFromRemote];
 }
 
 module.exports = {
