@@ -178,9 +178,14 @@ function removeSequenceMedia(sequence) {
 // WhatsApp de ce même tenant : aucune campagne, aucun destinataire, aucun
 // résultat n'est jamais partagé entre deux clés de licence.
 class CampaignEngine {
-  constructor(tenantId, session) {
+  // onActivity : callback optionnel (voir adapters/sessionRegulator.js)
+  // invoqué après chaque envoi réel — repousse l'échéance d'inactivité de 15
+  // minutes du tenant pendant qu'une campagne tourne en tâche de fond, sans
+  // qu'aucune requête HTTP n'arrive entre deux destinataires.
+  constructor(tenantId, session, onActivity) {
     this.tenantId = tenantId;
     this.session = session;
+    this.onActivity = onActivity;
     this.campaign = null; // état en mémoire de la campagne en cours/dernière
     this.persistableSequence = null; // forme sérialisable (mediaFile au lieu de buffer)
     this.resolvedSequence = null; // forme utilisable pour l'envoi (buffer réel)
@@ -340,6 +345,7 @@ class CampaignEngine {
       campaign.nextIndex = i + 1;
       campaign.results.push({ to, status, timestamp: new Date().toISOString() });
       this._persist();
+      if (this.onActivity) this.onActivity();
 
       if (i < recipients.length - 1 && !campaign.stopRequested) {
         const baseDelayMs = delaySeconds ? delaySeconds * 1000 : randomDelay(8000, 15000);

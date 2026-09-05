@@ -2,6 +2,8 @@ node_modules/
 .env
 auth_info_baileys/
 telegram_session.txt
+telegram_sessions/
+telegram_campaigns_state/
 licenses.json
 ADMIN_ACCESS.md
 youtube_token.json

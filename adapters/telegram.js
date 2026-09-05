@@ -3,6 +3,7 @@ const path = require('path');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
+const githubStore = require('../githubStore');
 const telegramAuthStore = require('./telegramAuthStore');
 
 function sleep(ms) {
@@ -13,185 +14,293 @@ function randomDelay(minMs, maxMs) {
   return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
 }
 
-// Comme pour auth_info_baileys/, ce fichier vit sur le disque local : sans
-// disque persistant Render monté sur ce chemin, la session Telegram est
-// reperdue à chaque redéploiement et il faut se reconnecter (numéro + code) —
-// sauf si GITHUB_TOKEN/GITHUB_DATA_REPO sont définis (voir telegramAuthStore.js),
-// auquel cas elle est aussi sauvegardée dans le repo GitHub dédié et restaurée
-// au démarrage (voir restoreSessionFromRemote, appelée une fois par index.js
-// avant le premier init()), sur le même principe que la session WhatsApp.
-const SESSION_PATH = process.env.TELEGRAM_SESSION_PATH || path.join(__dirname, '..', 'telegram_session.txt');
+// Isolation stricte par tenant (voir adapters/telegramManager.js), sur le
+// même principe que adapters/whatsapp.js : chaque clé de licence obtient son
+// PROPRE client MTProto (son propre compte Telegram connecté, sa propre
+// session, son propre état de connexion) — plus aucun état partagé au niveau
+// du module, contrairement à l'ancienne classe TelegramAdapter instanciée une
+// seule fois pour tout le serveur (qui faisait qu'ouvrir une 2e connexion
+// Telegram déconnectait/écrasait la première). createSession(tenantId) est
+// appelée une fois par tenant par le gestionnaire, qui conserve l'instance
+// retournée tant que ce tenant reste actif.
+//
+// apiId/apiHash restent lus une seule fois au niveau du module : ce sont les
+// identifiants de l'APPLICATION Telegram (my.telegram.org), partagés par
+// construction entre tous les tenants — seul le COMPTE (numéro de téléphone)
+// connecté via ce client diffère par tenant.
+const API_ID = parseInt(process.env.TELEGRAM_API_ID, 10) || null;
+const API_HASH = process.env.TELEGRAM_API_HASH || null;
 
-if (!process.env.TELEGRAM_SESSION_PATH && !telegramAuthStore.enabled) {
+if (!API_ID || !API_HASH) {
   console.warn(
-    `TELEGRAM_SESSION_PATH non défini et sauvegarde GitHub désactivée : la session Telegram est stockée dans "${SESSION_PATH}" sur le disque local uniquement. ` +
-    'Sur Render, ce fichier est effacé à chaque redéploiement/redémarrage sauf disque persistant ou GITHUB_TOKEN/GITHUB_DATA_REPO configurés.',
+    'TELEGRAM_API_ID / TELEGRAM_API_HASH non définis : le module Telegram est inactif ' +
+    '(les routes /api/telegram/* renverront une erreur 503).',
   );
 }
 
+// Chaque tenant a son propre fichier de session (SESSION_DIR_BASE/<tenantId>.txt),
+// sur le même principe que AUTH_DIR/<tenantId>/ côté WhatsApp. Sur Render
+// (et la plupart des PaaS), le disque local est éphémère : sans disque
+// persistant monté sur ce chemin, la session est reperdue à chaque
+// redéploiement/redémarrage et il faut se reconnecter — sauf si
+// GITHUB_TOKEN/GITHUB_DATA_REPO sont définis (voir telegramAuthStore.js), la
+// session de chaque tenant est aussi sauvegardée dans le repo GitHub et
+// restaurée au démarrage.
+const SESSION_DIR_BASE = process.env.TELEGRAM_SESSION_DIR || path.join(__dirname, '..', 'telegram_sessions');
+
+// Chemin de l'ancien fichier de session unique (avant l'isolation par
+// tenant) — conservé pour que adapters/telegramManager.js puisse migrer une
+// session historique déjà appairée vers le tenant admin plutôt que de la
+// perdre silencieusement (voir migrateLegacyLocalAuth()).
+const LEGACY_SESSION_PATH = process.env.TELEGRAM_SESSION_PATH || path.join(__dirname, '..', 'telegram_session.txt');
+
+if (!process.env.TELEGRAM_SESSION_DIR && !githubStore.enabled) {
+  console.warn(
+    `TELEGRAM_SESSION_DIR non défini et sauvegarde GitHub désactivée : les sessions Telegram sont stockées sous "${SESSION_DIR_BASE}/<tenant>.txt" sur le disque local uniquement. ` +
+    'Sur Render, ce dossier est effacé à chaque redéploiement/redémarrage sauf disque persistant ou GITHUB_TOKEN/GITHUB_DATA_REPO configurés.',
+  );
+}
+
+function sessionPathFor(tenantId) {
+  return path.join(SESSION_DIR_BASE, `${tenantId}.txt`);
+}
+
+const BASE_RECONNECT_DELAY_MS = 5000;
+const MAX_RECONNECT_DELAY_MS = 5 * 60 * 1000;
+
 /**
  * Adaptateur Telegram basé sur GramJS (protocole MTProto d'un compte
- * utilisateur réel), et non sur l'API Bot officielle. C'est un choix
- * déliberé : un bot Telegram (node-telegram-bot-api) ne peut PAS lister les
- * groupes/canaux existants (aucun endpoint "mes groupes" côté Bot API — un
- * bot ne connaît que les chats où il a déjà reçu un message). Pour
- * reproduire la fonctionnalité "lister mes groupes" demandée, il faut donc
- * se connecter comme un vrai compte via MTProto, à l'image de l'adaptateur
- * WhatsApp/Baileys. Contrairement à Facebook, Telegram documente et
- * supporte officiellement ce type de client (my.telegram.org).
+ * utilisateur réel), et non sur l'API Bot officielle — voir la justification
+ * complète dans l'historique du projet : un bot Telegram ne peut pas lister
+ * les groupes/canaux existants (aucun endpoint "mes groupes" côté Bot API).
  *
- * Nécessite TELEGRAM_API_ID et TELEGRAM_API_HASH (obtenus sur
- * https://my.telegram.org/apps).
+ * createSession(tenantId) retourne une instance totalement indépendante,
+ * conservée par adapters/telegramManager.js tant que ce tenant reste actif.
  */
-class TelegramAdapter {
-  constructor() {
-    this.apiId = parseInt(process.env.TELEGRAM_API_ID, 10) || null;
-    this.apiHash = process.env.TELEGRAM_API_HASH || null;
-    this.client = null;
-    this.connected = false;
-    this._codeResolver = null;
-    this._passwordResolver = null;
-    this._loginError = null;
-    this._heartbeatTimer = null;
-    this._syncStarted = false;
-    // Incrémenté à chaque logout()/startLogin() : les callbacks asynchrones
-    // liés à un client remplacé entre-temps (heartbeat en vol, résolution
-    // tardive de client.start()) se désactivent au lieu de muter
-    // this.connected avec un état périmé — même principe que
-    // connectGeneration dans adapters/whatsapp.js.
-    this._sessionGeneration = 0;
+function createSession(tenantId) {
+  const sessionPath = sessionPathFor(tenantId);
+  const authStore = telegramAuthStore.createAuthStore(tenantId);
 
-    if (!this.apiId || !this.apiHash) {
-      console.warn(
-        'TELEGRAM_API_ID / TELEGRAM_API_HASH non définis : le module Telegram est inactif ' +
-        '(les routes /api/telegram/* renverront une erreur 503).',
-      );
+  let client = null;
+  let connected = false;
+  let codeResolver = null;
+  let passwordResolver = null;
+  let loginError = null;
+  let heartbeatTimer = null;
+  let reconnectTimer = null;
+  let syncStarted = false;
+  let consecutiveFailures = 0;
+  // Incrémenté à chaque logout()/startLogin()/dispose() : les callbacks
+  // asynchrones liés à un client remplacé ou libéré entre-temps (heartbeat en
+  // vol, résolution tardive de client.start(), reconnexion planifiée) se
+  // désactivent au lieu de muter `connected` avec un état périmé — même
+  // principe que connectGeneration dans adapters/whatsapp.js.
+  let sessionGeneration = 0;
+
+  function isConfigured() {
+    return Boolean(API_ID && API_HASH);
+  }
+
+  function isConnected() {
+    return connected;
+  }
+
+  function loadSessionString() {
+    try {
+      return fs.readFileSync(sessionPath, 'utf8').trim();
+    } catch (err) {
+      return '';
     }
   }
 
-  isConfigured() {
-    return Boolean(this.apiId && this.apiHash);
+  function saveSessionString(value) {
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    fs.writeFileSync(sessionPath, value, 'utf8');
   }
 
-  isConnected() {
-    return this.connected;
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
+  function stopReconnectTimer() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  // Backoff exponentiel (5s, 10s, 20s, ... plafonné à 5 min), même principe
+  // que scheduleReconnect() dans adapters/whatsapp.js : protège contre un
+  // martèlement des serveurs Telegram en cas d'échec persistant. Remis à
+  // zéro dès qu'une reconnexion réussit.
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    const myGeneration = sessionGeneration;
+    const delayMs = Math.min(BASE_RECONNECT_DELAY_MS * (2 ** consecutiveFailures), MAX_RECONNECT_DELAY_MS);
+    consecutiveFailures += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      attemptReconnect(myGeneration);
+    }, delayMs);
+    if (reconnectTimer.unref) reconnectTimer.unref();
+  }
+
+  // Tentative de reconnexion silencieuse déclenchée soit par un échec de
+  // heartbeat (session MTProto plus autorisée côté serveurs Telegram), soit
+  // par une coupure réseau détectée par GramJS — sans jamais bloquer le
+  // reste du système (queue de campagne, autres tenants) : voir le cahier des
+  // charges sur le health-check en arrière-plan.
+  async function attemptReconnect(myGeneration) {
+    if (myGeneration !== sessionGeneration || !client) return;
+
+    try {
+      if (!client.connected) {
+        await client.connect();
+      }
+      const authorized = await client.checkAuthorization();
+      if (myGeneration !== sessionGeneration) return;
+
+      if (authorized) {
+        connected = true;
+        consecutiveFailures = 0;
+        console.log(`Telegram (tenant "${tenantId}"): reconnexion automatique réussie.`);
+        startHeartbeat();
+      } else {
+        console.warn(`Telegram (tenant "${tenantId}"): session non autorisée après reconnexion — nouvelle connexion requise via /api/telegram/login/start.`);
+      }
+    } catch (err) {
+      if (myGeneration !== sessionGeneration) return;
+      console.warn(`Telegram (tenant "${tenantId}"): tentative de reconnexion échouée —`, err.message);
+      scheduleReconnect();
+    }
   }
 
   // Vérification de session légère et périodique : GramJS gère déjà la
   // reconnexion réseau bas niveau (connectionRetries), mais rien ne
   // confirme que la session MTProto reste réellement autorisée côté
   // serveurs Telegram sur la durée. getMe() est un appel minimal, sans
-  // aucun effet de bord.
-  startHeartbeat() {
-    this.stopHeartbeat();
-    const myGeneration = this._sessionGeneration;
+  // aucun effet de bord. Un échec déclenche maintenant une reconnexion
+  // automatique (voir scheduleReconnect) au lieu de laisser la session
+  // marquée "déconnectée" indéfiniment sans jamais la relancer.
+  function startHeartbeat() {
+    stopHeartbeat();
+    const myGeneration = sessionGeneration;
     const HEARTBEAT_INTERVAL_MS = 10 * 60 * 1000;
-    this._heartbeatTimer = setInterval(async () => {
-      if (!this.client || myGeneration !== this._sessionGeneration) return;
+    heartbeatTimer = setInterval(async () => {
+      if (!client || myGeneration !== sessionGeneration) return;
       try {
-        await this.client.getMe();
+        await client.getMe();
       } catch (err) {
-        if (myGeneration !== this._sessionGeneration) return;
-        console.warn('Heartbeat Telegram: vérification de session échouée —', err.message);
-        this.connected = false;
+        if (myGeneration !== sessionGeneration) return;
+        console.warn(`Heartbeat Telegram (tenant "${tenantId}"): vérification de session échouée —`, err.message);
+        connected = false;
+        stopHeartbeat();
+        scheduleReconnect();
       }
     }, HEARTBEAT_INTERVAL_MS);
     // Ne bloque jamais l'arrêt propre du process.
-    if (this._heartbeatTimer.unref) this._heartbeatTimer.unref();
-  }
-
-  stopHeartbeat() {
-    if (this._heartbeatTimer) {
-      clearInterval(this._heartbeatTimer);
-      this._heartbeatTimer = null;
-    }
-  }
-
-  loadSessionString() {
-    try {
-      return fs.readFileSync(SESSION_PATH, 'utf8').trim();
-    } catch (err) {
-      return '';
-    }
-  }
-
-  saveSessionString(value) {
-    fs.writeFileSync(SESSION_PATH, value, 'utf8');
+    if (heartbeatTimer.unref) heartbeatTimer.unref();
   }
 
   // À appeler une seule fois, au tout premier démarrage du processus, avant
-  // init() — restaure la session Telegram depuis le repo GitHub dédié si
-  // elle y est présente (voir telegramAuthStore.js), sur le même principe
-  // que whatsapp.restoreSessionFromRemote().
-  async restoreSessionFromRemote() {
-    return telegramAuthStore.restoreSessionFromRemote(SESSION_PATH);
+  // init() — restaure la session depuis le repo GitHub dédié à ce tenant si
+  // elle y est présente.
+  async function restoreSessionFromRemote() {
+    return authStore.restoreSessionFromRemote(sessionPath);
   }
 
-  getStorageStatus() {
-    return telegramAuthStore.getStatus();
+  function getStorageStatus() {
+    return authStore.getStatus();
   }
 
   // Déconnexion manuelle (bouton "Se déconnecter de Telegram" du dashboard) :
-  // révoque la session côté serveurs Telegram (auth.LogOut, pour qu'un fichier
-  // de session dérobé ne serve plus à rien), ferme le client, efface le
-  // fichier de session local ET distant, puis repasse en attente — prêt pour
-  // une nouvelle connexion (même numéro ou un autre) via
+  // révoque la session côté serveurs Telegram (auth.LogOut, pour qu'un
+  // fichier de session dérobé ne serve plus à rien), ferme le client, efface
+  // le fichier de session local ET distant, puis repasse en attente — prêt
+  // pour une nouvelle connexion (même numéro ou un autre) via
   // POST /api/telegram/login/start, sans redémarrage du serveur.
-  async logout() {
-    this._sessionGeneration += 1;
-    this.stopHeartbeat();
+  async function logout() {
+    sessionGeneration += 1;
+    stopHeartbeat();
+    stopReconnectTimer();
 
-    if (this.client) {
+    if (client) {
       try {
-        if (this.connected) {
-          await this.client.invoke(new Api.auth.LogOut());
+        if (connected) {
+          await client.invoke(new Api.auth.LogOut());
         }
       } catch (err) {
-        console.warn('Erreur lors du logout Telegram (nettoyage local effectué quand même) :', err.message);
+        console.warn(`Erreur lors du logout Telegram (tenant "${tenantId}", nettoyage local effectué quand même) :`, err.message);
       }
       try {
-        await this.client.disconnect();
+        await client.disconnect();
       } catch (err) {
         // ignore
       }
     }
 
-    this.client = null;
-    this.connected = false;
-    this._codeResolver = null;
-    this._passwordResolver = null;
-    this._loginError = null;
+    client = null;
+    connected = false;
+    codeResolver = null;
+    passwordResolver = null;
+    loginError = null;
 
     try {
-      fs.unlinkSync(SESSION_PATH);
+      fs.unlinkSync(sessionPath);
     } catch (err) {
       // déjà absent
     }
-    await telegramAuthStore.clearRemote();
+    await authStore.clearRemote();
+  }
+
+  // Libération "douce" déclenchée par le régulateur de sessions (voir
+  // adapters/sessionRegulator.js) quand ce tenant est inactif depuis plus de
+  // 15 minutes, ou est le plus ancien sans campagne en cours, et qu'une
+  // nouvelle session doit prendre sa place sous la limite fixée par
+  // MAX_ACTIVE_SESSIONS. Contrairement à logout(), NE révoque PAS la session
+  // côté Telegram et NE supprime PAS le fichier de session : le tenant reste
+  // authentifié et se reconnectera automatiquement (sans redemander de code)
+  // à sa prochaine requête, quand telegramManager rappellera
+  // telegram.createSession() pour ce même tenantId.
+  function dispose() {
+    sessionGeneration += 1;
+    stopHeartbeat();
+    stopReconnectTimer();
+    authStore.stopPeriodicSync();
+
+    if (client) {
+      client.disconnect().catch(() => {});
+    }
+
+    client = null;
+    connected = false;
   }
 
   // À appeler au démarrage du serveur : restaure une session déjà autorisée
   // si le fichier de session existe, sans redemander de code.
-  async init() {
-    if (!this.isConfigured()) {
+  async function init() {
+    if (!isConfigured()) {
       return;
     }
 
-    const stringSession = new StringSession(this.loadSessionString());
-    this.client = new TelegramClient(stringSession, this.apiId, this.apiHash, { connectionRetries: 5 });
-    await this.client.connect();
-    this.connected = await this.client.checkAuthorization();
+    const stringSession = new StringSession(loadSessionString());
+    client = new TelegramClient(stringSession, API_ID, API_HASH, { connectionRetries: 5 });
+    await client.connect();
+    connected = await client.checkAuthorization();
 
-    if (!this._syncStarted) {
-      this._syncStarted = true;
-      telegramAuthStore.startPeriodicSync(SESSION_PATH);
+    if (!syncStarted) {
+      syncStarted = true;
+      authStore.startPeriodicSync(sessionPath);
     }
 
-    if (this.connected) {
-      console.log('Telegram: session restaurée, connecté.');
-      this.startHeartbeat();
+    if (connected) {
+      console.log(`Telegram (tenant "${tenantId}"): session restaurée, connecté.`);
+      startHeartbeat();
     } else {
-      console.log('Telegram: aucune session valide — connexion requise via POST /api/telegram/login/start.');
+      console.log(`Telegram (tenant "${tenantId}"): aucune session valide — connexion requise via POST /api/telegram/login/start.`);
     }
   }
 
@@ -203,106 +312,108 @@ class TelegramAdapter {
    * la machine d'état de GramJS d'avancer avant de renvoyer l'étape
    * suivante au frontend — volontairement simple (pas de WebSocket/SSE).
    */
-  async startLogin(phoneNumber) {
-    if (!this.isConfigured()) {
+  async function startLogin(phoneNumber) {
+    if (!isConfigured()) {
       throw new Error('TELEGRAM_NOT_CONFIGURED');
     }
 
-    this._sessionGeneration += 1;
-    const myGeneration = this._sessionGeneration;
-    this.stopHeartbeat();
+    sessionGeneration += 1;
+    const myGeneration = sessionGeneration;
+    stopHeartbeat();
+    stopReconnectTimer();
 
-    if (this.client) {
+    if (client) {
       try {
-        await this.client.disconnect();
+        await client.disconnect();
       } catch (err) {
         // ignore
       }
     }
 
     const stringSession = new StringSession('');
-    this.client = new TelegramClient(stringSession, this.apiId, this.apiHash, { connectionRetries: 5 });
-    await this.client.connect();
+    client = new TelegramClient(stringSession, API_ID, API_HASH, { connectionRetries: 5 });
+    await client.connect();
 
-    this._codeResolver = null;
-    this._passwordResolver = null;
-    this._loginError = null;
-    this.connected = false;
+    codeResolver = null;
+    passwordResolver = null;
+    loginError = null;
+    connected = false;
 
-    this.client.start({
+    client.start({
       phoneNumber: async () => phoneNumber,
-      phoneCode: async () => new Promise((resolve) => { this._codeResolver = resolve; }),
-      password: async () => new Promise((resolve) => { this._passwordResolver = resolve; }),
+      phoneCode: async () => new Promise((resolve) => { codeResolver = resolve; }),
+      password: async () => new Promise((resolve) => { passwordResolver = resolve; }),
       onError: (err) => {
-        this._loginError = err;
-        console.error('Telegram: erreur pendant la connexion:', err);
+        loginError = err;
+        console.error(`Telegram (tenant "${tenantId}"): erreur pendant la connexion:`, err);
       },
     }).then(() => {
-      // Ce login a été remplacé entre-temps (nouvel appel startLogin() ou
-      // logout()) : ne pas ressusciter un état "connecté" périmé sur le
-      // client actuellement actif.
-      if (myGeneration !== this._sessionGeneration) return;
-      this.saveSessionString(this.client.session.save());
-      this.connected = true;
-      this.startHeartbeat();
-      if (!this._syncStarted) {
-        this._syncStarted = true;
-        telegramAuthStore.startPeriodicSync(SESSION_PATH);
+      // Ce login a été remplacé entre-temps (nouvel appel startLogin(),
+      // logout() ou dispose()) : ne pas ressusciter un état "connecté" périmé
+      // sur le client actuellement actif.
+      if (myGeneration !== sessionGeneration) return;
+      saveSessionString(client.session.save());
+      connected = true;
+      consecutiveFailures = 0;
+      startHeartbeat();
+      if (!syncStarted) {
+        syncStarted = true;
+        authStore.startPeriodicSync(sessionPath);
       }
       // Poussé tout de suite plutôt que d'attendre le prochain instantané
       // périodique, pour ne pas devoir se reconnecter si le process redémarre
       // juste après une connexion réussie (même principe que creds.update
       // côté WhatsApp).
-      telegramAuthStore.pushSnapshot(SESSION_PATH);
-      console.log('Telegram: connexion établie et session sauvegardée.');
+      authStore.pushSnapshot(sessionPath);
+      console.log(`Telegram (tenant "${tenantId}"): connexion établie et session sauvegardée.`);
     }).catch((err) => {
-      if (myGeneration !== this._sessionGeneration) return;
-      this._loginError = err;
-      console.error('Telegram: échec de connexion:', err);
+      if (myGeneration !== sessionGeneration) return;
+      loginError = err;
+      console.error(`Telegram (tenant "${tenantId}"): échec de connexion:`, err);
     });
 
     await sleep(2000);
-    return this._currentStep();
+    return currentStep();
   }
 
-  _currentStep() {
-    if (this.connected) return 'connected';
-    if (this._loginError) return 'error';
-    if (this._passwordResolver) return 'password_required';
-    if (this._codeResolver) return 'code_required';
+  function currentStep() {
+    if (connected) return 'connected';
+    if (loginError) return 'error';
+    if (passwordResolver) return 'password_required';
+    if (codeResolver) return 'code_required';
     return 'pending';
   }
 
-  async submitCode(code) {
-    if (!this._codeResolver) {
+  async function submitCode(code) {
+    if (!codeResolver) {
       throw new Error('NO_PENDING_CODE_REQUEST');
     }
-    this._codeResolver(code);
-    this._codeResolver = null;
+    codeResolver(code);
+    codeResolver = null;
     await sleep(2000);
-    return this._currentStep();
+    return currentStep();
   }
 
-  async submitPassword(password) {
-    if (!this._passwordResolver) {
+  async function submitPassword(password) {
+    if (!passwordResolver) {
       throw new Error('NO_PENDING_PASSWORD_REQUEST');
     }
-    this._passwordResolver(password);
-    this._passwordResolver = null;
+    passwordResolver(password);
+    passwordResolver = null;
     await sleep(2000);
-    return this._currentStep();
+    return currentStep();
   }
 
-  getLoginError() {
-    return this._loginError ? (this._loginError.message || String(this._loginError)) : null;
+  function getLoginError() {
+    return loginError ? (loginError.message || String(loginError)) : null;
   }
 
-  async getGroups() {
-    if (!this.connected) {
+  async function getGroups() {
+    if (!connected) {
       throw new Error('TELEGRAM_NOT_CONNECTED');
     }
 
-    const dialogs = await this.client.getDialogs({ limit: 200 });
+    const dialogs = await client.getDialogs({ limit: 200 });
 
     return dialogs
       .filter((d) => d.isGroup || d.isChannel)
@@ -327,8 +438,8 @@ class TelegramAdapter {
    * numéro à un compte (non inscrit, ou visibilité restreinte par ses
    * paramètres de confidentialité), la résolution échoue proprement.
    */
-  async resolveRecipient(identifier) {
-    if (!this.connected) {
+  async function resolveRecipient(identifier) {
+    if (!connected) {
       throw new Error('TELEGRAM_NOT_CONNECTED');
     }
 
@@ -342,7 +453,7 @@ class TelegramAdapter {
     if (looksLikeUsername) {
       const username = value.startsWith('@') ? value : `@${value}`;
       try {
-        return await this.client.getEntity(username);
+        return await client.getEntity(username);
       } catch (err) {
         throw new Error('RECIPIENT_NOT_FOUND');
       }
@@ -355,7 +466,7 @@ class TelegramAdapter {
     const phone = digits.startsWith('+') ? digits : `+${digits}`;
 
     try {
-      const result = await this.client.invoke(new Api.contacts.ImportContacts({
+      const result = await client.invoke(new Api.contacts.ImportContacts({
         contacts: [new Api.InputPhoneContact({
           clientId: Math.floor(Math.random() * 1_000_000_000),
           phone,
@@ -374,28 +485,30 @@ class TelegramAdapter {
     }
   }
 
-  async sendMessage(chatId, text) {
-    if (!this.connected) {
+  async function sendMessage(chatId, text) {
+    if (!connected) {
       throw new Error('TELEGRAM_NOT_CONNECTED');
     }
-    return this.client.sendMessage(chatId, { message: text });
+    return client.sendMessage(chatId, { message: text });
   }
 
-  async sendMedia(chatId, { buffer, filename, caption }) {
-    if (!this.connected) {
+  async function sendMedia(chatId, { buffer, filename, caption }) {
+    if (!connected) {
       throw new Error('TELEGRAM_NOT_CONNECTED');
     }
     const file = new CustomFile(filename || 'fichier', buffer.length, '', buffer);
-    return this.client.sendFile(chatId, { file, caption });
+    return client.sendFile(chatId, { file, caption });
   }
 
   /**
    * Envoi en masse avec régulateur de débit : délai (fixe ou 10-15s
    * aléatoire par défaut) entre chaque envoi, et pause de sécurité triplée
    * toutes les `batchSize` messages pour rester sous les limites anti-flood
-   * de Telegram.
+   * de Telegram. Un échec individuel (FloodWait, destinataire invalide...)
+   * est journalisé et marqué "failed" dans les résultats : la file continue
+   * automatiquement vers le destinataire suivant plutôt que de s'arrêter.
    */
-  async sendBulk(chatIds, message, options = {}) {
+  async function sendBulk(chatIds, message, options = {}) {
     const { delaySeconds, batchSize, media, onProgress } = options;
     const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : chatIds.length;
     const results = [];
@@ -406,13 +519,13 @@ class TelegramAdapter {
 
       try {
         if (media) {
-          await this.sendMedia(chatId, { ...media, caption: message });
+          await sendMedia(chatId, { ...media, caption: message });
         } else {
-          await this.sendMessage(chatId, message);
+          await sendMessage(chatId, message);
         }
         status = 'delivered';
       } catch (err) {
-        console.error(`Telegram: échec de l'envoi à ${chatId}:`, err.message || err);
+        console.error(`Telegram (tenant "${tenantId}"): échec de l'envoi à ${chatId}:`, err.message || err);
       }
 
       results.push({ to: String(chatId), status, timestamp: new Date().toISOString() });
@@ -431,6 +544,31 @@ class TelegramAdapter {
 
     return results;
   }
+
+  return {
+    tenantId,
+    isConfigured,
+    isConnected,
+    restoreSessionFromRemote,
+    getStorageStatus,
+    logout,
+    dispose,
+    init,
+    startLogin,
+    submitCode,
+    submitPassword,
+    getLoginError,
+    getGroups,
+    resolveRecipient,
+    sendMessage,
+    sendMedia,
+    sendBulk,
+  };
 }
 
-module.exports = TelegramAdapter;
+module.exports = {
+  createSession,
+  sessionPathFor,
+  SESSION_DIR_BASE,
+  LEGACY_SESSION_PATH,
+};

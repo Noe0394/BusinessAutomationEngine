@@ -478,6 +478,42 @@ function createSession(tenantId) {
     await connect();
   }
 
+  // Libération "douce" déclenchée par le régulateur de sessions (voir
+  // adapters/sessionRegulator.js) quand ce tenant est inactif depuis plus de
+  // 15 minutes, ou est la plus ancienne session sans campagne en cours,
+  // et qu'une nouvelle session doit prendre sa place sous la limite fixée
+  // par MAX_ACTIVE_SESSIONS. Contrairement à logout(), NE supprime PAS les
+  // identifiants (creds.json, local et GitHub) : le tenant reste appairé et
+  // se reconnectera automatiquement (sans rescanner de QR) à sa prochaine
+  // requête, quand whatsappManager rappellera whatsapp.createSession() pour
+  // ce même tenantId.
+  function dispose() {
+    connectGeneration += 1; // rend obsolètes les écouteurs du socket en cours
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    stopHeartbeat();
+    authStore.stopPeriodicSync();
+
+    if (sock) {
+      try {
+        sock.ev.removeAllListeners();
+      } catch (err) {
+        // ignore
+      }
+      try {
+        sock.end(new Error('Session libérée par le régulateur de sessions (inactivité ou limite atteinte).'));
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    sock = null;
+    connected = false;
+    latestQR = null;
+  }
+
   return {
     tenantId,
     connect,
@@ -492,6 +528,7 @@ function createSession(tenantId) {
     getGroupParticipants,
     getContactName,
     logout,
+    dispose,
     getStorageStatus: authStore.getStatus,
   };
 }

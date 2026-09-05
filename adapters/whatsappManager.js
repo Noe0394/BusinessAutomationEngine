@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
 const whatsapp = require('./whatsapp');
+const sessionRegulator = require('./sessionRegulator');
 const { CampaignEngine, listTenantsWithPendingCampaigns } = require('../queues/campaignEngine');
 
 // Registre des instances WhatsApp par tenant — le cœur de l'isolation
@@ -19,13 +20,26 @@ function sanitizeTenantId(rawId) {
   return cleaned || 'unknown';
 }
 
+// Peut lever sessionRegulator.SessionLimitError si la limite globale de
+// sessions simultanées (voir adapters/sessionRegulator.js) est atteinte et
+// qu'aucune session n'est éligible à l'éviction — à traiter par l'appelant
+// (voir attachWhatsapp dans index.js) en refusant poliment la connexion
+// plutôt que de laisser planter la requête.
 function getOrCreate(rawTenantId) {
   const tenantId = sanitizeTenantId(rawTenantId);
   if (!tenants.has(tenantId)) {
+    sessionRegulator.ensureCapacity('whatsapp', tenantId);
     const session = whatsapp.createSession(tenantId);
-    const campaignEngine = new CampaignEngine(tenantId, session);
+    const campaignEngine = new CampaignEngine(tenantId, session, () => sessionRegulator.touch('whatsapp', tenantId));
     tenants.set(tenantId, { session, campaignEngine, initStarted: false });
+    sessionRegulator.register('whatsapp', tenantId, {
+      protected: tenantId === ADMIN_TENANT_ID,
+      hasActiveCampaign: () => (campaignEngine.getStatus() || {}).status === 'running',
+      dispose: () => session.dispose(),
+      onEvicted: () => tenants.delete(tenantId),
+    });
   }
+  sessionRegulator.touch('whatsapp', tenantId);
   return tenants.get(tenantId);
 }
 

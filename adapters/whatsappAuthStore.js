@@ -103,6 +103,17 @@ function createAuthStore(tenantId) {
     if (snapshotTimer.unref) snapshotTimer.unref();
   }
 
+  // À appeler quand le régulateur de sessions (voir sessionRegulator.js)
+  // libère ce tenant par inactivité : sans ça, ce timer garderait la closure
+  // entière (et son AUTH_DIR) vivante en mémoire même après la suppression du
+  // tenant de whatsappManager.tenants.
+  function stopPeriodicSync() {
+    if (snapshotTimer) {
+      clearInterval(snapshotTimer);
+      snapshotTimer = null;
+    }
+  }
+
   // Déconnexion manuelle (voir whatsapp.logout()) : vide le fichier distant tout
   // de suite plutôt que d'attendre que le prochain connect() régénère des creds
   // et écrase naturellement l'ancien contenu via creds.update — évite qu'une
@@ -124,6 +135,7 @@ function createAuthStore(tenantId) {
     restoreSessionFromRemote,
     pushSnapshot,
     startPeriodicSync,
+    stopPeriodicSync,
     clearRemote,
     getStatus: store.getStatus,
   };

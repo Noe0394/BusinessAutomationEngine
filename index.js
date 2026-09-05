@@ -12,7 +12,8 @@ const QRCode = require('qrcode');
 const axios = require('axios');
 const whatsappManager = require('./adapters/whatsappManager');
 const FacebookMessengerAdapter = require('./adapters/facebook');
-const TelegramAdapter = require('./adapters/telegram');
+const telegramManager = require('./adapters/telegramManager');
+const sessionRegulator = require('./adapters/sessionRegulator');
 const MediaPublisherAdapter = require('./adapters/media_publisher');
 const videoCompressor = require('./adapters/videoCompressor');
 const licenses = require('./licenses');
@@ -53,7 +54,6 @@ const PRIVACY_POLICY_PATH = path.join(__dirname, 'public', 'legal', 'privacy.htm
 const TERMS_OF_SERVICE_PATH = path.join(__dirname, 'public', 'legal', 'terms.html');
 const DATA_DELETION_PATH = path.join(__dirname, 'public', 'legal', 'data-deletion.html');
 const facebook = new FacebookMessengerAdapter();
-const telegram = new TelegramAdapter();
 const mediaPublisher = new MediaPublisherAdapter();
 
 // Fichiers média joints à une programmation multi-canal (module Programmation
@@ -217,15 +217,50 @@ function requireModule(moduleName) {
   };
 }
 
+// getSessionForRequest() peut lever sessionRegulator.SessionLimitError si le
+// plafond de sessions simultanées (voir adapters/sessionRegulator.js) est
+// atteint et qu'aucune session (WhatsApp ou Telegram, tous tenants confondus)
+// n'est éligible à l'éviction — répond alors 503 avec un message clair pour
+// l'interface plutôt que de faire planter la requête ou le process.
+function respondSessionLimitReached(res, err) {
+  if (err instanceof sessionRegulator.SessionLimitError) {
+    res.status(503).json({ error: err.message });
+    return true;
+  }
+  return false;
+}
+
 // À utiliser après requireAccess (et requireModule('whatsapp')) sur toute
 // route WhatsApp : attache l'instance isolée du tenant courant (admin ou clé
 // de licence — voir adapters/whatsappManager.js) à req.whatsapp/req.campaign,
 // pour qu'aucun handler ne puisse jamais toucher, même par erreur, au socket
 // ou aux données d'un autre tenant.
 function attachWhatsapp(req, res, next) {
-  const entry = whatsappManager.getSessionForRequest(req);
+  let entry;
+  try {
+    entry = whatsappManager.getSessionForRequest(req);
+  } catch (err) {
+    if (respondSessionLimitReached(res, err)) return;
+    throw err;
+  }
   req.whatsapp = entry.session;
   req.campaignEngine = entry.campaignEngine;
+  next();
+}
+
+// Même principe qu'attachWhatsapp, pour Telegram (voir
+// adapters/telegramManager.js) : isolation stricte par tenant, aucun état
+// partagé entre deux clés de licence.
+function attachTelegram(req, res, next) {
+  let entry;
+  try {
+    entry = telegramManager.getSessionForRequest(req);
+  } catch (err) {
+    if (respondSessionLimitReached(res, err)) return;
+    throw err;
+  }
+  req.telegram = entry.session;
+  req.telegramCampaignEngine = entry.campaignEngine;
   next();
 }
 
@@ -288,182 +323,17 @@ function sleep(ms) {
 // queues/campaignEngine.js (une instance par tenant, voir
 // adapters/whatsappManager.js) — plus aucun état de campagne global ici.
 
-// Campagne de messages directs Telegram vers une liste de contacts importée
-// (usernames et/ou numéros de téléphone), distincte de la campagne WhatsApp
-// (voir queues/campaignEngine.js) et de la diffusion groupe/canal existante
-// (/api/telegram/queue)
-// : ici chaque destinataire est résolu individuellement via
-// telegram.resolveRecipient avant l'envoi. Même modèle stoppable que la
-// campagne WhatsApp (pause/stop, suivi de progression).
-let currentTelegramDmCampaign = null;
-
-// Fenêtre de délai imposée entre deux envois individuels — non contournable
-// depuis le frontend, qui ne peut que choisir un délai fixe ou aléatoire à
-// l'intérieur de cette fenêtre (recommandation explicite de l'utilisateur
-// pour rester dans un usage raisonnable de l'API Telegram).
-const TELEGRAM_DM_MIN_DELAY_MS = 30_000;
-const TELEGRAM_DM_MAX_DELAY_MS = 60_000;
-
-function clampTelegramDmDelayMs(ms) {
-  if (!Number.isFinite(ms)) return null;
-  return Math.min(Math.max(ms, TELEGRAM_DM_MIN_DELAY_MS), TELEGRAM_DM_MAX_DELAY_MS);
-}
-
-// Gère à la fois la pause volontaire (boutons Pause/Reprendre) et la perte
-// de connexion (auto-pause le temps que Telegram se reconnecte) — les deux
-// cas se traduisent de la même façon pour la file d'attente : on attend
-// avant de continuer, sans marquer les destinataires restants comme échoués.
-async function waitWhileTelegramCampaignBlocked(campaign) {
-  if (!campaign.userPaused && telegram.isConnected()) {
-    return;
-  }
-
-  campaign.paused = true;
-  if (campaign.userPaused) {
-    console.log('Campagne Telegram: en pause (demandée par l\'utilisateur).');
-  } else {
-    console.log('Campagne Telegram: mise en pause — connexion perdue, en attente de reconnexion...');
-  }
-
-  while (!campaign.stopRequested && (campaign.userPaused || !telegram.isConnected())) {
-    await sleep(1000);
-  }
-
-  campaign.paused = false;
-  if (!campaign.stopRequested) {
-    console.log('Campagne Telegram: reprise.');
-  }
-}
-
-// Comme interruptibleSleep (WhatsApp), mais réagit aussi à une pause
-// utilisateur déclenchée en pleine attente entre deux envois : le délai ne
-// continue pas à s'écouler pendant la pause.
-async function telegramDmInterruptibleSleep(ms, campaign) {
-  const tickMs = 300;
-  let elapsed = 0;
-  while (elapsed < ms) {
-    if (campaign.stopRequested) return;
-    if (campaign.userPaused) {
-      campaign.paused = true;
-      await sleep(tickMs);
-      continue;
-    }
-    campaign.paused = false;
-    const step = Math.min(tickMs, ms - elapsed);
-    await sleep(step);
-    elapsed += step;
-  }
-}
-
-function markTelegramDmRemainingInterrupted(campaign, recipients, fromIndex) {
-  for (let j = fromIndex; j < recipients.length; j += 1) {
-    campaign.results.push({ to: recipients[j], status: 'interrupted', timestamp: new Date().toISOString() });
-  }
-  campaign.status = 'stopped';
-  campaign.paused = false;
-  campaign.finishedAt = new Date().toISOString();
-}
-
-async function runTelegramDmQueue(campaign, recipients, message, options = {}) {
-  const { minDelayMs, maxDelayMs, media } = options;
-
-  for (let i = 0; i < recipients.length; i += 1) {
-    if (campaign.stopRequested) {
-      markTelegramDmRemainingInterrupted(campaign, recipients, i);
-      console.log('Campagne Telegram: interrompue par l\'utilisateur.');
-      return;
-    }
-
-    await waitWhileTelegramCampaignBlocked(campaign);
-
-    if (campaign.stopRequested) {
-      markTelegramDmRemainingInterrupted(campaign, recipients, i);
-      console.log('Campagne Telegram: interrompue par l\'utilisateur.');
-      return;
-    }
-
-    const identifier = recipients[i];
-    let status = 'failed';
-    let errorReason = null;
-
-    try {
-      const entity = await telegram.resolveRecipient(identifier);
-      if (media) {
-        await telegram.sendMedia(entity, { ...media, caption: message });
-      } else {
-        await telegram.sendMessage(entity, message);
-      }
-      status = 'delivered';
-      campaign.success += 1;
-      console.log(`Campagne Telegram: message envoyé à ${identifier} (${i + 1}/${recipients.length}).`);
-    } catch (err) {
-      campaign.failed += 1;
-      errorReason = err.message || String(err);
-      console.error(`Campagne Telegram: échec de l'envoi à ${identifier}:`, errorReason);
-    }
-
-    campaign.sent += 1;
-    campaign.results.push({ to: identifier, status, error: errorReason, timestamp: new Date().toISOString() });
-
-    if (i < recipients.length - 1 && !campaign.stopRequested) {
-      const delayMs = randomDelay(minDelayMs, maxDelayMs);
-      await telegramDmInterruptibleSleep(delayMs, campaign);
-    }
-  }
-
-  if (campaign.status === 'running') {
-    campaign.status = 'completed';
-    campaign.finishedAt = new Date().toISOString();
-  }
-
-  console.log('Campagne Telegram: terminée.');
-}
-
-function startTelegramDmCampaign(recipients, message, options = {}) {
-  if (currentTelegramDmCampaign && currentTelegramDmCampaign.status === 'running') {
-    throw new Error('CAMPAIGN_IN_PROGRESS');
-  }
-
-  const { maxPerCycle, media } = options;
-  const limitedRecipients = Number.isInteger(maxPerCycle) && maxPerCycle > 0
-    ? recipients.slice(0, maxPerCycle)
-    : recipients;
-
-  const minDelayMs = clampTelegramDmDelayMs(options.minDelayMs) || TELEGRAM_DM_MIN_DELAY_MS;
-  const maxDelayMs = Math.max(clampTelegramDmDelayMs(options.maxDelayMs) || TELEGRAM_DM_MAX_DELAY_MS, minDelayMs);
-
-  currentTelegramDmCampaign = {
-    total: limitedRecipients.length,
-    truncated: limitedRecipients.length < recipients.length,
-    sent: 0,
-    success: 0,
-    failed: 0,
-    status: 'running',
-    paused: false,
-    userPaused: false,
-    stopRequested: false,
-    startedAt: new Date().toISOString(),
-    finishedAt: null,
-    results: [],
-  };
-
-  const campaign = currentTelegramDmCampaign;
-
-  runTelegramDmQueue(campaign, limitedRecipients, message, { minDelayMs, maxDelayMs, media }).catch((err) => {
-    console.error('Erreur pendant la campagne Telegram:', err);
-    campaign.status = 'stopped';
-    campaign.paused = false;
-    campaign.finishedAt = new Date().toISOString();
-  });
-
-  return campaign;
-}
+// La campagne de messages directs Telegram (pause/stop/reprise, persistance,
+// isolation par tenant) vit maintenant entièrement dans
+// queues/telegramCampaignEngine.js (une instance par tenant, voir
+// adapters/telegramManager.js) — plus aucun état de campagne global ici,
+// sur le même principe que la campagne WhatsApp ci-dessus.
 
 // ---------- Programmation multi-canal (module Programmation / Planning) ----------
-// Contrairement aux campagnes interactives ci-dessus (le moteur par tenant de
-// queues/campaignEngine.js pour WhatsApp, currentTelegramDmCampaign pour
-// Telegram — un seul créneau à la fois par tenant, partagé avec le
-// dashboard), une programmation est indépendante : elle doit pouvoir
+// Contrairement aux campagnes interactives ci-dessus (un moteur par tenant
+// pour WhatsApp comme pour Telegram — un seul créneau à la fois par tenant,
+// partagé avec le dashboard), une programmation est indépendante : elle doit
+// pouvoir
 // s'exécuter sans écraser une campagne manuelle en cours, ni en être bloquée.
 // Chaque canal a donc sa propre boucle d'envoi séquentielle ici plutôt que de
 // réutiliser les créneaux interactifs existants. Note : cette programmation
@@ -620,7 +490,12 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
   return results;
 }
 
+// Comme dispatchScheduledWhatsapp ci-dessus : la programmation multi-canal
+// n'a aujourd'hui aucune notion de tenant/propriétaire, donc les envois
+// programmés Telegram passent par l'instance du tenant admin plutôt que par
+// une session partagée fantôme.
 async function dispatchScheduledTelegram(entry, media) {
+  const session = telegramManager.getOrCreate(telegramManager.ADMIN_TENANT_ID).session;
   const targets = entry.recipients;
   const results = [];
 
@@ -630,13 +505,13 @@ async function dispatchScheduledTelegram(entry, media) {
       // voir resolveRecipient(). 'groups' : identifiants de groupes/canaux
       // déjà connus (getGroups()), utilisables directement.
       const destination = entry.recipientType === 'contacts'
-        ? await telegram.resolveRecipient(targets[i])
+        ? await session.resolveRecipient(targets[i])
         : targets[i];
 
       if (media) {
-        await telegram.sendMedia(destination, { ...media, caption: entry.message });
+        await session.sendMedia(destination, { ...media, caption: entry.message });
       } else {
-        await telegram.sendMessage(destination, entry.message);
+        await session.sendMessage(destination, entry.message);
       }
       results.push({ to: String(targets[i]), status: 'delivered' });
     } catch (err) {
@@ -1004,7 +879,7 @@ app.get('/api/admin/storage-status', requireAdmin, (req, res) => {
   res.status(200).json({
     licenses: licenses.getStorageStatus(),
     whatsapp: whatsappManager.getStorageStatus(),
-    telegram: telegram.getStorageStatus(),
+    telegram: telegramManager.getStorageStatus(),
   });
 });
 
@@ -2349,20 +2224,19 @@ app.get('/api/facebook/groups/export-excel', requireAccess, requireModule('faceb
   res.send(buffer);
 });
 
-app.get('/api/telegram/status', requireAccess, requireModule('telegram'), (req, res) => {
+app.get('/api/telegram/status', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
   res.status(200).json({
-    configured: telegram.isConfigured(),
-    connected: telegram.isConnected(),
+    configured: req.telegram.isConfigured(),
+    connected: req.telegram.isConnected(),
   });
 });
 
 // Déconnexion dédiée à Telegram (bouton "Se déconnecter de Telegram" du
-// dashboard) — indépendante des autres canaux : n'affecte ni WhatsApp ni
-// Facebook. Repasse immédiatement en attente d'une nouvelle connexion (même
-// numéro ou un autre) via POST /api/telegram/login/start.
-app.post('/api/telegram/logout', requireAccess, requireModule('telegram'), async (req, res) => {
+// dashboard) — indépendante des autres canaux et des autres tenants : n'agit
+// que sur l'instance isolée du tenant courant (voir attachTelegram).
+app.post('/api/telegram/logout', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
   try {
-    await telegram.logout();
+    await req.telegram.logout();
     res.status(200).json({ status: 'logged_out' });
   } catch (err) {
     console.error('Erreur lors de la déconnexion Telegram:', err);
@@ -2370,29 +2244,29 @@ app.post('/api/telegram/logout', requireAccess, requireModule('telegram'), async
   }
 });
 
-app.post('/api/telegram/login/start', requireAccess, requireModule('telegram'), async (req, res) => {
+app.post('/api/telegram/login/start', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
   const { phoneNumber } = req.body || {};
 
   if (!phoneNumber || !String(phoneNumber).replace(/\D/g, '')) {
     return res.status(400).json({ error: 'Le champ "phoneNumber" est requis (indicatif pays inclus).' });
   }
 
-  if (!telegram.isConfigured()) {
+  if (!req.telegram.isConfigured()) {
     return res.status(503).json({
       error: 'Intégration Telegram non configurée (variables TELEGRAM_API_ID / TELEGRAM_API_HASH manquantes).',
     });
   }
 
   try {
-    const step = await telegram.startLogin(phoneNumber);
-    res.status(200).json({ step, error: step === 'error' ? telegram.getLoginError() : null });
+    const step = await req.telegram.startLogin(phoneNumber);
+    res.status(200).json({ step, error: step === 'error' ? req.telegram.getLoginError() : null });
   } catch (err) {
     console.error('Erreur lors du démarrage de la connexion Telegram:', err);
     res.status(500).json({ error: 'Échec du démarrage de la connexion Telegram.' });
   }
 });
 
-app.post('/api/telegram/login/code', requireAccess, requireModule('telegram'), async (req, res) => {
+app.post('/api/telegram/login/code', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
   const { code } = req.body || {};
 
   if (!code) {
@@ -2400,8 +2274,8 @@ app.post('/api/telegram/login/code', requireAccess, requireModule('telegram'), a
   }
 
   try {
-    const step = await telegram.submitCode(code);
-    res.status(200).json({ step, error: step === 'error' ? telegram.getLoginError() : null });
+    const step = await req.telegram.submitCode(code);
+    res.status(200).json({ step, error: step === 'error' ? req.telegram.getLoginError() : null });
   } catch (err) {
     if (err.message === 'NO_PENDING_CODE_REQUEST') {
       return res.status(409).json({ error: 'Aucune demande de code en attente. Relancez /api/telegram/login/start.' });
@@ -2411,7 +2285,7 @@ app.post('/api/telegram/login/code', requireAccess, requireModule('telegram'), a
   }
 });
 
-app.post('/api/telegram/login/password', requireAccess, requireModule('telegram'), async (req, res) => {
+app.post('/api/telegram/login/password', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
   const { password } = req.body || {};
 
   if (!password) {
@@ -2419,8 +2293,8 @@ app.post('/api/telegram/login/password', requireAccess, requireModule('telegram'
   }
 
   try {
-    const step = await telegram.submitPassword(password);
-    res.status(200).json({ step, error: step === 'error' ? telegram.getLoginError() : null });
+    const step = await req.telegram.submitPassword(password);
+    res.status(200).json({ step, error: step === 'error' ? req.telegram.getLoginError() : null });
   } catch (err) {
     if (err.message === 'NO_PENDING_PASSWORD_REQUEST') {
       return res.status(409).json({ error: 'Aucune demande de mot de passe 2FA en attente.' });
@@ -2430,13 +2304,13 @@ app.post('/api/telegram/login/password', requireAccess, requireModule('telegram'
   }
 });
 
-app.get('/api/telegram/groups', requireAccess, requireModule('telegram'), async (req, res) => {
-  if (!telegram.isConnected()) {
+app.get('/api/telegram/groups', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
+  if (!req.telegram.isConnected()) {
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant de lister les groupes.' });
   }
 
   try {
-    const groups = await telegram.getGroups();
+    const groups = await req.telegram.getGroups();
     res.status(200).json(groups);
   } catch (err) {
     console.error('Erreur lors de la récupération des groupes Telegram:', err);
@@ -2444,8 +2318,8 @@ app.get('/api/telegram/groups', requireAccess, requireModule('telegram'), async 
   }
 });
 
-app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), upload.single('media'), async (req, res) => {
-  if (!telegram.isConnected()) {
+app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), attachTelegram, upload.single('media'), async (req, res) => {
+  if (!req.telegram.isConnected()) {
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
   }
 
@@ -2471,6 +2345,8 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), upload
   const media = req.file
     ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
     : null;
+  const tenantTelegram = req.telegram;
+  const tenantLabel = req.isAdmin ? telegramManager.ADMIN_TENANT_ID : req.licenseKey;
 
   res.status(202).json({
     status: 'tg_queue_started',
@@ -2480,15 +2356,15 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), upload
     media: media ? media.filename : null,
   });
 
-  telegram.sendBulk(recipients, message, {
+  tenantTelegram.sendBulk(recipients, message, {
     delaySeconds: fixedDelaySeconds,
     batchSize: parsedBatchSize,
     media,
   }).then((results) => {
     const success = results.filter((r) => r.status === 'delivered').length;
-    console.log(`Telegram: campagne terminée (${success}/${results.length} réussite(s)).`);
+    console.log(`Telegram (tenant "${tenantLabel}"): diffusion terminée (${success}/${results.length} réussite(s)).`);
   }).catch((err) => {
-    console.error('Erreur pendant la campagne Telegram:', err);
+    console.error(`Erreur pendant la diffusion Telegram (tenant "${tenantLabel}"):`, err);
   });
 });
 
@@ -2531,8 +2407,8 @@ app.post('/api/telegram/contacts/import', requireAccess, requireModule('telegram
   res.status(200).json({ contacts, total: contacts.length });
 });
 
-app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram'), upload.single('media'), async (req, res) => {
-  if (!telegram.isConnected()) {
+app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram'), attachTelegram, upload.single('media'), async (req, res) => {
+  if (!req.telegram.isConnected()) {
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
   }
 
@@ -2559,7 +2435,7 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
 
   let campaign;
   try {
-    campaign = startTelegramDmCampaign(recipients, message, {
+    campaign = await req.telegramCampaignEngine.start(recipients, message, {
       minDelayMs: minDelaySeconds !== undefined && minDelaySeconds !== '' ? parseFloat(minDelaySeconds) * 1000 : undefined,
       maxDelayMs: maxDelaySeconds !== undefined && maxDelaySeconds !== '' ? parseFloat(maxDelaySeconds) * 1000 : undefined,
       maxPerCycle: maxPerCycle !== undefined && maxPerCycle !== '' ? parseInt(maxPerCycle, 10) : undefined,
@@ -2581,40 +2457,49 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
   });
 });
 
-app.post('/api/telegram/campaign/pause', requireAccess, requireModule('telegram'), (req, res) => {
-  if (!currentTelegramDmCampaign || currentTelegramDmCampaign.status !== 'running') {
-    return res.status(400).json({ error: 'Aucune campagne Telegram en cours à mettre en pause.' });
+app.post('/api/telegram/campaign/pause', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+  try {
+    req.telegramCampaignEngine.pause();
+    res.status(200).json({ status: 'pause_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(400).json({ error: 'Aucune campagne Telegram en cours à mettre en pause.' });
+    }
+    throw err;
   }
-
-  currentTelegramDmCampaign.userPaused = true;
-  res.status(200).json({ status: 'pause_requested' });
 });
 
-app.post('/api/telegram/campaign/resume', requireAccess, requireModule('telegram'), (req, res) => {
-  if (!currentTelegramDmCampaign || currentTelegramDmCampaign.status !== 'running') {
-    return res.status(400).json({ error: 'Aucune campagne Telegram en cours à reprendre.' });
+app.post('/api/telegram/campaign/resume', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+  try {
+    req.telegramCampaignEngine.resume();
+    res.status(200).json({ status: 'resume_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(400).json({ error: 'Aucune campagne Telegram en cours à reprendre.' });
+    }
+    throw err;
   }
-
-  currentTelegramDmCampaign.userPaused = false;
-  res.status(200).json({ status: 'resume_requested' });
 });
 
-app.post('/api/telegram/campaign/stop', requireAccess, requireModule('telegram'), (req, res) => {
-  if (!currentTelegramDmCampaign || currentTelegramDmCampaign.status !== 'running') {
-    return res.status(400).json({ error: 'Aucune campagne Telegram en cours à interrompre.' });
+app.post('/api/telegram/campaign/stop', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+  try {
+    req.telegramCampaignEngine.stop();
+    res.status(200).json({ status: 'stop_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(400).json({ error: 'Aucune campagne Telegram en cours à interrompre.' });
+    }
+    throw err;
   }
-
-  currentTelegramDmCampaign.stopRequested = true;
-  currentTelegramDmCampaign.userPaused = false;
-  res.status(200).json({ status: 'stop_requested' });
 });
 
-app.get('/api/telegram/campaign/status', requireAccess, requireModule('telegram'), (req, res) => {
-  if (!currentTelegramDmCampaign) {
+app.get('/api/telegram/campaign/status', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+  const status = req.telegramCampaignEngine.getStatus();
+  if (!status) {
     return res.status(200).json({ exists: false });
   }
 
-  res.status(200).json({ exists: true, ...currentTelegramDmCampaign });
+  res.status(200).json({ exists: true, ...status });
 });
 
 // Doit rester PUBLIQUE et sans authentification : c'est Meta (Instagram) qui
@@ -3084,14 +2969,19 @@ whatsappManager
     });
   });
 
-telegram
-  .restoreSessionFromRemote()
+// Même principe que whatsappManager ci-dessus, désormais côté Telegram (voir
+// adapters/telegramManager.js) : le tenant admin se connecte automatiquement
+// au démarrage, puis chaque campagne Telegram encore en cours au moment de
+// l'arrêt précédent du process reprend automatiquement là où elle s'était
+// arrêtée.
+telegramManager
+  .initAdminSession()
   .catch((err) => {
-    console.error('Erreur lors de la restauration de la session Telegram depuis GitHub :', err);
+    console.error('Erreur lors de l\'initialisation de la session Telegram admin:', err);
   })
   .finally(() => {
-    telegram.init().catch((err) => {
-      console.error('Erreur lors de l\'initialisation de l\'adaptateur Telegram:', err);
+    telegramManager.bootResumePendingCampaigns().catch((err) => {
+      console.error('Erreur lors de la reprise des campagnes Telegram interrompues :', err);
     });
   });
 
