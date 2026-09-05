@@ -47,17 +47,30 @@ function get(id) {
  *   - facebook_page : toujours les identifiants d'un sous-ensemble des
  *     Groupes gérés (voir adapters/facebook.js) à qui diffuser en plus de
  *     la Page elle-même ; peut être vide (Page uniquement).
+ *
+ * "media" (tableau) porte une ou plusieurs pièces jointes — WhatsApp est
+ * aujourd'hui le seul canal à les envoyer toutes (image + vidéo + PDF
+ * combinés en une action, voir dispatchScheduledWhatsapp dans index.js) ;
+ * Telegram/Facebook n'utilisent que la première. "mediaUrl"/"mediaMimetype"/
+ * "mediaFilename" restent en plus, dérivés de ce premier élément, pour tout
+ * appelant qui lit encore ces champs singuliers directement (rétrocompat).
  */
-function create({ channel, recipientType, recipients, message, mediaUrl, mediaMimetype, mediaFilename, scheduledAt, keyword }) {
+function create({ channel, recipientType, recipients, message, mediaUrl, mediaMimetype, mediaFilename, media, scheduledAt, keyword }) {
+  const normalizedMedia = Array.isArray(media) && media.length > 0
+    ? media
+    : (mediaUrl ? [{ mediaUrl, mediaMimetype: mediaMimetype || null, mediaFilename: mediaFilename || null }] : []);
+  const primary = normalizedMedia[0] || null;
+
   const entry = {
     id: `sched_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     channel,
     recipientType: recipientType || null,
     recipients: Array.isArray(recipients) ? recipients : [],
     message: message || '',
-    mediaUrl: mediaUrl || null,
-    mediaMimetype: mediaMimetype || null,
-    mediaFilename: mediaFilename || null,
+    media: normalizedMedia,
+    mediaUrl: primary ? primary.mediaUrl : null,
+    mediaMimetype: primary ? primary.mediaMimetype : null,
+    mediaFilename: primary ? primary.mediaFilename : null,
     // Étiquette purement informative (ex : "RECETTE") pour repérer un post
     // programmé dans le tableau récapitulatif — contrairement aux mots-clés
     // du module de Capture de Prospects (models/keyword_rules.js), celle-ci

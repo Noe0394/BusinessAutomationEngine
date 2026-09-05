@@ -195,6 +195,14 @@ async function requestPairingCode(phoneNumber) {
     throw new Error('Adaptateur WhatsApp non initialisé.');
   }
 
+  // Une seule session active à la fois : si un appareil est déjà connecté, il
+  // faut d'abord se déconnecter explicitement (voir logout()) avant de pouvoir
+  // en appairer un autre — évite qu'une seconde tentative de code d'association
+  // ne vienne perturber la session déjà établie.
+  if (connected) {
+    throw new Error('ALREADY_CONNECTED');
+  }
+
   if (authState?.creds?.registered) {
     throw new Error('ALREADY_REGISTERED');
   }
@@ -234,6 +242,39 @@ async function getGroupParticipants(groupId) {
   return metadata.participants;
 }
 
+// Déconnexion manuelle demandée par l'utilisateur (bouton "Se déconnecter" du
+// dashboard) : contrairement à une coupure réseau (voir connection.update /
+// DisconnectReason.loggedOut), il faut ici explicitement effacer les
+// identifiants locaux pour permettre de lier un nouvel appareil/numéro — sans
+// quoi useMultiFileAuthState() rechargerait les mêmes creds et resterait
+// enregistré sur l'ancien compte. On relance ensuite connect() tout de suite
+// pour que l'utilisateur obtienne un nouveau QR code sans devoir redémarrer
+// le serveur.
+async function logout() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  stopHeartbeat();
+
+  if (sock) {
+    try {
+      await sock.logout();
+    } catch (err) {
+      console.warn('Erreur lors du logout WhatsApp (nettoyage local effectué quand même) :', err.message);
+    }
+  }
+
+  connected = false;
+  latestQR = null;
+  authState = null;
+  sock = null;
+
+  fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+
+  await connect();
+}
+
 module.exports = {
   connect,
   restoreSessionFromRemote,
@@ -245,5 +286,6 @@ module.exports = {
   getGroupMetadata,
   getGroups,
   getGroupParticipants,
+  logout,
   getStorageStatus: whatsappAuthStore.getStatus,
 };

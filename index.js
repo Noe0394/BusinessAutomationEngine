@@ -303,7 +303,7 @@ async function waitForConnection(campaign) {
 }
 
 async function runCampaignQueue(campaign, recipients, message, options = {}) {
-  const { delaySeconds, batchSize, media } = options;
+  const { delaySeconds, batchSize, mediaList } = options;
   const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipients.length;
 
   for (let i = 0; i < recipients.length; i += 1) {
@@ -325,8 +325,14 @@ async function runCampaignQueue(campaign, recipients, message, options = {}) {
     let status = 'failed';
 
     try {
-      if (media) {
-        await whatsapp.sendMedia(to, { ...media, caption: message });
+      if (Array.isArray(mediaList) && mediaList.length > 0) {
+        // Plusieurs pièces jointes combinées (image + vidéo + PDF...) :
+        // WhatsApp ne permet pas de les regrouper dans un seul message, donc
+        // elles partent en rafale au même destinataire — la légende (message)
+        // n'est portée que par la première, pour ne pas la répéter.
+        for (let m = 0; m < mediaList.length; m += 1) {
+          await whatsapp.sendMedia(to, { ...mediaList[m], caption: m === 0 ? message : undefined });
+        }
       } else {
         await whatsapp.sendMessage(to, message);
       }
@@ -606,15 +612,28 @@ async function resolveMediaReference(ref, mediaDir) {
   return { buffer: Buffer.from(res.data), mimetype, filename };
 }
 
-function resolveScheduledMedia(entry) {
-  return resolveMediaReference(entry, SCHEDULED_MEDIA_DIR);
+// entry.media (tableau, voir queues/scheduled_messages.js) porte une ou
+// plusieurs pièces jointes — WhatsApp est le seul canal à toutes les envoyer
+// (voir dispatchScheduledWhatsapp) ; les autres canaux ne consomment que le
+// premier élément du tableau retourné ici.
+async function resolveScheduledMediaList(entry) {
+  const items = Array.isArray(entry.media) && entry.media.length > 0
+    ? entry.media
+    : (entry.mediaUrl ? [{ mediaUrl: entry.mediaUrl, mediaMimetype: entry.mediaMimetype, mediaFilename: entry.mediaFilename }] : []);
+
+  const resolved = [];
+  for (const item of items) {
+    const media = await resolveMediaReference(item, SCHEDULED_MEDIA_DIR);
+    if (media) resolved.push(media);
+  }
+  return resolved;
 }
 
 function resolveKeywordRuleMedia(rule) {
   return resolveMediaReference(rule, KEYWORD_MEDIA_DIR);
 }
 
-async function dispatchScheduledWhatsapp(entry, media) {
+async function dispatchScheduledWhatsapp(entry, mediaList) {
   let recipients = entry.recipients;
 
   if (entry.recipientType === 'groups') {
@@ -630,8 +649,13 @@ async function dispatchScheduledWhatsapp(entry, media) {
   for (let i = 0; i < recipients.length; i += 1) {
     const to = normalizeJid(recipients[i]);
     try {
-      if (media) {
-        await whatsapp.sendMedia(to, { ...media, caption: entry.message });
+      if (Array.isArray(mediaList) && mediaList.length > 0) {
+        // Rafale de pièces jointes au même destinataire (voir
+        // runCampaignQueue pour la même logique côté envoi immédiat) : la
+        // légende n'est portée que par la première.
+        for (let m = 0; m < mediaList.length; m += 1) {
+          await whatsapp.sendMedia(to, { ...mediaList[m], caption: m === 0 ? entry.message : undefined });
+        }
       } else {
         await whatsapp.sendMessage(to, entry.message);
       }
@@ -724,15 +748,15 @@ async function runScheduledMessagesTick() {
       scheduledMessages.update(entry.id, { status: 'sending' });
 
       try {
-        const media = await resolveScheduledMedia(entry);
+        const mediaList = await resolveScheduledMediaList(entry);
         let result;
 
         if (entry.channel === 'whatsapp') {
-          result = await dispatchScheduledWhatsapp(entry, media);
+          result = await dispatchScheduledWhatsapp(entry, mediaList);
         } else if (entry.channel === 'telegram') {
-          result = await dispatchScheduledTelegram(entry, media);
+          result = await dispatchScheduledTelegram(entry, mediaList[0] || null);
         } else if (entry.channel === 'facebook_page') {
-          result = await dispatchScheduledFacebookPage(entry, media);
+          result = await dispatchScheduledFacebookPage(entry, mediaList[0] || null);
         } else {
           throw new Error(`Canal de programmation inconnu : ${entry.channel}`);
         }
@@ -1158,11 +1182,25 @@ app.post('/api/pairing-code', requireAccess, requireModule('whatsapp'), async (r
     const code = await whatsapp.requestPairingCode(phoneNumber);
     res.status(200).json({ code });
   } catch (err) {
-    if (err.message === 'ALREADY_REGISTERED') {
-      return res.status(409).json({ error: 'Cet appareil est déjà connecté à WhatsApp.' });
+    if (err.message === 'ALREADY_REGISTERED' || err.message === 'ALREADY_CONNECTED') {
+      return res.status(409).json({ error: 'Un appareil est déjà connecté à WhatsApp. Déconnectez-vous d\'abord pour en lier un autre.' });
     }
     console.error('Erreur lors de la génération du code d\'association:', err);
     res.status(500).json({ error: 'Échec de la génération du code d\'association.' });
+  }
+});
+
+// Déconnexion manuelle (bouton "Se déconnecter" du dashboard) : contrainte
+// "une seule session active à la fois" — l'utilisateur doit explicitement se
+// déconnecter avant de pouvoir lier un nouvel appareil/numéro (voir la garde
+// ALREADY_CONNECTED ci-dessus dans requestPairingCode).
+app.post('/api/whatsapp/logout', requireAccess, requireModule('whatsapp'), async (req, res) => {
+  try {
+    await whatsapp.logout();
+    res.status(200).json({ status: 'logged_out' });
+  } catch (err) {
+    console.error('Erreur lors de la déconnexion WhatsApp:', err);
+    res.status(500).json({ error: 'Échec de la déconnexion WhatsApp.' });
   }
 });
 
@@ -1202,7 +1240,61 @@ app.get('/api/groups/:id/participants', requireAccess, requireModule('whatsapp')
   }
 });
 
-app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload.single('media'), async (req, res) => {
+// Extraction consolidée des membres d'un ou plusieurs groupes sélectionnés
+// vers un unique fichier Excel téléchargeable (module de gestion des
+// contacts) : un même membre présent dans plusieurs groupes cochés n'apparaît
+// qu'une fois, avec la liste de ces groupes en colonne "groupes".
+app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'), async (req, res) => {
+  let { groupIds } = req.body || {};
+  if (typeof groupIds === 'string') {
+    try {
+      groupIds = JSON.parse(groupIds);
+    } catch (err) {
+      groupIds = groupIds.split(',').map((id) => id.trim()).filter(Boolean);
+    }
+  }
+
+  if (!Array.isArray(groupIds) || groupIds.length === 0) {
+    return res.status(400).json({ error: 'Fournissez "groupIds" (tableau d\'identifiants de groupes sélectionnés).' });
+  }
+
+  try {
+    const groups = await whatsapp.getGroups();
+    const groupNameById = new Map(groups.map((g) => [g.id, g.subject || g.id]));
+    const merged = new Map(); // jid -> { telephone, groupes: Set<string>, admin: bool }
+
+    for (const groupId of groupIds) {
+      const participants = await whatsapp.getGroupParticipants(groupId);
+      const groupName = groupNameById.get(groupId) || groupId;
+      (participants || []).forEach((p) => {
+        const existing = merged.get(p.id) || { telephone: (p.id || '').split('@')[0], groupes: new Set(), admin: false };
+        existing.groupes.add(groupName);
+        if (p.admin) existing.admin = true;
+        merged.set(p.id, existing);
+      });
+    }
+
+    const rows = Array.from(merged.values()).map((m) => ({
+      telephone: m.telephone,
+      groupes: Array.from(m.groupes).join(', '),
+      admin: m.admin ? 'Oui' : 'Non',
+    }));
+
+    const sheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Membres');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="membres_groupes_whatsapp.xlsx"');
+    res.status(200).send(buffer);
+  } catch (err) {
+    console.error('Erreur lors de l\'extraction des membres des groupes:', err);
+    res.status(500).json({ error: 'Échec de l\'extraction des membres des groupes sélectionnés.' });
+  }
+});
+
+app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload.array('media', 5), async (req, res) => {
   const { message, groupId, delaySeconds, batchSize } = req.body;
   let { recipients, groupIds } = req.body;
 
@@ -1248,16 +1340,18 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload
 
   const fixedDelaySeconds = delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined;
   const parsedBatchSize = batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined;
-  const media = req.file
-    ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
-    : null;
+  const mediaList = (req.files || []).map((file) => ({
+    buffer: file.buffer,
+    mimetype: file.mimetype,
+    filename: file.originalname,
+  }));
 
   let campaign;
   try {
     campaign = startCampaign(recipients, message, {
       delaySeconds: fixedDelaySeconds,
       batchSize: parsedBatchSize,
-      media,
+      mediaList,
     });
   } catch (err) {
     if (err.message === 'CAMPAIGN_IN_PROGRESS') {
@@ -1273,7 +1367,7 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload
     total: campaign.total,
     delaySeconds: fixedDelaySeconds || '8-15 (aléatoire)',
     batchSize: parsedBatchSize || recipients.length,
-    media: media ? media.filename : null,
+    media: mediaList.length > 0 ? mediaList.map((m) => m.filename) : null,
   });
 });
 
@@ -2604,10 +2698,11 @@ app.get('/api/scheduled-messages', requireAccess, (req, res) => {
 app.post(
   '/api/scheduled-messages',
   requireAccess,
-  upload.single('media'),
+  upload.array('media', 5),
   async (req, res) => {
     const { channel, recipientType, message, mediaUrl, scheduledAt } = req.body;
     let { recipients } = req.body;
+    const files = req.files || [];
 
     if (typeof recipients === 'string') {
       try {
@@ -2626,29 +2721,37 @@ app.post(
     if (!scheduledAt || Number.isNaN(new Date(scheduledAt).getTime())) {
       return res.status(400).json({ error: 'Le champ "scheduledAt" (date/heure d\'envoi ISO) est requis et doit être une date valide.' });
     }
-    if (!message && !req.file && !mediaUrl) {
-      return res.status(400).json({ error: 'Fournissez un "message" et/ou un média (fichier joint ou "mediaUrl").' });
+    if (!message && files.length === 0 && !mediaUrl) {
+      return res.status(400).json({ error: 'Fournissez un "message" et/ou un média (fichier(s) joint(s) ou "mediaUrl").' });
     }
     if (channel !== 'facebook_page' && (!Array.isArray(recipients) || recipients.length === 0)) {
       return res.status(400).json({ error: 'Fournissez "recipients" (destinataires ou groupes ciblés) pour ce canal.' });
     }
-    if (req.file && req.file.mimetype === 'application/pdf' && channel === 'facebook_page') {
+    // Plusieurs pièces jointes combinées en un seul envoi (image + vidéo +
+    // PDF...) : seul WhatsApp sait aujourd'hui les envoyer toutes (voir
+    // dispatchScheduledWhatsapp) — Telegram/Facebook n'utiliseraient que la
+    // première, ce qui surprendrait silencieusement l'utilisateur.
+    if (files.length > 1 && channel !== 'whatsapp') {
+      return res.status(400).json({
+        error: 'Plusieurs pièces jointes en un seul envoi ne sont prises en charge que pour le canal WhatsApp.',
+      });
+    }
+    if (files.some((f) => f.mimetype === 'application/pdf') && channel === 'facebook_page') {
       return res.status(400).json({
         error: 'L\'API Graph de Meta ne permet pas de joindre un PDF à une publication de Page ou de Groupe. '
           + 'Hébergez le PDF ailleurs et partagez son lien dans le message.',
       });
     }
 
-    let storedMediaUrl = mediaUrl || null;
-    let mediaMimetype = null;
-    let mediaFilename = null;
-
-    if (req.file) {
-      const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-      fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), req.file.buffer);
-      storedMediaUrl = `local:${safeName}`;
-      mediaMimetype = req.file.mimetype;
-      mediaFilename = req.file.originalname;
+    let mediaItems = [];
+    if (files.length > 0) {
+      mediaItems = files.map((file) => {
+        const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), file.buffer);
+        return { mediaUrl: `local:${safeName}`, mediaMimetype: file.mimetype, mediaFilename: file.originalname };
+      });
+    } else if (mediaUrl) {
+      mediaItems = [{ mediaUrl, mediaMimetype: null, mediaFilename: null }];
     }
 
     const entry = scheduledMessages.create({
@@ -2656,9 +2759,7 @@ app.post(
       recipientType: recipientType || null,
       recipients: Array.isArray(recipients) ? recipients : [],
       message,
-      mediaUrl: storedMediaUrl,
-      mediaMimetype,
-      mediaFilename,
+      media: mediaItems,
       scheduledAt: new Date(scheduledAt).toISOString(),
     });
 

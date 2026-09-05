@@ -190,6 +190,12 @@
           <button type="button" id="generate-pairing-btn" class="send-button" style="width:auto;">Générer mon Code d'Association</button>
           <div id="pairing-result"></div>
         </div>
+
+        <div id="whatsapp-connected-actions" hidden style="margin-top: 1rem;">
+          <p class="empty">Un seul appareil peut être connecté à la fois. Pour changer d'appareil ou de numéro, déconnectez-vous d'abord.</p>
+          <button type="button" id="whatsapp-logout-btn" class="stop-button">🔌 Se déconnecter (changer d'appareil)</button>
+        </div>
+        <p id="whatsapp-logout-feedback" hidden></p>
       </div>
 
       <div class="conn-block" data-module="telegram">
@@ -250,8 +256,10 @@
         <div class="group-actions">
           <button type="button" id="select-all-btn">Tout sélectionner</button>
           <button type="button" id="deselect-all-btn">Tout désélectionner</button>
+          <button type="button" id="export-members-btn">📥 Exporter les membres (Excel)</button>
           <span id="selected-groups-count">0 groupe(s) sélectionné(s)</span>
         </div>
+        <p id="export-members-feedback" hidden></p>
 
         <div class="table-wrap">
           <table>
@@ -298,9 +306,9 @@
         </div>
 
         <div class="field">
-          <label>Pièce jointe (optionnel — JPG, PNG, MP4, PDF, Sticker WEBP)</label>
-          <div id="drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
-          <input type="file" id="campaign-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,.webp,image/jpeg,image/png,image/webp,video/mp4,application/pdf" hidden />
+          <label>Pièces jointes (optionnel — combinez plusieurs fichiers : JPG, PNG, MP4, PDF, Sticker WEBP)</label>
+          <div id="drop-zone">Glissez-déposez un ou plusieurs fichiers ici, ou touchez pour parcourir</div>
+          <input type="file" id="campaign-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,.webp,image/jpeg,image/png,image/webp,video/mp4,application/pdf" multiple hidden />
           <p id="campaign-file-name" class="empty">Aucun fichier sélectionné.</p>
         </div>
 
@@ -754,9 +762,9 @@
         </div>
 
         <div class="field">
-          <label>Média (optionnel — image, vidéo ou PDF)</label>
-          <div id="sched-media-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
-          <input type="file" id="sched-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" hidden />
+          <label id="sched-media-label">Média (optionnel — image, vidéo ou PDF)</label>
+          <div id="sched-media-drop-zone">Glissez-déposez un ou plusieurs fichiers ici, ou touchez pour parcourir</div>
+          <input type="file" id="sched-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" multiple hidden />
           <p id="sched-media-file-name" class="empty">Aucun fichier sélectionné.</p>
         </div>
 
@@ -764,6 +772,11 @@
           ⚠️ Un PDF ne peut pas être joint nativement à une publication Facebook (Page ou Groupe). Pour ce canal,
           hébergez le PDF ailleurs et partagez son lien dans le texte — Telegram et WhatsApp acceptent eux le PDF
           en pièce jointe directe.
+        </div>
+
+        <div class="warning-box" id="sched-multi-media-warning" hidden>
+          ⚠️ Seul WhatsApp accepte plusieurs pièces jointes combinées (image + vidéo + PDF) dans un même envoi.
+          Pour Telegram et Facebook, un seul fichier sera pris en compte.
         </div>
 
         <div class="field">
@@ -1009,7 +1022,7 @@
     const AUTH_TYPE_KEY = 'auth_type'; // 'admin' | 'license'
     const AUTH_VALUE_KEY = 'auth_value';
     const state = { groups: [], selectedGroupIds: new Set(), importedContacts: [] };
-    let selectedFile = null;
+    let selectedFiles = [];
     let lastReportShownAt = null;
     let observedRunningStartedAt = null;
     let authRole = null; // 'admin' | 'license'
@@ -1295,14 +1308,17 @@
         const badge = document.getElementById('status-badge');
         const qrContainer = document.getElementById('qr-container');
         const qrImage = document.getElementById('qr-image');
+        const connectedActions = document.getElementById('whatsapp-connected-actions');
 
         if (data.connected) {
           badge.textContent = 'Connecté';
           badge.className = 'badge connected';
           qrContainer.hidden = true;
+          connectedActions.hidden = false;
         } else {
           badge.textContent = 'Déconnecté';
           badge.className = 'badge disconnected';
+          connectedActions.hidden = true;
           if (data.qr) {
             qrImage.src = data.qr;
             qrContainer.hidden = false;
@@ -1314,6 +1330,33 @@
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }
     }
+
+    document.getElementById('whatsapp-logout-btn').addEventListener('click', async () => {
+      const feedback = document.getElementById('whatsapp-logout-feedback');
+      const btn = document.getElementById('whatsapp-logout-btn');
+      btn.disabled = true;
+      feedback.hidden = false;
+      feedback.className = '';
+      feedback.textContent = 'Déconnexion en cours...';
+
+      try {
+        const res = await apiFetch('/api/whatsapp/logout', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+          feedback.className = 'error';
+          feedback.textContent = data.error || 'Échec de la déconnexion.';
+        } else {
+          feedback.className = 'ok';
+          feedback.textContent = 'Déconnecté. Générez un nouveau QR code ou code d\'association pour lier un autre appareil.';
+          pollStatus();
+        }
+      } catch (err) {
+        feedback.className = 'error';
+        feedback.textContent = 'Erreur réseau lors de la déconnexion.';
+      } finally {
+        btn.disabled = false;
+      }
+    });
 
     // ---------- WhatsApp : Groupes & Contacts (multisélection) ----------
     function updateSelectedGroupsUI() {
@@ -1395,6 +1438,50 @@
       currentFilteredGroups().forEach((g) => state.selectedGroupIds.delete(g.id));
       renderGroupsTable(currentFilteredGroups());
       updateSelectedGroupsUI();
+    });
+
+    // Export consolidé : tous les membres des groupes cochés (dédupliqués)
+    // vers un unique fichier Excel téléchargé localement.
+    document.getElementById('export-members-btn').addEventListener('click', async () => {
+      const feedback = document.getElementById('export-members-feedback');
+      feedback.hidden = false;
+
+      if (state.selectedGroupIds.size === 0) {
+        feedback.className = 'error';
+        feedback.textContent = 'Sélectionnez au moins un groupe ci-dessus.';
+        return;
+      }
+
+      feedback.className = '';
+      feedback.textContent = 'Génération du fichier en cours...';
+
+      try {
+        const res = await apiFetch('/api/groups/export-members', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupIds: Array.from(state.selectedGroupIds) }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          feedback.className = 'error';
+          feedback.textContent = data.error || 'Échec de l\'export.';
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'membres_groupes_whatsapp.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        feedback.className = 'ok';
+        feedback.textContent = 'Fichier téléchargé.';
+      } catch (err) {
+        feedback.className = 'error';
+        feedback.textContent = 'Erreur réseau lors de l\'export.';
+      }
     });
 
     // ---------- WhatsApp : Import Excel / CSV ----------
@@ -1489,14 +1576,15 @@
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       dropZone.classList.remove('dragover');
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) setSelectedFile(e.dataTransfer.files[0]);
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) setSelectedFiles(e.dataTransfer.files);
     });
     fileInput.addEventListener('change', () => {
-      if (fileInput.files && fileInput.files[0]) setSelectedFile(fileInput.files[0]);
+      if (fileInput.files && fileInput.files.length > 0) setSelectedFiles(fileInput.files);
     });
-    function setSelectedFile(file) {
-      selectedFile = file;
-      document.getElementById('campaign-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    function setSelectedFiles(fileList) {
+      selectedFiles = Array.from(fileList);
+      document.getElementById('campaign-file-name').textContent =
+        selectedFiles.length + ' fichier(s) sélectionné(s) : ' + selectedFiles.map((f) => f.name).join(', ');
     }
 
     function showCampaignFeedback(message, isError) {
@@ -1534,7 +1622,7 @@
         formData.append('recipients', JSON.stringify(numbers));
       }
 
-      if (selectedFile) formData.append('media', selectedFile);
+      selectedFiles.forEach((file) => formData.append('media', file));
 
       const sendBtn = document.getElementById('send-campaign-btn');
       sendBtn.disabled = true;
@@ -1548,7 +1636,7 @@
         } else {
           showCampaignFeedback(
             '🚀 Campagne lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
-            ', délai ' + data.delaySeconds + 's' + (data.media ? ', pièce jointe : ' + data.media : '') + '.',
+            ', délai ' + data.delaySeconds + 's' + (data.media ? ', pièce(s) jointe(s) : ' + data.media.join(', ') : '') + '.',
             false,
           );
           document.getElementById('campaign-feedback').hidden = true;
@@ -2804,7 +2892,7 @@
     // ---------- Programmation / Planning (multi-canal) ----------
     let schedImportedContacts = [];
     let selectedSchedContactsFile = null;
-    let selectedSchedMediaFile = null;
+    let selectedSchedMediaFiles = [];
 
     function schedShowFeedback(message, isError) {
       const el = document.getElementById('sched-feedback');
@@ -2883,6 +2971,13 @@
       const contactsPicker = document.getElementById('sched-contacts-picker');
       const fbGroupsPicker = document.getElementById('sched-fb-groups-picker');
       const pdfWarning = document.getElementById('sched-pdf-warning');
+      const multiMediaWarning = document.getElementById('sched-multi-media-warning');
+      const mediaLabel = document.getElementById('sched-media-label');
+
+      mediaLabel.textContent = channel === 'whatsapp'
+        ? 'Médias (optionnel — combinez plusieurs fichiers : image, vidéo, PDF)'
+        : 'Média (optionnel — un seul fichier : image, vidéo ou PDF)';
+      multiMediaWarning.hidden = !(channel !== 'whatsapp' && selectedSchedMediaFiles.length > 1);
 
       if (channel === 'facebook_page') {
         recipientTypeField.hidden = true;
@@ -2965,14 +3060,16 @@
     schedMediaDropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       schedMediaDropZone.classList.remove('dragover');
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) schedSetSelectedMediaFile(e.dataTransfer.files[0]);
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) schedSetSelectedMediaFiles(e.dataTransfer.files);
     });
     schedMediaFileInput.addEventListener('change', () => {
-      if (schedMediaFileInput.files && schedMediaFileInput.files[0]) schedSetSelectedMediaFile(schedMediaFileInput.files[0]);
+      if (schedMediaFileInput.files && schedMediaFileInput.files.length > 0) schedSetSelectedMediaFiles(schedMediaFileInput.files);
     });
-    function schedSetSelectedMediaFile(file) {
-      selectedSchedMediaFile = file;
-      document.getElementById('sched-media-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+    function schedSetSelectedMediaFiles(fileList) {
+      selectedSchedMediaFiles = Array.from(fileList);
+      document.getElementById('sched-media-file-name').textContent =
+        selectedSchedMediaFiles.length + ' fichier(s) sélectionné(s) : ' + selectedSchedMediaFiles.map((f) => f.name).join(', ');
+      schedUpdateChannelUI();
     }
 
     document.getElementById('sched-submit-btn').addEventListener('click', async () => {
@@ -2990,12 +3087,16 @@
         recipients = schedImportedContacts.map(schedContactIdentifier).filter(Boolean);
       }
 
-      if (!message && !selectedSchedMediaFile) {
+      if (!message && selectedSchedMediaFiles.length === 0) {
         schedShowFeedback('Fournissez un texte et/ou un média.', true);
         return;
       }
       if (channel !== 'facebook_page' && recipients.length === 0) {
         schedShowFeedback('Sélectionnez au moins un destinataire (groupe/canal ou contact importé).', true);
+        return;
+      }
+      if (channel !== 'whatsapp' && selectedSchedMediaFiles.length > 1) {
+        schedShowFeedback('Plusieurs pièces jointes en un seul envoi ne sont prises en charge que pour WhatsApp.', true);
         return;
       }
 
@@ -3005,7 +3106,7 @@
       formData.append('recipients', JSON.stringify(recipients));
       formData.append('message', message);
       formData.append('scheduledAt', datetimeValue ? new Date(datetimeValue).toISOString() : new Date().toISOString());
-      if (selectedSchedMediaFile) formData.append('media', selectedSchedMediaFile);
+      selectedSchedMediaFiles.forEach((file) => formData.append('media', file));
 
       const btn = document.getElementById('sched-submit-btn');
       btn.disabled = true;
@@ -3017,9 +3118,10 @@
         } else {
           schedShowFeedback('✅ Programmation enregistrée.', false);
           document.getElementById('sched-message').value = '';
-          selectedSchedMediaFile = null;
+          selectedSchedMediaFiles = [];
           document.getElementById('sched-media-file-name').textContent = 'Aucun fichier sélectionné.';
           document.getElementById('sched-media-file-name').className = 'empty';
+          schedUpdateChannelUI();
           schedRefreshList();
         }
       } catch (err) {
@@ -3069,7 +3171,8 @@
 
           const messageTd = document.createElement('td');
           const preview = (m.message || '').slice(0, 60) + ((m.message || '').length > 60 ? '…' : '');
-          messageTd.textContent = preview + (m.mediaUrl ? ' 📎' : '');
+          const mediaCount = Array.isArray(m.media) ? m.media.length : (m.mediaUrl ? 1 : 0);
+          messageTd.textContent = preview + (mediaCount > 1 ? ` 📎x${mediaCount}` : (mediaCount === 1 ? ' 📎' : ''));
 
           const scheduledTd = document.createElement('td');
           scheduledTd.textContent = new Date(m.scheduledAt).toLocaleString();
