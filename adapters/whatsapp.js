@@ -271,6 +271,7 @@ async function logout() {
   sock = null;
 
   fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+  await whatsappAuthStore.clearRemote();
 
   await connect();
 }

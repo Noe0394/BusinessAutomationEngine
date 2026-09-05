@@ -121,6 +121,27 @@ class FacebookMessengerAdapter {
     return this.pageId;
   }
 
+  // Déconnexion manuelle (bouton "Se déconnecter de Facebook" du dashboard) :
+  // efface le jeton obtenu par OAuth (facebook_token.json) et l'état mis en
+  // cache. Contrairement à WhatsApp/Telegram, il n'y a rien à révoquer côté
+  // serveurs Meta ici (checkConnection() re-vérifie juste le jeton à la
+  // demande) — si FB_PAGE_ACCESS_TOKEN/FACEBOOK_PAGE_ACCESS_TOKEN est défini
+  // en variable d'environnement, il reprend automatiquement le relais (c'est
+  // un réglage manuel de l'exploitant, pas une session vivante que ce bouton
+  // peut couper) : envTokenStillActive le signale à l'appelant.
+  disconnect() {
+    try {
+      fs.unlinkSync(FACEBOOK_TOKEN_PATH);
+    } catch (err) {
+      // déjà absent
+    }
+    this.pageId = null;
+    this.pageName = null;
+    return {
+      envTokenStillActive: Boolean(process.env.FB_PAGE_ACCESS_TOKEN || process.env.FACEBOOK_PAGE_ACCESS_TOKEN),
+    };
+  }
+
   // Contrairement à WhatsApp/Telegram, il n'y a pas de session persistante à
   // proprement parler ici : "connecté" signifie que le jeton configuré est
   // valide et résout bien une Page (vérifié à la demande, pas mis en cache

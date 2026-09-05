@@ -63,10 +63,23 @@ function startPeriodicSync(sessionPath) {
   if (snapshotTimer.unref) snapshotTimer.unref();
 }
 
+// Déconnexion manuelle (voir TelegramAdapter.logout()) : vide le fichier
+// distant tout de suite, sur le même principe que whatsappAuthStore.clearRemote().
+async function clearRemote() {
+  if (!store.enabled) return;
+  try {
+    await store.pushRemote('');
+    lastPushedContent = '';
+  } catch (err) {
+    console.error('Échec de la suppression de la session Telegram sur GitHub :', err.message);
+  }
+}
+
 module.exports = {
   enabled: store.enabled,
   restoreSessionFromRemote,
   pushSnapshot,
   startPeriodicSync,
+  clearRemote,
   getStatus: store.getStatus,
 };

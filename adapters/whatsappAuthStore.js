@@ -90,10 +90,27 @@ function startPeriodicSync(authDir) {
   if (snapshotTimer.unref) snapshotTimer.unref();
 }
 
+// Déconnexion manuelle (voir whatsapp.logout()) : vide le fichier distant tout
+// de suite plutôt que d'attendre que le prochain connect() régénère des creds
+// et écrase naturellement l'ancien contenu via creds.update — évite qu'une
+// session révoquée reste lisible dans le repo GitHub le temps de ce prochain
+// cycle (ex: si le process redémarre juste après la déconnexion, avant le
+// prochain appairage).
+async function clearRemote() {
+  if (!store.enabled) return;
+  try {
+    await store.pushRemote('');
+    lastPushedContent = '';
+  } catch (err) {
+    console.error('Échec de la suppression de la session WhatsApp sur GitHub :', err.message);
+  }
+}
+
 module.exports = {
   enabled: store.enabled,
   restoreSessionFromRemote,
   pushSnapshot,
   startPeriodicSync,
+  clearRemote,
   getStatus: store.getStatus,
 };

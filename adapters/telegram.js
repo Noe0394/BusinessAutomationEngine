@@ -123,6 +123,44 @@ class TelegramAdapter {
     return telegramAuthStore.getStatus();
   }
 
+  // Déconnexion manuelle (bouton "Se déconnecter de Telegram" du dashboard) :
+  // révoque la session côté serveurs Telegram (auth.LogOut, pour qu'un fichier
+  // de session dérobé ne serve plus à rien), ferme le client, efface le
+  // fichier de session local ET distant, puis repasse en attente — prêt pour
+  // une nouvelle connexion (même numéro ou un autre) via
+  // POST /api/telegram/login/start, sans redémarrage du serveur.
+  async logout() {
+    this.stopHeartbeat();
+
+    if (this.client) {
+      try {
+        if (this.connected) {
+          await this.client.invoke(new Api.auth.LogOut());
+        }
+      } catch (err) {
+        console.warn('Erreur lors du logout Telegram (nettoyage local effectué quand même) :', err.message);
+      }
+      try {
+        await this.client.disconnect();
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    this.client = null;
+    this.connected = false;
+    this._codeResolver = null;
+    this._passwordResolver = null;
+    this._loginError = null;
+
+    try {
+      fs.unlinkSync(SESSION_PATH);
+    } catch (err) {
+      // déjà absent
+    }
+    await telegramAuthStore.clearRemote();
+  }
+
   // À appeler au démarrage du serveur : restaure une session déjà autorisée
   // si le fichier de session existe, sans redemander de code.
   async init() {

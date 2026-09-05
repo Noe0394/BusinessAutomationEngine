@@ -204,7 +204,7 @@
 
         <div id="whatsapp-connected-actions" hidden style="margin-top: 1rem;">
           <p class="empty">Un seul appareil peut être connecté à la fois. Pour changer d'appareil ou de numéro, déconnectez-vous d'abord.</p>
-          <button type="button" id="whatsapp-logout-btn" class="stop-button">🔌 Se déconnecter (changer d'appareil)</button>
+          <button type="button" id="whatsapp-logout-btn" class="stop-button">🔌 Se déconnecter de WhatsApp</button>
         </div>
         <p id="whatsapp-logout-feedback" hidden></p>
       </div>
@@ -233,12 +233,23 @@
 
           <p id="tg-login-feedback" class="empty"></p>
         </div>
+
+        <div id="tg-connected-actions" hidden style="margin-top: 1rem;">
+          <p class="empty">Une seule session peut être connectée à la fois. Pour changer de compte, déconnectez-vous d'abord.</p>
+          <button type="button" id="tg-logout-btn" class="stop-button">🔌 Se déconnecter de Telegram</button>
+        </div>
+        <p id="tg-logout-feedback" hidden></p>
       </div>
 
       <div class="conn-block" data-module="facebook">
         <h3>Facebook <span id="fb-status-badge" class="badge disconnected">Vérification...</span></h3>
         <p class="empty" id="fb-conn-hint"></p>
         <button type="button" id="fb-connect-btn">Se connecter avec Facebook</button>
+
+        <div id="fb-connected-actions" hidden style="margin-top: 1rem;">
+          <button type="button" id="fb-logout-btn" class="stop-button">🔌 Se déconnecter de Facebook</button>
+        </div>
+        <p id="fb-logout-feedback" hidden></p>
       </div>
 
       <div class="conn-block" data-module="studio_video">
@@ -2775,6 +2786,8 @@
         const badge = document.getElementById('fb-status-badge');
         const hint = document.getElementById('fb-conn-hint');
         const connectBtn = document.getElementById('fb-connect-btn');
+        const connectedActions = document.getElementById('fb-connected-actions');
+        connectedActions.hidden = !data.connected;
         if (data.connected) {
           badge.textContent = 'Connecté' + (data.pageName ? ' (' + data.pageName + ')' : '');
           badge.className = 'badge connected';
@@ -2801,6 +2814,36 @@
 
     document.getElementById('fb-connect-btn').addEventListener('click', () => {
       window.location.href = buildAuthedUrl('/api/facebook/connect');
+    });
+
+    document.getElementById('fb-logout-btn').addEventListener('click', async () => {
+      const feedback = document.getElementById('fb-logout-feedback');
+      const btn = document.getElementById('fb-logout-btn');
+      btn.disabled = true;
+      feedback.hidden = false;
+      feedback.className = '';
+      feedback.textContent = 'Déconnexion en cours...';
+
+      try {
+        const res = await apiFetch('/api/facebook/logout', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+          feedback.className = 'error';
+          feedback.textContent = data.error || 'Échec de la déconnexion.';
+        } else if (data.envTokenStillActive) {
+          feedback.className = 'error';
+          feedback.textContent = 'Jeton OAuth effacé, mais un jeton est aussi configuré en variable d\'environnement sur le serveur — la connexion reste donc active. Retirez FB_PAGE_ACCESS_TOKEN côté serveur pour vous déconnecter complètement.';
+        } else {
+          feedback.className = 'ok';
+          feedback.textContent = 'Déconnecté. Cliquez sur "Se connecter avec Facebook" pour lier un autre compte/une autre Page.';
+        }
+        fbRefreshStatus();
+      } catch (err) {
+        feedback.className = 'error';
+        feedback.textContent = 'Erreur réseau lors de la déconnexion.';
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     async function mediaRefreshStatus() {
@@ -2901,6 +2944,7 @@
         const loginPanel = document.getElementById('tg-login-panel');
         const mainContent = document.getElementById('tg-main-content');
         const notConnectedHint = document.getElementById('tg-not-connected-hint');
+        const connectedActions = document.getElementById('tg-connected-actions');
 
         if (!data.configured) {
           badge.textContent = 'Non connecté';
@@ -2908,6 +2952,7 @@
           loginPanel.hidden = false;
           mainContent.hidden = true;
           notConnectedHint.hidden = false;
+          connectedActions.hidden = true;
           return;
         }
 
@@ -2917,17 +2962,46 @@
           loginPanel.hidden = true;
           mainContent.hidden = false;
           notConnectedHint.hidden = true;
+          connectedActions.hidden = false;
         } else {
           badge.textContent = 'Déconnecté';
           badge.className = 'badge disconnected';
           loginPanel.hidden = false;
           mainContent.hidden = true;
           notConnectedHint.hidden = false;
+          connectedActions.hidden = true;
         }
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }
     }
+
+    document.getElementById('tg-logout-btn').addEventListener('click', async () => {
+      const feedback = document.getElementById('tg-logout-feedback');
+      const btn = document.getElementById('tg-logout-btn');
+      btn.disabled = true;
+      feedback.hidden = false;
+      feedback.className = '';
+      feedback.textContent = 'Déconnexion en cours...';
+
+      try {
+        const res = await apiFetch('/api/telegram/logout', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+          feedback.className = 'error';
+          feedback.textContent = data.error || 'Échec de la déconnexion.';
+        } else {
+          feedback.className = 'ok';
+          feedback.textContent = 'Déconnecté. Saisissez un numéro (le même ou un autre) pour vous reconnecter.';
+          tgRefreshStatus();
+        }
+      } catch (err) {
+        feedback.className = 'error';
+        feedback.textContent = 'Erreur réseau lors de la déconnexion.';
+      } finally {
+        btn.disabled = false;
+      }
+    });
 
     function tgHandleLoginStep(step, error) {
       const feedback = document.getElementById('tg-login-feedback');

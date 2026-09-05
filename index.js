@@ -1587,6 +1587,17 @@ app.get('/api/facebook/status', requireAccess, requireModule('facebook'), async 
   res.status(200).json({ configured: facebook.isConfigured(), connectAvailable: facebook.isConnectAvailable(), ...status });
 });
 
+// Déconnexion dédiée à Facebook (bouton "Se déconnecter de Facebook" du
+// dashboard) — indépendante des autres canaux : n'affecte ni WhatsApp ni
+// Telegram. Voir facebook.disconnect() : si un jeton est aussi configuré en
+// variable d'environnement sur Render, il reprend le relais automatiquement
+// (envTokenStillActive dans la réponse) — ce bouton ne peut couper qu'un
+// jeton obtenu via OAuth.
+app.post('/api/facebook/logout', requireAccess, requireModule('facebook'), (req, res) => {
+  const result = facebook.disconnect();
+  res.status(200).json({ status: 'logged_out', ...result });
+});
+
 // Déclenchée par une navigation top-level (clic sur "Se connecter avec
 // Facebook"), pas par fetch/XHR : le mot de passe/la clé de licence arrive
 // donc en paramètre de requête (déjà supporté par requireAccess), jamais en
@@ -2389,6 +2400,20 @@ app.get('/api/telegram/status', requireAccess, requireModule('telegram'), (req, 
     configured: telegram.isConfigured(),
     connected: telegram.isConnected(),
   });
+});
+
+// Déconnexion dédiée à Telegram (bouton "Se déconnecter de Telegram" du
+// dashboard) — indépendante des autres canaux : n'affecte ni WhatsApp ni
+// Facebook. Repasse immédiatement en attente d'une nouvelle connexion (même
+// numéro ou un autre) via POST /api/telegram/login/start.
+app.post('/api/telegram/logout', requireAccess, requireModule('telegram'), async (req, res) => {
+  try {
+    await telegram.logout();
+    res.status(200).json({ status: 'logged_out' });
+  } catch (err) {
+    console.error('Erreur lors de la déconnexion Telegram:', err);
+    res.status(500).json({ error: 'Échec de la déconnexion Telegram.' });
+  }
 });
 
 app.post('/api/telegram/login/start', requireAccess, requireModule('telegram'), async (req, res) => {
