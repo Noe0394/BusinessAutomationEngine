@@ -82,6 +82,17 @@
       padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; font-weight: bold;
     }
 
+    .sequence-step {
+      border: 1px solid #ccc; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.75rem; background: #fafafa;
+    }
+    .sequence-step-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .sequence-step-badge { font-weight: bold; font-size: 0.85rem; color: #075E54; }
+    .sequence-step-actions button {
+      background: none; border: 1px solid #ccc; border-radius: 4px; min-width: 36px; min-height: 36px;
+      margin-left: 0.3rem; cursor: pointer;
+    }
+    .sequence-step textarea { min-height: 70px; }
+
     .send-button { background: #25D366; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; }
     .send-button:disabled { background: #a9d9bc; cursor: not-allowed; }
     .stop-button { background: #c0392b; color: #fff; border: none; padding: 0.9rem 1.5rem; border-radius: 8px; font-weight: bold; font-size: 1.05rem; width: 100%; min-height: 52px; margin-top: 0.75rem; }
@@ -301,15 +312,25 @@
         </div>
 
         <div class="field">
-          <label for="campaign-message">Message (emojis supportés)</label>
-          <textarea id="campaign-message" placeholder="Écrivez votre message ici... 😀"></textarea>
+          <label>Séquence d'envoi (emojis supportés)</label>
+          <p class="empty">Construisez la campagne comme une suite de messages séparés — ex: accroche → média → argumentaire → appel à l'action — envoyés dans cet ordre à chaque destinataire.</p>
+          <div id="campaign-sequence-list"></div>
+          <div class="row">
+            <button type="button" id="campaign-add-text-btn">➕ Ajouter un texte</button>
+            <button type="button" id="campaign-add-media-btn">➕ Ajouter un média (JPG, PNG, MP4, PDF, Sticker WEBP)</button>
+          </div>
+          <input type="file" id="campaign-sequence-file-input" accept=".jpg,.jpeg,.png,.mp4,.pdf,.webp,image/jpeg,image/png,image/webp,video/mp4,application/pdf" hidden />
         </div>
 
-        <div class="field">
-          <label>Pièces jointes (optionnel — combinez plusieurs fichiers : JPG, PNG, MP4, PDF, Sticker WEBP)</label>
-          <div id="drop-zone">Glissez-déposez un ou plusieurs fichiers ici, ou touchez pour parcourir</div>
-          <input type="file" id="campaign-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,.webp,image/jpeg,image/png,image/webp,video/mp4,application/pdf" multiple hidden />
-          <p id="campaign-file-name" class="empty">Aucun fichier sélectionné.</p>
+        <div class="row">
+          <div class="field">
+            <label for="campaign-seq-delay-min">Délai entre messages de la séquence — min (secondes)</label>
+            <input type="number" id="campaign-seq-delay-min" value="2" min="1" />
+          </div>
+          <div class="field">
+            <label for="campaign-seq-delay-max">Délai entre messages de la séquence — max (secondes)</label>
+            <input type="number" id="campaign-seq-delay-max" value="5" min="1" />
+          </div>
         </div>
 
         <div class="field">
@@ -328,11 +349,11 @@
 
         <div class="row">
           <div class="field">
-            <label for="batch-size">Nombre de messages par lot</label>
+            <label for="batch-size">Nombre de destinataires par lot</label>
             <input type="number" id="batch-size" value="5" min="1" />
           </div>
           <div class="field">
-            <label for="delay-seconds">Délai de pause entre messages (secondes)</label>
+            <label for="delay-seconds">Délai entre deux destinataires (secondes)</label>
             <input type="number" id="delay-seconds" value="12" min="1" />
           </div>
         </div>
@@ -756,27 +777,52 @@
           </div>
         </div>
 
-        <div class="field">
-          <label for="sched-message">Texte</label>
-          <textarea id="sched-message" placeholder="Votre message..."></textarea>
+        <div id="sched-standard-fields">
+          <div class="field">
+            <label for="sched-message">Texte</label>
+            <textarea id="sched-message" placeholder="Votre message..."></textarea>
+          </div>
+
+          <div class="field">
+            <label id="sched-media-label">Média (optionnel — image, vidéo ou PDF)</label>
+            <div id="sched-media-drop-zone">Glissez-déposez un ou plusieurs fichiers ici, ou touchez pour parcourir</div>
+            <input type="file" id="sched-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" multiple hidden />
+            <p id="sched-media-file-name" class="empty">Aucun fichier sélectionné.</p>
+          </div>
+
+          <div class="warning-box" id="sched-pdf-warning" hidden>
+            ⚠️ Un PDF ne peut pas être joint nativement à une publication Facebook (Page ou Groupe). Pour ce canal,
+            hébergez le PDF ailleurs et partagez son lien dans le texte — Telegram et WhatsApp acceptent eux le PDF
+            en pièce jointe directe.
+          </div>
+
+          <div class="warning-box" id="sched-multi-media-warning" hidden>
+            ⚠️ Seul WhatsApp accepte plusieurs pièces jointes combinées (image + vidéo + PDF) dans un même envoi.
+            Pour Telegram et Facebook, un seul fichier sera pris en compte.
+          </div>
         </div>
 
-        <div class="field">
-          <label id="sched-media-label">Média (optionnel — image, vidéo ou PDF)</label>
-          <div id="sched-media-drop-zone">Glissez-déposez un ou plusieurs fichiers ici, ou touchez pour parcourir</div>
-          <input type="file" id="sched-media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,image/jpeg,image/png,video/mp4,application/pdf" multiple hidden />
-          <p id="sched-media-file-name" class="empty">Aucun fichier sélectionné.</p>
-        </div>
-
-        <div class="warning-box" id="sched-pdf-warning" hidden>
-          ⚠️ Un PDF ne peut pas être joint nativement à une publication Facebook (Page ou Groupe). Pour ce canal,
-          hébergez le PDF ailleurs et partagez son lien dans le texte — Telegram et WhatsApp acceptent eux le PDF
-          en pièce jointe directe.
-        </div>
-
-        <div class="warning-box" id="sched-multi-media-warning" hidden>
-          ⚠️ Seul WhatsApp accepte plusieurs pièces jointes combinées (image + vidéo + PDF) dans un même envoi.
-          Pour Telegram et Facebook, un seul fichier sera pris en compte.
+        <div id="sched-sequence-fields" hidden>
+          <div class="field">
+            <label>Séquence d'envoi (texte et médias, dans l'ordre voulu)</label>
+            <p class="empty">Comme le Centre d'Envoi WhatsApp : une suite de messages séparés, envoyés dans cet ordre à la date programmée.</p>
+            <div id="sched-sequence-list"></div>
+            <div class="row">
+              <button type="button" id="sched-add-text-btn">➕ Ajouter un texte</button>
+              <button type="button" id="sched-add-media-btn">➕ Ajouter un média</button>
+            </div>
+            <input type="file" id="sched-sequence-file-input" accept=".jpg,.jpeg,.png,.mp4,.pdf,.webp,image/jpeg,image/png,image/webp,video/mp4,application/pdf" hidden />
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="sched-seq-delay-min">Délai entre messages de la séquence — min (secondes)</label>
+              <input type="number" id="sched-seq-delay-min" value="2" min="1" />
+            </div>
+            <div class="field">
+              <label for="sched-seq-delay-max">Délai entre messages de la séquence — max (secondes)</label>
+              <input type="number" id="sched-seq-delay-max" value="5" min="1" />
+            </div>
+          </div>
         </div>
 
         <div class="field">
@@ -1022,7 +1068,6 @@
     const AUTH_TYPE_KEY = 'auth_type'; // 'admin' | 'license'
     const AUTH_VALUE_KEY = 'auth_value';
     const state = { groups: [], selectedGroupIds: new Set(), importedContacts: [] };
-    let selectedFiles = [];
     let lastReportShownAt = null;
     let observedRunningStartedAt = null;
     let authRole = null; // 'admin' | 'license'
@@ -1568,24 +1613,89 @@
       radio.addEventListener('change', toggleTargetMode);
     });
 
-    const dropZone = document.getElementById('drop-zone');
-    const fileInput = document.getElementById('campaign-file');
-    dropZone.addEventListener('click', () => fileInput.click());
-    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-    dropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('dragover');
-      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) setSelectedFiles(e.dataTransfer.files);
-    });
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files && fileInput.files.length > 0) setSelectedFiles(fileInput.files);
-    });
-    function setSelectedFiles(fileList) {
-      selectedFiles = Array.from(fileList);
-      document.getElementById('campaign-file-name').textContent =
-        selectedFiles.length + ' fichier(s) sélectionné(s) : ' + selectedFiles.map((f) => f.name).join(', ');
+    // Séquençage / Envoi Multi-Messages : la campagne n'est plus un seul bloc
+    // texte + pièces jointes, mais une suite ordonnée d'étapes (texte ou
+    // média), envoyées comme autant de messages séparés à chaque destinataire.
+    let campaignSequence = []; // { type: 'text', text } | { type: 'media', file }
+
+    function moveCampaignStep(idx, delta) {
+      const newIdx = idx + delta;
+      if (newIdx < 0 || newIdx >= campaignSequence.length) return;
+      const tmp = campaignSequence[idx];
+      campaignSequence[idx] = campaignSequence[newIdx];
+      campaignSequence[newIdx] = tmp;
+      renderCampaignSequence();
     }
+
+    function renderCampaignSequence() {
+      const list = document.getElementById('campaign-sequence-list');
+      list.innerHTML = '';
+
+      if (campaignSequence.length === 0) {
+        list.innerHTML = '<p class="empty">Aucune étape — ajoutez un texte ou un média ci-dessous.</p>';
+        return;
+      }
+
+      campaignSequence.forEach((step, idx) => {
+        const card = document.createElement('div');
+        card.className = 'sequence-step';
+
+        const header = document.createElement('div');
+        header.className = 'sequence-step-header';
+        const badge = document.createElement('span');
+        badge.className = 'sequence-step-badge';
+        badge.textContent = (idx + 1) + '. ' + (step.type === 'text' ? 'Texte' : 'Média');
+        header.appendChild(badge);
+
+        const actions = document.createElement('div');
+        actions.className = 'sequence-step-actions';
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button'; upBtn.textContent = '▲'; upBtn.title = 'Monter'; upBtn.disabled = idx === 0;
+        upBtn.addEventListener('click', () => moveCampaignStep(idx, -1));
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button'; downBtn.textContent = '▼'; downBtn.title = 'Descendre'; downBtn.disabled = idx === campaignSequence.length - 1;
+        downBtn.addEventListener('click', () => moveCampaignStep(idx, 1));
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button'; delBtn.textContent = '🗑️'; delBtn.title = 'Supprimer';
+        delBtn.addEventListener('click', () => { campaignSequence.splice(idx, 1); renderCampaignSequence(); });
+        actions.appendChild(upBtn); actions.appendChild(downBtn); actions.appendChild(delBtn);
+        header.appendChild(actions);
+        card.appendChild(header);
+
+        if (step.type === 'text') {
+          const textarea = document.createElement('textarea');
+          textarea.placeholder = 'Écrivez ce message... 😀';
+          textarea.value = step.text;
+          textarea.addEventListener('input', () => { step.text = textarea.value; });
+          card.appendChild(textarea);
+        } else {
+          const p = document.createElement('p');
+          p.textContent = '📎 ' + step.file.name;
+          card.appendChild(p);
+        }
+
+        list.appendChild(card);
+      });
+    }
+
+    document.getElementById('campaign-add-text-btn').addEventListener('click', () => {
+      campaignSequence.push({ type: 'text', text: '' });
+      renderCampaignSequence();
+    });
+
+    const campaignSequenceFileInput = document.getElementById('campaign-sequence-file-input');
+    document.getElementById('campaign-add-media-btn').addEventListener('click', () => {
+      campaignSequenceFileInput.click();
+    });
+    campaignSequenceFileInput.addEventListener('change', () => {
+      if (campaignSequenceFileInput.files && campaignSequenceFileInput.files[0]) {
+        campaignSequence.push({ type: 'media', file: campaignSequenceFileInput.files[0] });
+        renderCampaignSequence();
+        campaignSequenceFileInput.value = ''; // permet de resélectionner le même fichier ensuite
+      }
+    });
+
+    renderCampaignSequence();
 
     function showCampaignFeedback(message, isError) {
       const el = document.getElementById('campaign-feedback');
@@ -1595,12 +1705,20 @@
     }
 
     document.getElementById('send-campaign-btn').addEventListener('click', async () => {
-      const message = document.getElementById('campaign-message').value.trim();
       const mode = document.querySelector('input[name="target-mode"]:checked').value;
       const batchSize = document.getElementById('batch-size').value;
       const delaySeconds = document.getElementById('delay-seconds').value;
+      const seqDelayMin = document.getElementById('campaign-seq-delay-min').value;
+      const seqDelayMax = document.getElementById('campaign-seq-delay-max').value;
 
-      if (!message) { showCampaignFeedback('Le message ne peut pas être vide.', true); return; }
+      if (campaignSequence.length === 0) {
+        showCampaignFeedback('Ajoutez au moins un texte ou un média à la séquence.', true);
+        return;
+      }
+      if (campaignSequence.some((s) => s.type === 'text' && !s.text.trim())) {
+        showCampaignFeedback('Un des messages texte de la séquence est vide.', true);
+        return;
+      }
       if (mode === 'groups' && state.selectedGroupIds.size === 0) {
         showCampaignFeedback('Sélectionnez au moins un groupe (section "Groupes & Contacts" ci-dessus).', true);
         return;
@@ -1611,9 +1729,15 @@
       }
 
       const formData = new FormData();
-      formData.append('message', message);
+      const sequenceMeta = campaignSequence.map((s) => (
+        s.type === 'text' ? { type: 'text', text: s.text.trim() } : { type: 'media' }
+      ));
+      formData.append('sequence', JSON.stringify(sequenceMeta));
+      campaignSequence.filter((s) => s.type === 'media').forEach((s) => formData.append('media', s.file));
       formData.append('batchSize', batchSize);
       formData.append('delaySeconds', delaySeconds);
+      formData.append('sequenceDelayMin', seqDelayMin);
+      formData.append('sequenceDelayMax', seqDelayMax);
 
       if (mode === 'groups') {
         formData.append('groupIds', JSON.stringify(Array.from(state.selectedGroupIds)));
@@ -1621,8 +1745,6 @@
         const numbers = state.importedContacts.map((c) => c.telephone);
         formData.append('recipients', JSON.stringify(numbers));
       }
-
-      selectedFiles.forEach((file) => formData.append('media', file));
 
       const sendBtn = document.getElementById('send-campaign-btn');
       sendBtn.disabled = true;
@@ -1636,7 +1758,7 @@
         } else {
           showCampaignFeedback(
             '🚀 Campagne lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
-            ', délai ' + data.delaySeconds + 's' + (data.media ? ', pièce(s) jointe(s) : ' + data.media.join(', ') : '') + '.',
+            ', délai ' + data.delaySeconds + 's, séquence de ' + data.steps + ' étape(s).',
             false,
           );
           document.getElementById('campaign-feedback').hidden = true;
@@ -2972,11 +3094,14 @@
       const fbGroupsPicker = document.getElementById('sched-fb-groups-picker');
       const pdfWarning = document.getElementById('sched-pdf-warning');
       const multiMediaWarning = document.getElementById('sched-multi-media-warning');
-      const mediaLabel = document.getElementById('sched-media-label');
+      const standardFields = document.getElementById('sched-standard-fields');
+      const sequenceFields = document.getElementById('sched-sequence-fields');
 
-      mediaLabel.textContent = channel === 'whatsapp'
-        ? 'Médias (optionnel — combinez plusieurs fichiers : image, vidéo, PDF)'
-        : 'Média (optionnel — un seul fichier : image, vidéo ou PDF)';
+      // WhatsApp programmé : Séquençage / Envoi Multi-Messages (mêmes
+      // fonctions que le Centre d'Envoi immédiat) — les autres canaux
+      // gardent le formulaire classique (un texte + média).
+      standardFields.hidden = channel === 'whatsapp';
+      sequenceFields.hidden = channel !== 'whatsapp';
       multiMediaWarning.hidden = !(channel !== 'whatsapp' && selectedSchedMediaFiles.length > 1);
 
       if (channel === 'facebook_page') {
@@ -3072,9 +3197,93 @@
       schedUpdateChannelUI();
     }
 
+    // Séquençage / Envoi Multi-Messages pour la programmation WhatsApp — même
+    // logique que campaignSequence/renderCampaignSequence (Centre d'Envoi
+    // immédiat), dupliquée ici plutôt que partagée car les deux formulaires
+    // ont chacun leur propre état et leurs propres éléments DOM.
+    let schedSequence = []; // { type: 'text', text } | { type: 'media', file }
+
+    function schedMoveSequenceStep(idx, delta) {
+      const newIdx = idx + delta;
+      if (newIdx < 0 || newIdx >= schedSequence.length) return;
+      const tmp = schedSequence[idx];
+      schedSequence[idx] = schedSequence[newIdx];
+      schedSequence[newIdx] = tmp;
+      renderSchedSequence();
+    }
+
+    function renderSchedSequence() {
+      const list = document.getElementById('sched-sequence-list');
+      list.innerHTML = '';
+
+      if (schedSequence.length === 0) {
+        list.innerHTML = '<p class="empty">Aucune étape — ajoutez un texte ou un média ci-dessous.</p>';
+        return;
+      }
+
+      schedSequence.forEach((step, idx) => {
+        const card = document.createElement('div');
+        card.className = 'sequence-step';
+
+        const header = document.createElement('div');
+        header.className = 'sequence-step-header';
+        const badge = document.createElement('span');
+        badge.className = 'sequence-step-badge';
+        badge.textContent = (idx + 1) + '. ' + (step.type === 'text' ? 'Texte' : 'Média');
+        header.appendChild(badge);
+
+        const actions = document.createElement('div');
+        actions.className = 'sequence-step-actions';
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button'; upBtn.textContent = '▲'; upBtn.title = 'Monter'; upBtn.disabled = idx === 0;
+        upBtn.addEventListener('click', () => schedMoveSequenceStep(idx, -1));
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button'; downBtn.textContent = '▼'; downBtn.title = 'Descendre'; downBtn.disabled = idx === schedSequence.length - 1;
+        downBtn.addEventListener('click', () => schedMoveSequenceStep(idx, 1));
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button'; delBtn.textContent = '🗑️'; delBtn.title = 'Supprimer';
+        delBtn.addEventListener('click', () => { schedSequence.splice(idx, 1); renderSchedSequence(); });
+        actions.appendChild(upBtn); actions.appendChild(downBtn); actions.appendChild(delBtn);
+        header.appendChild(actions);
+        card.appendChild(header);
+
+        if (step.type === 'text') {
+          const textarea = document.createElement('textarea');
+          textarea.placeholder = 'Écrivez ce message... 😀';
+          textarea.value = step.text;
+          textarea.addEventListener('input', () => { step.text = textarea.value; });
+          card.appendChild(textarea);
+        } else {
+          const p = document.createElement('p');
+          p.textContent = '📎 ' + step.file.name;
+          card.appendChild(p);
+        }
+
+        list.appendChild(card);
+      });
+    }
+
+    document.getElementById('sched-add-text-btn').addEventListener('click', () => {
+      schedSequence.push({ type: 'text', text: '' });
+      renderSchedSequence();
+    });
+
+    const schedSequenceFileInput = document.getElementById('sched-sequence-file-input');
+    document.getElementById('sched-add-media-btn').addEventListener('click', () => {
+      schedSequenceFileInput.click();
+    });
+    schedSequenceFileInput.addEventListener('change', () => {
+      if (schedSequenceFileInput.files && schedSequenceFileInput.files[0]) {
+        schedSequence.push({ type: 'media', file: schedSequenceFileInput.files[0] });
+        renderSchedSequence();
+        schedSequenceFileInput.value = '';
+      }
+    });
+
+    renderSchedSequence();
+
     document.getElementById('sched-submit-btn').addEventListener('click', async () => {
       const channel = schedCurrentChannel();
-      const message = document.getElementById('sched-message').value.trim();
       const datetimeValue = document.getElementById('sched-datetime').value;
       const recipientType = schedCurrentRecipientType();
 
@@ -3087,16 +3296,8 @@
         recipients = schedImportedContacts.map(schedContactIdentifier).filter(Boolean);
       }
 
-      if (!message && selectedSchedMediaFiles.length === 0) {
-        schedShowFeedback('Fournissez un texte et/ou un média.', true);
-        return;
-      }
       if (channel !== 'facebook_page' && recipients.length === 0) {
         schedShowFeedback('Sélectionnez au moins un destinataire (groupe/canal ou contact importé).', true);
-        return;
-      }
-      if (channel !== 'whatsapp' && selectedSchedMediaFiles.length > 1) {
-        schedShowFeedback('Plusieurs pièces jointes en un seul envoi ne sont prises en charge que pour WhatsApp.', true);
         return;
       }
 
@@ -3104,9 +3305,37 @@
       formData.append('channel', channel);
       if (channel !== 'facebook_page') formData.append('recipientType', recipientType);
       formData.append('recipients', JSON.stringify(recipients));
-      formData.append('message', message);
       formData.append('scheduledAt', datetimeValue ? new Date(datetimeValue).toISOString() : new Date().toISOString());
-      selectedSchedMediaFiles.forEach((file) => formData.append('media', file));
+
+      if (channel === 'whatsapp') {
+        if (schedSequence.length === 0) {
+          schedShowFeedback('Ajoutez au moins un texte ou un média à la séquence.', true);
+          return;
+        }
+        if (schedSequence.some((s) => s.type === 'text' && !s.text.trim())) {
+          schedShowFeedback('Un des messages texte de la séquence est vide.', true);
+          return;
+        }
+        const sequenceMeta = schedSequence.map((s) => (
+          s.type === 'text' ? { type: 'text', text: s.text.trim() } : { type: 'media' }
+        ));
+        formData.append('sequence', JSON.stringify(sequenceMeta));
+        schedSequence.filter((s) => s.type === 'media').forEach((s) => formData.append('media', s.file));
+        formData.append('sequenceDelayMin', document.getElementById('sched-seq-delay-min').value);
+        formData.append('sequenceDelayMax', document.getElementById('sched-seq-delay-max').value);
+      } else {
+        const message = document.getElementById('sched-message').value.trim();
+        if (!message && selectedSchedMediaFiles.length === 0) {
+          schedShowFeedback('Fournissez un texte et/ou un média.', true);
+          return;
+        }
+        if (selectedSchedMediaFiles.length > 1) {
+          schedShowFeedback('Plusieurs pièces jointes en un seul envoi ne sont prises en charge que pour WhatsApp.', true);
+          return;
+        }
+        formData.append('message', message);
+        selectedSchedMediaFiles.forEach((file) => formData.append('media', file));
+      }
 
       const btn = document.getElementById('sched-submit-btn');
       btn.disabled = true;
@@ -3121,6 +3350,8 @@
           selectedSchedMediaFiles = [];
           document.getElementById('sched-media-file-name').textContent = 'Aucun fichier sélectionné.';
           document.getElementById('sched-media-file-name').className = 'empty';
+          schedSequence = [];
+          renderSchedSequence();
           schedUpdateChannelUI();
           schedRefreshList();
         }
@@ -3171,8 +3402,12 @@
 
           const messageTd = document.createElement('td');
           const preview = (m.message || '').slice(0, 60) + ((m.message || '').length > 60 ? '…' : '');
-          const mediaCount = Array.isArray(m.media) ? m.media.length : (m.mediaUrl ? 1 : 0);
-          messageTd.textContent = preview + (mediaCount > 1 ? ` 📎x${mediaCount}` : (mediaCount === 1 ? ' 📎' : ''));
+          if (Array.isArray(m.sequence) && m.sequence.length > 0) {
+            messageTd.textContent = preview + ` 🔢 séquence de ${m.sequence.length} étape(s)`;
+          } else {
+            const mediaCount = Array.isArray(m.media) ? m.media.length : (m.mediaUrl ? 1 : 0);
+            messageTd.textContent = preview + (mediaCount > 1 ? ` 📎x${mediaCount}` : (mediaCount === 1 ? ' 📎' : ''));
+          }
 
           const scheduledTd = document.createElement('td');
           scheduledTd.textContent = new Date(m.scheduledAt).toLocaleString();

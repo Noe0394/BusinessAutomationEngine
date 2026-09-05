@@ -302,9 +302,16 @@ async function waitForConnection(campaign) {
   }
 }
 
-async function runCampaignQueue(campaign, recipients, message, options = {}) {
-  const { delaySeconds, batchSize, mediaList } = options;
+// sequence (tableau) porte la campagne à envoyer : chaque étape est soit
+// { type: 'text', text } soit { type: 'media', buffer, mimetype, filename },
+// envoyée dans l'ordre à chaque destinataire avec un court délai (2-5s par
+// défaut, paramétrable) entre chaque étape — pour simuler une frappe
+// naturelle, distinct du délai (8-15s) appliqué entre deux destinataires.
+async function runCampaignQueue(campaign, recipients, options = {}) {
+  const { delaySeconds, batchSize, sequence, sequenceDelayMinMs, sequenceDelayMaxMs } = options;
   const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipients.length;
+  const seqMinMs = Number.isFinite(sequenceDelayMinMs) ? sequenceDelayMinMs : 2000;
+  const seqMaxMs = Number.isFinite(sequenceDelayMaxMs) ? Math.max(seqMinMs, sequenceDelayMaxMs) : Math.max(seqMinMs, 5000);
 
   for (let i = 0; i < recipients.length; i += 1) {
     if (campaign.stopRequested) {
@@ -325,20 +332,20 @@ async function runCampaignQueue(campaign, recipients, message, options = {}) {
     let status = 'failed';
 
     try {
-      if (Array.isArray(mediaList) && mediaList.length > 0) {
-        // Plusieurs pièces jointes combinées (image + vidéo + PDF...) :
-        // WhatsApp ne permet pas de les regrouper dans un seul message, donc
-        // elles partent en rafale au même destinataire — la légende (message)
-        // n'est portée que par la première, pour ne pas la répéter.
-        for (let m = 0; m < mediaList.length; m += 1) {
-          await whatsapp.sendMedia(to, { ...mediaList[m], caption: m === 0 ? message : undefined });
+      for (let s = 0; s < sequence.length; s += 1) {
+        const step = sequence[s];
+        if (step.type === 'media') {
+          await whatsapp.sendMedia(to, step);
+        } else {
+          await whatsapp.sendMessage(to, step.text);
         }
-      } else {
-        await whatsapp.sendMessage(to, message);
+        if (s < sequence.length - 1) {
+          await sleep(randomDelay(seqMinMs, seqMaxMs));
+        }
       }
       status = 'delivered';
       campaign.success += 1;
-      console.log(`Campagne: message envoyé à ${to} (${i + 1}/${recipients.length}).`);
+      console.log(`Campagne: séquence envoyée à ${to} (${i + 1}/${recipients.length}).`);
     } catch (err) {
       campaign.failed += 1;
       console.error(`Campagne: échec de l'envoi à ${to}:`, err);
@@ -363,7 +370,7 @@ async function runCampaignQueue(campaign, recipients, message, options = {}) {
   console.log('Campagne: terminée.');
 }
 
-function startCampaign(recipients, message, options = {}) {
+function startCampaign(recipients, options = {}) {
   if (currentCampaign && currentCampaign.status === 'running') {
     throw new Error('CAMPAIGN_IN_PROGRESS');
   }
@@ -383,7 +390,7 @@ function startCampaign(recipients, message, options = {}) {
 
   const campaign = currentCampaign;
 
-  runCampaignQueue(campaign, recipients, message, options).catch((err) => {
+  runCampaignQueue(campaign, recipients, options).catch((err) => {
     console.error('Erreur pendant la campagne:', err);
     campaign.status = 'stopped';
     campaign.paused = false;
@@ -633,6 +640,28 @@ function resolveKeywordRuleMedia(rule) {
   return resolveMediaReference(rule, KEYWORD_MEDIA_DIR);
 }
 
+// entry.sequence (tableau, voir queues/scheduled_messages.js et
+// runCampaignQueue pour l'équivalent côté envoi immédiat) : résout chaque
+// étape média en buffer, en conservant l'ordre et les étapes texte telles
+// quelles. Retourne null si l'entrée ne porte pas de séquence (programmation
+// classique message + médias, voir resolveScheduledMediaList).
+async function resolveScheduledSequence(entry) {
+  if (!Array.isArray(entry.sequence) || entry.sequence.length === 0) {
+    return null;
+  }
+
+  const resolved = [];
+  for (const step of entry.sequence) {
+    if (step.type === 'media') {
+      const media = await resolveMediaReference(step, SCHEDULED_MEDIA_DIR);
+      if (media) resolved.push({ ...media, type: 'media' });
+    } else {
+      resolved.push({ type: 'text', text: step.text });
+    }
+  }
+  return resolved;
+}
+
 async function dispatchScheduledWhatsapp(entry, mediaList) {
   let recipients = entry.recipients;
 
@@ -645,11 +674,30 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
     recipients = Array.from(merged);
   }
 
+  const sequence = await resolveScheduledSequence(entry);
+  const seqMinMs = Math.max(1, entry.sequenceDelayMinSeconds || 2) * 1000;
+  const seqMaxMs = Math.max(seqMinMs, (entry.sequenceDelayMaxSeconds || 5) * 1000);
+
   const results = [];
   for (let i = 0; i < recipients.length; i += 1) {
     const to = normalizeJid(recipients[i]);
     try {
-      if (Array.isArray(mediaList) && mediaList.length > 0) {
+      if (sequence) {
+        // Séquençage / Envoi Multi-Messages : chaque étape part comme un
+        // message distinct, dans l'ordre choisi, avec un court délai entre
+        // deux étapes pour simuler une frappe naturelle.
+        for (let s = 0; s < sequence.length; s += 1) {
+          const step = sequence[s];
+          if (step.type === 'media') {
+            await whatsapp.sendMedia(to, step);
+          } else {
+            await whatsapp.sendMessage(to, step.text);
+          }
+          if (s < sequence.length - 1) {
+            await sleep(randomDelay(seqMinMs, seqMaxMs));
+          }
+        }
+      } else if (Array.isArray(mediaList) && mediaList.length > 0) {
         // Rafale de pièces jointes au même destinataire (voir
         // runCampaignQueue pour la même logique côté envoi immédiat) : la
         // légende n'est portée que par la première.
@@ -852,7 +900,7 @@ async function handleNaturalMessage(message) {
     const delaySeconds = delaySecondsRaw ? parseFloat(delaySecondsRaw) : undefined;
 
     try {
-      startCampaign(recipients, campaignMessage.trim(), { delaySeconds });
+      startCampaign(recipients, { sequence: [{ type: 'text', text: campaignMessage.trim() }], delaySeconds });
     } catch (err) {
       if (err.message === 'CAMPAIGN_IN_PROGRESS') {
         return 'Une campagne est déjà en cours. Attendez sa fin ou interrompez-la avant d\'en lancer une nouvelle.';
@@ -1295,9 +1343,9 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
   }
 });
 
-app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload.array('media', 5), async (req, res) => {
-  const { message, groupId, delaySeconds, batchSize } = req.body;
-  let { recipients, groupIds } = req.body;
+app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload.array('media', 10), async (req, res) => {
+  const { message, groupId, delaySeconds, batchSize, sequenceDelayMin, sequenceDelayMax } = req.body;
+  let { recipients, groupIds, sequence } = req.body;
 
   if (typeof recipients === 'string') {
     try {
@@ -1333,26 +1381,79 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload
     }
   }
 
-  if (!Array.isArray(recipients) || recipients.length === 0 || !message) {
+  if (!Array.isArray(recipients) || recipients.length === 0) {
     return res.status(400).json({
-      error: 'Fournissez "recipients" (tableau ou liste), "groupId" ou "groupIds", ainsi qu\'un "message".',
+      error: 'Fournissez "recipients" (tableau ou liste), "groupId" ou "groupIds".',
     });
+  }
+
+  if (typeof sequence === 'string') {
+    try {
+      sequence = JSON.parse(sequence);
+    } catch (err) {
+      sequence = null;
+    }
+  }
+
+  const files = req.files || [];
+
+  // sequence (tableau, voir Séquençage / Envoi Multi-Messages) décrit l'ordre
+  // exact des étapes ({type:'text', text} ou {type:'media'}) ; les étapes
+  // média consomment les fichiers téléversés dans le même ordre. Sans
+  // "sequence" fournie, on retombe sur l'ancien comportement (un seul texte +
+  // pièces jointes envoyées à la suite), pour ne rien casser côté appelants
+  // existants.
+  let resolvedSequence;
+  if (Array.isArray(sequence) && sequence.length > 0) {
+    resolvedSequence = [];
+    let fileIdx = 0;
+    for (const step of sequence) {
+      if (step && step.type === 'media') {
+        const file = files[fileIdx];
+        fileIdx += 1;
+        if (!file) {
+          return res.status(400).json({
+            error: 'Le nombre de fichiers envoyés ne correspond pas au nombre d\'étapes média de la séquence.',
+          });
+        }
+        resolvedSequence.push({ buffer: file.buffer, mimetype: file.mimetype, filename: file.originalname, type: 'media' });
+      } else {
+        resolvedSequence.push({ type: 'text', text: String((step && step.text) || '') });
+      }
+    }
+    if (fileIdx !== files.length) {
+      return res.status(400).json({
+        error: 'Le nombre de fichiers envoyés ne correspond pas au nombre d\'étapes média de la séquence.',
+      });
+    }
+  } else {
+    resolvedSequence = [];
+    if (message) resolvedSequence.push({ type: 'text', text: message });
+    files.forEach((file) => {
+      resolvedSequence.push({ buffer: file.buffer, mimetype: file.mimetype, filename: file.originalname, type: 'media' });
+    });
+  }
+
+  if (resolvedSequence.length === 0) {
+    return res.status(400).json({ error: 'Fournissez au moins un message texte ou un média dans la séquence.' });
   }
 
   const fixedDelaySeconds = delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined;
   const parsedBatchSize = batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined;
-  const mediaList = (req.files || []).map((file) => ({
-    buffer: file.buffer,
-    mimetype: file.mimetype,
-    filename: file.originalname,
-  }));
+  // Délai court entre les messages d'une même séquence (2-5s par défaut,
+  // pour simuler une frappe naturelle) — distinct du délai plus long
+  // (delaySeconds, 8-15s) appliqué entre deux destinataires différents.
+  const seqDelayMinMs = Math.max(1, parseFloat(sequenceDelayMin) || 2) * 1000;
+  const seqDelayMaxMs = Math.max(seqDelayMinMs, (parseFloat(sequenceDelayMax) || 5) * 1000);
 
   let campaign;
   try {
-    campaign = startCampaign(recipients, message, {
+    campaign = startCampaign(recipients, {
       delaySeconds: fixedDelaySeconds,
       batchSize: parsedBatchSize,
-      mediaList,
+      sequence: resolvedSequence,
+      sequenceDelayMinMs: seqDelayMinMs,
+      sequenceDelayMaxMs: seqDelayMaxMs,
     });
   } catch (err) {
     if (err.message === 'CAMPAIGN_IN_PROGRESS') {
@@ -1368,7 +1469,7 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload
     total: campaign.total,
     delaySeconds: fixedDelaySeconds || '8-15 (aléatoire)',
     batchSize: parsedBatchSize || recipients.length,
-    media: mediaList.length > 0 ? mediaList.map((m) => m.filename) : null,
+    steps: resolvedSequence.length,
   });
 });
 
@@ -2696,13 +2797,21 @@ app.get('/api/scheduled-messages', requireAccess, (req, res) => {
   res.status(200).json({ messages: visible });
 });
 
+function clampSeqDelaySeconds(value, fallback) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 30) : fallback;
+}
+
 app.post(
   '/api/scheduled-messages',
   requireAccess,
-  upload.array('media', 5),
+  upload.array('media', 10),
   async (req, res) => {
-    const { channel, recipientType, message, mediaUrl, scheduledAt } = req.body;
-    let { recipients } = req.body;
+    const {
+      channel, recipientType, message, mediaUrl, scheduledAt,
+      sequenceDelayMin, sequenceDelayMax,
+    } = req.body;
+    let { recipients, sequence } = req.body;
     const files = req.files || [];
 
     if (typeof recipients === 'string') {
@@ -2710,6 +2819,13 @@ app.post(
         recipients = JSON.parse(recipients);
       } catch (err) {
         recipients = recipients.split(/[,\n]/).map((r) => r.trim()).filter(Boolean);
+      }
+    }
+    if (typeof sequence === 'string') {
+      try {
+        sequence = JSON.parse(sequence);
+      } catch (err) {
+        sequence = null;
       }
     }
 
@@ -2722,37 +2838,77 @@ app.post(
     if (!scheduledAt || Number.isNaN(new Date(scheduledAt).getTime())) {
       return res.status(400).json({ error: 'Le champ "scheduledAt" (date/heure d\'envoi ISO) est requis et doit être une date valide.' });
     }
-    if (!message && files.length === 0 && !mediaUrl) {
-      return res.status(400).json({ error: 'Fournissez un "message" et/ou un média (fichier(s) joint(s) ou "mediaUrl").' });
-    }
     if (channel !== 'facebook_page' && (!Array.isArray(recipients) || recipients.length === 0)) {
       return res.status(400).json({ error: 'Fournissez "recipients" (destinataires ou groupes ciblés) pour ce canal.' });
     }
-    // Plusieurs pièces jointes combinées en un seul envoi (image + vidéo +
-    // PDF...) : seul WhatsApp sait aujourd'hui les envoyer toutes (voir
-    // dispatchScheduledWhatsapp) — Telegram/Facebook n'utiliseraient que la
-    // première, ce qui surprendrait silencieusement l'utilisateur.
-    if (files.length > 1 && channel !== 'whatsapp') {
+
+    // Séquençage / Envoi Multi-Messages (voir queues/scheduled_messages.js) :
+    // une suite ordonnée de textes/médias, réservée à WhatsApp — Telegram et
+    // Facebook restent sur le modèle classique (un message + médias)
+    // ci-dessous.
+    const hasSequence = Array.isArray(sequence) && sequence.length > 0;
+    if (hasSequence && channel !== 'whatsapp') {
       return res.status(400).json({
-        error: 'Plusieurs pièces jointes en un seul envoi ne sont prises en charge que pour le canal WhatsApp.',
-      });
-    }
-    if (files.some((f) => f.mimetype === 'application/pdf') && channel === 'facebook_page') {
-      return res.status(400).json({
-        error: 'L\'API Graph de Meta ne permet pas de joindre un PDF à une publication de Page ou de Groupe. '
-          + 'Hébergez le PDF ailleurs et partagez son lien dans le message.',
+        error: 'La séquence multi-messages n\'est prise en charge que pour le canal WhatsApp.',
       });
     }
 
+    let sequenceItems = null;
     let mediaItems = [];
-    if (files.length > 0) {
-      mediaItems = files.map((file) => {
-        const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-        fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), file.buffer);
-        return { mediaUrl: `local:${safeName}`, mediaMimetype: file.mimetype, mediaFilename: file.originalname };
-      });
-    } else if (mediaUrl) {
-      mediaItems = [{ mediaUrl, mediaMimetype: null, mediaFilename: null }];
+
+    if (hasSequence) {
+      sequenceItems = [];
+      let fileIdx = 0;
+      for (const step of sequence) {
+        if (step && step.type === 'media') {
+          const file = files[fileIdx];
+          fileIdx += 1;
+          if (!file) {
+            return res.status(400).json({
+              error: 'Le nombre de fichiers envoyés ne correspond pas au nombre d\'étapes média de la séquence.',
+            });
+          }
+          const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+          fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), file.buffer);
+          sequenceItems.push({ type: 'media', mediaUrl: `local:${safeName}`, mediaMimetype: file.mimetype, mediaFilename: file.originalname });
+        } else {
+          sequenceItems.push({ type: 'text', text: String((step && step.text) || '') });
+        }
+      }
+      if (fileIdx !== files.length) {
+        return res.status(400).json({
+          error: 'Le nombre de fichiers envoyés ne correspond pas au nombre d\'étapes média de la séquence.',
+        });
+      }
+    } else {
+      if (!message && files.length === 0 && !mediaUrl) {
+        return res.status(400).json({ error: 'Fournissez un "message" et/ou un média (fichier(s) joint(s) ou "mediaUrl").' });
+      }
+      // Plusieurs pièces jointes combinées en un seul envoi (image + vidéo +
+      // PDF...) : seul WhatsApp sait aujourd'hui les envoyer toutes (voir
+      // dispatchScheduledWhatsapp) — Telegram/Facebook n'utiliseraient que la
+      // première, ce qui surprendrait silencieusement l'utilisateur.
+      if (files.length > 1 && channel !== 'whatsapp') {
+        return res.status(400).json({
+          error: 'Plusieurs pièces jointes en un seul envoi ne sont prises en charge que pour le canal WhatsApp.',
+        });
+      }
+      if (files.some((f) => f.mimetype === 'application/pdf') && channel === 'facebook_page') {
+        return res.status(400).json({
+          error: 'L\'API Graph de Meta ne permet pas de joindre un PDF à une publication de Page ou de Groupe. '
+            + 'Hébergez le PDF ailleurs et partagez son lien dans le message.',
+        });
+      }
+
+      if (files.length > 0) {
+        mediaItems = files.map((file) => {
+          const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+          fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), file.buffer);
+          return { mediaUrl: `local:${safeName}`, mediaMimetype: file.mimetype, mediaFilename: file.originalname };
+        });
+      } else if (mediaUrl) {
+        mediaItems = [{ mediaUrl, mediaMimetype: null, mediaFilename: null }];
+      }
     }
 
     const entry = scheduledMessages.create({
@@ -2761,6 +2917,9 @@ app.post(
       recipients: Array.isArray(recipients) ? recipients : [],
       message,
       media: mediaItems,
+      sequence: sequenceItems,
+      sequenceDelayMinSeconds: hasSequence ? clampSeqDelaySeconds(sequenceDelayMin, 2) : undefined,
+      sequenceDelayMaxSeconds: hasSequence ? clampSeqDelaySeconds(sequenceDelayMax, 5) : undefined,
       scheduledAt: new Date(scheduledAt).toISOString(),
     });
 

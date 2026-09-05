@@ -54,11 +54,37 @@ function get(id) {
  * Telegram/Facebook n'utilisent que la première. "mediaUrl"/"mediaMimetype"/
  * "mediaFilename" restent en plus, dérivés de ce premier élément, pour tout
  * appelant qui lit encore ces champs singuliers directement (rétrocompat).
+ *
+ * "sequence" (tableau, WhatsApp uniquement) porte une campagne "Séquençage /
+ * Envoi Multi-Messages" : une suite ordonnée d'étapes { type: 'text', text }
+ * ou { type: 'media', mediaUrl, mediaMimetype, mediaFilename }, envoyées une
+ * à une avec un court délai (sequenceDelayMinSeconds/MaxSeconds, 2-5s par
+ * défaut) entre chaque étape — voir dispatchScheduledWhatsapp. Quand elle est
+ * fournie, elle prime sur "message"/"media" pour ce canal ; ces derniers
+ * restent renseignés (dérivés du premier texte/média de la séquence) pour que
+ * l'aperçu dans la liste des programmations (voir dashboard.html) continue de
+ * fonctionner sans traitement spécial.
  */
-function create({ channel, recipientType, recipients, message, mediaUrl, mediaMimetype, mediaFilename, media, scheduledAt, keyword }) {
-  const normalizedMedia = Array.isArray(media) && media.length > 0
-    ? media
-    : (mediaUrl ? [{ mediaUrl, mediaMimetype: mediaMimetype || null, mediaFilename: mediaFilename || null }] : []);
+function create({
+  channel, recipientType, recipients, message, mediaUrl, mediaMimetype, mediaFilename, media,
+  sequence, sequenceDelayMinSeconds, sequenceDelayMaxSeconds, scheduledAt, keyword,
+}) {
+  const normalizedSequence = Array.isArray(sequence) && sequence.length > 0 ? sequence : null;
+
+  let normalizedMedia;
+  let derivedMessage = message || '';
+
+  if (normalizedSequence) {
+    normalizedMedia = normalizedSequence.filter((s) => s.type === 'media');
+    if (!derivedMessage) {
+      const firstText = normalizedSequence.find((s) => s.type === 'text');
+      derivedMessage = firstText ? firstText.text : '';
+    }
+  } else {
+    normalizedMedia = Array.isArray(media) && media.length > 0
+      ? media
+      : (mediaUrl ? [{ mediaUrl, mediaMimetype: mediaMimetype || null, mediaFilename: mediaFilename || null }] : []);
+  }
   const primary = normalizedMedia[0] || null;
 
   const entry = {
@@ -66,11 +92,14 @@ function create({ channel, recipientType, recipients, message, mediaUrl, mediaMi
     channel,
     recipientType: recipientType || null,
     recipients: Array.isArray(recipients) ? recipients : [],
-    message: message || '',
+    message: derivedMessage,
     media: normalizedMedia,
     mediaUrl: primary ? primary.mediaUrl : null,
     mediaMimetype: primary ? primary.mediaMimetype : null,
     mediaFilename: primary ? primary.mediaFilename : null,
+    sequence: normalizedSequence,
+    sequenceDelayMinSeconds: Number.isFinite(sequenceDelayMinSeconds) ? sequenceDelayMinSeconds : 2,
+    sequenceDelayMaxSeconds: Number.isFinite(sequenceDelayMaxSeconds) ? sequenceDelayMaxSeconds : 5,
     // Étiquette purement informative (ex : "RECETTE") pour repérer un post
     // programmé dans le tableau récapitulatif — contrairement aux mots-clés
     // du module de Capture de Prospects (models/keyword_rules.js), celle-ci
