@@ -21,6 +21,8 @@ const oauthConfig = require('./oauth_config');
 const scheduledMessages = require('./queues/scheduled_messages');
 const contactsStore = require('./models/contact');
 const keywordRules = require('./models/keyword_rules');
+const scrapedNumbers = require('./models/scrapedNumbers');
+const groupScraper = require('./lib/groupScraper');
 const { replaceVariables, normalizeJid, jidToE164, normalizeRecipientEntry } = require('./lib/whatsappRecipients');
 const { resolveSpintax } = require('./lib/spintax');
 
@@ -49,7 +51,13 @@ const videoUpload = multer({
     return cb(new Error('INVALID_VIDEO_TYPE'));
   },
 });
-const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
+// Obscurcissement Frontend : sert la version obscurcie (voir
+// scripts/build-dashboard.js, "npm run build") quand elle a été générée,
+// retombe sur la source lisible sinon (développement local sans build) —
+// jamais l'inverse.
+const DASHBOARD_BUILT_PATH = path.join(__dirname, 'public', 'dist', 'dashboard.html');
+const DASHBOARD_SOURCE_PATH = path.join(__dirname, 'public', 'dashboard.html');
+const DASHBOARD_PATH = fs.existsSync(DASHBOARD_BUILT_PATH) ? DASHBOARD_BUILT_PATH : DASHBOARD_SOURCE_PATH;
 const ADMIN_PORTAL_PATH = path.join(__dirname, 'public', 'admin.html');
 const PRIVACY_POLICY_PATH = path.join(__dirname, 'public', 'legal', 'privacy.html');
 const TERMS_OF_SERVICE_PATH = path.join(__dirname, 'public', 'legal', 'terms.html');
@@ -135,6 +143,49 @@ function printAndWriteAdminAccessInstructions() {
     console.error('Impossible d\'écrire ADMIN_ACCESS.md :', err.message);
   }
 }
+
+// ---------- Verrouillage CORS (protection de l'API / de la propriété intellectuelle) ----------
+// N'autorise que l'origine du Dashboard officiel à lire les réponses de
+// cette API depuis un navigateur — une page web tierce qui tenterait
+// d'appeler ces routes via fetch()/XHR depuis le navigateur d'un client (en
+// s'appuyant sur une session déjà ouverte) reçoit un 403 avant d'atteindre
+// la moindre route métier. DASHBOARD_ORIGIN permet d'ajouter d'autres
+// origines de confiance (domaine personnalisé, environnement local) sous
+// forme d'une liste séparée par des virgules ; à défaut, seule l'origine de
+// déploiement (PUBLIC_BASE_URL) est autorisée. Sans en-tête Origin (appel
+// serveur-à-serveur, webhook Meta, client non-navigateur authentifié par
+// clé de licence) : CORS ne s'applique pas, la requête suit son cours
+// normalement (l'authentification applicative reste gérée par requireAccess/
+// requireAdmin plus loin, indépendamment de cette origine).
+const ALLOWED_DASHBOARD_ORIGINS = (process.env.DASHBOARD_ORIGIN || PUBLIC_BASE_URL)
+  .split(',')
+  .map((o) => o.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
+function lockCorsToOfficialDashboard(req, res, next) {
+  const origin = req.get('origin');
+
+  if (!origin) {
+    return next();
+  }
+
+  if (!ALLOWED_DASHBOARD_ORIGINS.includes(origin.replace(/\/$/, ''))) {
+    return res.status(403).json({ error: 'Origine non autorisée.' });
+  }
+
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-admin-password,x-license-key,x-device-id');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  return next();
+}
+
+app.use(lockCorsToOfficialDashboard);
 
 // verify: capture le corps brut pour la vérification de signature HMAC des
 // webhooks Meta (X-Hub-Signature-256, voir POST /api/facebook/webhook) sans
@@ -1105,18 +1156,26 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
     return res.status(400).json({ error: 'Fournissez "groupIds" (tableau d\'identifiants de groupes sélectionnés).' });
   }
 
+  // Group Scraper (voir lib/groupScraper.js) : sur une grosse sélection de
+  // groupes, traite par tranches de 20, avec une pause de 3s (non bloquante)
+  // entre la lecture de chaque groupe, et écrit les numéros extraits sur
+  // disque groupe par groupe plutôt que de tout garder en mémoire vive le
+  // temps de toute l'extraction — évite la saturation RAM et les timeouts
+  // réseau sur une instance Render à faible mémoire. Un groupe en échec (ex:
+  // rate-overlimit WhatsApp) est consigné puis on passe au suivant, sans
+  // jamais interrompre le reste de l'extraction.
+  let runId;
   try {
-    // Un même membre présent dans plusieurs groupes cochés n'apparaît qu'une
-    // fois (Map indexée par le vrai JID téléphone). "telephone" est extrait
-    // de participant.jid, PAS participant.id : pour un participant ayant
-    // activé la confidentialité WhatsApp "masquer mon numéro", .id porte un
-    // identifiant anonyme (@lid) sans rapport avec son numéro réel — voir
-    // extractGroupMetadata() dans Baileys (lib/Socket/groups.js), qui
-    // distingue explicitement .id (adressage, peut être un @lid) de .jid (le
-    // vrai numéro, dérivé de l'attribut phone_number quand .id est un @lid).
-    // Un participant dont le numéro réel reste indérivable (confidentialité +
-    // jamais "rencontré" par ce compte) est omis du fichier plutôt que d'y
-    // laisser une ligne avec un téléphone vide ou erroné.
+    // extractRows() : "telephone" est extrait de participant.jid, PAS
+    // participant.id : pour un participant ayant activé la confidentialité
+    // WhatsApp "masquer mon numéro", .id porte un identifiant anonyme (@lid)
+    // sans rapport avec son numéro réel — voir extractGroupMetadata() dans
+    // Baileys (lib/Socket/groups.js), qui distingue explicitement .id
+    // (adressage, peut être un @lid) de .jid (le vrai numéro, dérivé de
+    // l'attribut phone_number quand .id est un @lid). Un participant dont le
+    // numéro réel reste indérivable (confidentialité + jamais "rencontré" par
+    // ce compte) est omis du fichier plutôt que d'y laisser une ligne avec un
+    // téléphone vide ou erroné.
     //
     // "nom" vient du cache opportuniste de noms publics (pushName/notify)
     // constitué par l'adaptateur au fil des messages/contacts déjà vus par ce
@@ -1124,25 +1183,37 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
     // téléphone puis, à défaut, sous le @lid observé pour ce même
     // participant — WhatsApp n'expose aucune API pour récupérer le nom
     // public d'un numéro qu'on n'a jamais "rencontré", donc ce champ peut
-    // rester vide.
-    const merged = new Map(); // phoneJid -> lidJid (repli pour la recherche du nom)
-    for (const groupId of groupIds) {
-      const participants = await req.whatsapp.getGroupParticipants(groupId);
-      (participants || []).forEach((p) => {
+    // rester vide. Un même membre présent dans plusieurs groupes cochés
+    // n'apparaît qu'une fois (dédoublonné par phoneJid dans le run persisté,
+    // voir models/scrapedNumbers.js#appendRows).
+    function extractRows(groupId, participants) {
+      const rows = {};
+      participants.forEach((p) => {
         const phoneJid = p.jid && !p.jid.endsWith('@lid')
           ? p.jid
           : (p.id && !p.id.endsWith('@lid') ? p.id : null);
-        if (phoneJid) {
-          merged.set(phoneJid, p.lid || (p.id !== phoneJid ? p.id : null));
-        }
+        if (!phoneJid) return;
+        const lidJid = p.lid || (p.id !== phoneJid ? p.id : null);
+        rows[phoneJid] = {
+          telephone: jidToE164(phoneJid),
+          nom: req.whatsapp.getContactName(phoneJid) || (lidJid ? req.whatsapp.getContactName(lidJid) : '') || '',
+        };
       });
+      return rows;
     }
 
-    const rows = Array.from(merged.entries()).map(([phoneJid, lidJid]) => ({
-      telephone: jidToE164(phoneJid),
-      nom: req.whatsapp.getContactName(phoneJid) || (lidJid ? req.whatsapp.getContactName(lidJid) : '') || '',
-    }));
+    const { runId: scrapeRunId, errors } = await groupScraper.scrapeGroupsToStore(
+      groupIds,
+      (groupId) => req.whatsapp.getGroupParticipants(groupId),
+      extractRows,
+    );
+    runId = scrapeRunId;
 
+    if (errors.length > 0) {
+      res.setHeader('X-Group-Scraper-Errors', String(errors.length));
+    }
+
+    const rows = scrapedNumbers.listRun(runId);
     const sheet = XLSX.utils.json_to_sheet(rows);
 
     // Force la colonne "telephone" (A) en TEXTE (format '@') : sans ça,
@@ -1174,11 +1245,18 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
   } catch (err) {
     console.error('Erreur lors de l\'extraction des membres des groupes:', err);
     res.status(500).json({ error: describeGroupQueryError(err) || 'Échec de l\'extraction des membres des groupes sélectionnés.' });
+  } finally {
+    // Le run persisté (voir models/scrapedNumbers.js) n'est qu'un tampon de
+    // travail pour cette requête : jamais conservé au-delà, qu'elle réussisse
+    // ou échoue.
+    if (runId) {
+      scrapedNumbers.clearRun(runId);
+    }
   }
 });
 
 app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attachWhatsapp, whatsappMediaUpload.array('media', 10), async (req, res) => {
-  const { message, groupId, delaySeconds, batchSize, sequenceDelayMin, sequenceDelayMax } = req.body;
+  const { message, groupId, delaySeconds, batchSize, batchPauseSeconds, sequenceDelayMin, sequenceDelayMax } = req.body;
   let { recipients, groupIds, sequence } = req.body;
 
   if (typeof recipients === 'string') {
@@ -1274,9 +1352,10 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
 
   const fixedDelaySeconds = delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined;
   const parsedBatchSize = batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined;
-  // Délai court entre les messages d'une même séquence (2-5s par défaut,
-  // pour simuler une frappe naturelle) — distinct du délai plus long
-  // (delaySeconds, 8-15s) appliqué entre deux destinataires différents.
+  const parsedBatchPauseSeconds = batchPauseSeconds !== undefined && batchPauseSeconds !== '' ? parseFloat(batchPauseSeconds) : undefined;
+  // Délai court entre les messages d'une même séquence (média puis texte,
+  // 2-5s par défaut) — distinct du délai fixe (delaySeconds, 15s par défaut)
+  // appliqué entre deux destinataires différents.
   const seqDelayMinMs = Math.max(1, parseFloat(sequenceDelayMin) || 2) * 1000;
   const seqDelayMaxMs = Math.max(seqDelayMinMs, (parseFloat(sequenceDelayMax) || 5) * 1000);
 
@@ -1285,6 +1364,7 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
     campaign = await req.campaignEngine.start(recipients, {
       delaySeconds: fixedDelaySeconds,
       batchSize: parsedBatchSize,
+      batchPauseSeconds: parsedBatchPauseSeconds,
       sequence: resolvedSequence,
       sequenceDelayMinMs: seqDelayMinMs,
       sequenceDelayMaxMs: seqDelayMaxMs,
@@ -1301,8 +1381,9 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
   res.status(202).json({
     status: 'campaign_started',
     total: campaign.total,
-    delaySeconds: fixedDelaySeconds || '8-15 (aléatoire)',
+    delaySeconds: fixedDelaySeconds || 15,
     batchSize: parsedBatchSize || recipients.length,
+    batchPauseSeconds: parsedBatchPauseSeconds || (fixedDelaySeconds || 15) * 3,
     steps: resolvedSequence.length,
   });
 });
@@ -2342,7 +2423,7 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), attach
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
   }
 
-  const { message, delaySeconds, batchSize } = req.body;
+  const { message, delaySeconds, batchSize, batchPauseSeconds } = req.body;
   let { recipients } = req.body;
 
   if (typeof recipients === 'string') {
@@ -2361,6 +2442,7 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), attach
 
   const fixedDelaySeconds = delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined;
   const parsedBatchSize = batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined;
+  const parsedBatchPauseSeconds = batchPauseSeconds !== undefined && batchPauseSeconds !== '' ? parseFloat(batchPauseSeconds) : undefined;
   const media = req.file
     ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
     : null;
@@ -2370,14 +2452,16 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), attach
   res.status(202).json({
     status: 'tg_queue_started',
     total: recipients.length,
-    delaySeconds: fixedDelaySeconds || '10-15 (aléatoire)',
+    delaySeconds: fixedDelaySeconds || 12,
     batchSize: parsedBatchSize || recipients.length,
+    batchPauseSeconds: parsedBatchPauseSeconds || (fixedDelaySeconds || 12) * 3,
     media: media ? media.filename : null,
   });
 
   tenantTelegram.sendBulk(recipients, message, {
     delaySeconds: fixedDelaySeconds,
     batchSize: parsedBatchSize,
+    batchPauseSeconds: parsedBatchPauseSeconds,
     media,
   }).then((results) => {
     const success = results.filter((r) => r.status === 'delivered').length;
@@ -2431,7 +2515,7 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
   }
 
-  const { message, minDelaySeconds, maxDelaySeconds, maxPerCycle } = req.body;
+  const { message, delaySeconds, minDelaySeconds, maxDelaySeconds, batchSize, batchPauseSeconds, maxPerCycle } = req.body;
   let { recipients } = req.body;
 
   if (typeof recipients === 'string') {
@@ -2455,8 +2539,14 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
   let campaign;
   try {
     campaign = await req.telegramCampaignEngine.start(recipients, message, {
+      // Délai fixe configurable, prioritaire sur la fenêtre min/max
+      // (voir queues/telegramCampaignEngine.js) : standard demandé, sans
+      // randomisation quand une valeur précise est fournie.
+      delaySeconds: delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined,
       minDelayMs: minDelaySeconds !== undefined && minDelaySeconds !== '' ? parseFloat(minDelaySeconds) * 1000 : undefined,
       maxDelayMs: maxDelaySeconds !== undefined && maxDelaySeconds !== '' ? parseFloat(maxDelaySeconds) * 1000 : undefined,
+      batchSize: batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined,
+      batchPauseSeconds: batchPauseSeconds !== undefined && batchPauseSeconds !== '' ? parseFloat(batchPauseSeconds) : undefined,
       maxPerCycle: maxPerCycle !== undefined && maxPerCycle !== '' ? parseInt(maxPerCycle, 10) : undefined,
       media,
     });

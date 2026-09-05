@@ -3,6 +3,7 @@ const path = require('path');
 const githubStore = require('../githubStore');
 const { replaceVariables, normalizeRecipientEntry } = require('../lib/whatsappRecipients');
 const { resolveSpintax } = require('../lib/spintax');
+const circuitBreaker = require('../lib/circuitBreaker');
 
 // Persistance de la progression d'une campagne WhatsApp, tenant par tenant
 // (voir adapters/whatsappManager.js) : sur un environnement Docker/Render où
@@ -62,6 +63,12 @@ function sleep(ms) {
 function randomDelay(minMs, maxMs) {
   return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
 }
+
+// Durée de la pause appliquée à la file d'attente dès qu'un contact répond
+// pendant l'envoi d'une campagne (voir CampaignEngine#_pauseForIncomingReply) :
+// laisse le temps à l'opérateur de lire/traiter la réponse avant que la
+// campagne ne reprenne l'envoi au destinataire suivant.
+const INCOMING_REPLY_PAUSE_MS = 30_000;
 
 // Délai non-bloquant, interrompable dès que shouldStop() devient vrai (ex:
 // STOP demandé par l'utilisateur en pleine attente entre deux destinataires).
@@ -191,6 +198,96 @@ class CampaignEngine {
     this.persistableSequence = null; // forme sérialisable (mediaFile au lieu de buffer)
     this.resolvedSequence = null; // forme utilisable pour l'envoi (buffer réel)
     this.remoteStore = githubStore.createStore(remoteFilePath(tenantId));
+    // Horodatage (Date.now()) jusqu'auquel la file d'attente doit rester en
+    // pause suite à une réponse entrante — 0 tant qu'aucune réponse n'a été
+    // reçue. Propriété de l'instance (pas de campaign) : elle n'a pas besoin
+    // de survivre à un redémarrage du process, contrairement au reste de
+    // l'état de campagne.
+    this.incomingPauseUntil = 0;
+    if (typeof session.onIncomingMessage === 'function') {
+      session.onIncomingMessage(() => this._pauseForIncomingReply());
+    }
+    // Supervision de santé réseau et coupe-circuit (voir lib/circuitBreaker.js) :
+    // même raison que incomingPauseUntil ci-dessus pour ne pas persister cet
+    // état — c'est un signal de santé réseau "live", pas une donnée de
+    // progression de campagne.
+    this.networkHealth = new circuitBreaker.CircuitBreakerState();
+  }
+
+  // Mesure le temps de réponse d'UN envoi et alimente le détecteur de
+  // latence — voir CircuitBreakerState#recordLatency. Deux requêtes
+  // consécutives dépassant le seuil suspendent la file 15 minutes
+  // ('degraded_network') avant de reprendre normalement (l'envoi, lui, a
+  // réussi : ce n'est pas un échec, juste un signal de dégradation).
+  _recordSendLatency(elapsedMs) {
+    if (this.networkHealth.recordLatency(elapsedMs)) {
+      console.log(
+        `Campagne (tenant "${this.tenantId}"): latence élevée (${elapsedMs}ms) sur 2 requêtes consécutives — ` +
+        `statut 'degraded_network', pause de ${circuitBreaker.DEGRADED_NETWORK_PAUSE_MS / 60000} min.`,
+      );
+    }
+  }
+
+  // Bloque la file d'attente tant que le coupe-circuit est ouvert
+  // ('degraded_network' ou 'circuit_open' — voir lib/circuitBreaker.js), puis
+  // effectue un test de connexion passif (session.isConnected(), déjà tenu à
+  // jour par les écouteurs de connexion de l'adaptateur) avant de rendre la
+  // main : si le signal n'est pas nominal à l'expiration du délai, la
+  // vérification est retentée périodiquement plutôt que de reprendre
+  // l'envoi aveuglément.
+  async _waitForNetworkHold() {
+    const campaign = this.campaign;
+    const health = this.networkHealth;
+    if (!health.isHeld()) return;
+
+    campaign.paused = true;
+    this._persist();
+    console.log(
+      `Campagne (tenant "${this.tenantId}"): file en pause — statut réseau '${health.networkStatus}', ` +
+      `reprise prévue vers ${new Date(health.holdUntil).toISOString()}.`,
+    );
+
+    while (!campaign.stopRequested && health.isHeld()) {
+      await sleep(1000);
+    }
+    if (campaign.stopRequested) return;
+
+    while (!campaign.stopRequested && !this.session.isConnected()) {
+      console.log(`Campagne (tenant "${this.tenantId}"): health check négatif — nouvelle vérification dans 30s avant reprise.`);
+      await sleep(circuitBreaker.HEALTH_RECHECK_INTERVAL_MS);
+    }
+    if (campaign.stopRequested) return;
+
+    const wasCircuitOpen = health.networkStatus === 'circuit_open';
+    health.networkStatus = 'normal';
+    campaign.paused = false;
+    this._persist();
+    console.log(
+      `Campagne (tenant "${this.tenantId}"): health check nominal — reprise de l'envoi` +
+      `${wasCircuitOpen ? ' au destinataire précédemment en échec de surcharge' : ''}.`,
+    );
+  }
+
+  // Appelé par l'adaptateur WhatsApp (voir adapters/whatsapp.js) dès qu'un
+  // message entrant (hors ceux qu'on envoie soi-même) est reçu, que ce soit
+  // pendant ou en dehors d'une campagne — ne fait rien si aucune campagne
+  // n'est active. `Math.max` évite qu'une deuxième réponse arrivant pendant la
+  // pause ne la RACCOURCISSE si elle était déjà plus longue.
+  _pauseForIncomingReply() {
+    if (!this.campaign || this.campaign.status !== 'running') return;
+    const until = Date.now() + INCOMING_REPLY_PAUSE_MS;
+    if (until > this.incomingPauseUntil) {
+      this.incomingPauseUntil = until;
+      console.log(`Campagne (tenant "${this.tenantId}"): réponse entrante détectée — pause de ${INCOMING_REPLY_PAUSE_MS / 1000}s avant de reprendre l'envoi.`);
+    }
+  }
+
+  async _waitForIncomingPause() {
+    const campaign = this.campaign;
+    while (Date.now() < this.incomingPauseUntil) {
+      if (campaign.stopRequested) return;
+      await sleep(300);
+    }
   }
 
   _buildRecord() {
@@ -208,9 +305,14 @@ class CampaignEngine {
       nextIndex: this.campaign.nextIndex,
       recipients: this.campaign.recipients,
       results: this.campaign.results,
+      // Voir lib/circuitBreaker.js#toJSON : persisté pour qu'une pause de
+      // sécurité ('degraded_network'/'circuit_open') survive à un
+      // redéploiement plutôt que d'être silencieusement oubliée.
+      networkHealth: this.networkHealth.toJSON(),
       options: {
         delaySeconds: this.campaign.options.delaySeconds,
         batchSize: this.campaign.options.batchSize,
+        batchPauseSeconds: this.campaign.options.batchPauseSeconds,
         sequenceDelayMinMs: this.campaign.options.sequenceDelayMinMs,
         sequenceDelayMaxMs: this.campaign.options.sequenceDelayMaxMs,
         sequence: this.persistableSequence,
@@ -245,7 +347,10 @@ class CampaignEngine {
   getStatus() {
     if (!this.campaign) return null;
     const { total, sent, success, failed, status, paused, stopRequested, startedAt, finishedAt, results, resumeError } = this.campaign;
-    const base = { total, sent, success, failed, status, paused, stopRequested, startedAt, finishedAt, results };
+    const base = {
+      total, sent, success, failed, status, paused, stopRequested, startedAt, finishedAt, results,
+      networkStatus: this.networkHealth.networkStatus,
+    };
     return resumeError ? { ...base, resumeError } : base;
   }
 
@@ -295,14 +400,15 @@ class CampaignEngine {
   // naturelle, distinct du délai (8-15s) appliqué entre deux destinataires.
   async _run(startIndex) {
     const campaign = this.campaign;
-    const { delaySeconds, batchSize, sequenceDelayMinMs, sequenceDelayMaxMs } = campaign.options;
+    const { delaySeconds, batchSize, batchPauseSeconds, sequenceDelayMinMs, sequenceDelayMaxMs } = campaign.options;
     const recipients = campaign.recipients;
     const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipients.length;
     const seqMinMs = Number.isFinite(sequenceDelayMinMs) ? sequenceDelayMinMs : 2000;
     const seqMaxMs = Number.isFinite(sequenceDelayMaxMs) ? Math.max(seqMinMs, sequenceDelayMaxMs) : Math.max(seqMinMs, 5000);
     const sequence = this.resolvedSequence;
 
-    for (let i = startIndex; i < recipients.length; i += 1) {
+    let i = startIndex;
+    while (i < recipients.length) {
       if (campaign.stopRequested) {
         this._markRemainingInterrupted(i);
         this._persist();
@@ -319,12 +425,32 @@ class CampaignEngine {
         return;
       }
 
+      await this._waitForIncomingPause();
+
+      if (campaign.stopRequested) {
+        this._markRemainingInterrupted(i);
+        this._persist();
+        console.log(`Campagne (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
+        return;
+      }
+
+      await this._waitForNetworkHold();
+
+      if (campaign.stopRequested) {
+        this._markRemainingInterrupted(i);
+        this._persist();
+        console.log(`Campagne (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
+        return;
+      }
+
       const { to, nom } = normalizeRecipientEntry(recipients[i], this.session.getContactName);
       let status = 'failed';
+      let overloadDetected = false;
 
       try {
         for (let s = 0; s < sequence.length; s += 1) {
           const step = sequence[s];
+          const sendStartedAt = Date.now();
           if (step.type === 'media') {
             await this.session.sendMedia(to, step);
           } else {
@@ -334,16 +460,40 @@ class CampaignEngine {
             // texte identique mot pour mot, même à partir du même modèle.
             await this.session.sendMessage(to, resolveSpintax(replaceVariables(step.text, { nom })));
           }
+          this._recordSendLatency(Date.now() - sendStartedAt);
           if (s < sequence.length - 1) {
             await sleep(randomDelay(seqMinMs, seqMaxMs));
           }
         }
         status = 'delivered';
         campaign.success += 1;
+        this.networkHealth.recordSuccess();
         console.log(`Campagne (tenant "${this.tenantId}"): séquence envoyée à ${to} (${i + 1}/${recipients.length}).`);
       } catch (err) {
-        campaign.failed += 1;
-        console.error(`Campagne (tenant "${this.tenantId}"): échec de l'envoi à ${to}:`, err);
+        if (circuitBreaker.isOverloadError(err)) {
+          // Signal de surcharge du service distant (429, timeout d'ACK,
+          // reset de socket...) : ce n'est pas un échec du destinataire —
+          // on conserve son index tel quel (campaign.nextIndex reste à i)
+          // pour le RETENTER après le délai de mise en veille et un health
+          // check positif (voir _waitForNetworkHold), sans le compter ni
+          // avancer la file.
+          overloadDetected = true;
+          const backoffMs = this.networkHealth.recordOverloadFailure();
+          this._persist();
+          console.log(
+            `Campagne (tenant "${this.tenantId}"): signal de surcharge détecté (${err.message}) — ` +
+            `statut 'circuit_open', nouvelle tentative pour ${to} dans ${Math.round(backoffMs / 60000)} min (index ${i} conservé).`,
+          );
+        } else {
+          campaign.failed += 1;
+          console.error(`Campagne (tenant "${this.tenantId}"): échec de l'envoi à ${to}:`, err);
+        }
+      }
+
+      if (overloadDetected) {
+        // Ne pas incrémenter i : le prochain passage dans la boucle
+        // retentera CE MÊME destinataire, après _waitForNetworkHold().
+        continue;
       }
 
       campaign.sent += 1;
@@ -352,10 +502,24 @@ class CampaignEngine {
       this._persist();
       if (this.onActivity) this.onActivity();
 
-      if (i < recipients.length - 1 && !campaign.stopRequested) {
-        const baseDelayMs = delaySeconds ? delaySeconds * 1000 : randomDelay(8000, 15000);
-        const endOfBatch = (i + 1) % batch === 0;
-        const delayMs = endOfBatch ? baseDelayMs * 3 : baseDelayMs;
+      i += 1;
+
+      if (i < recipients.length && !campaign.stopRequested) {
+        // Délai fixe et configurable (standard, sans randomisation) : à
+        // défaut de valeur fournie, 15s reste une valeur raisonnable pour un
+        // usage normal de l'API WhatsApp.
+        const baseDelayMs = Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds * 1000 : 15_000;
+        // i a déjà été incrémenté ci-dessus : il représente ici le nombre de
+        // destinataires traités jusqu'ici (compte 1-based), pas un index.
+        const endOfBatch = i % batch === 0;
+        // batchPauseSeconds : pause après un lot, configurable indépendamment
+        // du délai par message — à défaut, on retombe sur l'ancien
+        // comportement (3x le délai par message) pour rester cohérent avec
+        // une campagne qui ne préciserait pas ce paramètre.
+        const batchPauseMs = Number.isFinite(batchPauseSeconds) && batchPauseSeconds > 0
+          ? batchPauseSeconds * 1000
+          : baseDelayMs * 3;
+        const delayMs = endOfBatch ? batchPauseMs : baseDelayMs;
         await interruptibleSleep(delayMs, () => campaign.stopRequested);
       }
     }
@@ -400,10 +564,13 @@ class CampaignEngine {
       options: {
         delaySeconds: options.delaySeconds,
         batchSize: options.batchSize,
+        batchPauseSeconds: options.batchPauseSeconds,
         sequenceDelayMinMs: options.sequenceDelayMinMs,
         sequenceDelayMaxMs: options.sequenceDelayMaxMs,
       },
     };
+    this.incomingPauseUntil = 0;
+    this.networkHealth = new circuitBreaker.CircuitBreakerState();
     this._persist();
 
     this._run(0).catch((err) => {
@@ -513,10 +680,17 @@ class CampaignEngine {
       results: record.results,
       options: record.options,
     };
+    // Restaure la pause de sécurité en cours (voir lib/circuitBreaker.js) le
+    // cas échéant, plutôt que de repartir sur un compteur d'échecs à zéro :
+    // un redéploiement survenant en pleine pause 'circuit_open' ne doit pas
+    // faire retenter l'envoi immédiatement alors que le service distant
+    // pourrait être toujours surchargé.
+    this.networkHealth = circuitBreaker.CircuitBreakerState.fromJSON(record.networkHealth);
     this._persist();
 
     console.log(
-      `Campagne (tenant "${this.tenantId}"): reprise après redémarrage à partir du destinataire ${record.nextIndex + 1}/${record.total}.`,
+      `Campagne (tenant "${this.tenantId}"): reprise après redémarrage à partir du destinataire ${record.nextIndex + 1}/${record.total}` +
+      `${this.networkHealth.isHeld() ? ` (statut réseau '${this.networkHealth.networkStatus}' restauré, en pause jusqu'à ${new Date(this.networkHealth.holdUntil).toISOString()})` : ''}.`,
     );
 
     this._run(record.nextIndex).catch((err) => {

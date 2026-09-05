@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
 const { resolveSpintax } = require('../lib/spintax');
+const circuitBreaker = require('../lib/circuitBreaker');
 
 // Persistance de la progression d'une campagne Telegram (messages directs
 // vers une liste de contacts importée), tenant par tenant — même principe
@@ -52,6 +53,16 @@ function clampDelayMs(ms) {
   if (!Number.isFinite(ms)) return null;
   return Math.min(Math.max(ms, MIN_DELAY_MS), MAX_DELAY_MS);
 }
+
+// Durée de la pause appliquée à la file d'attente dès qu'un contact répond
+// pendant l'envoi d'une campagne — même principe que
+// queues/campaignEngine.js#INCOMING_REPLY_PAUSE_MS côté WhatsApp.
+const INCOMING_REPLY_PAUSE_MS = 30_000;
+
+// Pause courte, fixe, entre l'envoi du média et celui du texte associé (voir
+// _run ci-dessous) : évite d'agréger les deux dans le même appel API, sans
+// viser une quelconque variation aléatoire.
+const MEDIA_TEXT_SEQUENCE_PAUSE_MS = 3_000;
 
 // Une campagne DM Telegram ne porte au plus qu'UNE pièce jointe (contrairement
 // à la séquence WhatsApp) : persistée une seule fois au lancement, sur le
@@ -121,6 +132,71 @@ class TelegramCampaignEngine {
     this.persistedMedia = null;
     this.resolvedMedia = null;
     this.remoteStore = githubStore.createStore(remoteFilePath(tenantId));
+    // Voir queues/campaignEngine.js#incomingPauseUntil (même principe,
+    // propriété de l'instance plutôt que de campaign : pas besoin de
+    // survivre à un redémarrage).
+    this.incomingPauseUntil = 0;
+    if (typeof session.onIncomingMessage === 'function') {
+      session.onIncomingMessage(() => this._pauseForIncomingReply());
+    }
+    // Voir lib/circuitBreaker.js — même principe que côté WhatsApp
+    // (queues/campaignEngine.js#networkHealth) : signal de santé réseau
+    // "live", non persisté.
+    this.networkHealth = new circuitBreaker.CircuitBreakerState();
+  }
+
+  // Voir queues/campaignEngine.js#_pauseForIncomingReply (même principe).
+  _pauseForIncomingReply() {
+    if (!this.campaign || this.campaign.status !== 'running') return;
+    const until = Date.now() + INCOMING_REPLY_PAUSE_MS;
+    if (until > this.incomingPauseUntil) {
+      this.incomingPauseUntil = until;
+      console.log(`Campagne Telegram (tenant "${this.tenantId}"): réponse entrante détectée — pause de ${INCOMING_REPLY_PAUSE_MS / 1000}s avant de reprendre l'envoi.`);
+    }
+  }
+
+  // Voir queues/campaignEngine.js#_recordSendLatency (même principe).
+  _recordSendLatency(elapsedMs) {
+    if (this.networkHealth.recordLatency(elapsedMs)) {
+      console.log(
+        `Campagne Telegram (tenant "${this.tenantId}"): latence élevée (${elapsedMs}ms) sur 2 requêtes consécutives — ` +
+        `statut 'degraded_network', pause de ${circuitBreaker.DEGRADED_NETWORK_PAUSE_MS / 60000} min.`,
+      );
+    }
+  }
+
+  // Voir queues/campaignEngine.js#_waitForNetworkHold (même principe).
+  async _waitForNetworkHold() {
+    const campaign = this.campaign;
+    const health = this.networkHealth;
+    if (!health.isHeld()) return;
+
+    campaign.paused = true;
+    this._persist();
+    console.log(
+      `Campagne Telegram (tenant "${this.tenantId}"): file en pause — statut réseau '${health.networkStatus}', ` +
+      `reprise prévue vers ${new Date(health.holdUntil).toISOString()}.`,
+    );
+
+    while (!campaign.stopRequested && health.isHeld()) {
+      await sleep(1000);
+    }
+    if (campaign.stopRequested) return;
+
+    while (!campaign.stopRequested && !this.session.isConnected()) {
+      console.log(`Campagne Telegram (tenant "${this.tenantId}"): health check négatif — nouvelle vérification dans 30s avant reprise.`);
+      await sleep(circuitBreaker.HEALTH_RECHECK_INTERVAL_MS);
+    }
+    if (campaign.stopRequested) return;
+
+    const wasCircuitOpen = health.networkStatus === 'circuit_open';
+    health.networkStatus = 'normal';
+    campaign.paused = false;
+    this._persist();
+    console.log(
+      `Campagne Telegram (tenant "${this.tenantId}"): health check nominal — reprise de l'envoi` +
+      `${wasCircuitOpen ? ' au destinataire précédemment en échec de surcharge' : ''}.`,
+    );
   }
 
   _buildRecord() {
@@ -142,8 +218,15 @@ class TelegramCampaignEngine {
       recipients: c.recipients,
       message: c.message,
       results: c.results,
+      delaySeconds: c.delaySeconds,
       minDelayMs: c.minDelayMs,
       maxDelayMs: c.maxDelayMs,
+      batchSize: c.batchSize,
+      batchPauseSeconds: c.batchPauseSeconds,
+      // Voir lib/circuitBreaker.js#toJSON : persisté pour qu'une pause de
+      // sécurité ('degraded_network'/'circuit_open') survive à un
+      // redéploiement plutôt que d'être silencieusement oubliée.
+      networkHealth: this.networkHealth.toJSON(),
       media: this.persistedMedia,
     };
   }
@@ -164,7 +247,10 @@ class TelegramCampaignEngine {
   getStatus() {
     if (!this.campaign) return null;
     const { total, truncated, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError } = this.campaign;
-    const base = { total, truncated, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results };
+    const base = {
+      total, truncated, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results,
+      networkStatus: this.networkHealth.networkStatus,
+    };
     return resumeError ? { ...base, resumeError } : base;
   }
 
@@ -176,7 +262,8 @@ class TelegramCampaignEngine {
   // restants comme échoués.
   async _waitWhileBlocked() {
     const campaign = this.campaign;
-    if (!campaign.userPaused && this.session.isConnected()) {
+    const isBlocked = () => campaign.userPaused || !this.session.isConnected() || Date.now() < this.incomingPauseUntil;
+    if (!isBlocked()) {
       return;
     }
 
@@ -184,11 +271,13 @@ class TelegramCampaignEngine {
     this._persist();
     if (campaign.userPaused) {
       console.log(`Campagne Telegram (tenant "${this.tenantId}"): en pause (demandée par l'utilisateur).`);
-    } else {
+    } else if (!this.session.isConnected()) {
       console.log(`Campagne Telegram (tenant "${this.tenantId}"): mise en pause — connexion perdue, en attente de reconnexion...`);
+    } else {
+      console.log(`Campagne Telegram (tenant "${this.tenantId}"): en pause — réponse entrante détectée.`);
     }
 
-    while (!campaign.stopRequested && (campaign.userPaused || !this.session.isConnected())) {
+    while (!campaign.stopRequested && isBlocked()) {
       await sleep(1000);
     }
 
@@ -233,7 +322,8 @@ class TelegramCampaignEngine {
     const campaign = this.campaign;
     const recipients = campaign.recipients;
 
-    for (let i = startIndex; i < recipients.length; i += 1) {
+    let i = startIndex;
+    while (i < recipients.length) {
       if (campaign.stopRequested) {
         this._markRemainingInterrupted(i);
         this._persist();
@@ -250,9 +340,19 @@ class TelegramCampaignEngine {
         return;
       }
 
+      await this._waitForNetworkHold();
+
+      if (campaign.stopRequested) {
+        this._markRemainingInterrupted(i);
+        this._persist();
+        console.log(`Campagne Telegram (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
+        return;
+      }
+
       const identifier = recipients[i];
       let status = 'failed';
       let errorReason = null;
+      let overloadDetected = false;
 
       try {
         const entity = await this.session.resolveRecipient(identifier);
@@ -261,17 +361,52 @@ class TelegramCampaignEngine {
         // mot, même à partir du même modèle.
         const personalizedMessage = resolveSpintax(campaign.message);
         if (this.resolvedMedia) {
-          await this.session.sendMedia(entity, { ...this.resolvedMedia, caption: personalizedMessage });
+          // Séquencement standard média + texte : le média est expédié seul
+          // (sans légende), puis le texte associé est envoyé séparément
+          // juste après — jamais agrégés dans le même appel API.
+          const mediaStartedAt = Date.now();
+          await this.session.sendMedia(entity, this.resolvedMedia);
+          this._recordSendLatency(Date.now() - mediaStartedAt);
+          if (personalizedMessage) {
+            await sleep(MEDIA_TEXT_SEQUENCE_PAUSE_MS);
+            const textStartedAt = Date.now();
+            await this.session.sendMessage(entity, personalizedMessage);
+            this._recordSendLatency(Date.now() - textStartedAt);
+          }
         } else {
+          const textStartedAt = Date.now();
           await this.session.sendMessage(entity, personalizedMessage);
+          this._recordSendLatency(Date.now() - textStartedAt);
         }
         status = 'delivered';
         campaign.success += 1;
+        this.networkHealth.recordSuccess();
         console.log(`Campagne Telegram (tenant "${this.tenantId}"): message envoyé à ${identifier} (${i + 1}/${recipients.length}).`);
       } catch (err) {
-        campaign.failed += 1;
-        errorReason = err.message || String(err);
-        console.error(`Campagne Telegram (tenant "${this.tenantId}"): échec de l'envoi à ${identifier}:`, errorReason);
+        if (circuitBreaker.isOverloadError(err)) {
+          // Signal de surcharge (429, FloodWaitError, reset de socket...) :
+          // pas un échec du destinataire — son index est conservé
+          // (campaign.nextIndex reste à i) pour le RETENTER après le délai
+          // de mise en veille et un health check positif (voir
+          // _waitForNetworkHold), sans le compter ni avancer la file.
+          overloadDetected = true;
+          const backoffMs = this.networkHealth.recordOverloadFailure();
+          this._persist();
+          console.log(
+            `Campagne Telegram (tenant "${this.tenantId}"): signal de surcharge détecté (${err.message}) — ` +
+            `statut 'circuit_open', nouvelle tentative pour ${identifier} dans ${Math.round(backoffMs / 60000)} min (index ${i} conservé).`,
+          );
+        } else {
+          campaign.failed += 1;
+          errorReason = err.message || String(err);
+          console.error(`Campagne Telegram (tenant "${this.tenantId}"): échec de l'envoi à ${identifier}:`, errorReason);
+        }
+      }
+
+      if (overloadDetected) {
+        // Ne pas incrémenter i : le prochain passage dans la boucle
+        // retentera CE MÊME destinataire, après _waitForNetworkHold().
+        continue;
       }
 
       campaign.sent += 1;
@@ -280,8 +415,26 @@ class TelegramCampaignEngine {
       this._persist();
       if (this.onActivity) this.onActivity();
 
-      if (i < recipients.length - 1 && !campaign.stopRequested) {
-        await this._interruptibleSleep(randomDelay(campaign.minDelayMs, campaign.maxDelayMs));
+      i += 1;
+
+      if (i < recipients.length && !campaign.stopRequested) {
+        // Délai fixe et configurable en priorité (standard, sans
+        // randomisation) ; à défaut, on retombe sur l'ancienne fenêtre
+        // aléatoire min/max pour ne pas casser les campagnes déjà
+        // paramétrées ainsi.
+        const baseDelayMs = Number.isFinite(campaign.delaySeconds) && campaign.delaySeconds > 0
+          ? campaign.delaySeconds * 1000
+          : randomDelay(campaign.minDelayMs, campaign.maxDelayMs);
+        const batch = Number.isInteger(campaign.batchSize) && campaign.batchSize > 0 ? campaign.batchSize : recipients.length;
+        // i a déjà été incrémenté ci-dessus : il représente ici le nombre de
+        // destinataires traités jusqu'ici (compte 1-based), pas un index.
+        const endOfBatch = i % batch === 0;
+        // batchPauseSeconds : pause après un lot, configurable indépendamment
+        // du délai par message — à défaut, 3x le délai par message.
+        const batchPauseMs = Number.isFinite(campaign.batchPauseSeconds) && campaign.batchPauseSeconds > 0
+          ? campaign.batchPauseSeconds * 1000
+          : baseDelayMs * 3;
+        await this._interruptibleSleep(endOfBatch ? batchPauseMs : baseDelayMs);
       }
     }
 
@@ -300,7 +453,7 @@ class TelegramCampaignEngine {
       throw new Error('CAMPAIGN_IN_PROGRESS');
     }
 
-    const { maxPerCycle, media } = options;
+    const { maxPerCycle, media, delaySeconds, batchSize, batchPauseSeconds } = options;
     const limitedRecipients = Number.isInteger(maxPerCycle) && maxPerCycle > 0
       ? recipients.slice(0, maxPerCycle)
       : recipients;
@@ -327,9 +480,14 @@ class TelegramCampaignEngine {
       recipients: limitedRecipients,
       message,
       results: [],
+      delaySeconds: Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds : undefined,
       minDelayMs,
       maxDelayMs,
+      batchSize: Number.isInteger(batchSize) && batchSize > 0 ? batchSize : undefined,
+      batchPauseSeconds: Number.isFinite(batchPauseSeconds) && batchPauseSeconds > 0 ? batchPauseSeconds : undefined,
     };
+    this.incomingPauseUntil = 0;
+    this.networkHealth = new circuitBreaker.CircuitBreakerState();
     this._persist();
 
     this._run(0).catch((err) => {
@@ -430,10 +588,18 @@ class TelegramCampaignEngine {
       paused: false,
       finishedAt: null,
     };
+    this.incomingPauseUntil = 0;
+    // Restaure la pause de sécurité en cours (voir lib/circuitBreaker.js) le
+    // cas échéant, plutôt que de repartir sur un compteur d'échecs à zéro :
+    // un redéploiement survenant en pleine pause 'circuit_open' ne doit pas
+    // faire retenter l'envoi immédiatement alors que Telegram pourrait être
+    // toujours en train de limiter ce compte.
+    this.networkHealth = circuitBreaker.CircuitBreakerState.fromJSON(record.networkHealth);
     this._persist();
 
     console.log(
-      `Campagne Telegram (tenant "${this.tenantId}"): reprise après redémarrage à partir du destinataire ${record.nextIndex + 1}/${record.total}.`,
+      `Campagne Telegram (tenant "${this.tenantId}"): reprise après redémarrage à partir du destinataire ${record.nextIndex + 1}/${record.total}` +
+      `${this.networkHealth.isHeld() ? ` (statut réseau '${this.networkHealth.networkStatus}' restauré, en pause jusqu'à ${new Date(this.networkHealth.holdUntil).toISOString()})` : ''}.`,
     );
 
     this._run(record.nextIndex).catch((err) => {

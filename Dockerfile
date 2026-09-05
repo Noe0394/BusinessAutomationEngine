@@ -16,6 +16,11 @@ RUN npm install
 
 COPY . .
 
+# Obscurcissement Frontend : génère public/dist/dashboard.html (JS client
+# minifié/obscurci) — voir scripts/build-dashboard.js. index.js sert
+# automatiquement cette version dès qu'elle existe.
+RUN npm run build
+
 EXPOSE 10000
 
 CMD ["npm", "start"]

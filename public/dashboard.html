@@ -367,6 +367,10 @@
             <label for="delay-seconds">Délai entre deux destinataires (secondes)</label>
             <input type="number" id="delay-seconds" value="12" min="1" />
           </div>
+          <div class="field">
+            <label for="batch-pause-seconds">Pause après un lot (secondes)</label>
+            <input type="number" id="batch-pause-seconds" value="36" min="1" />
+          </div>
         </div>
 
         <button type="button" id="send-campaign-btn" class="send-button">🚀 Lancer l'envoi</button>
@@ -382,6 +386,7 @@
             <span class="count-success">✅ Réussites : 0</span>
             <span class="count-failed">❌ Échecs : 0</span>
           </p>
+          <p id="progress-network-status" class="warning-box" hidden></p>
         </div>
 
         <p style="margin-top: 1rem;">
@@ -439,6 +444,10 @@
           <div class="field">
             <label for="tg-delay-seconds">Délai d'attente entre chaque message (secondes)</label>
             <input type="number" id="tg-delay-seconds" value="12" min="1" />
+          </div>
+          <div class="field">
+            <label for="tg-batch-pause-seconds">Pause après un lot (secondes)</label>
+            <input type="number" id="tg-batch-pause-seconds" value="36" min="1" />
           </div>
         </div>
 
@@ -500,6 +509,17 @@
             <input type="number" id="tg-dm-max-per-cycle" value="20" min="1" />
           </div>
 
+          <div class="row">
+            <div class="field">
+              <label for="tg-dm-batch-size">Nombre de messages par lot</label>
+              <input type="number" id="tg-dm-batch-size" value="5" min="1" />
+            </div>
+            <div class="field">
+              <label for="tg-dm-batch-pause-seconds">Pause après un lot (secondes)</label>
+              <input type="number" id="tg-dm-batch-pause-seconds" value="90" min="1" />
+            </div>
+          </div>
+
           <button type="button" id="tg-dm-send-btn" class="send-button">🚀 Lancer la diffusion</button>
           <button type="button" id="tg-dm-pause-btn" class="pause-button" hidden>⏸️ Pause</button>
           <button type="button" id="tg-dm-resume-btn" class="resume-button" hidden>▶️ Reprendre</button>
@@ -515,6 +535,7 @@
               <span class="count-success">✅ Réussites : 0</span>
               <span class="count-failed">❌ Échecs : 0</span>
             </p>
+            <p id="tg-dm-progress-network-status" class="warning-box" hidden></p>
           </div>
         </div>
       </div>
@@ -1748,6 +1769,7 @@
       const mode = document.querySelector('input[name="target-mode"]:checked').value;
       const batchSize = document.getElementById('batch-size').value;
       const delaySeconds = document.getElementById('delay-seconds').value;
+      const batchPauseSeconds = document.getElementById('batch-pause-seconds').value;
       const seqDelayMin = document.getElementById('campaign-seq-delay-min').value;
       const seqDelayMax = document.getElementById('campaign-seq-delay-max').value;
 
@@ -1776,6 +1798,7 @@
       campaignSequence.filter((s) => s.type === 'media').forEach((s) => formData.append('media', s.file));
       formData.append('batchSize', batchSize);
       formData.append('delaySeconds', delaySeconds);
+      formData.append('batchPauseSeconds', batchPauseSeconds);
       formData.append('sequenceDelayMin', seqDelayMin);
       formData.append('sequenceDelayMax', seqDelayMax);
 
@@ -1812,7 +1835,7 @@
         } else {
           showCampaignFeedback(
             '🚀 Campagne lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
-            ', délai ' + data.delaySeconds + 's, séquence de ' + data.steps + ' étape(s).',
+            ', délai ' + data.delaySeconds + 's (pause de ' + data.batchPauseSeconds + 's après un lot), séquence de ' + data.steps + ' étape(s).',
             false,
           );
           document.getElementById('campaign-feedback').hidden = true;
@@ -1844,6 +1867,17 @@
       document.getElementById('progress-counters').innerHTML =
         '<span class="count-success">✅ Réussites : ' + campaign.success + '</span>' +
         '<span class="count-failed">❌ Échecs : ' + campaign.failed + '</span>';
+
+      const networkEl = document.getElementById('progress-network-status');
+      if (campaign.networkStatus === 'degraded_network') {
+        networkEl.hidden = false;
+        networkEl.textContent = '⚠️ Réseau dégradé : latence anormale détectée, file en pause temporaire.';
+      } else if (campaign.networkStatus === 'circuit_open') {
+        networkEl.hidden = false;
+        networkEl.textContent = '⛔ Coupe-circuit ouvert : surcharge détectée côté serveur distant, reprise automatique après le délai de sécurité.';
+      } else {
+        networkEl.hidden = true;
+      }
     }
 
     function statusLabel(status) {
@@ -2084,6 +2118,7 @@
       const message = document.getElementById('tg-message').value.trim();
       const batchSize = document.getElementById('tg-batch-size').value;
       const delaySeconds = document.getElementById('tg-delay-seconds').value;
+      const batchPauseSeconds = document.getElementById('tg-batch-pause-seconds').value;
 
       if (!message) { tgShowFeedback('Le message ne peut pas être vide.', true); return; }
       if (tgState.selectedIds.size === 0) { tgShowFeedback('Sélectionnez au moins un groupe/canal.', true); return; }
@@ -2092,6 +2127,7 @@
       formData.append('message', message);
       formData.append('batchSize', batchSize);
       formData.append('delaySeconds', delaySeconds);
+      formData.append('batchPauseSeconds', batchPauseSeconds);
       formData.append('recipients', JSON.stringify(Array.from(tgState.selectedIds)));
       if (selectedTgFile) formData.append('media', selectedTgFile);
 
@@ -2106,7 +2142,8 @@
         } else {
           tgShowFeedback(
             '🚀 Campagne Telegram lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
-            ', délai ' + data.delaySeconds + 's' + (data.media ? ', pièce jointe : ' + data.media : '') + '.',
+            ', délai ' + data.delaySeconds + 's (pause de ' + data.batchPauseSeconds + 's après un lot)' +
+            (data.media ? ', pièce jointe : ' + data.media : '') + '.',
             false,
           );
         }
@@ -2224,6 +2261,17 @@
       document.getElementById('tg-dm-progress-counters').innerHTML =
         '<span class="count-success">✅ Réussites : ' + campaign.success + '</span>' +
         '<span class="count-failed">❌ Échecs : ' + campaign.failed + '</span>';
+
+      const networkEl = document.getElementById('tg-dm-progress-network-status');
+      if (campaign.networkStatus === 'degraded_network') {
+        networkEl.hidden = false;
+        networkEl.textContent = '⚠️ Réseau dégradé : latence anormale détectée, file en pause temporaire.';
+      } else if (campaign.networkStatus === 'circuit_open') {
+        networkEl.hidden = false;
+        networkEl.textContent = '⛔ Coupe-circuit ouvert : surcharge détectée côté Telegram, reprise automatique après le délai de sécurité.';
+      } else {
+        networkEl.hidden = true;
+      }
     }
 
     function tgDmStartPolling() {
@@ -2278,6 +2326,8 @@
       const minDelaySeconds = document.getElementById('tg-dm-min-delay').value;
       const maxDelaySeconds = document.getElementById('tg-dm-max-delay').value;
       const maxPerCycle = document.getElementById('tg-dm-max-per-cycle').value;
+      const batchSize = document.getElementById('tg-dm-batch-size').value;
+      const batchPauseSeconds = document.getElementById('tg-dm-batch-pause-seconds').value;
 
       if (!message) { tgDmShowFeedback('Le message ne peut pas être vide.', true); return; }
       if (tgDmImportedContacts.length === 0) {
@@ -2290,6 +2340,8 @@
       formData.append('minDelaySeconds', minDelaySeconds);
       formData.append('maxDelaySeconds', maxDelaySeconds);
       formData.append('maxPerCycle', maxPerCycle);
+      formData.append('batchSize', batchSize);
+      formData.append('batchPauseSeconds', batchPauseSeconds);
       formData.append('recipients', JSON.stringify(tgDmImportedContacts.map((c) => c.identifier)));
       if (selectedTgDmMediaFile) formData.append('media', selectedTgDmMediaFile);
 

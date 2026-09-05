@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { TelegramClient, Api } = require('telegram');
+const { NewMessage } = require('telegram/events');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
 const githubStore = require('../githubStore');
@@ -9,10 +10,6 @@ const { resolveSpintax } = require('../lib/spintax');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function randomDelay(minMs, maxMs) {
-  return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
 }
 
 // Isolation stricte par tenant (voir adapters/telegramManager.js), sur le
@@ -91,6 +88,11 @@ function createSession(tenantId) {
   let reconnectTimer = null;
   let syncStarted = false;
   let consecutiveFailures = 0;
+  // Écouteurs "message entrant" (voir onIncomingMessage plus bas) : le moteur
+  // de campagne (queues/telegramCampaignEngine.js) s'y abonne pour mettre la
+  // file d'attente en pause dès qu'un contact répond pendant l'envoi d'une
+  // campagne.
+  const incomingMessageListeners = [];
   // Incrémenté à chaque logout()/startLogin()/dispose() : les callbacks
   // asynchrones liés à un client remplacé ou libéré entre-temps (heartbeat en
   // vol, résolution tardive de client.start(), reconnexion planifiée) se
@@ -104,6 +106,32 @@ function createSession(tenantId) {
 
   function isConnected() {
     return connected;
+  }
+
+  function onIncomingMessage(callback) {
+    incomingMessageListeners.push(callback);
+  }
+
+  // Enregistré une fois par instance de TelegramClient (init() et
+  // startLogin() en créent chacun une nouvelle) : reste actif à travers les
+  // reconnexions automatiques (attemptReconnect réutilise le même client),
+  // puisque GramJS conserve les gestionnaires d'événements tant que le client
+  // lui-même n'est pas recréé.
+  function registerIncomingHandler() {
+    client.addEventHandler((event) => {
+      // event.message.out === true : message envoyé par CE compte (notre
+      // propre campagne, ou une réponse manuelle de l'utilisateur) — seul un
+      // message reçu d'un contact doit mettre la file d'attente en pause.
+      if (event.message && !event.message.out) {
+        incomingMessageListeners.forEach((callback) => {
+          try {
+            callback(event.message);
+          } catch (err) {
+            console.error(`Erreur dans un écouteur de message entrant Telegram (tenant "${tenantId}") :`, err.message);
+          }
+        });
+      }
+    }, new NewMessage({}));
   }
 
   function loadSessionString() {
@@ -289,6 +317,7 @@ function createSession(tenantId) {
 
     const stringSession = new StringSession(loadSessionString());
     client = new TelegramClient(stringSession, API_ID, API_HASH, { connectionRetries: 5 });
+    registerIncomingHandler();
     await client.connect();
     connected = await client.checkAuthorization();
 
@@ -333,6 +362,7 @@ function createSession(tenantId) {
 
     const stringSession = new StringSession('');
     client = new TelegramClient(stringSession, API_ID, API_HASH, { connectionRetries: 5 });
+    registerIncomingHandler();
     await client.connect();
 
     codeResolver = null;
@@ -510,7 +540,7 @@ function createSession(tenantId) {
    * automatiquement vers le destinataire suivant plutôt que de s'arrêter.
    */
   async function sendBulk(chatIds, message, options = {}) {
-    const { delaySeconds, batchSize, media, onProgress } = options;
+    const { delaySeconds, batchSize, batchPauseSeconds, media, onProgress } = options;
     const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : chatIds.length;
     const results = [];
 
@@ -540,10 +570,17 @@ function createSession(tenantId) {
       }
 
       if (i < chatIds.length - 1) {
-        const baseDelayMs = delaySeconds ? delaySeconds * 1000 : randomDelay(10000, 15000);
+        // Délai fixe et configurable (standard, sans randomisation) : à
+        // défaut de valeur fournie, 12s reste une valeur raisonnable pour un
+        // usage normal de l'API Telegram.
+        const baseDelayMs = Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds * 1000 : 12_000;
         const endOfBatch = (i + 1) % batch === 0;
-        const delayMs = endOfBatch ? baseDelayMs * 3 : baseDelayMs;
-        await sleep(delayMs);
+        // batchPauseSeconds : pause après un lot, configurable indépendamment
+        // du délai par message — à défaut, 3x le délai par message.
+        const batchPauseMs = Number.isFinite(batchPauseSeconds) && batchPauseSeconds > 0
+          ? batchPauseSeconds * 1000
+          : baseDelayMs * 3;
+        await sleep(endOfBatch ? batchPauseMs : baseDelayMs);
       }
     }
 
@@ -554,6 +591,7 @@ function createSession(tenantId) {
     tenantId,
     isConfigured,
     isConnected,
+    onIncomingMessage,
     restoreSessionFromRemote,
     getStorageStatus,
     logout,

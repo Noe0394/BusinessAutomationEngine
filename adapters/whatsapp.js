@@ -92,6 +92,27 @@ function createSession(tenantId) {
   // instance.
   const contactNames = new Map();
 
+  // Écouteurs "message entrant" (voir onIncomingMessage plus bas) : le moteur
+  // de campagne (queues/campaignEngine.js) s'y abonne pour mettre la file
+  // d'attente en pause dès qu'un contact répond pendant l'envoi d'une
+  // campagne, plutôt que de continuer à lui envoyer la suite de la séquence
+  // sans tenir compte de sa réponse.
+  const incomingMessageListeners = [];
+
+  function onIncomingMessage(callback) {
+    incomingMessageListeners.push(callback);
+  }
+
+  function notifyIncomingMessage(msg) {
+    incomingMessageListeners.forEach((callback) => {
+      try {
+        callback(msg);
+      } catch (err) {
+        console.error(`Erreur dans un écouteur de message entrant (tenant "${tenantId}") :`, err.message);
+      }
+    });
+  }
+
   function rememberContactName(jid, name) {
     if (jid && name) {
       contactNames.set(jid, name);
@@ -335,7 +356,17 @@ function createSession(tenantId) {
 
     sock.ev.on('messages.upsert', (m) => {
       if (isStale()) return;
-      (m.messages || []).forEach(rememberFromMessage);
+      (m.messages || []).forEach((msg) => {
+        rememberFromMessage(msg);
+        // Ne notifie que pour un vrai message reçu en direct (m.type ===
+        // 'notify', pas un message historique rejoué par la synchronisation),
+        // envoyé par le contact (pas un message qu'on vient nous-mêmes
+        // d'envoyer) et hors diffusion "statut" (status@broadcast, qui n'est
+        // jamais une réponse d'un contact précis).
+        if (m.type === 'notify' && msg.key && !msg.key.fromMe && msg.key.remoteJid !== 'status@broadcast') {
+          notifyIncomingMessage(msg);
+        }
+      });
     });
 
     sock.ev.on('contacts.upsert', (contacts) => {
@@ -540,6 +571,7 @@ function createSession(tenantId) {
     getGroups,
     getGroupParticipants,
     getContactName,
+    onIncomingMessage,
     logout,
     dispose,
     getStorageStatus: authStore.getStatus,

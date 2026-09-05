@@ -4,7 +4,8 @@
   "description": "Serveur d'orchestration de services",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "build": "node scripts/build-dashboard.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.9",
@@ -20,5 +21,8 @@
     "qrcode-terminal": "^0.12.0",
     "telegram": "^2.26.22",
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "^5.6.0"
   }
 }
