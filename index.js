@@ -1050,13 +1050,30 @@ app.post('/api/messages', requireAccess, requireModule('whatsapp'), attachWhatsa
   }
 });
 
+// "rate-overlimit" : WhatsApp applique une limite temporaire sur les
+// requêtes de métadonnées de groupe (groupMetadata, utilisée par
+// getGroupParticipants) — observé en particulier sur un appareil qui vient
+// tout juste d'être lié (période de "mise en confiance" côté WhatsApp, de
+// quelques minutes à quelques heures). Ce n'est ni un bug ni une action
+// bloquée définitivement : WhatsApp répond juste "réessayez plus tard" à ce
+// type d'appel précis (l'envoi de messages directs n'est pas concerné, lui
+// n'appelle jamais groupMetadata). Le message d'erreur reflète ça plutôt
+// qu'un échec générique, pour éviter de faire chercher un bug qui n'existe
+// pas côté serveur.
+function describeGroupQueryError(err) {
+  if (err && err.message === 'rate-overlimit') {
+    return 'WhatsApp limite temporairement les requêtes sur les groupes pour ce compte (fréquent juste après une nouvelle liaison d\'appareil). Réessayez dans quelques minutes à quelques heures — l\'envoi de messages directs n\'est pas affecté par cette limite.';
+  }
+  return null;
+}
+
 app.get('/api/groups', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
     const groups = await req.whatsapp.getGroups();
     res.status(200).json(groups);
   } catch (err) {
     console.error('Erreur lors de la récupération des groupes:', err);
-    res.status(500).json({ error: 'Échec de la récupération des groupes.' });
+    res.status(500).json({ error: describeGroupQueryError(err) || 'Échec de la récupération des groupes.' });
   }
 });
 
@@ -1066,7 +1083,7 @@ app.get('/api/groups/:id/participants', requireAccess, requireModule('whatsapp')
     res.status(200).json(participants);
   } catch (err) {
     console.error('Erreur lors de la récupération des participants:', err);
-    res.status(500).json({ error: 'Échec de la récupération des participants.' });
+    res.status(500).json({ error: describeGroupQueryError(err) || 'Échec de la récupération des participants.' });
   }
 });
 
@@ -1156,7 +1173,7 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
     res.status(200).send(buffer);
   } catch (err) {
     console.error('Erreur lors de l\'extraction des membres des groupes:', err);
-    res.status(500).json({ error: 'Échec de l\'extraction des membres des groupes sélectionnés.' });
+    res.status(500).json({ error: describeGroupQueryError(err) || 'Échec de l\'extraction des membres des groupes sélectionnés.' });
   }
 });
 
@@ -1194,7 +1211,7 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
       recipients = Array.from(merged);
     } catch (err) {
       console.error('Erreur lors de la récupération des participants des groupes cibles:', err);
-      return res.status(400).json({ error: 'Impossible de récupérer les participants des groupes cibles.' });
+      return res.status(400).json({ error: describeGroupQueryError(err) || 'Impossible de récupérer les participants des groupes cibles.' });
     }
   }
 
