@@ -14,6 +14,7 @@ const whatsapp = require('./adapters/whatsapp');
 const FacebookMessengerAdapter = require('./adapters/facebook');
 const TelegramAdapter = require('./adapters/telegram');
 const MediaPublisherAdapter = require('./adapters/media_publisher');
+const videoCompressor = require('./adapters/videoCompressor');
 const licenses = require('./licenses');
 const oauthConfig = require('./oauth_config');
 const scheduledMessages = require('./queues/scheduled_messages');
@@ -24,6 +25,13 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '@CYRUS2026';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
+// Une campagne WhatsApp peut joindre une vidéo bien plus lourde que 16 Mo
+// (compressée automatiquement avant l'envoi, voir buildWhatsappMediaStep) :
+// instance multer dédiée, limite plus large. Reste en mémoire
+// (multer.memoryStorage) comme le reste de l'app : à surveiller sur une
+// instance Render à faible RAM avec plusieurs grosses vidéos jointes à la
+// même campagne (jusqu'à 10 fichiers par envoi).
+const whatsappMediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 // Les vidéos (YouTube/Instagram/TikTok) sont bien plus lourdes que les
 // médias WhatsApp/Telegram/Messenger : instance multer dédiée, limite plus
 // large. Reste en mémoire (multer.memoryStorage) comme le reste de l'app :
@@ -276,6 +284,26 @@ function normalizeRecipientEntry(recipient) {
   }
   const to = normalizeJid(recipient);
   return { to, nom: whatsapp.getContactName(to) || '' };
+}
+
+// Convertit un fichier "média" issu de multer en étape prête à l'envoi
+// WhatsApp, en compressant automatiquement une vidéo trop lourde (voir
+// adapters/videoCompressor.js — cible 15 Mo, résolution 720p/480p) avant de
+// l'attacher. Appelé une seule fois par fichier au moment de l'upload (pas à
+// chaque destinataire) : le résultat (buffer déjà compressé le cas échéant)
+// est réutilisé tel quel pour toute la campagne.
+async function buildWhatsappMediaStep(file) {
+  if (file.mimetype && file.mimetype.startsWith('video/') && file.buffer.length > videoCompressor.MAX_SIZE_BYTES) {
+    const result = await videoCompressor.compressVideoIfNeeded(file.buffer, file.originalname);
+    return {
+      type: 'media',
+      buffer: result.buffer,
+      mimetype: result.forceDocument ? file.mimetype : result.mimetype,
+      filename: file.originalname,
+      forceDocument: result.forceDocument,
+    };
+  }
+  return { type: 'media', buffer: file.buffer, mimetype: file.mimetype, filename: file.originalname };
 }
 
 function randomDelay(minMs, maxMs) {
@@ -666,7 +694,7 @@ async function resolveScheduledMediaList(entry) {
   const resolved = [];
   for (const item of items) {
     const media = await resolveMediaReference(item, SCHEDULED_MEDIA_DIR);
-    if (media) resolved.push(media);
+    if (media) resolved.push({ ...media, forceDocument: Boolean(item.forceDocument) });
   }
   return resolved;
 }
@@ -689,7 +717,7 @@ async function resolveScheduledSequence(entry) {
   for (const step of entry.sequence) {
     if (step.type === 'media') {
       const media = await resolveMediaReference(step, SCHEDULED_MEDIA_DIR);
-      if (media) resolved.push({ ...media, type: 'media' });
+      if (media) resolved.push({ ...media, type: 'media', forceDocument: Boolean(step.forceDocument) });
     } else {
       resolved.push({ type: 'text', text: step.text });
     }
@@ -1415,7 +1443,7 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
   }
 });
 
-app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload.array('media', 10), async (req, res) => {
+app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), whatsappMediaUpload.array('media', 10), async (req, res) => {
   const { message, groupId, delaySeconds, batchSize, sequenceDelayMin, sequenceDelayMax } = req.body;
   let { recipients, groupIds, sequence } = req.body;
 
@@ -1488,7 +1516,7 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload
             error: 'Le nombre de fichiers envoyés ne correspond pas au nombre d\'étapes média de la séquence.',
           });
         }
-        resolvedSequence.push({ buffer: file.buffer, mimetype: file.mimetype, filename: file.originalname, type: 'media' });
+        resolvedSequence.push(await buildWhatsappMediaStep(file));
       } else {
         resolvedSequence.push({ type: 'text', text: String((step && step.text) || '') });
       }
@@ -1501,9 +1529,9 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), upload
   } else {
     resolvedSequence = [];
     if (message) resolvedSequence.push({ type: 'text', text: message });
-    files.forEach((file) => {
-      resolvedSequence.push({ buffer: file.buffer, mimetype: file.mimetype, filename: file.originalname, type: 'media' });
-    });
+    for (const file of files) {
+      resolvedSequence.push(await buildWhatsappMediaStep(file));
+    }
   }
 
   if (resolvedSequence.length === 0) {
@@ -2912,7 +2940,7 @@ function clampSeqDelaySeconds(value, fallback) {
 app.post(
   '/api/scheduled-messages',
   requireAccess,
-  upload.array('media', 10),
+  whatsappMediaUpload.array('media', 10),
   async (req, res) => {
     const {
       channel, recipientType, message, mediaUrl, scheduledAt,
@@ -2975,9 +3003,18 @@ app.post(
               error: 'Le nombre de fichiers envoyés ne correspond pas au nombre d\'étapes média de la séquence.',
             });
           }
-          const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-          fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), file.buffer);
-          sequenceItems.push({ type: 'media', mediaUrl: `local:${safeName}`, mediaMimetype: file.mimetype, mediaFilename: file.originalname });
+          // Canal garanti "whatsapp" ici (voir la garde hasSequence ci-dessus)
+          // : compression vidéo automatique avant de persister sur disque.
+          const built = await buildWhatsappMediaStep(file);
+          const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${built.filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+          fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), built.buffer);
+          sequenceItems.push({
+            type: 'media',
+            mediaUrl: `local:${safeName}`,
+            mediaMimetype: built.mimetype,
+            mediaFilename: built.filename,
+            forceDocument: built.forceDocument || false,
+          });
         } else {
           sequenceItems.push({ type: 'text', text: String((step && step.text) || '') });
         }
@@ -3008,11 +3045,24 @@ app.post(
       }
 
       if (files.length > 0) {
-        mediaItems = files.map((file) => {
-          const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-          fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), file.buffer);
-          return { mediaUrl: `local:${safeName}`, mediaMimetype: file.mimetype, mediaFilename: file.originalname };
-        });
+        mediaItems = [];
+        for (const file of files) {
+          // Compression vidéo uniquement pour WhatsApp (voir
+          // buildWhatsappMediaStep) : la limite de 15 Mo visée ne concerne
+          // pas Telegram/Facebook, qui acceptent des fichiers plus lourds.
+          const built = channel === 'whatsapp' ? await buildWhatsappMediaStep(file) : null;
+          const buffer = built ? built.buffer : file.buffer;
+          const mimetype = built ? built.mimetype : file.mimetype;
+          const filename = built ? built.filename : file.originalname;
+          const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+          fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), buffer);
+          mediaItems.push({
+            mediaUrl: `local:${safeName}`,
+            mediaMimetype: mimetype,
+            mediaFilename: filename,
+            forceDocument: built ? (built.forceDocument || false) : false,
+          });
+        }
       } else if (mediaUrl) {
         mediaItems = [{ mediaUrl, mediaMimetype: null, mediaFilename: null }];
       }

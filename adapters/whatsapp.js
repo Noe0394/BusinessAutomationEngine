@@ -260,21 +260,28 @@ async function sendMessage(to, text) {
   return sock.sendMessage(to, { text });
 }
 
-async function sendMedia(to, { buffer, mimetype, filename, caption }) {
+// forceDocument (voir adapters/videoCompressor.js) : une vidéo trop lourde
+// qui n'a pas pu être compressée sous la limite visée est envoyée en pièce
+// jointe "document" plutôt qu'en message "vidéo" — WhatsApp accepte des
+// documents bien plus lourds, ce qui contourne l'échec probable d'un envoi
+// vidéo trop volumineux.
+async function sendMedia(to, { buffer, mimetype, filename, caption, forceDocument }) {
   if (!sock) {
     throw new Error('Adaptateur WhatsApp non initialisé.');
   }
 
-  if (mimetype === 'image/webp') {
-    return sock.sendMessage(to, { sticker: buffer });
-  }
+  if (!forceDocument) {
+    if (mimetype === 'image/webp') {
+      return sock.sendMessage(to, { sticker: buffer });
+    }
 
-  if (mimetype && mimetype.startsWith('image/')) {
-    return sock.sendMessage(to, { image: buffer, caption });
-  }
+    if (mimetype && mimetype.startsWith('image/')) {
+      return sock.sendMessage(to, { image: buffer, caption });
+    }
 
-  if (mimetype && mimetype.startsWith('video/')) {
-    return sock.sendMessage(to, { video: buffer, caption });
+    if (mimetype && mimetype.startsWith('video/')) {
+      return sock.sendMessage(to, { video: buffer, caption });
+    }
   }
 
   return sock.sendMessage(to, {

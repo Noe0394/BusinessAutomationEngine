@@ -1792,6 +1792,17 @@
       const sendBtn = document.getElementById('send-campaign-btn');
       sendBtn.disabled = true;
 
+      // Une vidéo > 15 Mo sera compressée automatiquement côté serveur avant
+      // l'envoi (voir adapters/videoCompressor.js) : ça peut prendre jusqu'à
+      // une minute, d'où ce message pour ne pas laisser l'utilisateur croire
+      // que le bouton est resté bloqué sans raison.
+      const hasLargeVideo = campaignSequence.some((s) => (
+        s.type === 'media' && s.file.type.startsWith('video/') && s.file.size > 15 * 1024 * 1024
+      ));
+      if (hasLargeVideo) {
+        showCampaignFeedback('🎬 Traitement et compression de la vidéo en cours... (jusqu\'à une minute)', false);
+      }
+
       try {
         const res = await apiFetch('/api/messages/queue', { method: 'POST', body: formData });
         const data = await res.json();
@@ -3453,6 +3464,17 @@
 
       const btn = document.getElementById('sched-submit-btn');
       btn.disabled = true;
+
+      // Une vidéo > 15 Mo sera compressée automatiquement côté serveur avant
+      // d'être persistée pour l'envoi programmé (voir
+      // adapters/videoCompressor.js) : ça peut prendre jusqu'à une minute.
+      const hasLargeVideo = channel === 'whatsapp' && schedSequence.some((s) => (
+        s.type === 'media' && s.file.type.startsWith('video/') && s.file.size > 15 * 1024 * 1024
+      ));
+      if (hasLargeVideo) {
+        schedShowFeedback('🎬 Traitement et compression de la vidéo en cours... (jusqu\'à une minute)', false);
+      }
+
       try {
         const res = await apiFetch('/api/scheduled-messages', { method: 'POST', body: formData });
         const data = await res.json();
