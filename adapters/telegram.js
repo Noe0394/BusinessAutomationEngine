@@ -3,6 +3,7 @@ const path = require('path');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { CustomFile } = require('telegram/client/uploads');
+const telegramAuthStore = require('./telegramAuthStore');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -14,13 +15,17 @@ function randomDelay(minMs, maxMs) {
 
 // Comme pour auth_info_baileys/, ce fichier vit sur le disque local : sans
 // disque persistant Render monté sur ce chemin, la session Telegram est
-// reperdue à chaque redéploiement et il faut se reconnecter (numéro + code).
+// reperdue à chaque redéploiement et il faut se reconnecter (numéro + code) —
+// sauf si GITHUB_TOKEN/GITHUB_DATA_REPO sont définis (voir telegramAuthStore.js),
+// auquel cas elle est aussi sauvegardée dans le repo GitHub dédié et restaurée
+// au démarrage (voir restoreSessionFromRemote, appelée une fois par index.js
+// avant le premier init()), sur le même principe que la session WhatsApp.
 const SESSION_PATH = process.env.TELEGRAM_SESSION_PATH || path.join(__dirname, '..', 'telegram_session.txt');
 
-if (!process.env.TELEGRAM_SESSION_PATH) {
+if (!process.env.TELEGRAM_SESSION_PATH && !telegramAuthStore.enabled) {
   console.warn(
-    `TELEGRAM_SESSION_PATH non défini : la session Telegram est stockée dans "${SESSION_PATH}" sur le disque local. ` +
-    'Sur Render, ce fichier est effacé à chaque redéploiement sauf disque persistant monté sur ce chemin.',
+    `TELEGRAM_SESSION_PATH non défini et sauvegarde GitHub désactivée : la session Telegram est stockée dans "${SESSION_PATH}" sur le disque local uniquement. ` +
+    'Sur Render, ce fichier est effacé à chaque redéploiement/redémarrage sauf disque persistant ou GITHUB_TOKEN/GITHUB_DATA_REPO configurés.',
   );
 }
 
@@ -48,6 +53,7 @@ class TelegramAdapter {
     this._passwordResolver = null;
     this._loginError = null;
     this._heartbeatTimer = null;
+    this._syncStarted = false;
 
     if (!this.apiId || !this.apiHash) {
       console.warn(
@@ -105,6 +111,18 @@ class TelegramAdapter {
     fs.writeFileSync(SESSION_PATH, value, 'utf8');
   }
 
+  // À appeler une seule fois, au tout premier démarrage du processus, avant
+  // init() — restaure la session Telegram depuis le repo GitHub dédié si
+  // elle y est présente (voir telegramAuthStore.js), sur le même principe
+  // que whatsapp.restoreSessionFromRemote().
+  async restoreSessionFromRemote() {
+    return telegramAuthStore.restoreSessionFromRemote(SESSION_PATH);
+  }
+
+  getStorageStatus() {
+    return telegramAuthStore.getStatus();
+  }
+
   // À appeler au démarrage du serveur : restaure une session déjà autorisée
   // si le fichier de session existe, sans redemander de code.
   async init() {
@@ -116,6 +134,11 @@ class TelegramAdapter {
     this.client = new TelegramClient(stringSession, this.apiId, this.apiHash, { connectionRetries: 5 });
     await this.client.connect();
     this.connected = await this.client.checkAuthorization();
+
+    if (!this._syncStarted) {
+      this._syncStarted = true;
+      telegramAuthStore.startPeriodicSync(SESSION_PATH);
+    }
 
     if (this.connected) {
       console.log('Telegram: session restaurée, connecté.');
@@ -169,6 +192,15 @@ class TelegramAdapter {
       this.saveSessionString(this.client.session.save());
       this.connected = true;
       this.startHeartbeat();
+      if (!this._syncStarted) {
+        this._syncStarted = true;
+        telegramAuthStore.startPeriodicSync(SESSION_PATH);
+      }
+      // Poussé tout de suite plutôt que d'attendre le prochain instantané
+      // périodique, pour ne pas devoir se reconnecter si le process redémarre
+      // juste après une connexion réussie (même principe que creds.update
+      // côté WhatsApp).
+      telegramAuthStore.pushSnapshot(SESSION_PATH);
       console.log('Telegram: connexion établie et session sauvegardée.');
     }).catch((err) => {
       this._loginError = err;

@@ -82,6 +82,7 @@
         <div id="storage-status" style="margin: 1rem 0 0; display: flex; flex-direction: column; gap: 0.5rem;">
           <p id="storage-status-licenses" style="margin: 0; padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.9rem;"></p>
           <p id="storage-status-whatsapp" style="margin: 0; padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.9rem;"></p>
+          <p id="storage-status-telegram" style="margin: 0; padding: 0.75rem 1rem; border-radius: 6px; font-size: 0.9rem;"></p>
         </div>
       </section>
 
@@ -279,6 +280,7 @@
         const s = await res.json();
         renderStorageStatusLine(document.getElementById('storage-status-licenses'), s.licenses, 'Licences');
         renderStorageStatusLine(document.getElementById('storage-status-whatsapp'), s.whatsapp, 'Session WhatsApp');
+        renderStorageStatusLine(document.getElementById('storage-status-telegram'), s.telegram, 'Session Telegram');
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }

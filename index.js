@@ -1052,6 +1052,7 @@ app.get('/api/admin/storage-status', requireAdmin, (req, res) => {
   res.status(200).json({
     licenses: licenses.getStorageStatus(),
     whatsapp: whatsapp.getStorageStatus(),
+    telegram: telegram.getStorageStatus(),
   });
 });
 
@@ -2916,9 +2917,16 @@ whatsapp
     });
   });
 
-telegram.init().catch((err) => {
-  console.error('Erreur lors de l\'initialisation de l\'adaptateur Telegram:', err);
-});
+telegram
+  .restoreSessionFromRemote()
+  .catch((err) => {
+    console.error('Erreur lors de la restauration de la session Telegram depuis GitHub :', err);
+  })
+  .finally(() => {
+    telegram.init().catch((err) => {
+      console.error('Erreur lors de l\'initialisation de l\'adaptateur Telegram:', err);
+    });
+  });
 
 // Auto-ping interne : sur le plan gratuit Render, le service se met en
 // veille après ~15 min sans requête entrante, ce qui coupe aussi les
