@@ -1844,7 +1844,18 @@
           textarea.value = step.text;
           textarea.addEventListener('input', () => { step.text = textarea.value; });
           card.appendChild(textarea);
-          createSmartTextGenerator(textarea);
+          // Canal détecté dynamiquement au clic sur "Varier" (voir
+          // smartTextGenerateVariant) : diffusion aux Groupes sélectionnés
+          // ("group", ton communautaire, aucune balise de prénom) ou vers
+          // une Liste importée ("private", tutoiement + {nom}) — même
+          // bouton radio "target-mode" que le reste du Centre d'Envoi.
+          createSmartTextGenerator(textarea, {
+            mode: () => {
+              const checked = document.querySelector('input[name="target-mode"]:checked');
+              return checked && checked.value === 'groups' ? 'group' : 'private';
+            },
+            namePlaceholder: '{nom}',
+          });
         } else {
           const p = document.createElement('p');
           p.textContent = '📎 ' + step.file.name;
@@ -3497,6 +3508,15 @@
       return checked ? checked.value : 'groups';
     }
 
+    // Détection du canal pour le composant SmartTextGenerator (voir plus
+    // bas) : une publication Facebook (Page) s'adresse toujours à un public
+    // ("group"), les deux autres canaux basculent selon le bouton radio
+    // "Destinataires" (Groupes/Canaux vs Liste importée).
+    function schedTextGenMode() {
+      if (schedCurrentChannel() === 'facebook_page') return 'group';
+      return schedCurrentRecipientType() === 'groups' ? 'group' : 'private';
+    }
+
     function schedContactIdentifier(contact) {
       // Telegram (/api/telegram/contacts/import) renvoie "identifier",
       // WhatsApp (/api/contacts/import) renvoie "telephone" — deux formats
@@ -3718,7 +3738,7 @@
           textarea.value = step.text;
           textarea.addEventListener('input', () => { step.text = textarea.value; });
           card.appendChild(textarea);
-          createSmartTextGenerator(textarea);
+          createSmartTextGenerator(textarea, { mode: schedTextGenMode });
         } else {
           const p = document.createElement('p');
           p.textContent = '📎 ' + step.file.name;
@@ -4503,33 +4523,40 @@
 
     // ---------- Composant universel "Copywriter IA Intelligent" (SmartTextGenerator) ----------
     // Moteur "Copywriter Mille Variantes" côté client (aucun appel serveur,
-    // aucune IA générative — un moteur de permutations façon Spintax) : pioche
-    // au hasard une accroche, un cadrage de l'intention, 2 ou 3 puces
-    // d'avantages (sans répétition) et un appel à l'action, chacun dans un
-    // pool de variantes courtes — rejoué à chaque nouvelle carte ET à la
-    // demande ("🔄 Varier") pour qu'aucun prospect ne reçoive mot pour mot le
-    // même texte. Avec les tailles de pools ci-dessous (accroches × cadrages
-    // × puces choisies-et-ordonnées × appels à l'action), le nombre de
-    // combinaisons distinctes se compte en dizaines de milliers — largement
-    // au-delà du "aucun prospect ne reçoit le même texte" demandé. Un lien
-    // éventuellement collé dans l'intention est détecté et extrait plutôt
-    // que répété dans le corps du message.
+    // aucune IA générative — un moteur de permutations façon Spintax lourd) :
+    // pioche au hasard une accroche, un cadrage de l'intention, 2 ou 3 puces
+    // d'avantages (sans répétition, puis reformulées mot à mot via un
+    // dictionnaire de synonymes — voir synonymize) et un appel à l'action,
+    // chacun dans un pool de variantes courtes — rejoué à chaque nouvelle
+    // carte ET à la demande ("🔄 Varier") pour qu'aucun destinataire ne
+    // reçoive mot pour mot le même texte. Un lien éventuellement collé dans
+    // l'intention est détecté et extrait plutôt que répété dans le corps du
+    // message.
     //
     // Partagé par TOUS les formulaires de rédaction du dashboard (Relance
     // Manuelle Express, Programmation de Campagnes, Envois Automatiques
     // WhatsApp/Telegram/Facebook, Templates de réponse auto) — voir
     // createSmartTextGenerator ci-dessous, qui monte le petit composant
     // "Mon Intention" + "🔄 Varier le texte" sous n'importe quel <textarea>.
-    // `name` reçoit soit un prénom déjà résolu (carte Relance Manuelle : un
-    // seul contact connu), soit littéralement une balise de personnalisation
-    // serveur (ex: "{first_name}", voir lib/personalization.js) pour les
-    // formulaires de campagne en masse — elle atterrit alors telle quelle
-    // dans l'accroche générée (ex: "Salut {first_name} !") et sera résolue
-    // par contact au moment de l'envoi. Passer une chaîne vide bascule sur
-    // les accroches génériques (aucune mention de nom) — utilisé pour les
-    // publications publiques (Page/Groupes Facebook) qui ne s'adressent à
-    // personne en particulier.
-    function smartTextGenerateVariant(intentionRaw, name) {
+    //
+    // `channelMode` détecte le canal de diffusion et adapte le ton :
+    //  - 'private' (envoi 1-to-1 : DM, contact importé, Relance Manuelle) —
+    //    ultra-familier, tutoiement, `name` (un prénom déjà résolu pour la
+    //    carte Relance Manuelle, ou littéralement une balise de
+    //    personnalisation serveur comme "{first_name}"/"{prenom}" pour les
+    //    formulaires de campagne en masse — voir lib/personalization.js —
+    //    résolue par contact au moment de l'envoi) est injecté dans
+    //    l'accroche. `name` vide bascule sur des accroches privées mais
+    //    anonymes (ex: réponse auto à un commentaire dont le prénom n'est
+    //    pas connu), toujours en tutoiement.
+    //  - 'group' (diffusion à un groupe/canal/Page : aucun destinataire
+    //    individuel identifiable) — ton communautaire ("Salut la famille",
+    //    "Hello l'équipe") et vouvoiement pluriel dans l'appel à l'action ;
+    //    `name` est ignoré : jamais de balise de personnalisation
+    //    individuelle insérée dans un message de groupe (voir le paramètre
+    //    `mode` de createSmartTextGenerator, qui l'impose).
+    function smartTextGenerateVariant(intentionRaw, channelMode, name) {
+      const isGroup = channelMode === 'group';
       const urlMatch = intentionRaw.match(/https?:\/\/\S+/i);
       const link = urlMatch ? urlMatch[0] : '';
       // Retire aussi un éventuel mot d'introduction du lien resté en fin de
@@ -4541,16 +4568,22 @@
         .trim()
         .replace(/[\s,;:.-]+$/, '');
 
-      const HOOKS = name
+      const HOOKS = isGroup
         ? [
-          `🔥 Salut ${name} !`, `👋 Coucou ${name},`, `✨ Hey ${name} !`, `😊 Bonjour ${name},`,
-          `🙌 Salut ${name}, j'espère que tu vas bien !`, `💌 Hello ${name} !`, `🌟 ${name}, j'ai une info pour toi !`,
-          `👋 Petit coucou, ${name} !`, `😄 Salut ${name}, ça faisait longtemps !`, `🎯 ${name}, j'ai pensé à toi !`,
+          `🔥 Salut la famille !`, `👋 Hello l'équipe,`, `✨ Coucou à tous !`, `😊 Bonjour à toutes et tous,`,
+          `📣 Chers membres,`, `🌟 Une info pour toute la communauté !`, `🎯 Info du jour pour vous tous :`,
+          `💬 Salut le groupe !`, `📢 À toute la team,`, `🙌 Hello tout le monde !`,
         ]
-        : [
-          `🔥 Salut !`, `👋 Bonjour,`, `✨ Hey !`, `😊 Bonjour à vous,`, `💌 Hello !`,
-          `🌟 J'ai une info pour vous !`, `🎯 Petite info du jour :`,
-        ];
+        : (name
+          ? [
+            `🔥 Salut ${name} !`, `👋 Coucou ${name},`, `✨ Hey ${name} !`, `😊 Bonjour ${name},`,
+            `🙌 Salut ${name}, j'espère que tu vas bien !`, `💌 Hello ${name} !`, `🌟 ${name}, j'ai une info pour toi !`,
+            `👋 Petit coucou, ${name} !`, `😄 Salut ${name}, ça faisait longtemps !`, `🎯 ${name}, j'ai pensé à toi !`,
+          ]
+          : [
+            `🔥 Salut !`, `👋 Bonjour,`, `✨ Hey !`, `😊 Bonjour à vous,`, `💌 Hello !`,
+            `🌟 J'ai une info pour vous !`, `🎯 Petite info du jour :`,
+          ]);
 
       // Cadrages alternatifs de l'intention (même contenu, tournure
       // différente à chaque tirage) — sert de PREMIÈRE puce quand une
@@ -4563,7 +4596,9 @@
         : [];
 
       // Puces d'avantages génériques (2ᵉ/3ᵉ puce) — choisies SANS répétition
-      // à chaque génération, dans un ordre tiré au hasard.
+      // à chaque génération, dans un ordre tiré au hasard, PUIS reformulées
+      // mot à mot (voir synonymize) pour ne jamais retomber deux fois sur la
+      // même phrase exacte même si la même puce est repiochée.
       const BENEFITS = [
         `⏳ Offre valable pour une durée limitée`,
         `🎁 Sans engagement`,
@@ -4577,14 +4612,27 @@
         `🎯 Des résultats rapides`,
         `👍 Simple et rapide à obtenir`,
         `🌟 Une occasion à ne pas laisser passer`,
+        `✅ Facile à obtenir`,
+        `🔥 Une offre exceptionnelle`,
+        `🎉 Un bon plan à saisir vite`,
       ];
 
-      const CTAS = [
-        `👉 Dis-moi si ça t'intéresse !`, `📩 Réponds-moi pour en savoir plus.`,
-        `✅ Je reste dispo pour toute question !`, `🙏 Hâte d'avoir ton retour !`,
-        `💬 On en discute ?`, `🤝 Ça te dit ?`, `⚡ Fonce avant qu'il ne soit trop tard !`,
-        `🎯 Réserve ta place dès maintenant !`, `📲 Écris-moi pour valider !`, `🚀 Ne rate pas cette occasion !`,
-      ];
+      // Appels à l'action : tutoiement en privé, vouvoiement pluriel et
+      // formulations communautaires en groupe (jamais "tu"/"toi" adressé à
+      // un groupe entier).
+      const CTAS = isGroup
+        ? [
+          `👉 Dites-nous si ça vous intéresse !`, `📩 Réagissez en commentaire pour en savoir plus.`,
+          `✅ On reste dispo pour toute question !`, `🙏 Hâte de vous lire !`,
+          `💬 Qu'en pensez-vous ?`, `🤝 Ça vous tente ?`, `⚡ Foncez avant qu'il ne soit trop tard !`,
+          `🎯 Réservez votre place dès maintenant !`, `📲 Écrivez-nous pour valider !`, `🚀 Ne ratez pas cette occasion !`,
+        ]
+        : [
+          `👉 Dis-moi si ça t'intéresse !`, `📩 Réponds-moi pour en savoir plus.`,
+          `✅ Je reste dispo pour toute question !`, `🙏 Hâte d'avoir ton retour !`,
+          `💬 On en discute ?`, `🤝 Ça te dit ?`, `⚡ Fonce avant qu'il ne soit trop tard !`,
+          `🎯 Réserve ta place dès maintenant !`, `📲 Écris-moi pour valider !`, `🚀 Ne rate pas cette occasion !`,
+        ];
 
       const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
       // Tire N éléments distincts d'un pool, dans un ordre aléatoire (Fisher-
@@ -4602,29 +4650,76 @@
       // 2 ou 3 puces au total, aussi courtes et aérées que l'accroche —
       // jamais de pavé de texte.
       const bulletCount = 2 + Math.round(Math.random());
-      const bullets = core
+      const bullets = (core
         ? [pick(CORE_FRAMES), ...pickN(BENEFITS, bulletCount - 1)]
-        : pickN(BENEFITS, bulletCount);
+        : pickN(BENEFITS, bulletCount)
+      ).map((line, idx) => (idx === 0 && core ? line : synonymize(line)));
 
       const lines = [pick(HOOKS), '', ...bullets, ''];
       if (link) lines.push(`🔗 ${link}`);
-      lines.push(pick(CTAS));
+      lines.push(synonymize(pick(CTAS)));
 
       return lines.join('\n');
+    }
+
+    // Spintax lourd, couche 2 : dictionnaire de synonymes appliqué mot par
+    // mot sur les puces/CTA déjà piochées (jamais sur `core`, l'intention
+    // saisie par l'utilisateur — un prix ou un nom de produit ne doit
+    // jamais être reformulé). Multiplie encore le nombre de formulations
+    // distinctes au-delà de la simple permutation de pools : deux tirages
+    // qui retombent sur la même puce/CTA ne produisent alors, la plupart du
+    // temps, plus le même texte mot pour mot. La casse du mot d'origine
+    // (majuscule de début de phrase) est préservée sur le remplacement.
+    const SYNONYM_MAP = {
+      rapide: ['rapide', 'express', 'ultra-rapide', 'instantané'],
+      rapides: ['rapides', 'express', 'instantanés'],
+      immédiat: ['immédiat', 'instantané', 'sur-le-champ'],
+      garantie: ['garantie', 'assurée', 'certifiée'],
+      garanti: ['garanti', 'assuré', 'certifié'],
+      imbattable: ['imbattable', 'canon', 'incroyable', 'exceptionnel'],
+      limitée: ['limitée', 'restreinte', 'exceptionnelle'],
+      limitées: ['limitées', 'comptées', 'exceptionnelles'],
+      simple: ['simple', 'facile', 'sans prise de tête'],
+      facile: ['facile', 'simple', 'sans effort'],
+      occasion: ['occasion', 'opportunité', 'bon plan'],
+      exceptionnelle: ['exceptionnelle', 'unique', 'rare'],
+      exceptionnel: ['exceptionnel', 'unique', 'rare'],
+      offre: ['offre', 'promo', 'deal', 'bon plan'],
+      dispo: ['dispo', 'disponible', 'joignable'],
+      vite: ['vite', 'rapidement', 'sans tarder'],
+    };
+    function synonymize(text) {
+      return text.replace(/\p{L}+/gu, (word) => {
+        const options = SYNONYM_MAP[word.toLowerCase()];
+        if (!options) return word;
+        const choice = options[Math.floor(Math.random() * options.length)];
+        return word[0] !== word[0].toLowerCase() ? choice[0].toUpperCase() + choice.slice(1) : choice;
+      });
     }
 
     // Monte le composant <SmartTextGenerator /> (champ "Mon Intention" +
     // bouton "🔄 Varier le texte") juste après le <textarea> donné. Purement
     // additif : n'importe quel texte déjà présent dans le <textarea> (import,
     // brouillon manuel) reste intact tant que "Varier le texte" n'a pas été
-    // cliqué. `options.namePlaceholder` (par défaut "{first_name}") est la
-    // balise de personnalisation insérée dans les accroches générées —
-    // laisser `options.personalized: false` pour les formulaires qui
-    // s'adressent à un public (publication Page/Groupe) plutôt qu'à un
-    // contact nommé, auquel cas aucune balise n'est insérée.
+    // cliqué.
+    //
+    // `options.mode` détecte le canal ('private' par défaut, ou 'group') —
+    // soit une chaîne fixe pour un formulaire toujours du même type (ex:
+    // diffusion Groupes/Canaux Telegram : toujours 'group'), soit une
+    // fonction rappelée À CHAQUE clic sur "Varier" pour les formulaires dont
+    // le canal peut changer en cours de saisie (ex: le bascule Groupes/Liste
+    // importée du Centre d'Envoi WhatsApp ou de la Programmation) — voir les
+    // appels à mountSmartTextGenerator/createSmartTextGenerator plus bas.
+    // En mode 'group', `options.namePlaceholder` est ignoré : le moteur
+    // n'insère jamais de balise de personnalisation individuelle dans un
+    // message de groupe (voir smartTextGenerateVariant). En mode 'private',
+    // `options.namePlaceholder` (par défaut "{first_name}") est la balise
+    // insérée dans les accroches — passer '' pour un formulaire privé mais
+    // sans prénom connu (ex: réponse auto à un commentaire).
     function createSmartTextGenerator(textarea, options) {
       const opts = options || {};
-      const namePlaceholder = opts.personalized === false ? '' : (opts.namePlaceholder || '{first_name}');
+      const namePlaceholder = opts.namePlaceholder === '' ? '' : (opts.namePlaceholder || '{first_name}');
+      const resolveMode = () => (typeof opts.mode === 'function' ? opts.mode() : (opts.mode || 'private'));
 
       const wrap = document.createElement('div');
       wrap.className = 'smart-textgen';
@@ -4655,7 +4750,8 @@
           return;
         }
         hint.hidden = true;
-        textarea.value = smartTextGenerateVariant(intention, namePlaceholder);
+        const mode = resolveMode();
+        textarea.value = smartTextGenerateVariant(intention, mode, mode === 'group' ? '' : namePlaceholder);
         // Notifie les autres écouteurs déjà attachés au textarea (ex:
         // synchronisation d'une étape de séquence dans un tableau d'état) —
         // exactement comme s'il s'agissait d'une saisie manuelle.
@@ -4692,7 +4788,7 @@
       if (cursor >= items.length) return;
       const item = items[cursor];
       const intention = relanceGetIntention();
-      const message = intention ? smartTextGenerateVariant(intention, item.name) : (item.message || '');
+      const message = intention ? smartTextGenerateVariant(intention, 'private', item.name) : (item.message || '');
       document.getElementById('relance-message-text').value = message;
     }
 
@@ -4881,20 +4977,26 @@
     // ---------- Composant "Copywriter IA Intelligent" : intégration sur tous
     // les autres formulaires de rédaction (en plus de la Relance Manuelle
     // Express, qui a sa propre carte dédiée déjà branchée sur le même
-    // moteur — voir smartTextGenerateVariant plus haut). Les champs qui
-    // s'adressent à un contact nommé (campagnes en masse, DM individuel)
-    // reçoivent le placeholder de personnalisation par défaut
-    // ("{first_name}") ; les publications publiques (Page/Groupes Facebook,
-    // réponse auto générique, texte de partage) passent personalized:false.
-    mountSmartTextGenerator('tg-message');
+    // moteur — voir smartTextGenerateVariant plus haut). Chaque champ
+    // déclare son canal réel :
+    //  - 'group' : diffusion à un groupe/canal/Page (tg-message envoie aux
+    //    groupes/canaux Telegram sélectionnés dans CE panneau — jamais à des
+    //    contacts individuels, voir le panneau Telegram plus haut — et les
+    //    publications/partages Facebook s'adressent à un public, jamais à un
+    //    contact nommé).
+    //  - 'private' (par défaut) avec namePlaceholder : envoi 1-to-1 vers des
+    //    contacts nommés (DM Telegram, relance Facebook).
+    //  - 'private' avec namePlaceholder: '' : envoi 1-to-1 mais sans prénom
+    //    connu de manière fiable (réponse auto à un commentaire).
+    mountSmartTextGenerator('tg-message', { mode: 'group' });
     mountSmartTextGenerator('tg-dm-message');
     mountSmartTextGenerator('fb-import-message', { namePlaceholder: '{prenom}' });
-    mountSmartTextGenerator('fb-publish-message', { personalized: false });
-    mountSmartTextGenerator('fb-sched-message', { personalized: false });
-    mountSmartTextGenerator('fb-groups-message', { personalized: false });
-    mountSmartTextGenerator('sched-message');
-    mountSmartTextGenerator('rule-message-input', { personalized: false });
-    mountSmartTextGenerator('share-message-text', { personalized: false });
+    mountSmartTextGenerator('fb-publish-message', { mode: 'group' });
+    mountSmartTextGenerator('fb-sched-message', { mode: 'group' });
+    mountSmartTextGenerator('fb-groups-message', { mode: 'group' });
+    mountSmartTextGenerator('sched-message', { mode: schedTextGenMode });
+    mountSmartTextGenerator('rule-message-input', { namePlaceholder: '' });
+    mountSmartTextGenerator('share-message-text', { mode: 'group' });
 
     tryAutoLogin().then((ok) => { if (ok) init(); });
   </script>
