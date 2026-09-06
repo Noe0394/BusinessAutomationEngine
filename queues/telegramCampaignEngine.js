@@ -1,8 +1,28 @@
 const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
-const { resolveSpintax } = require('../lib/spintax');
+const { personalizeMessage, buildPersonalizationVars } = require('../lib/personalization');
 const circuitBreaker = require('../lib/circuitBreaker');
+
+// Normalise un destinataire Telegram pour l'envoi : un identifiant ("username
+// Telegram, numéro, ou identifiant de groupe/canal déjà résolu — voir
+// recipientType ci-dessous) et le jeu complet de variables dynamiques
+// ("vars", voir lib/personalization.js#buildPersonalizationVars), construit à
+// partir du nom éventuellement associé lors de l'import Excel/CSV (voir
+// /api/telegram/contacts/import) — vide si absent ou si le profil Telegram
+// est masqué, auquel cas personalizeMessage retombe proprement sur des
+// variables vides. Accepte soit un identifiant simple (chaîne — ancien
+// format, ou identifiant de groupe), soit un contact enrichi
+// { identifier, name }.
+function normalizeTelegramRecipient(recipient) {
+  if (recipient && typeof recipient === 'object') {
+    const identifier = String(recipient.identifier ?? recipient.username ?? recipient.telephone ?? recipient.to ?? '').trim();
+    const name = String(recipient.name ?? recipient.prenom ?? recipient.nom ?? '').trim();
+    return { identifier, vars: buildPersonalizationVars(name, identifier) };
+  }
+  const identifier = String(recipient ?? '').trim();
+  return { identifier, vars: buildPersonalizationVars('', identifier) };
+}
 
 // Persistance de la progression d'une campagne Telegram (messages directs
 // vers une liste de contacts importée), tenant par tenant — même principe
@@ -216,6 +236,7 @@ class TelegramCampaignEngine {
       finishedAt: c.finishedAt,
       nextIndex: c.nextIndex,
       recipients: c.recipients,
+      recipientType: c.recipientType,
       message: c.message,
       results: c.results,
       delaySeconds: c.delaySeconds,
@@ -310,7 +331,7 @@ class TelegramCampaignEngine {
   _markRemainingInterrupted(fromIndex) {
     const campaign = this.campaign;
     for (let j = fromIndex; j < campaign.recipients.length; j += 1) {
-      campaign.results.push({ to: String(campaign.recipients[j]), status: 'interrupted', timestamp: new Date().toISOString() });
+      campaign.results.push({ to: normalizeTelegramRecipient(campaign.recipients[j]).identifier, status: 'interrupted', timestamp: new Date().toISOString() });
     }
     campaign.nextIndex = campaign.recipients.length;
     campaign.status = 'stopped';
@@ -349,17 +370,23 @@ class TelegramCampaignEngine {
         return;
       }
 
-      const identifier = recipients[i];
+      const { identifier, vars } = normalizeTelegramRecipient(recipients[i]);
       let status = 'failed';
       let errorReason = null;
       let overloadDetected = false;
 
       try {
-        const entity = await this.session.resolveRecipient(identifier);
-        // Résolu à chaque destinataire (voir lib/spintax.js) : deux
-        // destinataires reçoivent alors rarement le texte identique mot pour
-        // mot, même à partir du même modèle.
-        const personalizedMessage = resolveSpintax(campaign.message);
+        // 'groups' : identifiants de groupes/canaux déjà connus (getGroups()),
+        // utilisables directement sans passer par resolveRecipient (qui ne
+        // sait résoudre qu'un username Telegram ou un numéro de téléphone).
+        // 'contacts' (par défaut) : identifiants importés à résoudre.
+        const entity = campaign.recipientType === 'groups' ? identifier : await this.session.resolveRecipient(identifier);
+        // Spintax résolu PUIS variables de personnalisation substituées (voir
+        // lib/personalization.js#personalizeMessage) — dans cet ordre, et À
+        // CHAQUE destinataire (pas une seule fois pour toute la campagne) :
+        // deux destinataires reçoivent alors rarement le texte identique mot
+        // pour mot, même à partir du même modèle.
+        const personalizedMessage = personalizeMessage(campaign.message, vars);
         if (this.resolvedMedia) {
           // Séquencement standard média + texte : le média est expédié seul
           // (sans légende), puis le texte associé est envoyé séparément
@@ -390,7 +417,7 @@ class TelegramCampaignEngine {
           // de mise en veille et un health check positif (voir
           // _waitForNetworkHold), sans le compter ni avancer la file.
           overloadDetected = true;
-          const backoffMs = this.networkHealth.recordOverloadFailure();
+          const backoffMs = this.networkHealth.recordOverloadFailure(err);
           this._persist();
           console.log(
             `Campagne Telegram (tenant "${this.tenantId}"): signal de surcharge détecté (${err.message}) — ` +
@@ -454,6 +481,7 @@ class TelegramCampaignEngine {
     }
 
     const { maxPerCycle, media, delaySeconds, batchSize, batchPauseSeconds } = options;
+    const recipientType = options.recipientType === 'groups' ? 'groups' : 'contacts';
     const limitedRecipients = Number.isInteger(maxPerCycle) && maxPerCycle > 0
       ? recipients.slice(0, maxPerCycle)
       : recipients;
@@ -478,6 +506,7 @@ class TelegramCampaignEngine {
       finishedAt: null,
       nextIndex: 0,
       recipients: limitedRecipients,
+      recipientType,
       message,
       results: [],
       delaySeconds: Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds : undefined,

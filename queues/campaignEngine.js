@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
-const { replaceVariables, normalizeRecipientEntry } = require('../lib/whatsappRecipients');
-const { resolveSpintax } = require('../lib/spintax');
+const { normalizeRecipientEntry } = require('../lib/whatsappRecipients');
+const { personalizeMessage } = require('../lib/personalization');
 const circuitBreaker = require('../lib/circuitBreaker');
 
 // Persistance de la progression d'une campagne WhatsApp, tenant par tenant
@@ -443,7 +443,7 @@ class CampaignEngine {
         return;
       }
 
-      const { to, nom } = normalizeRecipientEntry(recipients[i], this.session.getContactName);
+      const { to, vars } = normalizeRecipientEntry(recipients[i], this.session.getContactName);
       let status = 'failed';
       let overloadDetected = false;
 
@@ -454,11 +454,12 @@ class CampaignEngine {
           if (step.type === 'media') {
             await this.session.sendMedia(to, step);
           } else {
-            // Spintax résolu APRÈS les variables (voir lib/spintax.js) et
-            // À CHAQUE destinataire (pas une seule fois pour toute la
-            // campagne) : deux destinataires reçoivent alors rarement le
+            // Spintax résolu PUIS variables de personnalisation substituées
+            // (voir lib/personalization.js#personalizeMessage) — dans cet
+            // ordre, et À CHAQUE destinataire (pas une seule fois pour toute
+            // la campagne) : deux destinataires reçoivent alors rarement le
             // texte identique mot pour mot, même à partir du même modèle.
-            await this.session.sendMessage(to, resolveSpintax(replaceVariables(step.text, { nom })));
+            await this.session.sendMessage(to, personalizeMessage(step.text, vars));
           }
           this._recordSendLatency(Date.now() - sendStartedAt);
           if (s < sequence.length - 1) {
@@ -478,7 +479,7 @@ class CampaignEngine {
           // check positif (voir _waitForNetworkHold), sans le compter ni
           // avancer la file.
           overloadDetected = true;
-          const backoffMs = this.networkHealth.recordOverloadFailure();
+          const backoffMs = this.networkHealth.recordOverloadFailure(err);
           this._persist();
           console.log(
             `Campagne (tenant "${this.tenantId}"): signal de surcharge détecté (${err.message}) — ` +

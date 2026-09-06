@@ -23,8 +23,7 @@ const contactsStore = require('./models/contact');
 const keywordRules = require('./models/keyword_rules');
 const scrapedNumbers = require('./models/scrapedNumbers');
 const groupScraper = require('./lib/groupScraper');
-const { replaceVariables, normalizeJid, jidToE164, normalizeRecipientEntry } = require('./lib/whatsappRecipients');
-const { resolveSpintax } = require('./lib/spintax');
+const { replaceVariables, normalizeJid, jidToE164 } = require('./lib/whatsappRecipients');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -336,8 +335,10 @@ function consumeOAuthState(state) {
   return Boolean(expiresAt) && expiresAt > Date.now();
 }
 
-// replaceVariables/normalizeJid/jidToE164/normalizeRecipientEntry : voir
-// lib/whatsappRecipients.js (partagées avec queues/campaignEngine.js).
+// replaceVariables/normalizeJid/jidToE164 : voir lib/whatsappRecipients.js
+// (partagées avec queues/campaignEngine.js — normalizeRecipientEntry, qui y
+// reste, n'est plus utilisée ici depuis que dispatchScheduledWhatsapp injecte
+// directement ses destinataires bruts dans le Queue Engine principal).
 
 // Convertit un fichier "média" issu de multer en étape prête à l'envoi
 // WhatsApp, en compressant automatiquement une vidéo trop lourde (voir
@@ -484,8 +485,19 @@ async function resolveScheduledSequence(entry) {
 // des campagnes et de contactNames). En attendant une éventuelle isolation
 // complète de ce module, les envois programmés WhatsApp passent par
 // l'instance du tenant admin plutôt que par une session partagée fantôme.
+//
+// L'envoi lui-même est désormais injecté directement dans le Queue Engine
+// principal (queues/campaignEngine.js) plutôt que dans une boucle d'envoi
+// dédiée : une programmation bénéficie ainsi exactement des mêmes
+// protections qu'une campagne interactive (Spintax, séquencement
+// Texte/Média, Circuit Breaker anti-surcharge et persistance sur disque
+// résistante à un redéploiement Render), au prix d'un seul créneau d'envoi
+// partagé entre campagnes interactives et programmations pour ce tenant (voir
+// CampaignEngine#start, qui refuse un second lancement concurrent —
+// remontée telle quelle par runScheduledMessagesTick, qui retentera cette
+// programmation au cycle suivant).
 async function dispatchScheduledWhatsapp(entry, mediaList) {
-  const session = whatsappManager.getOrCreate(whatsappManager.ADMIN_TENANT_ID).session;
+  const { session, campaignEngine } = whatsappManager.getOrCreate(whatsappManager.ADMIN_TENANT_ID);
   let recipients = entry.recipients;
 
   if (entry.recipientType === 'groups') {
@@ -497,84 +509,72 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
     recipients = Array.from(merged);
   }
 
-  const sequence = await resolveScheduledSequence(entry);
-  const seqMinMs = Math.max(1, entry.sequenceDelayMinSeconds || 2) * 1000;
-  const seqMaxMs = Math.max(seqMinMs, (entry.sequenceDelayMaxSeconds || 5) * 1000);
-
-  const results = [];
-  for (let i = 0; i < recipients.length; i += 1) {
-    const { to, nom } = normalizeRecipientEntry(recipients[i], session.getContactName);
-    try {
-      if (sequence) {
-        // Séquençage / Envoi Multi-Messages : chaque étape part comme un
-        // message distinct, dans l'ordre choisi, avec un court délai entre
-        // deux étapes pour simuler une frappe naturelle.
-        for (let s = 0; s < sequence.length; s += 1) {
-          const step = sequence[s];
-          if (step.type === 'media') {
-            await session.sendMedia(to, step);
-          } else {
-            await session.sendMessage(to, resolveSpintax(replaceVariables(step.text, { nom })));
-          }
-          if (s < sequence.length - 1) {
-            await sleep(randomDelay(seqMinMs, seqMaxMs));
-          }
-        }
-      } else if (Array.isArray(mediaList) && mediaList.length > 0) {
-        // Rafale de pièces jointes au même destinataire (voir
-        // queues/campaignEngine.js pour la même logique côté envoi
-        // immédiat) : la légende n'est portée que par la première.
-        const caption = resolveSpintax(replaceVariables(entry.message, { nom }));
-        for (let m = 0; m < mediaList.length; m += 1) {
-          await session.sendMedia(to, { ...mediaList[m], caption: m === 0 ? caption : undefined });
-        }
-      } else {
-        await session.sendMessage(to, resolveSpintax(replaceVariables(entry.message, { nom })));
-      }
-      results.push({ to, status: 'delivered' });
-    } catch (err) {
-      results.push({ to, status: 'failed', error: err.message || String(err) });
-    }
-    if (i < recipients.length - 1) {
-      await sleep(randomDelay(8000, 15000));
+  // Séquence Texte/Média à injecter dans le moteur : celle déjà définie pour
+  // cette programmation (Séquençage / Envoi Multi-Messages) si présente,
+  // sinon une séquence dérivée du message/média classique — média(s) d'abord,
+  // texte ensuite (le moteur envoie chaque étape séparément, sans légende
+  // combinée, voir queues/campaignEngine.js#_run).
+  let sequence = await resolveScheduledSequence(entry);
+  if (!sequence) {
+    sequence = [];
+    if (Array.isArray(mediaList) && mediaList.length > 0) {
+      mediaList.forEach((media) => sequence.push({ type: 'media', ...media }));
+      if (entry.message) sequence.push({ type: 'text', text: entry.message });
+    } else {
+      sequence.push({ type: 'text', text: entry.message || '' });
     }
   }
-  return results;
+
+  await campaignEngine.start(recipients, {
+    sequence,
+    sequenceDelayMinMs: Math.max(1, entry.sequenceDelayMinSeconds || 2) * 1000,
+    sequenceDelayMaxMs: Math.max(1, entry.sequenceDelayMaxSeconds || 5) * 1000,
+  });
+
+  const finalStatus = await waitForCampaignCompletion(campaignEngine);
+  return (finalStatus && finalStatus.results) || [];
 }
 
 // Comme dispatchScheduledWhatsapp ci-dessus : la programmation multi-canal
 // n'a aujourd'hui aucune notion de tenant/propriétaire, donc les envois
 // programmés Telegram passent par l'instance du tenant admin plutôt que par
-// une session partagée fantôme.
+// une session partagée fantôme — et sont désormais injectés dans le Queue
+// Engine Telegram (queues/telegramCampaignEngine.js) pour les mêmes raisons
+// que côté WhatsApp ci-dessus.
 async function dispatchScheduledTelegram(entry, media) {
-  const session = telegramManager.getOrCreate(telegramManager.ADMIN_TENANT_ID).session;
-  const targets = entry.recipients;
-  const results = [];
+  const { campaignEngine } = telegramManager.getOrCreate(telegramManager.ADMIN_TENANT_ID);
 
-  for (let i = 0; i < targets.length; i += 1) {
-    try {
-      // 'contacts' : identifiants importés (username/téléphone) à résoudre —
-      // voir resolveRecipient(). 'groups' : identifiants de groupes/canaux
-      // déjà connus (getGroups()), utilisables directement.
-      const destination = entry.recipientType === 'contacts'
-        ? await session.resolveRecipient(targets[i])
-        : targets[i];
-      const personalizedMessage = resolveSpintax(entry.message);
+  await campaignEngine.start(entry.recipients, entry.message, {
+    media,
+    // 'contacts' : identifiants importés (username/téléphone) à résoudre par
+    // le moteur avant l'envoi. 'groups' : identifiants de groupes/canaux déjà
+    // connus (getGroups()), utilisables directement.
+    recipientType: entry.recipientType === 'groups' ? 'groups' : 'contacts',
+  });
 
-      if (media) {
-        await session.sendMedia(destination, { ...media, caption: personalizedMessage });
-      } else {
-        await session.sendMessage(destination, personalizedMessage);
+  const finalStatus = await waitForCampaignCompletion(campaignEngine);
+  return (finalStatus && finalStatus.results) || [];
+}
+
+// Attend la fin (complétée ou interrompue) d'une campagne tout juste lancée
+// sur l'un des deux moteurs de file d'attente (CampaignEngine ou
+// TelegramCampaignEngine, tous deux exposant getStatus().status) — utilisé
+// par la programmation multi-canal ci-dessus, qui doit rendre la main à
+// runScheduledMessagesTick avec le résultat final plutôt qu'avec une
+// campagne encore en cours.
+function waitForCampaignCompletion(engine) {
+  const POLL_INTERVAL_MS = 500;
+  return new Promise((resolve) => {
+    const check = () => {
+      const status = engine.getStatus();
+      if (!status || status.status !== 'running') {
+        resolve(status);
+        return;
       }
-      results.push({ to: String(targets[i]), status: 'delivered' });
-    } catch (err) {
-      results.push({ to: String(targets[i]), status: 'failed', error: err.message || String(err) });
-    }
-    if (i < targets.length - 1) {
-      await sleep(randomDelay(10000, 15000));
-    }
-  }
-  return results;
+      setTimeout(check, POLL_INTERVAL_MS);
+    };
+    check();
+  });
 }
 
 async function dispatchScheduledFacebookPage(entry, media) {

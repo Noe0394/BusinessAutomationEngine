@@ -478,7 +478,7 @@
 
           <div class="field">
             <label for="tg-dm-message">Message individuel (emojis supportés)</label>
-            <textarea id="tg-dm-message" placeholder="Bonjour {prenom}, ..."></textarea>
+            <textarea id="tg-dm-message" placeholder="Bonjour {first_name}, ..."></textarea>
           </div>
 
           <div class="field">
@@ -2342,7 +2342,10 @@
       formData.append('maxPerCycle', maxPerCycle);
       formData.append('batchSize', batchSize);
       formData.append('batchPauseSeconds', batchPauseSeconds);
-      formData.append('recipients', JSON.stringify(tgDmImportedContacts.map((c) => c.identifier)));
+      // { identifier, name } plutôt qu'un simple identifiant : "name" alimente
+      // les variables de personnalisation {first_name}/{name} dans les
+      // messages (voir lib/personalization.js côté serveur).
+      formData.append('recipients', JSON.stringify(tgDmImportedContacts.map((c) => ({ identifier: c.identifier, name: c.name || '' }))));
       if (selectedTgDmMediaFile) formData.append('media', selectedTgDmMediaFile);
 
       const sendBtn = document.getElementById('tg-dm-send-btn');

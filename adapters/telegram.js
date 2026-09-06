@@ -7,6 +7,7 @@ const { CustomFile } = require('telegram/client/uploads');
 const githubStore = require('../githubStore');
 const telegramAuthStore = require('./telegramAuthStore');
 const { resolveSpintax } = require('../lib/spintax');
+const circuitBreaker = require('../lib/circuitBreaker');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -535,14 +536,19 @@ function createSession(tenantId) {
    * Envoi en masse avec régulateur de débit : délai (fixe ou 10-15s
    * aléatoire par défaut) entre chaque envoi, et pause de sécurité triplée
    * toutes les `batchSize` messages pour rester sous les limites anti-flood
-   * de Telegram. Un échec individuel (FloodWait, destinataire invalide...)
-   * est journalisé et marqué "failed" dans les résultats : la file continue
-   * automatiquement vers le destinataire suivant plutôt que de s'arrêter.
+   * de Telegram. Un échec individuel "métier" (destinataire invalide,
+   * contenu refusé...) est journalisé et marqué "failed" dans les résultats :
+   * la file continue automatiquement vers le destinataire suivant plutôt que
+   * de s'arrêter. Un signal de surcharge (429, FloodWaitError...) est traité
+   * différemment (voir lib/circuitBreaker.js) : la file se met en pause pour
+   * la durée EXACTE exigée par Telegram (FLOOD_WAIT_X) avant de RETENTER ce
+   * même destinataire, plutôt que de le compter comme un échec.
    */
   async function sendBulk(chatIds, message, options = {}) {
     const { delaySeconds, batchSize, batchPauseSeconds, media, onProgress } = options;
     const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : chatIds.length;
     const results = [];
+    const networkHealth = new circuitBreaker.CircuitBreakerState();
 
     for (let i = 0; i < chatIds.length; i += 1) {
       const chatId = chatIds[i];
@@ -552,15 +558,35 @@ function createSession(tenantId) {
       // mot, même à partir du même modèle.
       const personalizedMessage = resolveSpintax(message);
 
-      try {
-        if (media) {
-          await sendMedia(chatId, { ...media, caption: personalizedMessage });
-        } else {
-          await sendMessage(chatId, personalizedMessage);
+      // Boucle de retentative bornée aux seuls signaux de surcharge : un
+      // échec "métier" (destinataire invalide, contenu refusé...) sort tout
+      // de suite (break) et passe au destinataire suivant normalement.
+      for (;;) {
+        if (networkHealth.isHeld()) {
+          await sleep(Math.max(0, networkHealth.holdUntil - Date.now()));
+          networkHealth.networkStatus = 'normal';
         }
-        status = 'delivered';
-      } catch (err) {
-        console.error(`Telegram (tenant "${tenantId}"): échec de l'envoi à ${chatId}:`, err.message || err);
+        try {
+          if (media) {
+            await sendMedia(chatId, { ...media, caption: personalizedMessage });
+          } else {
+            await sendMessage(chatId, personalizedMessage);
+          }
+          status = 'delivered';
+          networkHealth.recordSuccess();
+          break;
+        } catch (err) {
+          if (circuitBreaker.isOverloadError(err)) {
+            const backoffMs = networkHealth.recordOverloadFailure(err);
+            console.log(
+              `Telegram (tenant "${tenantId}"): signal de surcharge détecté (${err.message}) — ` +
+              `nouvelle tentative pour ${chatId} dans ${Math.round(backoffMs / 1000)}s.`,
+            );
+            continue;
+          }
+          console.error(`Telegram (tenant "${tenantId}"): échec de l'envoi à ${chatId}:`, err.message || err);
+          break;
+        }
       }
 
       results.push({ to: String(chatId), status, timestamp: new Date().toISOString() });
