@@ -113,6 +113,32 @@ function createSession(tenantId) {
     incomingMessageListeners.push(callback);
   }
 
+  // Écouteurs "identité de compte réinitialisée" — adapters/telegramManager.js
+  // s'y abonne pour réinitialiser (TelegramCampaignEngine#reset) le moteur de
+  // campagne de ce tenant dès que le compte Telegram connecté change : une
+  // campagne "running"/"paused" de l'ANCIEN compte n'a plus aucun sens et ne
+  // doit JAMAIS verrouiller le lancement d'une campagne pour le NOUVEAU
+  // compte connecté sous ce même tenant (même clé de licence). Déclenché par
+  // logout() ET par startLogin() (qui remplace le client sans passer par
+  // logout(), voir plus bas) — jamais par une simple reconnexion automatique
+  // (attemptReconnect), qui garde le même compte et ne doit donc rien
+  // réinitialiser.
+  const accountResetListeners = [];
+
+  function onAccountReset(callback) {
+    accountResetListeners.push(callback);
+  }
+
+  function notifyAccountReset() {
+    accountResetListeners.forEach((callback) => {
+      try {
+        callback();
+      } catch (err) {
+        console.error(`Erreur dans un écouteur de réinitialisation de compte Telegram (tenant "${tenantId}") :`, err.message);
+      }
+    });
+  }
+
   // Enregistré une fois par instance de TelegramClient (init() et
   // startLogin() en créent chacun une nouvelle) : reste actif à travers les
   // reconnexions automatiques (attemptReconnect réutilise le même client),
@@ -253,6 +279,11 @@ function createSession(tenantId) {
   // pour une nouvelle connexion (même numéro ou un autre) via
   // POST /api/telegram/login/start, sans redémarrage du serveur.
   async function logout() {
+    // Voir onAccountReset ci-dessus : le prochain compte connecté sous ce
+    // tenant peut être totalement différent — le moteur de campagne ne doit
+    // jamais hériter d'un état "running"/"paused" de l'ancien.
+    notifyAccountReset();
+
     sessionGeneration += 1;
     stopHeartbeat();
     stopReconnectTimer();
@@ -347,6 +378,11 @@ function createSession(tenantId) {
     if (!isConfigured()) {
       throw new Error('TELEGRAM_NOT_CONFIGURED');
     }
+
+    // Voir onAccountReset ci-dessus : ce nouveau flux de connexion peut
+    // aboutir sur un compte totalement différent de celui précédemment
+    // connecté sous ce tenant (numéro de téléphone différent).
+    notifyAccountReset();
 
     sessionGeneration += 1;
     const myGeneration = sessionGeneration;
@@ -618,6 +654,7 @@ function createSession(tenantId) {
     isConfigured,
     isConnected,
     onIncomingMessage,
+    onAccountReset,
     restoreSessionFromRemote,
     getStorageStatus,
     logout,

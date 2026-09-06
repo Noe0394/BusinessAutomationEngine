@@ -31,6 +31,11 @@ function getOrCreate(rawTenantId) {
     sessionRegulator.ensureCapacity('whatsapp', tenantId);
     const session = whatsapp.createSession(tenantId);
     const campaignEngine = new CampaignEngine(tenantId, session, () => sessionRegulator.touch('whatsapp', tenantId));
+    // Voir adapters/whatsapp.js#onAccountReset et CampaignEngine#reset : dès
+    // que le NUMÉRO WhatsApp connecté sous ce tenant change (déconnexion
+    // manuelle, ré-appairage, révocation détectée), la campagne de l'ancien
+    // numéro est annulée proprement plutôt que de verrouiller le nouveau.
+    session.onAccountReset(() => campaignEngine.reset());
     tenants.set(tenantId, { session, campaignEngine, initStarted: false });
     sessionRegulator.register('whatsapp', tenantId, {
       protected: tenantId === ADMIN_TENANT_ID,

@@ -764,6 +764,36 @@ class CampaignEngine {
     console.log(`Campagne (tenant "${this.tenantId}"): mise en pause (session libérée) — reprise possible ultérieurement.`);
   }
 
+  // Appelée par adapters/whatsappManager.js dès que le NUMÉRO WhatsApp
+  // connecté sous ce tenant change (déconnexion manuelle, ré-appairage d'un
+  // autre numéro, ou révocation détectée par WhatsApp — voir
+  // adapters/whatsapp.js#onAccountReset) : contrairement à pauseForShutdown()
+  // ci-dessus (même compte, session juste libérée temporairement), l'ancien
+  // ET le nouveau compte n'ont ici RIEN en commun — une campagne
+  // "running"/"paused" de l'ancien numéro ne doit JAMAIS verrouiller le
+  // lancement d'une campagne pour le nouveau. Contrairement à stop() (arrêt
+  // demandé PAR l'utilisateur SUR le compte actif), celle-ci finalise
+  // "cancelled" (pas "stopped") pour distinguer clairement les deux causes
+  // dans l'historique/le rapport.
+  reset() {
+    if (this.campaign && this.campaign.status === 'running') {
+      this._markRemainingInterrupted(this.campaign.nextIndex);
+      this.campaign.superseded = true;
+      this.campaign.status = 'cancelled';
+      this.campaign.cancelReason = 'Compte WhatsApp déconnecté ou changé — campagne annulée.';
+      this._persist();
+      console.log(`Campagne (tenant "${this.tenantId}"): annulée — le compte WhatsApp connecté a changé.`);
+      removeSequenceMedia(this.persistableSequence || []);
+    }
+    this.campaign = null;
+    this.persistableSequence = null;
+    this.resolvedSequence = null;
+    this.incomingPauseUntil = 0;
+    this.networkHealth = new circuitBreaker.CircuitBreakerState();
+    this._lastHeartbeatAt = 0;
+    this._runActive = false;
+  }
+
   // Essaie le disque local en premier (rapide, source normale après un
   // simple crash/redémarrage du même conteneur), puis GitHub si le fichier
   // local est absent (cas d'un vrai redéploiement Render ayant vidé le

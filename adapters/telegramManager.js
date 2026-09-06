@@ -33,6 +33,12 @@ function getOrCreate(rawTenantId) {
     sessionRegulator.ensureCapacity('telegram', tenantId);
     const session = telegram.createSession(tenantId);
     const campaignEngine = new TelegramCampaignEngine(tenantId, session, () => sessionRegulator.touch('telegram', tenantId));
+    // Voir adapters/telegram.js#onAccountReset et
+    // TelegramCampaignEngine#reset : dès que le COMPTE Telegram connecté
+    // sous ce tenant change (déconnexion manuelle, ré-appairage), la
+    // campagne de l'ancien compte est annulée proprement plutôt que de
+    // verrouiller le nouveau.
+    session.onAccountReset(() => campaignEngine.reset());
     tenants.set(tenantId, { session, campaignEngine, initStarted: false });
     sessionRegulator.register('telegram', tenantId, {
       protected: tenantId === ADMIN_TENANT_ID,

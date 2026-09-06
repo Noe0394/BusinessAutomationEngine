@@ -638,6 +638,32 @@ class TelegramCampaignEngine {
     console.log(`Campagne Telegram (tenant "${this.tenantId}"): mise en pause (session libérée) — reprise possible ultérieurement.`);
   }
 
+  // Appelée par adapters/telegramManager.js dès que le COMPTE Telegram
+  // connecté sous ce tenant change (déconnexion manuelle, ré-appairage d'un
+  // autre numéro — voir adapters/telegram.js#onAccountReset) : contrairement
+  // à pauseForShutdown() ci-dessus (même compte, session juste libérée
+  // temporairement), l'ancien ET le nouveau compte n'ont ici RIEN en
+  // commun — une campagne "running"/"paused" de l'ancien compte ne doit
+  // JAMAIS verrouiller le lancement d'une campagne pour le nouveau.
+  reset() {
+    if (this.campaign && this.campaign.status === 'running') {
+      this._markRemainingInterrupted(this.campaign.nextIndex);
+      this.campaign.superseded = true;
+      this.campaign.status = 'cancelled';
+      this.campaign.cancelReason = 'Compte Telegram déconnecté ou changé — campagne annulée.';
+      this._persist();
+      console.log(`Campagne Telegram (tenant "${this.tenantId}"): annulée — le compte Telegram connecté a changé.`);
+      removeMedia(this.persistedMedia);
+    }
+    this.campaign = null;
+    this.persistedMedia = null;
+    this.resolvedMedia = null;
+    this.incomingPauseUntil = 0;
+    this.networkHealth = new circuitBreaker.CircuitBreakerState();
+    this._lastHeartbeatAt = 0;
+    this._runActive = false;
+  }
+
   async _loadRecord() {
     try {
       return JSON.parse(fs.readFileSync(statePath(this.tenantId), 'utf8'));

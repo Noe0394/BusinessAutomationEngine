@@ -113,6 +113,33 @@ function createSession(tenantId) {
     });
   }
 
+  // Écouteurs "identité de compte réinitialisée" — adapters/whatsappManager.js
+  // s'y abonne pour réinitialiser (CampaignEngine#reset) le moteur de
+  // campagne de ce tenant dès que le numéro WhatsApp connecté change ou est
+  // révoqué : une campagne "running"/"paused" de l'ANCIEN numéro n'a plus
+  // aucun sens et ne doit JAMAIS verrouiller le lancement d'une campagne pour
+  // le NOUVEAU numéro appairé sous ce même tenant (même clé de licence).
+  // Déclenché par logout() (déconnexion manuelle, y compris celle effectuée
+  // par requestPairingCode() avant d'appairer un nouveau numéro) et par une
+  // révocation détectée côté WhatsApp (voir connection.update ci-dessous) —
+  // jamais par une simple coupure réseau/reconnexion, qui garde le même
+  // compte et ne doit donc rien réinitialiser.
+  const accountResetListeners = [];
+
+  function onAccountReset(callback) {
+    accountResetListeners.push(callback);
+  }
+
+  function notifyAccountReset() {
+    accountResetListeners.forEach((callback) => {
+      try {
+        callback();
+      } catch (err) {
+        console.error(`Erreur dans un écouteur de réinitialisation de compte (tenant "${tenantId}") :`, err.message);
+      }
+    });
+  }
+
   function rememberContactName(jid, name) {
     if (jid && name) {
       contactNames.set(jid, name);
@@ -327,6 +354,10 @@ function createSession(tenantId) {
           fs.rmSync(AUTH_DIR, { recursive: true, force: true });
           contactNames.clear();
           authStore.clearRemote().catch(() => {});
+          // Le prochain appairage réussi sous ce tenant peut concerner un
+          // numéro totalement différent (l'ancien lien étant révoqué) — voir
+          // onAccountReset ci-dessus.
+          notifyAccountReset();
           scheduleReconnect();
         } else {
           // Tout autre cas (coupure réseau, timeout de QR non scanné à
@@ -496,6 +527,11 @@ function createSession(tenantId) {
   // pour que l'utilisateur obtienne un nouveau QR code sans devoir redémarrer
   // le serveur.
   async function logout() {
+    // Voir onAccountReset ci-dessus : le prochain appairage sous ce tenant
+    // peut concerner un numéro totalement différent — le moteur de campagne
+    // ne doit jamais hériter d'un état "running"/"paused" de l'ancien.
+    notifyAccountReset();
+
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -572,6 +608,7 @@ function createSession(tenantId) {
     getGroupParticipants,
     getContactName,
     onIncomingMessage,
+    onAccountReset,
     logout,
     dispose,
     getStorageStatus: authStore.getStatus,

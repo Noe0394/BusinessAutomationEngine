@@ -374,12 +374,15 @@
         </div>
 
         <button type="button" id="send-campaign-btn" class="send-button">🚀 Lancer l'envoi</button>
-        <button type="button" id="pause-campaign-btn" class="stop-button" hidden>⏸️ Mettre en pause</button>
-        <button type="button" id="resume-campaign-btn" class="send-button" hidden>▶️ Reprendre</button>
-        <button type="button" id="stop-campaign-btn" class="stop-button" hidden>⛔ STOP / Interrompre définitivement</button>
         <div id="campaign-feedback" hidden></div>
 
         <div id="progress-area" hidden>
+          <p id="campaign-alert" class="warning-box">⚠️ Campagne WhatsApp en cours sur ce compte.</p>
+          <div id="campaign-controls">
+            <button type="button" id="pause-campaign-btn" class="pause-button" hidden>⏸️ Mettre en pause</button>
+            <button type="button" id="resume-campaign-btn" class="resume-button" hidden>▶️ Reprendre</button>
+            <button type="button" id="stop-campaign-btn" class="stop-button">🛑 Stopper la campagne</button>
+          </div>
           <div id="progress-bar-outer">
             <div id="progress-bar-inner"></div>
           </div>
@@ -523,12 +526,15 @@
           </div>
 
           <button type="button" id="tg-dm-send-btn" class="send-button">🚀 Lancer la diffusion</button>
-          <button type="button" id="tg-dm-pause-btn" class="pause-button" hidden>⏸️ Pause</button>
-          <button type="button" id="tg-dm-resume-btn" class="resume-button" hidden>▶️ Reprendre</button>
-          <button type="button" id="tg-dm-stop-btn" class="stop-button" hidden>⛔ Arrêter</button>
           <div id="tg-dm-feedback" hidden></div>
 
           <div id="tg-dm-progress-area" hidden>
+            <p id="tg-dm-campaign-alert" class="warning-box">⚠️ Campagne Telegram en cours sur ce compte.</p>
+            <div id="tg-dm-campaign-controls">
+              <button type="button" id="tg-dm-pause-btn" class="pause-button" hidden>⏸️ Mettre en pause</button>
+              <button type="button" id="tg-dm-resume-btn" class="resume-button" hidden>▶️ Reprendre</button>
+              <button type="button" id="tg-dm-stop-btn" class="stop-button">🛑 Stopper la campagne</button>
+            </div>
             <div id="tg-dm-progress-bar-outer">
               <div id="tg-dm-progress-bar-inner"></div>
             </div>
@@ -2000,6 +2006,7 @@
         const pauseBtn = document.getElementById('pause-campaign-btn');
         const resumeBtn = document.getElementById('resume-campaign-btn');
         const stopBtn = document.getElementById('stop-campaign-btn');
+        const alertEl = document.getElementById('campaign-alert');
 
         if (data.status === 'running') {
           observedRunningStartedAt = data.startedAt;
@@ -2008,6 +2015,9 @@
           resumeBtn.hidden = !data.userPaused;
           stopBtn.hidden = false;
           stopBtn.disabled = false;
+          alertEl.textContent = data.userPaused
+            ? '⏸️ Campagne WhatsApp en pause sur ce compte — cliquez "Reprendre" pour continuer.'
+            : '⚠️ Campagne WhatsApp en cours sur ce compte.';
           updateProgressUI(data);
         } else {
           sendBtn.disabled = false;
@@ -2314,6 +2324,7 @@
         const pauseBtn = document.getElementById('tg-dm-pause-btn');
         const resumeBtn = document.getElementById('tg-dm-resume-btn');
         const stopBtn = document.getElementById('tg-dm-stop-btn');
+        const alertEl = document.getElementById('tg-dm-campaign-alert');
 
         if (data.status === 'running') {
           tgDmObservedRunningStartedAt = data.startedAt;
@@ -2322,6 +2333,9 @@
           stopBtn.disabled = false;
           pauseBtn.hidden = Boolean(data.userPaused);
           resumeBtn.hidden = !data.userPaused;
+          alertEl.textContent = data.userPaused
+            ? '⏸️ Campagne Telegram en pause sur ce compte — cliquez "Reprendre" pour continuer.'
+            : '⚠️ Campagne Telegram en cours sur ce compte.';
           tgDmUpdateProgressUI(data);
         } else {
           sendBtn.disabled = false;
@@ -4167,9 +4181,24 @@
         pollStatus();
         if (statusInterval) clearInterval(statusInterval);
         statusInterval = setInterval(pollStatus, 4000);
-        pollCampaignStatus();
+        // startCampaignPolling() (pas un simple pollCampaignStatus() isolé) :
+        // une campagne déjà en cours/en pause côté serveur (rechargement de
+        // page, campagne reprise après redémarrage...) doit continuer à se
+        // rafraîchir en direct dès le chargement, pas seulement une fois —
+        // sans quoi les boutons Pause/Reprendre/Stop et la barre de
+        // progression n'apparaissent qu'après un nouveau clic sur "Lancer
+        // l'envoi". pollCampaignStatus() arrête lui-même l'intervalle si
+        // aucune campagne n'est active.
+        startCampaignPolling();
       }
-      if (hasModule('telegram')) tgRefreshStatus();
+      if (hasModule('telegram')) {
+        tgRefreshStatus();
+        // Même correctif que ci-dessus côté WhatsApp : sans cet appel, une
+        // campagne Telegram déjà en cours/en pause ne montre JAMAIS ses
+        // boutons de contrôle avant un nouveau clic sur "Lancer la
+        // diffusion" dans cette même page.
+        tgDmStartPolling();
+      }
       if (hasModule('facebook')) fbRefreshStatus();
       if (hasModule('studio_video')) mediaRefreshStatus();
       schedInit();
