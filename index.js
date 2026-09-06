@@ -26,6 +26,9 @@ const keywordRules = require('./models/keyword_rules');
 const scrapedNumbers = require('./models/scrapedNumbers');
 const groupScraper = require('./lib/groupScraper');
 const { replaceVariables, normalizeJid, jidToE164 } = require('./lib/whatsappRecipients');
+const aiStudioStore = require('./lib/aiStudioStore');
+const copywriterEngine = require('./lib/ai/localCopywriterEngine');
+const ebookGenerator = require('./lib/pdf/ebookGenerator');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -3147,6 +3150,130 @@ app.delete('/api/facebook/schedule-post/:id', requireAccess, requireModule('face
       return res.status(409).json({ error: 'Seule une programmation "en attente" peut être annulée.' });
     }
     throw err;
+  }
+});
+
+// ---------- Copywriter Studio IA (assistant marketing/closing 100% local) ----------
+// Même convention de tenant que le reste de l'app (voir
+// adapters/whatsappManager.js#getSessionForRequest) : l'admin et chaque clé
+// de licence ont leurs propres discussions, jamais partagées.
+function resolveTenantId(req) {
+  return req.isAdmin ? '__admin__' : req.licenseKey;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+app.get('/api/ai-studio/sessions', requireAccess, async (req, res) => {
+  const sessions = await aiStudioStore.listSessions(resolveTenantId(req));
+  res.json({ sessions });
+});
+
+app.post('/api/ai-studio/sessions', requireAccess, async (req, res) => {
+  const session = await aiStudioStore.createSession(resolveTenantId(req));
+  res.status(201).json({ session });
+});
+
+app.get('/api/ai-studio/sessions/:id', requireAccess, async (req, res) => {
+  const session = await aiStudioStore.getSession(resolveTenantId(req), req.params.id);
+  if (!session) {
+    return res.status(404).json({ error: 'Discussion introuvable.' });
+  }
+  res.json({ session });
+});
+
+app.delete('/api/ai-studio/sessions/:id', requireAccess, async (req, res) => {
+  const deleted = await aiStudioStore.deleteSession(resolveTenantId(req), req.params.id);
+  if (!deleted) {
+    return res.status(404).json({ error: 'Discussion introuvable.' });
+  }
+  res.status(204).end();
+});
+
+// Compose la réponse de l'assistant (voir lib/ai/localCopywriterEngine.js —
+// 100% local, aucun appel externe) puis persiste le tour complet (message
+// utilisateur + réponse) en un seul appel. Un délai artificiel (voir sleep
+// ci-dessus) simule un temps de réflexion "naturel" — le moteur répond
+// instantanément, un temps de réponse à 0ms romprait l'illusion
+// conversationnelle demandée par la feuille de route.
+app.post('/api/ai-studio/sessions/:id/messages', requireAccess, async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  const text = String((req.body || {}).text || '').trim();
+  if (!text) {
+    return res.status(400).json({ error: 'Message vide.' });
+  }
+
+  const existing = await aiStudioStore.getSession(tenantId, req.params.id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Discussion introuvable.' });
+  }
+
+  const isFirstMessage = !Array.isArray(existing.messages) || existing.messages.length === 0;
+  const { text: replyText } = copywriterEngine.composeReply(text);
+  const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
+
+  await sleep(500 + Math.floor(Math.random() * 700));
+
+  const userMessage = { role: 'user', text, createdAt: new Date().toISOString() };
+  const assistantMessage = { role: 'assistant', text: replyText, createdAt: new Date().toISOString() };
+  const updated = await aiStudioStore.appendMessages(tenantId, req.params.id, [userMessage, assistantMessage], title);
+  res.json({ session: updated });
+});
+
+// ---------- Générateur de livres/ebooks PDF (moteur local, voir lib/pdf/ebookGenerator.js) ----------
+// upload.any() plutôt que upload.fields([...]) : le nombre de chapitres (et
+// donc de champs fichier "chapterImage_<index>") est dynamique, décidé côté
+// client — voir public/dashboard.html, section Générateur de Livres.
+app.post('/api/ebooks/generate', requireAccess, upload.any(), async (req, res) => {
+  let parsedSpec;
+  try {
+    parsedSpec = JSON.parse((req.body || {}).spec || '{}');
+  } catch (err) {
+    return res.status(400).json({ error: 'Paramètres du livre invalides.' });
+  }
+
+  const chapters = Array.isArray(parsedSpec.chapters) ? parsedSpec.chapters : [];
+  if (chapters.length === 0) {
+    return res.status(400).json({ error: 'Ajoutez au moins un chapitre.' });
+  }
+
+  const filesByField = {};
+  (req.files || []).forEach((f) => { filesByField[f.fieldname] = f; });
+
+  const spec = {
+    title: String(parsedSpec.title || '').trim() || 'Sans titre',
+    subtitle: String(parsedSpec.subtitle || '').trim(),
+    author: String(parsedSpec.author || '').trim(),
+    date: String(parsedSpec.date || '').trim(),
+    watermarkText: String(parsedSpec.watermarkText || '').trim(),
+    introduction: String(parsedSpec.introduction || '').trim(),
+    conclusion: String(parsedSpec.conclusion || '').trim(),
+    coverImageBuffer: filesByField.cover ? filesByField.cover.buffer : null,
+    logoImageBuffer: filesByField.logo ? filesByField.logo.buffer : null,
+    chapters: chapters.map((chapter, idx) => ({
+      title: String(chapter.title || '').trim(),
+      content: String(chapter.content || '').trim(),
+      quote: chapter.quoteText
+        ? { text: String(chapter.quoteText).trim(), author: String(chapter.quoteAuthor || '').trim() }
+        : null,
+      tip: chapter.tip ? String(chapter.tip).trim() : '',
+      images: filesByField[`chapterImage_${idx}`] ? [filesByField[`chapterImage_${idx}`].buffer] : [],
+    })),
+  };
+
+  try {
+    const pdfBuffer = await ebookGenerator.generateEbookPdf(spec);
+    const safeName = spec.title.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60) || 'ebook';
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${safeName}.pdf"`,
+      'Content-Length': String(pdfBuffer.length),
+    });
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error('Génération ebook PDF échouée :', err);
+    res.status(500).json({ error: 'Échec de la génération du PDF.' });
   }
 });
 

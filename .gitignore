@@ -19,4 +19,5 @@ keyword_rules.json
 keyword_media/
 campaigns_state/
 message_history/
+ai_studio_sessions/
 public/dist/

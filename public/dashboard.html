@@ -136,6 +136,31 @@
     .smart-textgen-vary { flex: 0 0 auto; min-height: 44px; padding: 0.7rem 1.1rem; background: #6c4fd6; color: #fff; border: none; border-radius: 8px; font-weight: bold; white-space: nowrap; }
     .smart-textgen-hint { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: #c0392b; }
 
+    /* Onglet Copywriter Studio IA (assistant + générateur de livres). */
+    .studio-layout { display: flex; gap: 1.25rem; margin-top: 1rem; }
+    .studio-sidebar { flex: 0 0 220px; display: flex; flex-direction: column; gap: 0.75rem; }
+    .studio-sidebar > button#studio-new-chat-btn { background: #6c4fd6; color: #fff; border: none; border-radius: 8px; padding: 0.8rem; font-weight: bold; min-height: 48px; }
+    .studio-sessions-list { display: flex; flex-direction: column; gap: 0.4rem; overflow-y: auto; max-height: 480px; }
+    .studio-session-item { text-align: left; padding: 0.7rem 0.8rem; border-radius: 8px; border: 1px solid #e0e0e0; background: #fff; font-size: 0.9rem; }
+    .studio-session-item.active { background: #f0ecff; border-color: #6c4fd6; font-weight: bold; }
+    .studio-chat { flex: 1; display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
+    .studio-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.9rem; padding: 1rem; background: #fafafa; border: 1px solid #e6e6e6; border-radius: 10px; min-height: 360px; max-height: 480px; }
+    .studio-msg { max-width: 85%; padding: 0.9rem 1rem; border-radius: 12px; white-space: pre-wrap; line-height: 1.45; }
+    .studio-msg.user { align-self: flex-end; background: #6c4fd6; color: #fff; }
+    .studio-msg.assistant { align-self: flex-start; background: #fff; border: 1px solid #e0e0e0; }
+    .studio-msg.thinking { align-self: flex-start; background: #fff; border: 1px solid #e0e0e0; color: #888; font-style: italic; animation: studio-pulse 1.4s ease-in-out infinite; }
+    @keyframes studio-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+    .studio-msg-actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
+    .studio-handoff-btn { background: #f0ecff; border: 1px solid #ded6fb; color: #4a3a91; border-radius: 6px; padding: 0.4rem 0.7rem; font-size: 0.82rem; font-weight: bold; }
+    .studio-input-row { display: flex; gap: 0.6rem; }
+    .studio-input-row textarea { flex: 1; min-height: 56px; max-height: 140px; }
+    .studio-input-row button { flex: 0 0 auto; min-height: 56px; padding: 0 1.3rem; background: #6c4fd6; color: #fff; border: none; border-radius: 8px; font-weight: bold; }
+    @media (max-width: 720px) {
+      .studio-layout { flex-direction: column; }
+      .studio-sidebar { flex: none; }
+      .studio-sessions-list { max-height: 200px; }
+    }
+
     #import-result { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
     #import-result.ok { background: #d4f5dd; color: #1a7a3c; }
     #import-result.error { background: #fbdada; color: #c0392b; }
@@ -194,6 +219,7 @@
       <button type="button" class="tab-btn" data-tab="prospects">🎯 Contacts / Prospects</button>
       <button type="button" class="tab-btn" data-tab="share">🔗 Groupes / Diffusion</button>
       <button type="button" class="tab-btn" data-tab="relance">📇 Relance Manuelle Express</button>
+      <button type="button" class="tab-btn" data-tab="studio">🧠 Copywriter Studio IA</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -1179,6 +1205,95 @@
       </div>
     </section>
 
+    <!-- Onglet Copywriter Studio IA : assistant marketing/closing 100% local
+         (aucune API externe — voir lib/ai/localCopywriterEngine.js) avec
+         historique des discussions persistant, et générateur de livres/
+         ebooks PDF (voir lib/pdf/ebookGenerator.js). -->
+    <section class="panel" id="panel-studio">
+      <h2>Copywriter Studio IA</h2>
+      <p class="empty">
+        Assistant marketing, closing &amp; rédaction 100% local — aucune donnée envoyée à l'extérieur, aucune
+        dépendance à une API externe. Posez une question ou générez un livre complet en PDF.
+      </p>
+
+      <div class="mode-toggle" id="studio-subtab-toggle">
+        <button type="button" class="mode-btn active" data-view="assistant">💬 Assistant IA</button>
+        <button type="button" class="mode-btn" data-view="ebook">📖 Générateur de Livres</button>
+      </div>
+
+      <div id="studio-assistant-view">
+        <div class="studio-layout">
+          <aside class="studio-sidebar">
+            <button type="button" id="studio-new-chat-btn">+ Nouvelle Discussion</button>
+            <div id="studio-sessions-list" class="studio-sessions-list">
+              <p class="empty">Aucune discussion pour l'instant.</p>
+            </div>
+          </aside>
+          <div class="studio-chat">
+            <div id="studio-messages" class="studio-messages">
+              <p class="empty">Posez une question pour démarrer — ads, closing, anti-ban, adaptation régionale...</p>
+            </div>
+            <p id="studio-feedback" hidden></p>
+            <div class="studio-input-row">
+              <textarea id="studio-input" placeholder="Écrivez votre message... (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"></textarea>
+              <button type="button" id="studio-send-btn">Envoyer</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="studio-ebook-view" hidden>
+        <div class="field">
+          <label for="ebook-title">Titre principal</label>
+          <input type="text" id="ebook-title" placeholder="Le titre de votre livre" />
+        </div>
+        <div class="field">
+          <label for="ebook-subtitle">Sous-titre (optionnel)</label>
+          <input type="text" id="ebook-subtitle" />
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="ebook-author">Nom de l'auteur</label>
+            <input type="text" id="ebook-author" />
+          </div>
+          <div class="field">
+            <label for="ebook-date">Date</label>
+            <input type="text" id="ebook-date" placeholder="ex : 6 septembre 2026" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="ebook-watermark">Filigrane (optionnel — affiché en fond sur toutes les pages)</label>
+          <input type="text" id="ebook-watermark" placeholder="ex : BROUILLON, EXTRAIT, CONFIDENTIEL..." />
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="ebook-cover-file">Visuel de couverture (optionnel)</label>
+            <input type="file" id="ebook-cover-file" accept="image/*" />
+          </div>
+          <div class="field">
+            <label for="ebook-logo-file">Logo (optionnel)</label>
+            <input type="file" id="ebook-logo-file" accept="image/*" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="ebook-introduction">Préface / Introduction (optionnel)</label>
+          <textarea id="ebook-introduction"></textarea>
+        </div>
+
+        <h3>Chapitres</h3>
+        <div id="ebook-chapters-list"></div>
+        <button type="button" id="ebook-add-chapter-btn">➕ Ajouter un chapitre</button>
+
+        <div class="field" style="margin-top: 1rem;">
+          <label for="ebook-conclusion">Conclusion (optionnel)</label>
+          <textarea id="ebook-conclusion"></textarea>
+        </div>
+
+        <button type="button" id="ebook-generate-btn" class="send-button">🚀 Générer le PDF</button>
+        <p id="ebook-feedback" hidden></p>
+      </div>
+    </section>
+
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -1332,9 +1447,13 @@
       // "connections" : le module Facebook y est toujours autorisé (voir
       // requireModule('facebook')/channelAllowed() côté serveur), et
       // "scheduler" filtre lui-même les canaux Telegram/WhatsApp selon
-      // hasModule() — pas besoin de masquer ces onglets entiers.
+      // hasModule() — pas besoin de masquer ces onglets entiers. "studio"
+      // (Copywriter Studio IA) n'a, lui, tout simplement AUCUNE restriction
+      // de module côté serveur (voir index.js, routes /api/ai-studio/* et
+      // /api/ebooks/generate : requireAccess seul, jamais requireModule) —
+      // disponible à toute clé de licence valide.
       const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'))
-        .filter((btn) => !['connections', 'scheduler', 'prospects', 'share'].includes(btn.dataset.tab));
+        .filter((btn) => !['connections', 'scheduler', 'prospects', 'share', 'studio'].includes(btn.dataset.tab));
 
       if (currentAllowedModules === null) {
         tabButtons.forEach((btn) => { btn.hidden = false; });
@@ -1446,6 +1565,7 @@
         if (btn.dataset.tab === 'prospects') { prospectsLoadRules(); prospectsRefreshList(); }
         if (btn.dataset.tab === 'share') { shareLoadGroups(); }
         if (btn.dataset.tab === 'relance') { relanceLoadQueue(); }
+        if (btn.dataset.tab === 'studio') { studioLoadSessionsList(); }
       });
     });
 
@@ -4997,6 +5117,416 @@
     mountSmartTextGenerator('sched-message', { mode: schedTextGenMode });
     mountSmartTextGenerator('rule-message-input', { namePlaceholder: '' });
     mountSmartTextGenerator('share-message-text', { mode: 'group' });
+
+    // ---------- Onglet "Copywriter Studio IA" : assistant (historique de
+    // discussions persistant + composition 100% locale, voir
+    // lib/ai/localCopywriterEngine.js côté serveur) et générateur de livres
+    // PDF (voir lib/pdf/ebookGenerator.js). ----------
+    const studioState = { sessions: [], currentSessionId: null };
+
+    document.getElementById('studio-subtab-toggle').addEventListener('click', (e) => {
+      const btn = e.target.closest('.mode-btn[data-view]');
+      if (!btn) return;
+      document.querySelectorAll('#studio-subtab-toggle .mode-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('studio-assistant-view').hidden = btn.dataset.view !== 'assistant';
+      document.getElementById('studio-ebook-view').hidden = btn.dataset.view !== 'ebook';
+    });
+
+    function studioFeedback(message, isError) {
+      const el = document.getElementById('studio-feedback');
+      el.textContent = message;
+      el.hidden = false;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    async function studioLoadSessionsList() {
+      try {
+        const res = await apiFetch('/api/ai-studio/sessions');
+        const data = await res.json();
+        studioState.sessions = data.sessions || [];
+        studioRenderSessionsList();
+      } catch (err) {
+        if (err.message !== 'unauthorized') studioFeedback('Impossible de charger les discussions.', true);
+      }
+    }
+
+    function studioRenderSessionsList() {
+      const container = document.getElementById('studio-sessions-list');
+      container.innerHTML = '';
+      if (!studioState.sessions.length) {
+        container.innerHTML = '<p class="empty">Aucune discussion pour l\'instant.</p>';
+        return;
+      }
+      studioState.sessions.forEach((s) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'studio-session-item' + (s.id === studioState.currentSessionId ? ' active' : '');
+        item.textContent = s.title;
+        item.addEventListener('click', () => studioSelectSession(s.id));
+        container.appendChild(item);
+      });
+    }
+
+    async function studioSelectSession(id) {
+      studioState.currentSessionId = id;
+      studioRenderSessionsList();
+      try {
+        const res = await apiFetch(`/api/ai-studio/sessions/${id}`);
+        const data = await res.json();
+        studioRenderMessages(data.session);
+      } catch (err) {
+        if (err.message !== 'unauthorized') studioFeedback('Impossible de charger cette discussion.', true);
+      }
+    }
+
+    async function studioCreateNewChat() {
+      try {
+        const res = await apiFetch('/api/ai-studio/sessions', { method: 'POST' });
+        const data = await res.json();
+        studioState.currentSessionId = data.session.id;
+        await studioLoadSessionsList();
+        studioRenderMessages(data.session);
+        return data.session.id;
+      } catch (err) {
+        if (err.message !== 'unauthorized') studioFeedback('Impossible de créer une nouvelle discussion.', true);
+        return null;
+      }
+    }
+
+    document.getElementById('studio-new-chat-btn').addEventListener('click', studioCreateNewChat);
+
+    function studioBuildBubble(msg) {
+      const bubble = document.createElement('div');
+      bubble.className = 'studio-msg ' + (msg.role === 'user' ? 'user' : 'assistant');
+      const textEl = document.createElement('div');
+      textEl.textContent = msg.text;
+      bubble.appendChild(textEl);
+
+      // "📌 Utiliser pour la campagne" : transmet le texte de l'assistant
+      // vers la Relance Manuelle Express (alimente immédiatement le moteur
+      // de Spintax local via relance-intention) OU vers la campagne
+      // automatique WhatsApp (1er pas texte de la séquence) — voir
+      // studioHandoffToManual/studioHandoffToAuto ci-dessous.
+      if (msg.role === 'assistant') {
+        const actions = document.createElement('div');
+        actions.className = 'studio-msg-actions';
+        const manualBtn = document.createElement('button');
+        manualBtn.type = 'button';
+        manualBtn.className = 'studio-handoff-btn';
+        manualBtn.textContent = '📌 Relance Manuelle';
+        manualBtn.addEventListener('click', () => studioHandoffToManual(msg.text));
+        const autoBtn = document.createElement('button');
+        autoBtn.type = 'button';
+        autoBtn.className = 'studio-handoff-btn';
+        autoBtn.textContent = '🚀 Campagne Auto';
+        autoBtn.addEventListener('click', () => studioHandoffToAuto(msg.text));
+        actions.appendChild(manualBtn);
+        actions.appendChild(autoBtn);
+        bubble.appendChild(actions);
+      }
+      return bubble;
+    }
+
+    function studioRenderMessages(session) {
+      const container = document.getElementById('studio-messages');
+      container.innerHTML = '';
+      const messages = (session && session.messages) || [];
+      if (!messages.length) {
+        container.innerHTML = '<p class="empty">Posez une question pour démarrer — ads, closing, anti-ban, adaptation régionale...</p>';
+        return;
+      }
+      messages.forEach((msg) => container.appendChild(studioBuildBubble(msg)));
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function studioAddThinkingBubble() {
+      const container = document.getElementById('studio-messages');
+      const bubble = document.createElement('div');
+      bubble.className = 'studio-msg assistant thinking';
+      bubble.id = 'studio-thinking-bubble';
+      bubble.textContent = "🧠 L'assistant élabore la stratégie...";
+      container.appendChild(bubble);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function studioRemoveThinkingBubble() {
+      const el = document.getElementById('studio-thinking-bubble');
+      if (el) el.remove();
+    }
+
+    async function studioSendMessage() {
+      const input = document.getElementById('studio-input');
+      const text = input.value.trim();
+      if (!text) return;
+
+      const sessionId = studioState.currentSessionId || await studioCreateNewChat();
+      if (!sessionId) return;
+
+      input.value = '';
+      input.disabled = true;
+      document.getElementById('studio-send-btn').disabled = true;
+      document.getElementById('studio-feedback').hidden = true;
+
+      // Affichage optimiste : bulle utilisateur + indicateur de réflexion
+      // affichés immédiatement, avant même la réponse serveur — voir la
+      // feuille de route ("indicateur de réflexion... temps de réponse
+      // naturel", le serveur ajoute lui-même un léger délai artificiel).
+      const container = document.getElementById('studio-messages');
+      const emptyHint = container.querySelector('.empty');
+      if (emptyHint) emptyHint.remove();
+      container.appendChild(studioBuildBubble({ role: 'user', text }));
+      studioAddThinkingBubble();
+      container.scrollTop = container.scrollHeight;
+
+      try {
+        const res = await apiFetch(`/api/ai-studio/sessions/${sessionId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        const data = await res.json();
+        studioRemoveThinkingBubble();
+        if (!res.ok) {
+          studioFeedback(data.error || "Échec de l'envoi du message.", true);
+        } else {
+          studioRenderMessages(data.session);
+          await studioLoadSessionsList();
+        }
+      } catch (err) {
+        studioRemoveThinkingBubble();
+        if (err.message !== 'unauthorized') studioFeedback('Erreur réseau — réessayez.', true);
+      } finally {
+        input.disabled = false;
+        document.getElementById('studio-send-btn').disabled = false;
+        input.focus();
+      }
+    }
+
+    document.getElementById('studio-send-btn').addEventListener('click', studioSendMessage);
+    document.getElementById('studio-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        studioSendMessage();
+      }
+    });
+
+    // Bascule vers l'onglet Relance Manuelle Express et préremplit "Mon
+    // Intention" avec le texte de l'assistant — alimente immédiatement le
+    // moteur de Spintax local (smartTextGenerateVariant), [Prénom] et
+    // émojis inclus, dès qu'une carte est chargée.
+    function studioHandoffToManual(text) {
+      document.querySelector('.tab-btn[data-tab="relance"]').click();
+      document.getElementById('relance-intention').value = text;
+      if (!document.getElementById('relance-card').hidden) {
+        relanceRefreshMessage();
+      }
+      relanceFeedback('Texte transmis depuis le Copywriter Studio IA — chargez la file d\'attente si besoin, ou "Varier" pour une autre tournure.', false);
+    }
+
+    // Bascule vers l'onglet WhatsApp et place le texte comme 1er pas texte
+    // de la séquence de campagne automatique (créé si la séquence est
+    // vide) — voir campaignSequence/renderCampaignSequence.
+    function studioHandoffToAuto(text) {
+      document.querySelector('.tab-btn[data-tab="whatsapp"]').click();
+      const firstTextStep = campaignSequence.find((s) => s.type === 'text');
+      if (firstTextStep) {
+        firstTextStep.text = text;
+      } else {
+        campaignSequence.unshift({ type: 'text', text });
+      }
+      renderCampaignSequence();
+      showCampaignFeedback('Texte transmis depuis le Copywriter Studio IA dans la séquence de campagne (1er pas texte).', false);
+    }
+
+    // ---------- Générateur de livres/ebooks PDF ----------
+    let ebookChapters = []; // { title, content, quoteText, quoteAuthor, tip, imageFile }
+
+    function ebookFeedback(message, isError) {
+      const el = document.getElementById('ebook-feedback');
+      el.textContent = message;
+      el.hidden = false;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    function renderEbookChapters() {
+      const list = document.getElementById('ebook-chapters-list');
+      list.innerHTML = '';
+
+      if (ebookChapters.length === 0) {
+        list.innerHTML = '<p class="empty">Aucun chapitre — ajoutez-en au moins un.</p>';
+        return;
+      }
+
+      ebookChapters.forEach((chapter, idx) => {
+        const card = document.createElement('div');
+        card.className = 'sequence-step';
+
+        const header = document.createElement('div');
+        header.className = 'sequence-step-header';
+        const badge = document.createElement('span');
+        badge.className = 'sequence-step-badge';
+        badge.textContent = `Chapitre ${idx + 1}`;
+        header.appendChild(badge);
+
+        const actions = document.createElement('div');
+        actions.className = 'sequence-step-actions';
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button'; upBtn.textContent = '▲'; upBtn.title = 'Monter'; upBtn.disabled = idx === 0;
+        upBtn.addEventListener('click', () => {
+          [ebookChapters[idx - 1], ebookChapters[idx]] = [ebookChapters[idx], ebookChapters[idx - 1]];
+          renderEbookChapters();
+        });
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button'; downBtn.textContent = '▼'; downBtn.title = 'Descendre'; downBtn.disabled = idx === ebookChapters.length - 1;
+        downBtn.addEventListener('click', () => {
+          [ebookChapters[idx + 1], ebookChapters[idx]] = [ebookChapters[idx], ebookChapters[idx + 1]];
+          renderEbookChapters();
+        });
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button'; delBtn.textContent = '🗑️'; delBtn.title = 'Supprimer';
+        delBtn.addEventListener('click', () => { ebookChapters.splice(idx, 1); renderEbookChapters(); });
+        actions.appendChild(upBtn); actions.appendChild(downBtn); actions.appendChild(delBtn);
+        header.appendChild(actions);
+        card.appendChild(header);
+
+        const titleField = document.createElement('div');
+        titleField.className = 'field';
+        titleField.innerHTML = '<label>Titre du chapitre</label>';
+        const titleInput = document.createElement('input');
+        titleInput.type = 'text';
+        titleInput.value = chapter.title;
+        titleInput.addEventListener('input', () => { chapter.title = titleInput.value; });
+        titleField.appendChild(titleInput);
+        card.appendChild(titleField);
+
+        const contentField = document.createElement('div');
+        contentField.className = 'field';
+        contentField.innerHTML = '<label>Contenu</label>';
+        const contentTextarea = document.createElement('textarea');
+        contentTextarea.style.minHeight = '140px';
+        contentTextarea.value = chapter.content;
+        contentTextarea.addEventListener('input', () => { chapter.content = contentTextarea.value; });
+        contentField.appendChild(contentTextarea);
+        card.appendChild(contentField);
+
+        const imageField = document.createElement('div');
+        imageField.className = 'field';
+        imageField.innerHTML = '<label>Image d\'illustration (optionnel)</label>';
+        const imageInput = document.createElement('input');
+        imageInput.type = 'file';
+        imageInput.accept = 'image/*';
+        imageInput.addEventListener('change', () => { chapter.imageFile = imageInput.files[0] || null; });
+        imageField.appendChild(imageInput);
+        card.appendChild(imageField);
+
+        const row = document.createElement('div');
+        row.className = 'row';
+        const quoteField = document.createElement('div');
+        quoteField.className = 'field';
+        quoteField.innerHTML = '<label>Citation (optionnel)</label>';
+        const quoteInput = document.createElement('input');
+        quoteInput.type = 'text';
+        quoteInput.value = chapter.quoteText;
+        quoteInput.addEventListener('input', () => { chapter.quoteText = quoteInput.value; });
+        quoteField.appendChild(quoteInput);
+        const quoteAuthorField = document.createElement('div');
+        quoteAuthorField.className = 'field';
+        quoteAuthorField.innerHTML = '<label>Auteur de la citation (optionnel)</label>';
+        const quoteAuthorInput = document.createElement('input');
+        quoteAuthorInput.type = 'text';
+        quoteAuthorInput.value = chapter.quoteAuthor;
+        quoteAuthorInput.addEventListener('input', () => { chapter.quoteAuthor = quoteAuthorInput.value; });
+        quoteAuthorField.appendChild(quoteAuthorInput);
+        row.appendChild(quoteField);
+        row.appendChild(quoteAuthorField);
+        card.appendChild(row);
+
+        const tipField = document.createElement('div');
+        tipField.className = 'field';
+        tipField.innerHTML = '<label>Conseil d\'expert (optionnel)</label>';
+        const tipInput = document.createElement('input');
+        tipInput.type = 'text';
+        tipInput.value = chapter.tip;
+        tipInput.addEventListener('input', () => { chapter.tip = tipInput.value; });
+        tipField.appendChild(tipInput);
+        card.appendChild(tipField);
+
+        list.appendChild(card);
+      });
+    }
+
+    document.getElementById('ebook-add-chapter-btn').addEventListener('click', () => {
+      ebookChapters.push({ title: '', content: '', quoteText: '', quoteAuthor: '', tip: '', imageFile: null });
+      renderEbookChapters();
+    });
+    renderEbookChapters();
+
+    document.getElementById('ebook-generate-btn').addEventListener('click', async () => {
+      const title = document.getElementById('ebook-title').value.trim();
+      if (!title) {
+        ebookFeedback('Renseignez au moins le titre principal.', true);
+        return;
+      }
+      if (ebookChapters.length === 0 || ebookChapters.every((c) => !c.content.trim())) {
+        ebookFeedback('Ajoutez au moins un chapitre avec du contenu.', true);
+        return;
+      }
+
+      const btn = document.getElementById('ebook-generate-btn');
+      btn.disabled = true;
+      ebookFeedback('🧠 Génération du PDF en cours...', false);
+
+      const spec = {
+        title,
+        subtitle: document.getElementById('ebook-subtitle').value.trim(),
+        author: document.getElementById('ebook-author').value.trim(),
+        date: document.getElementById('ebook-date').value.trim(),
+        watermarkText: document.getElementById('ebook-watermark').value.trim(),
+        introduction: document.getElementById('ebook-introduction').value.trim(),
+        conclusion: document.getElementById('ebook-conclusion').value.trim(),
+        chapters: ebookChapters.map((c) => ({
+          title: c.title.trim(),
+          content: c.content.trim(),
+          quoteText: c.quoteText.trim(),
+          quoteAuthor: c.quoteAuthor.trim(),
+          tip: c.tip.trim(),
+        })),
+      };
+
+      const formData = new FormData();
+      formData.append('spec', JSON.stringify(spec));
+      const coverFile = document.getElementById('ebook-cover-file').files[0];
+      const logoFile = document.getElementById('ebook-logo-file').files[0];
+      if (coverFile) formData.append('cover', coverFile);
+      if (logoFile) formData.append('logo', logoFile);
+      ebookChapters.forEach((c, idx) => {
+        if (c.imageFile) formData.append(`chapterImage_${idx}`, c.imageFile);
+      });
+
+      try {
+        const res = await apiFetch('/api/ebooks/generate', { method: 'POST', body: formData });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          ebookFeedback(data.error || 'Échec de la génération du PDF.', true);
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${title.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60) || 'ebook'}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        ebookFeedback('✅ PDF généré et téléchargé.', false);
+      } catch (err) {
+        if (err.message !== 'unauthorized') ebookFeedback('Erreur réseau — réessayez.', true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
 
     tryAutoLogin().then((ok) => { if (ok) init(); });
   </script>
