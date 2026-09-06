@@ -70,6 +70,21 @@ function randomDelay(minMs, maxMs) {
 // campagne ne reprenne l'envoi au destinataire suivant.
 const INCOMING_REPLY_PAUSE_MS = 30_000;
 
+// Fréquence à laquelle une attente potentiellement longue (pause manuelle,
+// coupure réseau, palier FLOOD_WAIT de plusieurs heures...) rafraîchit
+// lastProgressAt (voir CampaignEngine#_heartbeat) : prouve qu'un process
+// suit toujours activement la campagne, même sans envoi réel depuis un
+// moment, pour que purgeStaleCampaigns() ne l'annule jamais à tort.
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+
+// Seuil par défaut au-delà duquel purgeStaleCampaigns() annule une campagne
+// dont plus personne (aucun process actif) ne fait progresser ni ne
+// rafraîchit l'état — jamais une campagne activement suivie (voir
+// _heartbeat), aussi longue que soit son attente. Recommandation explicite
+// de l'utilisateur : les restrictions temporaires WhatsApp/Telegram peuvent
+// durer 24 à 48h, la purge ne doit donc jamais intervenir avant ce délai.
+const DEFAULT_STALE_MS = (parseFloat(process.env.CAMPAIGN_STALE_HOURS) || 48) * 3_600_000;
+
 // Délai non-bloquant, interrompable dès que shouldStop() devient vrai (ex:
 // STOP demandé par l'utilisateur en pleine attente entre deux destinataires).
 async function interruptibleSleep(ms, shouldStop) {
@@ -212,6 +227,31 @@ class CampaignEngine {
     // état — c'est un signal de santé réseau "live", pas une donnée de
     // progression de campagne.
     this.networkHealth = new circuitBreaker.CircuitBreakerState();
+    // Voir _heartbeat() : dernier rafraîchissement de lastProgressAt pendant
+    // une attente longue, pour ne le faire au plus qu'une fois toutes les
+    // HEARTBEAT_INTERVAL_MS plutôt qu'à chaque tick de 300ms-1s des boucles
+    // d'attente.
+    this._lastHeartbeatAt = 0;
+    // true tant qu'un appel à _run() est en vie (envoi ou attente) pour CETTE
+    // instance — voir resume(), qui ne redémarre une boucle que si aucune
+    // n'est déjà active (campagne restaurée via resumeIfPending() mais
+    // jamais relancée) plutôt que d'en faire tourner deux en parallèle sur
+    // le même campaign.
+    this._runActive = false;
+  }
+
+  // Rafraîchit lastProgressAt (voir _persist) pendant une attente
+  // potentiellement longue (pause manuelle, coupure réseau, palier
+  // FLOOD_WAIT de plusieurs heures...), au plus une fois toutes les
+  // HEARTBEAT_INTERVAL_MS : prouve qu'un process suit toujours activement
+  // cette campagne — voir purgeStaleCampaigns(), qui n'annule jamais une
+  // campagne dont le "pouls" est resté récent, aussi longue que soit son
+  // attente.
+  _heartbeat() {
+    const now = Date.now();
+    if (now - this._lastHeartbeatAt < HEARTBEAT_INTERVAL_MS) return;
+    this._lastHeartbeatAt = now;
+    this._persist();
   }
 
   // Mesure le temps de réponse d'UN envoi et alimente le détecteur de
@@ -247,16 +287,18 @@ class CampaignEngine {
       `reprise prévue vers ${new Date(health.holdUntil).toISOString()}.`,
     );
 
-    while (!campaign.stopRequested && health.isHeld()) {
+    while (!campaign.stopRequested && !campaign.superseded && health.isHeld()) {
+      this._heartbeat();
       await sleep(1000);
     }
-    if (campaign.stopRequested) return;
+    if (campaign.stopRequested || campaign.superseded) return;
 
-    while (!campaign.stopRequested && !this.session.isConnected()) {
+    while (!campaign.stopRequested && !campaign.superseded && !this.session.isConnected()) {
       console.log(`Campagne (tenant "${this.tenantId}"): health check négatif — nouvelle vérification dans 30s avant reprise.`);
+      this._heartbeat();
       await sleep(circuitBreaker.HEALTH_RECHECK_INTERVAL_MS);
     }
-    if (campaign.stopRequested) return;
+    if (campaign.stopRequested || campaign.superseded) return;
 
     const wasCircuitOpen = health.networkStatus === 'circuit_open';
     health.networkStatus = 'normal';
@@ -285,9 +327,35 @@ class CampaignEngine {
   async _waitForIncomingPause() {
     const campaign = this.campaign;
     while (Date.now() < this.incomingPauseUntil) {
-      if (campaign.stopRequested) return;
+      if (campaign.stopRequested || campaign.superseded) return;
       await sleep(300);
     }
+  }
+
+  // Pause manuelle demandée via POST /api/messages/pause (voir pause()
+  // ci-dessous) — même principe que TelegramCampaignEngine#_waitWhileBlocked
+  // pour la partie "pause utilisateur". Une campagne restaurée après un
+  // redémarrage/une éviction de session démarre déjà avec userPaused=true
+  // (voir resumeIfPending) : elle reste ici tant que l'utilisateur ne clique
+  // pas explicitement sur "Reprendre", même si l'attente dure plusieurs
+  // jours — _heartbeat() rafraîchit lastProgressAt entre-temps pour que
+  // purgeStaleCampaigns() sache qu'elle est toujours suivie.
+  async _waitForUserPause() {
+    const campaign = this.campaign;
+    if (!campaign.userPaused) return;
+
+    campaign.paused = true;
+    this._persist();
+    console.log(`Campagne (tenant "${this.tenantId}"): en pause (demandée par l'utilisateur ou restaurée après redémarrage).`);
+
+    while (campaign.userPaused && !campaign.stopRequested && !campaign.superseded) {
+      this._heartbeat();
+      await sleep(1000);
+    }
+    if (campaign.stopRequested || campaign.superseded) return;
+
+    campaign.paused = false;
+    console.log(`Campagne (tenant "${this.tenantId}"): reprise après pause utilisateur.`);
   }
 
   _buildRecord() {
@@ -295,6 +363,7 @@ class CampaignEngine {
       tenantId: this.tenantId,
       status: this.campaign.status,
       paused: this.campaign.paused,
+      userPaused: this.campaign.userPaused,
       stopRequested: this.campaign.stopRequested,
       total: this.campaign.total,
       sent: this.campaign.sent,
@@ -302,6 +371,13 @@ class CampaignEngine {
       failed: this.campaign.failed,
       startedAt: this.campaign.startedAt,
       finishedAt: this.campaign.finishedAt,
+      // Voir _heartbeat()/purgeStaleCampaigns() : dernier signe de vie d'un
+      // process qui suit activement cette campagne (envoi réel ou simple
+      // rafraîchissement pendant une attente longue) — jamais l'horodatage
+      // du dernier ENVOI seul, pour qu'une pause légitime de plusieurs jours
+      // ne soit jamais confondue avec un abandon.
+      lastProgressAt: this.campaign.lastProgressAt,
+      cancelReason: this.campaign.cancelReason || null,
       nextIndex: this.campaign.nextIndex,
       recipients: this.campaign.recipients,
       results: this.campaign.results,
@@ -322,6 +398,7 @@ class CampaignEngine {
 
   _persist() {
     if (!this.campaign) return;
+    this.campaign.lastProgressAt = new Date().toISOString();
     const record = this._buildRecord();
     const content = JSON.stringify(record, null, 2);
     // Écriture locale synchrone volontaire : le volume (une campagne à la
@@ -346,12 +423,14 @@ class CampaignEngine {
   // longue n'a rien à y faire.
   getStatus() {
     if (!this.campaign) return null;
-    const { total, sent, success, failed, status, paused, stopRequested, startedAt, finishedAt, results, resumeError } = this.campaign;
+    const { total, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError, cancelReason } = this.campaign;
     const base = {
-      total, sent, success, failed, status, paused, stopRequested, startedAt, finishedAt, results,
+      total, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results,
       networkStatus: this.networkHealth.networkStatus,
     };
-    return resumeError ? { ...base, resumeError } : base;
+    if (resumeError) base.resumeError = resumeError;
+    if (cancelReason) base.cancelReason = cancelReason;
+    return base;
   }
 
   // En cas de coupure réseau/Baileys en pleine campagne, on ne marque pas les
@@ -368,14 +447,14 @@ class CampaignEngine {
     this._persist();
     console.log(`Campagne (tenant "${this.tenantId}"): mise en pause — connexion WhatsApp perdue, en attente de reconnexion...`);
 
-    while (!this.session.isConnected() && !campaign.stopRequested) {
+    while (!this.session.isConnected() && !campaign.stopRequested && !campaign.superseded) {
+      this._heartbeat();
       await sleep(1000);
     }
+    if (campaign.stopRequested || campaign.superseded) return;
 
     campaign.paused = false;
-    if (!campaign.stopRequested) {
-      console.log(`Campagne (tenant "${this.tenantId}"): reprise après reconnexion WhatsApp.`);
-    }
+    console.log(`Campagne (tenant "${this.tenantId}"): reprise après reconnexion WhatsApp.`);
   }
 
   _markRemainingInterrupted(fromIndex) {
@@ -398,7 +477,20 @@ class CampaignEngine {
   // envoyée dans l'ordre à chaque destinataire avec un court délai (2-5s par
   // défaut, paramétrable) entre chaque étape — pour simuler une frappe
   // naturelle, distinct du délai (8-15s) appliqué entre deux destinataires.
+  // _runActive suit le cycle de vie de CET appel précis (voir resume(), qui
+  // ne redémarre une boucle que si aucune n'est déjà active) : try/finally
+  // couvre tous les points de sortie (chaque `return` de shouldAbort(), la
+  // fin normale de la boucle) sans avoir à dupliquer la remise à zéro.
   async _run(startIndex) {
+    this._runActive = true;
+    try {
+      await this._runLoop(startIndex);
+    } finally {
+      this._runActive = false;
+    }
+  }
+
+  async _runLoop(startIndex) {
     const campaign = this.campaign;
     const { delaySeconds, batchSize, batchPauseSeconds, sequenceDelayMinMs, sequenceDelayMaxMs } = campaign.options;
     const recipients = campaign.recipients;
@@ -407,41 +499,31 @@ class CampaignEngine {
     const seqMaxMs = Number.isFinite(sequenceDelayMaxMs) ? Math.max(seqMinMs, sequenceDelayMaxMs) : Math.max(seqMinMs, 5000);
     const sequence = this.resolvedSequence;
 
+    // Abandonne silencieusement ce passage de boucle SANS retoucher
+    // `campaign` : soit stop() a déjà tout finalisé de façon synchrone (voir
+    // stop() ci-dessous — marquage des destinataires restants, statut
+    // "stopped", persistance), soit pauseForShutdown() a déjà marqué la
+    // campagne "paused" pour une reprise ultérieure — dans les deux cas,
+    // re-persister ou re-marquer ici écraserait un état déjà correct (et
+    // potentiellement celui d'une TOUTE NOUVELLE campagne démarrée entre
+    // temps, le verrou ayant été libéré immédiatement par stop()).
+    const shouldAbort = () => campaign.stopRequested || campaign.superseded;
+
     let i = startIndex;
     while (i < recipients.length) {
-      if (campaign.stopRequested) {
-        this._markRemainingInterrupted(i);
-        this._persist();
-        console.log(`Campagne (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
-        return;
-      }
+      if (shouldAbort()) return;
 
       await this._waitForConnection();
-
-      if (campaign.stopRequested) {
-        this._markRemainingInterrupted(i);
-        this._persist();
-        console.log(`Campagne (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
-        return;
-      }
+      if (shouldAbort()) return;
 
       await this._waitForIncomingPause();
+      if (shouldAbort()) return;
 
-      if (campaign.stopRequested) {
-        this._markRemainingInterrupted(i);
-        this._persist();
-        console.log(`Campagne (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
-        return;
-      }
+      await this._waitForUserPause();
+      if (shouldAbort()) return;
 
       await this._waitForNetworkHold();
-
-      if (campaign.stopRequested) {
-        this._markRemainingInterrupted(i);
-        this._persist();
-        console.log(`Campagne (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
-        return;
-      }
+      if (shouldAbort()) return;
 
       const { to, vars } = normalizeRecipientEntry(recipients[i], this.session.getContactName);
       let status = 'failed';
@@ -480,7 +562,7 @@ class CampaignEngine {
           // avancer la file.
           overloadDetected = true;
           const backoffMs = this.networkHealth.recordOverloadFailure(err);
-          this._persist();
+          if (!shouldAbort()) this._persist();
           console.log(
             `Campagne (tenant "${this.tenantId}"): signal de surcharge détecté (${err.message}) — ` +
             `statut 'circuit_open', nouvelle tentative pour ${to} dans ${Math.round(backoffMs / 60000)} min (index ${i} conservé).`,
@@ -490,6 +572,12 @@ class CampaignEngine {
           console.error(`Campagne (tenant "${this.tenantId}"): échec de l'envoi à ${to}:`, err);
         }
       }
+
+      // stop()/pauseForShutdown() a pu finaliser `campaign` PENDANT l'envoi
+      // ci-dessus (attente réseau non interruptible) : ne pas laisser cet
+      // envoi qui vient de se terminer réécrire un état déjà clos — voir le
+      // commentaire sur shouldAbort() plus haut.
+      if (shouldAbort()) return;
 
       if (overloadDetected) {
         // Ne pas incrémenter i : le prochain passage dans la boucle
@@ -505,7 +593,7 @@ class CampaignEngine {
 
       i += 1;
 
-      if (i < recipients.length && !campaign.stopRequested) {
+      if (i < recipients.length && !shouldAbort()) {
         // Délai fixe et configurable (standard, sans randomisation) : à
         // défaut de valeur fournie, 15s reste une valeur raisonnable pour un
         // usage normal de l'API WhatsApp.
@@ -521,9 +609,11 @@ class CampaignEngine {
           ? batchPauseSeconds * 1000
           : baseDelayMs * 3;
         const delayMs = endOfBatch ? batchPauseMs : baseDelayMs;
-        await interruptibleSleep(delayMs, () => campaign.stopRequested);
+        await interruptibleSleep(delayMs, shouldAbort);
       }
     }
+
+    if (shouldAbort()) return;
 
     if (campaign.status === 'running') {
       campaign.status = 'completed';
@@ -556,9 +646,12 @@ class CampaignEngine {
       failed: 0,
       status: 'running',
       paused: false,
+      userPaused: false,
       stopRequested: false,
+      superseded: false,
       startedAt: new Date().toISOString(),
       finishedAt: null,
+      lastProgressAt: new Date().toISOString(),
       nextIndex: 0,
       recipients,
       results: [],
@@ -572,25 +665,103 @@ class CampaignEngine {
     };
     this.incomingPauseUntil = 0;
     this.networkHealth = new circuitBreaker.CircuitBreakerState();
+    this._lastHeartbeatAt = 0;
     this._persist();
 
+    const campaign = this.campaign;
     this._run(0).catch((err) => {
       console.error(`Erreur pendant la campagne (tenant "${this.tenantId}"):`, err);
-      this.campaign.status = 'stopped';
-      this.campaign.paused = false;
-      this.campaign.finishedAt = new Date().toISOString();
+      // Ne touche à rien si cette campagne a déjà été finalisée entre-temps
+      // (stop()/pauseForShutdown()) ou remplacée par un nouveau lancement —
+      // voir le commentaire sur shouldAbort() dans _run().
+      if (this.campaign !== campaign || campaign.stopRequested || campaign.superseded) return;
+      campaign.status = 'stopped';
+      campaign.paused = false;
+      campaign.finishedAt = new Date().toISOString();
       this._persist();
     });
 
     return this.campaign;
   }
 
+  // Arrêt DÉFINITIF demandé par l'utilisateur (POST /api/messages/stop) :
+  // finalise la campagne de façon SYNCHRONE (destinataires restants marqués
+  // "interrupted", statut "stopped", persistance) au lieu d'attendre que la
+  // boucle d'envoi en tâche de fond (_run) ne remarque stopRequested à son
+  // prochain point de contrôle — le verrou (this.campaign.status
+  // !== 'running') est donc libéré IMMÉDIATEMENT, permettant de lancer une
+  // nouvelle campagne sans attendre. superseded=true fait taire la boucle en
+  // tâche de fond si elle est encore en train d'attendre/d'envoyer, sans
+  // qu'elle ne retouche cet objet déjà finalisé (voir shouldAbort() dans
+  // _run()).
   stop() {
     if (!this.campaign || this.campaign.status !== 'running') {
       throw new Error('NO_CAMPAIGN_RUNNING');
     }
     this.campaign.stopRequested = true;
+    this._markRemainingInterrupted(this.campaign.nextIndex);
+    this.campaign.superseded = true;
     this._persist();
+  }
+
+  // Pause manuelle demandée par l'utilisateur (POST /api/messages/pause) :
+  // contrairement à stop(), ne finalise rien — la liste des destinataires
+  // restants et nextIndex restent intacts pour une reprise via resume().
+  pause() {
+    if (!this.campaign || this.campaign.status !== 'running') {
+      throw new Error('NO_CAMPAIGN_RUNNING');
+    }
+    this.campaign.userPaused = true;
+    this._persist();
+  }
+
+  // Reprend une campagne en pause (manuelle ou restaurée après un
+  // redémarrage/une éviction de session — voir resumeIfPending). Si la
+  // boucle d'envoi (_run) est toujours en vie (cas d'une pause manuelle en
+  // cours d'exécution), elle est simplement débloquée par userPaused=false ;
+  // sinon (campagne restaurée, jamais relancée depuis), une nouvelle boucle
+  // est démarrée à partir de nextIndex.
+  resume() {
+    if (!this.campaign || this.campaign.status !== 'running') {
+      throw new Error('NO_CAMPAIGN_RUNNING');
+    }
+    this.campaign.userPaused = false;
+    if (!this._runActive) {
+      // Aucune boucle en vie à débloquer (campagne restaurée via
+      // resumeIfPending() puis reprise directement) : _waitForUserPause() ne
+      // sera jamais atteint avec userPaused déjà à false, donc ce n'est pas
+      // elle qui remettra `paused` à false — on le fait ici.
+      this.campaign.paused = false;
+    }
+    this._persist();
+    if (!this._runActive) {
+      const campaign = this.campaign;
+      this._run(campaign.nextIndex).catch((err) => {
+        console.error(`Erreur pendant la reprise de campagne (tenant "${this.tenantId}"):`, err);
+        if (this.campaign !== campaign || campaign.stopRequested || campaign.superseded) return;
+        campaign.status = 'stopped';
+        campaign.paused = false;
+        campaign.finishedAt = new Date().toISOString();
+        this._persist();
+      });
+    }
+  }
+
+  // Appelée par le régulateur de sessions (voir adapters/sessionRegulator.js
+  // et whatsappManager.js) juste avant de disposer la session WhatsApp d'un
+  // tenant (éviction pour libérer un slot, inactivité...) : NE JAMAIS annuler
+  // la campagne — elle passe en pause pour conserver la liste des
+  // destinataires restants et permettre une reprise ultérieure (via
+  // resumeIfPending() au prochain getOrCreate() de ce tenant, ou un
+  // resume() manuel). superseded=true fait taire la boucle en tâche de fond
+  // sans qu'elle ne retouche cet état déjà mis en pause.
+  pauseForShutdown() {
+    if (!this.campaign || this.campaign.status !== 'running') return;
+    this.campaign.userPaused = true;
+    this.campaign.paused = true;
+    this.campaign.superseded = true;
+    this._persist();
+    console.log(`Campagne (tenant "${this.tenantId}"): mise en pause (session libérée) — reprise possible ultérieurement.`);
   }
 
   // Essaie le disque local en premier (rapide, source normale après un
@@ -618,13 +789,25 @@ class CampaignEngine {
     }
   }
 
-  // Appelée une fois par tenant au démarrage du process (voir
-  // adapters/whatsappManager.js#bootResumePendingCampaigns) si un état
-  // persisté (local ou distant) indique une campagne encore
-  // "running"/"paused" au moment où le conteneur s'est arrêté (redéploiement,
-  // crash) — reprend l'envoi exactement au destinataire suivant (nextIndex),
-  // sans redemander à l'utilisateur de relancer quoi que ce soit.
+  // Appelée pour chaque tenant au démarrage du process (voir
+  // adapters/whatsappManager.js#bootResumePendingCampaigns) ET désormais à
+  // chaque (re)création d'instance en cours de fonctionnement (voir
+  // getOrCreate() dans whatsappManager.js) si un état persisté (local ou
+  // distant) indique une campagne encore "running"/"paused"/"cancelled" au
+  // moment où le process/la session précédente s'est arrêtée (redéploiement,
+  // crash, éviction de session pour libérer un slot...).
+  //
+  // Ne relance JAMAIS l'envoi automatiquement : la campagne est restaurée en
+  // pause (userPaused=true), destinataires restants et nextIndex intacts —
+  // c'est à l'utilisateur de cliquer "Reprendre" (voir resume()) une fois
+  // certain que le compte n'est plus restreint, plutôt que de risquer de le
+  // remettre en cause dès le redémarrage. `if (this.campaign) return false`
+  // rend l'appel idempotent : un boot et une requête HTTP concurrente
+  // peuvent tous deux déclencher cette méthode pour le même tenant sans
+  // risque de double reprise.
   async resumeIfPending() {
+    if (this.campaign) return false;
+
     const record = await this._loadRecord();
     if (!record) return false;
 
@@ -653,7 +836,9 @@ class CampaignEngine {
         failed: record.failed,
         status: 'stopped',
         paused: false,
+        userPaused: false,
         stopRequested: true,
+        superseded: false,
         startedAt: record.startedAt,
         finishedAt: new Date().toISOString(),
         nextIndex: record.nextIndex,
@@ -672,8 +857,10 @@ class CampaignEngine {
       success: record.success,
       failed: record.failed,
       status: 'running',
-      paused: false,
-      stopRequested: record.stopRequested,
+      paused: true,
+      userPaused: true,
+      stopRequested: false,
+      superseded: false,
       startedAt: record.startedAt,
       finishedAt: null,
       nextIndex: record.nextIndex,
@@ -685,22 +872,16 @@ class CampaignEngine {
     // cas échéant, plutôt que de repartir sur un compteur d'échecs à zéro :
     // un redéploiement survenant en pleine pause 'circuit_open' ne doit pas
     // faire retenter l'envoi immédiatement alors que le service distant
-    // pourrait être toujours surchargé.
+    // pourrait être toujours surchargé — sans effet ici tant que
+    // userPaused reste true, mais restauré pour rester cohérent une fois
+    // resume() appelé.
     this.networkHealth = circuitBreaker.CircuitBreakerState.fromJSON(record.networkHealth);
     this._persist();
 
     console.log(
-      `Campagne (tenant "${this.tenantId}"): reprise après redémarrage à partir du destinataire ${record.nextIndex + 1}/${record.total}` +
-      `${this.networkHealth.isHeld() ? ` (statut réseau '${this.networkHealth.networkStatus}' restauré, en pause jusqu'à ${new Date(this.networkHealth.holdUntil).toISOString()})` : ''}.`,
+      `Campagne (tenant "${this.tenantId}"): restaurée en PAUSE après redémarrage/reconnexion, ` +
+      `au destinataire ${record.nextIndex + 1}/${record.total} — cliquez "Reprendre" pour continuer l'envoi.`,
     );
-
-    this._run(record.nextIndex).catch((err) => {
-      console.error(`Erreur pendant la reprise de campagne (tenant "${this.tenantId}"):`, err);
-      this.campaign.status = 'stopped';
-      this.campaign.paused = false;
-      this.campaign.finishedAt = new Date().toISOString();
-      this._persist();
-    });
 
     return true;
   }
@@ -773,7 +954,84 @@ async function listTenantsWithPendingCampaigns() {
   return [...tenantsFromLocal, ...tenantsFromRemote];
 }
 
+// Annule automatiquement (statut "cancelled") UNIQUEMENT les campagnes dont
+// AUCUN process n'a donné signe de vie (lastProgressAt — voir
+// CampaignEngine#_persist/_heartbeat) depuis plus de maxAgeMs : ni un envoi
+// réel, ni le simple battement de cœur d'une attente longue (pause
+// manuelle, coupure réseau, palier FLOOD_WAIT de plusieurs heures...).
+// Une campagne activement suivie par un process — même en pause depuis des
+// jours à attendre une restriction de compte — n'est donc JAMAIS annulée
+// ici, conformément à la demande explicite de ne jamais purger une
+// campagne "juste parce que du temps a passé" : seule une campagne
+// réellement abandonnée (process disparu après une éviction de session
+// jamais suivie de reconnexion, ou un crash sans redémarrage) finit par
+// dépasser ce délai. Opère directement sur les fichiers (pas sur des
+// instances CampaignEngine en mémoire, injoignables depuis ce module côté
+// WhatsApp) : appelée périodiquement par index.js, elle couvre aussi bien
+// les tenants encore actifs (dont le fichier reste à jour, donc jamais
+// purgés) que les tenants dont l'instance a été libérée depuis longtemps.
+function purgeStaleCampaigns(maxAgeMs = DEFAULT_STALE_MS) {
+  let files = [];
+  try {
+    files = fs.readdirSync(CAMPAIGNS_DIR);
+  } catch (err) {
+    return [];
+  }
+
+  const purged = [];
+  const now = Date.now();
+
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue;
+    const filePath = path.join(CAMPAIGNS_DIR, file);
+    let record;
+    try {
+      record = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (err) {
+      continue;
+    }
+
+    if (record.status !== 'running' && record.status !== 'paused') continue;
+
+    const referenceTime = record.lastProgressAt || record.startedAt;
+    if (!referenceTime) continue;
+    const ageMs = now - new Date(referenceTime).getTime();
+    if (!Number.isFinite(ageMs) || ageMs < maxAgeMs) continue;
+
+    const tenantId = record.tenantId || file.replace(/\.json$/, '');
+    const ageHours = Math.round(ageMs / 3_600_000);
+    record.status = 'cancelled';
+    record.paused = false;
+    record.userPaused = false;
+    record.stopRequested = true;
+    record.finishedAt = new Date().toISOString();
+    record.cancelReason = `Campagne inactive depuis plus de ${ageHours}h (aucun process ne l'a suivie) — annulée automatiquement.`;
+
+    try {
+      fs.writeFileSync(filePath, JSON.stringify(record, null, 2), 'utf8');
+    } catch (err) {
+      console.error(`Purge campagne WhatsApp (tenant "${tenantId}") : échec d'écriture locale —`, err.message);
+      continue;
+    }
+
+    removeSequenceMedia((record.options && record.options.sequence) || []);
+
+    if (githubStore.enabled) {
+      githubStore.createStore(remoteFilePath(tenantId)).pushRemote(JSON.stringify(record, null, 2)).catch((err) => {
+        console.error(`Purge campagne WhatsApp (tenant "${tenantId}") : échec de synchronisation GitHub —`, err.message);
+      });
+    }
+
+    console.log(`Campagne WhatsApp (tenant "${tenantId}") : annulée automatiquement après ${ageHours}h sans aucun signe de vie.`);
+    purged.push(tenantId);
+  }
+
+  return purged;
+}
+
 module.exports = {
   CampaignEngine,
   listTenantsWithPendingCampaigns,
+  purgeStaleCampaigns,
+  DEFAULT_STALE_MS,
 };

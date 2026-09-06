@@ -70,6 +70,13 @@ function pickEvictionCandidate() {
   const now = Date.now();
   const candidates = Array.from(registry.values()).filter((c) => !c.protected);
 
+  // Ce premier palier (inactivité) ne filtre PAS hasActiveCampaign() comme le
+  // second ci-dessous : une campagne en pause (réseau, FLOOD_WAIT de
+  // plusieurs heures...) ne génère aucune activité pendant l'attente et
+  // deviendrait donc éligible ici. Sans danger pour la campagne elle-même —
+  // dispose() (voir whatsappManager.js/telegramManager.js) la met en pause
+  // AVANT de couper la session plutôt que de l'abandonner, et elle reprend
+  // dès la reconnexion de ce tenant (ou un clic sur "Reprendre").
   const idleCandidates = candidates
     .filter((c) => now - c.lastActivityAt > IDLE_EVICTION_MS)
     .sort((a, b) => a.lastActivityAt - b.lastActivityAt);

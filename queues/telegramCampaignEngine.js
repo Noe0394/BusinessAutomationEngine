@@ -84,6 +84,12 @@ const INCOMING_REPLY_PAUSE_MS = 30_000;
 // viser une quelconque variation aléatoire.
 const MEDIA_TEXT_SEQUENCE_PAUSE_MS = 3_000;
 
+// Voir queues/campaignEngine.js#HEARTBEAT_INTERVAL_MS/DEFAULT_STALE_MS (même
+// principe et mêmes valeurs par défaut, dupliqué plutôt que partagé pour
+// rester indépendant du côté WhatsApp).
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_STALE_MS = (parseFloat(process.env.CAMPAIGN_STALE_HOURS) || 48) * 3_600_000;
+
 // Une campagne DM Telegram ne porte au plus qu'UNE pièce jointe (contrairement
 // à la séquence WhatsApp) : persistée une seule fois au lancement, sur le
 // même principe que persistSequenceMedia dans queues/campaignEngine.js
@@ -163,6 +169,18 @@ class TelegramCampaignEngine {
     // (queues/campaignEngine.js#networkHealth) : signal de santé réseau
     // "live", non persisté.
     this.networkHealth = new circuitBreaker.CircuitBreakerState();
+    // Voir queues/campaignEngine.js#_lastHeartbeatAt/_runActive (même
+    // principe côté WhatsApp).
+    this._lastHeartbeatAt = 0;
+    this._runActive = false;
+  }
+
+  // Voir queues/campaignEngine.js#_heartbeat (même principe).
+  _heartbeat() {
+    const now = Date.now();
+    if (now - this._lastHeartbeatAt < HEARTBEAT_INTERVAL_MS) return;
+    this._lastHeartbeatAt = now;
+    this._persist();
   }
 
   // Voir queues/campaignEngine.js#_pauseForIncomingReply (même principe).
@@ -198,16 +216,18 @@ class TelegramCampaignEngine {
       `reprise prévue vers ${new Date(health.holdUntil).toISOString()}.`,
     );
 
-    while (!campaign.stopRequested && health.isHeld()) {
+    while (!campaign.stopRequested && !campaign.superseded && health.isHeld()) {
+      this._heartbeat();
       await sleep(1000);
     }
-    if (campaign.stopRequested) return;
+    if (campaign.stopRequested || campaign.superseded) return;
 
-    while (!campaign.stopRequested && !this.session.isConnected()) {
+    while (!campaign.stopRequested && !campaign.superseded && !this.session.isConnected()) {
       console.log(`Campagne Telegram (tenant "${this.tenantId}"): health check négatif — nouvelle vérification dans 30s avant reprise.`);
+      this._heartbeat();
       await sleep(circuitBreaker.HEALTH_RECHECK_INTERVAL_MS);
     }
-    if (campaign.stopRequested) return;
+    if (campaign.stopRequested || campaign.superseded) return;
 
     const wasCircuitOpen = health.networkStatus === 'circuit_open';
     health.networkStatus = 'normal';
@@ -234,6 +254,10 @@ class TelegramCampaignEngine {
       failed: c.failed,
       startedAt: c.startedAt,
       finishedAt: c.finishedAt,
+      // Voir queues/campaignEngine.js#lastProgressAt (même principe et même
+      // usage par purgeStaleCampaigns()).
+      lastProgressAt: c.lastProgressAt,
+      cancelReason: c.cancelReason || null,
       nextIndex: c.nextIndex,
       recipients: c.recipients,
       recipientType: c.recipientType,
@@ -254,6 +278,7 @@ class TelegramCampaignEngine {
 
   _persist() {
     if (!this.campaign) return;
+    this.campaign.lastProgressAt = new Date().toISOString();
     const content = JSON.stringify(this._buildRecord(), null, 2);
     // Écriture locale synchrone volontaire, comme queues/campaignEngine.js :
     // volume négligeable (une campagne à la fois par tenant).
@@ -267,12 +292,14 @@ class TelegramCampaignEngine {
 
   getStatus() {
     if (!this.campaign) return null;
-    const { total, truncated, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError } = this.campaign;
+    const { total, truncated, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError, cancelReason } = this.campaign;
     const base = {
       total, truncated, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results,
       networkStatus: this.networkHealth.networkStatus,
     };
-    return resumeError ? { ...base, resumeError } : base;
+    if (resumeError) base.resumeError = resumeError;
+    if (cancelReason) base.cancelReason = cancelReason;
+    return base;
   }
 
   // Gère à la fois la pause volontaire (boutons Pause/Reprendre) et la perte
@@ -298,14 +325,14 @@ class TelegramCampaignEngine {
       console.log(`Campagne Telegram (tenant "${this.tenantId}"): en pause — réponse entrante détectée.`);
     }
 
-    while (!campaign.stopRequested && isBlocked()) {
+    while (!campaign.stopRequested && !campaign.superseded && isBlocked()) {
+      this._heartbeat();
       await sleep(1000);
     }
+    if (campaign.stopRequested || campaign.superseded) return;
 
     campaign.paused = false;
-    if (!campaign.stopRequested) {
-      console.log(`Campagne Telegram (tenant "${this.tenantId}"): reprise.`);
-    }
+    console.log(`Campagne Telegram (tenant "${this.tenantId}"): reprise.`);
   }
 
   // Comme interruptibleSleep (WhatsApp), mais réagit aussi à une pause
@@ -315,9 +342,10 @@ class TelegramCampaignEngine {
     const tickMs = 300;
     let elapsed = 0;
     while (elapsed < ms) {
-      if (campaign.stopRequested) return;
+      if (campaign.stopRequested || campaign.superseded) return;
       if (campaign.userPaused) {
         campaign.paused = true;
+        this._heartbeat();
         await sleep(tickMs);
         continue;
       }
@@ -339,36 +367,39 @@ class TelegramCampaignEngine {
     campaign.finishedAt = new Date().toISOString();
   }
 
+  // Voir queues/campaignEngine.js#_run/_runLoop (même principe : _runActive
+  // suit le cycle de vie de cet appel, utilisé par resume() pour savoir s'il
+  // doit redémarrer une boucle ou simplement débloquer celle déjà active).
   async _run(startIndex) {
+    this._runActive = true;
+    try {
+      await this._runLoop(startIndex);
+    } finally {
+      this._runActive = false;
+    }
+  }
+
+  async _runLoop(startIndex) {
     const campaign = this.campaign;
     const recipients = campaign.recipients;
 
+    // Voir queues/campaignEngine.js#_run pour la justification complète :
+    // stop()/pauseForShutdown() finalisent `campaign` de façon SYNCHRONE
+    // (voir plus bas) — ce passage de boucle doit alors juste s'arrêter sans
+    // rien retoucher, jamais re-marquer/re-persister par-dessus un état déjà
+    // clos (potentiellement celui d'une toute nouvelle campagne démarrée
+    // entre-temps, le verrou ayant été libéré immédiatement par stop()).
+    const shouldAbort = () => campaign.stopRequested || campaign.superseded;
+
     let i = startIndex;
     while (i < recipients.length) {
-      if (campaign.stopRequested) {
-        this._markRemainingInterrupted(i);
-        this._persist();
-        console.log(`Campagne Telegram (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
-        return;
-      }
+      if (shouldAbort()) return;
 
       await this._waitWhileBlocked();
-
-      if (campaign.stopRequested) {
-        this._markRemainingInterrupted(i);
-        this._persist();
-        console.log(`Campagne Telegram (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
-        return;
-      }
+      if (shouldAbort()) return;
 
       await this._waitForNetworkHold();
-
-      if (campaign.stopRequested) {
-        this._markRemainingInterrupted(i);
-        this._persist();
-        console.log(`Campagne Telegram (tenant "${this.tenantId}"): interrompue par l'utilisateur.`);
-        return;
-      }
+      if (shouldAbort()) return;
 
       const { identifier, vars } = normalizeTelegramRecipient(recipients[i]);
       let status = 'failed';
@@ -418,7 +449,7 @@ class TelegramCampaignEngine {
           // _waitForNetworkHold), sans le compter ni avancer la file.
           overloadDetected = true;
           const backoffMs = this.networkHealth.recordOverloadFailure(err);
-          this._persist();
+          if (!shouldAbort()) this._persist();
           console.log(
             `Campagne Telegram (tenant "${this.tenantId}"): signal de surcharge détecté (${err.message}) — ` +
             `statut 'circuit_open', nouvelle tentative pour ${identifier} dans ${Math.round(backoffMs / 60000)} min (index ${i} conservé).`,
@@ -429,6 +460,11 @@ class TelegramCampaignEngine {
           console.error(`Campagne Telegram (tenant "${this.tenantId}"): échec de l'envoi à ${identifier}:`, errorReason);
         }
       }
+
+      // stop()/pauseForShutdown() a pu finaliser `campaign` PENDANT l'envoi
+      // ci-dessus (attente réseau non interruptible) : ne pas laisser cet
+      // envoi qui vient de se terminer réécrire un état déjà clos.
+      if (shouldAbort()) return;
 
       if (overloadDetected) {
         // Ne pas incrémenter i : le prochain passage dans la boucle
@@ -444,7 +480,7 @@ class TelegramCampaignEngine {
 
       i += 1;
 
-      if (i < recipients.length && !campaign.stopRequested) {
+      if (i < recipients.length && !shouldAbort()) {
         // Délai fixe et configurable en priorité (standard, sans
         // randomisation) ; à défaut, on retombe sur l'ancienne fenêtre
         // aléatoire min/max pour ne pas casser les campagnes déjà
@@ -464,6 +500,8 @@ class TelegramCampaignEngine {
         await this._interruptibleSleep(endOfBatch ? batchPauseMs : baseDelayMs);
       }
     }
+
+    if (shouldAbort()) return;
 
     if (campaign.status === 'running') {
       campaign.status = 'completed';
@@ -502,8 +540,10 @@ class TelegramCampaignEngine {
       paused: false,
       userPaused: false,
       stopRequested: false,
+      superseded: false,
       startedAt: new Date().toISOString(),
       finishedAt: null,
+      lastProgressAt: new Date().toISOString(),
       nextIndex: 0,
       recipients: limitedRecipients,
       recipientType,
@@ -517,13 +557,16 @@ class TelegramCampaignEngine {
     };
     this.incomingPauseUntil = 0;
     this.networkHealth = new circuitBreaker.CircuitBreakerState();
+    this._lastHeartbeatAt = 0;
     this._persist();
 
+    const campaign = this.campaign;
     this._run(0).catch((err) => {
       console.error(`Erreur pendant la campagne Telegram (tenant "${this.tenantId}"):`, err);
-      this.campaign.status = 'stopped';
-      this.campaign.paused = false;
-      this.campaign.finishedAt = new Date().toISOString();
+      if (this.campaign !== campaign || campaign.stopRequested || campaign.superseded) return;
+      campaign.status = 'stopped';
+      campaign.paused = false;
+      campaign.finishedAt = new Date().toISOString();
       this._persist();
     });
 
@@ -538,21 +581,61 @@ class TelegramCampaignEngine {
     this._persist();
   }
 
+  // Voir queues/campaignEngine.js#resume (même principe) : si aucune boucle
+  // n'est déjà en vie (campagne restaurée via resumeIfPending() mais jamais
+  // relancée depuis), en démarre une nouvelle à partir de nextIndex plutôt
+  // que de se contenter de lever le drapeau userPaused, que personne
+  // n'observerait alors.
   resume() {
     if (!this.campaign || this.campaign.status !== 'running') {
       throw new Error('NO_CAMPAIGN_RUNNING');
     }
     this.campaign.userPaused = false;
+    if (!this._runActive) {
+      this.campaign.paused = false;
+    }
     this._persist();
+    if (!this._runActive) {
+      const campaign = this.campaign;
+      this._run(campaign.nextIndex).catch((err) => {
+        console.error(`Erreur pendant la reprise de campagne Telegram (tenant "${this.tenantId}"):`, err);
+        if (this.campaign !== campaign || campaign.stopRequested || campaign.superseded) return;
+        campaign.status = 'stopped';
+        campaign.paused = false;
+        campaign.finishedAt = new Date().toISOString();
+        this._persist();
+      });
+    }
   }
 
+  // Arrêt DÉFINITIF (voir queues/campaignEngine.js#stop pour la
+  // justification complète) : finalise la campagne de façon SYNCHRONE
+  // (destinataires restants marqués "interrupted", statut "stopped") au lieu
+  // d'attendre que la boucle en tâche de fond ne remarque stopRequested —
+  // libère donc le verrou immédiatement pour permettre un nouveau
+  // lancement. superseded=true fait taire la boucle en tâche de fond si elle
+  // est encore active, sans qu'elle ne retouche cet état déjà finalisé.
   stop() {
     if (!this.campaign || this.campaign.status !== 'running') {
       throw new Error('NO_CAMPAIGN_RUNNING');
     }
     this.campaign.stopRequested = true;
-    this.campaign.userPaused = false;
+    this._markRemainingInterrupted(this.campaign.nextIndex);
+    this.campaign.superseded = true;
     this._persist();
+  }
+
+  // Voir queues/campaignEngine.js#pauseForShutdown (même principe) : appelée
+  // par le régulateur de sessions juste avant de disposer la session
+  // Telegram d'un tenant — ne jamais annuler, juste mettre en pause pour une
+  // reprise ultérieure.
+  pauseForShutdown() {
+    if (!this.campaign || this.campaign.status !== 'running') return;
+    this.campaign.userPaused = true;
+    this.campaign.paused = true;
+    this.campaign.superseded = true;
+    this._persist();
+    console.log(`Campagne Telegram (tenant "${this.tenantId}"): mise en pause (session libérée) — reprise possible ultérieurement.`);
   }
 
   async _loadRecord() {
@@ -581,7 +664,17 @@ class TelegramCampaignEngine {
   // persisté indique une campagne encore "running"/"paused" au moment où le
   // conteneur s'est arrêté — reprend l'envoi exactement au destinataire
   // suivant (nextIndex), sans action requise de l'utilisateur.
+  // Voir queues/campaignEngine.js#resumeIfPending pour la justification
+  // complète : appelée au boot ET à chaque (re)création d'instance en cours
+  // de fonctionnement (voir getOrCreate() dans telegramManager.js). Ne
+  // relance JAMAIS l'envoi automatiquement — restaure en pause
+  // (userPaused=true), à reprendre manuellement via resume() une fois certain
+  // que le compte n'est plus restreint. `if (this.campaign) return false`
+  // rend l'appel idempotent (boot + requête HTTP concurrente sans risque de
+  // double reprise).
   async resumeIfPending() {
+    if (this.campaign) return false;
+
     const record = await this._loadRecord();
     if (!record) return false;
 
@@ -604,6 +697,7 @@ class TelegramCampaignEngine {
         paused: false,
         userPaused: false,
         stopRequested: true,
+        superseded: false,
         finishedAt: new Date().toISOString(),
         resumeError: 'Pièce jointe introuvable après redéploiement — relancez la campagne.',
       };
@@ -614,30 +708,25 @@ class TelegramCampaignEngine {
     this.campaign = {
       ...record,
       status: 'running',
-      paused: false,
+      paused: true,
+      userPaused: true,
+      stopRequested: false,
+      superseded: false,
       finishedAt: null,
     };
     this.incomingPauseUntil = 0;
+    this._lastHeartbeatAt = 0;
     // Restaure la pause de sécurité en cours (voir lib/circuitBreaker.js) le
-    // cas échéant, plutôt que de repartir sur un compteur d'échecs à zéro :
-    // un redéploiement survenant en pleine pause 'circuit_open' ne doit pas
-    // faire retenter l'envoi immédiatement alors que Telegram pourrait être
-    // toujours en train de limiter ce compte.
+    // cas échéant, plutôt que de repartir sur un compteur d'échecs à zéro —
+    // sans effet tant que userPaused reste true, mais restauré pour rester
+    // cohérent une fois resume() appelé.
     this.networkHealth = circuitBreaker.CircuitBreakerState.fromJSON(record.networkHealth);
     this._persist();
 
     console.log(
-      `Campagne Telegram (tenant "${this.tenantId}"): reprise après redémarrage à partir du destinataire ${record.nextIndex + 1}/${record.total}` +
-      `${this.networkHealth.isHeld() ? ` (statut réseau '${this.networkHealth.networkStatus}' restauré, en pause jusqu'à ${new Date(this.networkHealth.holdUntil).toISOString()})` : ''}.`,
+      `Campagne Telegram (tenant "${this.tenantId}"): restaurée en PAUSE après redémarrage/reconnexion, ` +
+      `au destinataire ${record.nextIndex + 1}/${record.total} — cliquez "Reprendre" pour continuer l'envoi.`,
     );
-
-    this._run(record.nextIndex).catch((err) => {
-      console.error(`Erreur pendant la reprise de campagne Telegram (tenant "${this.tenantId}"):`, err);
-      this.campaign.status = 'stopped';
-      this.campaign.paused = false;
-      this.campaign.finishedAt = new Date().toISOString();
-      this._persist();
-    });
 
     return true;
   }
@@ -698,7 +787,72 @@ async function listTenantsWithPendingCampaigns() {
   return [...tenantsFromLocal, ...tenantsFromRemote];
 }
 
+// Voir queues/campaignEngine.js#purgeStaleCampaigns (même principe et mêmes
+// garanties : n'annule jamais une campagne activement suivie par un process,
+// aussi longue que soit son attente — seule une campagne dont AUCUN process
+// n'a donné signe de vie depuis plus de maxAgeMs est annulée).
+function purgeStaleCampaigns(maxAgeMs = DEFAULT_STALE_MS) {
+  let files = [];
+  try {
+    files = fs.readdirSync(CAMPAIGNS_DIR);
+  } catch (err) {
+    return [];
+  }
+
+  const purged = [];
+  const now = Date.now();
+
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue;
+    const filePath = path.join(CAMPAIGNS_DIR, file);
+    let record;
+    try {
+      record = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (err) {
+      continue;
+    }
+
+    if (record.status !== 'running' && record.status !== 'paused') continue;
+
+    const referenceTime = record.lastProgressAt || record.startedAt;
+    if (!referenceTime) continue;
+    const ageMs = now - new Date(referenceTime).getTime();
+    if (!Number.isFinite(ageMs) || ageMs < maxAgeMs) continue;
+
+    const tenantId = record.tenantId || file.replace(/\.json$/, '');
+    const ageHours = Math.round(ageMs / 3_600_000);
+    record.status = 'cancelled';
+    record.paused = false;
+    record.userPaused = false;
+    record.stopRequested = true;
+    record.finishedAt = new Date().toISOString();
+    record.cancelReason = `Campagne inactive depuis plus de ${ageHours}h (aucun process ne l'a suivie) — annulée automatiquement.`;
+
+    try {
+      fs.writeFileSync(filePath, JSON.stringify(record, null, 2), 'utf8');
+    } catch (err) {
+      console.error(`Purge campagne Telegram (tenant "${tenantId}") : échec d'écriture locale —`, err.message);
+      continue;
+    }
+
+    removeMedia(record.media);
+
+    if (githubStore.enabled) {
+      githubStore.createStore(remoteFilePath(tenantId)).pushRemote(JSON.stringify(record, null, 2)).catch((err) => {
+        console.error(`Purge campagne Telegram (tenant "${tenantId}") : échec de synchronisation GitHub —`, err.message);
+      });
+    }
+
+    console.log(`Campagne Telegram (tenant "${tenantId}") : annulée automatiquement après ${ageHours}h sans aucun signe de vie.`);
+    purged.push(tenantId);
+  }
+
+  return purged;
+}
+
 module.exports = {
   TelegramCampaignEngine,
   listTenantsWithPendingCampaigns,
+  purgeStaleCampaigns,
+  DEFAULT_STALE_MS,
 };

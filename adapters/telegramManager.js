@@ -37,12 +37,39 @@ function getOrCreate(rawTenantId) {
     sessionRegulator.register('telegram', tenantId, {
       protected: tenantId === ADMIN_TENANT_ID,
       hasActiveCampaign: () => (campaignEngine.getStatus() || {}).status === 'running',
-      dispose: () => session.dispose(),
+      // NE JAMAIS annuler une campagne juste parce que sa session est
+      // libérée (limite de sessions simultanées atteinte, voir
+      // adapters/sessionRegulator.js) : on la met en pause (destinataires
+      // restants et progression conservés) AVANT de couper la connexion —
+      // voir TelegramCampaignEngine#pauseForShutdown. Une reprise
+      // ultérieure (bouton "Reprendre", ou resumeIfPending() ci-dessous à la
+      // prochaine reconnexion de ce tenant) la continuera exactement là où
+      // elle en était.
+      dispose: () => {
+        campaignEngine.pauseForShutdown();
+        session.dispose();
+      },
       onEvicted: () => tenants.delete(tenantId),
+    });
+    // Restaure une campagne persistée (même tenant, instance précédente
+    // évincée ou process redémarré sans que bootResumePendingCampaigns() ne
+    // soit passé par ce tenant) : voir TelegramCampaignEngine#resumeIfPending,
+    // qui ne relance jamais l'envoi automatiquement (restaure en pause) et
+    // est idempotent. Fire-and-forget : ne doit jamais bloquer la création
+    // de la session.
+    campaignEngine.resumeIfPending().catch((err) => {
+      console.error(`Erreur lors de la reprise automatique de campagne Telegram (tenant "${tenantId}") :`, err.message);
     });
   }
   sessionRegulator.touch('telegram', tenantId);
   return tenants.get(tenantId);
+}
+
+// Utilisé par index.js pour mettre en pause (jamais annuler) toute campagne
+// active lors d'un arrêt propre du process (SIGTERM envoyé par Render avant
+// un redéploiement) — voir TelegramCampaignEngine#pauseForShutdown.
+function listActiveEntries() {
+  return Array.from(tenants.values());
 }
 
 // Connexion paresseuse : une instance Telegram n'est démarrée (restauration
@@ -180,5 +207,6 @@ module.exports = {
   getSessionForRequest,
   initAdminSession,
   bootResumePendingCampaigns,
+  listActiveEntries,
   getStorageStatus,
 };

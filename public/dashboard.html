@@ -374,7 +374,9 @@
         </div>
 
         <button type="button" id="send-campaign-btn" class="send-button">🚀 Lancer l'envoi</button>
-        <button type="button" id="stop-campaign-btn" class="stop-button" hidden>⛔ STOP / Interrompre la campagne</button>
+        <button type="button" id="pause-campaign-btn" class="stop-button" hidden>⏸️ Mettre en pause</button>
+        <button type="button" id="resume-campaign-btn" class="send-button" hidden>▶️ Reprendre</button>
+        <button type="button" id="stop-campaign-btn" class="stop-button" hidden>⛔ STOP / Interrompre définitivement</button>
         <div id="campaign-feedback" hidden></div>
 
         <div id="progress-area" hidden>
@@ -1847,6 +1849,22 @@
       }
     });
 
+    document.getElementById('pause-campaign-btn').addEventListener('click', async () => {
+      try {
+        await apiFetch('/api/messages/pause', { method: 'POST' });
+      } catch (err) {
+        // le prochain poll reflétera l'état réel
+      }
+    });
+
+    document.getElementById('resume-campaign-btn').addEventListener('click', async () => {
+      try {
+        await apiFetch('/api/messages/resume', { method: 'POST' });
+      } catch (err) {
+        // le prochain poll reflétera l'état réel
+      }
+    });
+
     document.getElementById('stop-campaign-btn').addEventListener('click', async () => {
       try {
         await apiFetch('/api/messages/stop', { method: 'POST' });
@@ -1979,16 +1997,22 @@
         if (!data.exists) return;
 
         const sendBtn = document.getElementById('send-campaign-btn');
+        const pauseBtn = document.getElementById('pause-campaign-btn');
+        const resumeBtn = document.getElementById('resume-campaign-btn');
         const stopBtn = document.getElementById('stop-campaign-btn');
 
         if (data.status === 'running') {
           observedRunningStartedAt = data.startedAt;
           sendBtn.disabled = true;
+          pauseBtn.hidden = Boolean(data.userPaused);
+          resumeBtn.hidden = !data.userPaused;
           stopBtn.hidden = false;
           stopBtn.disabled = false;
           updateProgressUI(data);
         } else {
           sendBtn.disabled = false;
+          pauseBtn.hidden = true;
+          resumeBtn.hidden = true;
           stopBtn.hidden = true;
           updateProgressUI(data);
 

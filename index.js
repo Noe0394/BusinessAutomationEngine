@@ -19,6 +19,8 @@ const videoCompressor = require('./adapters/videoCompressor');
 const licenses = require('./licenses');
 const oauthConfig = require('./oauth_config');
 const scheduledMessages = require('./queues/scheduled_messages');
+const campaignEngineModule = require('./queues/campaignEngine');
+const telegramCampaignEngineModule = require('./queues/telegramCampaignEngine');
 const contactsStore = require('./models/contact');
 const keywordRules = require('./models/keyword_rules');
 const scrapedNumbers = require('./models/scrapedNumbers');
@@ -674,6 +676,31 @@ const scheduledMessagesInterval = setInterval(() => {
 // Ne bloque jamais l'arrêt propre du process (même principe que les autres
 // setInterval de ce fichier/des adaptateurs).
 if (scheduledMessagesInterval.unref) scheduledMessagesInterval.unref();
+
+// Purge automatique des campagnes WhatsApp/Telegram abandonnées (voir
+// queues/campaignEngine.js#purgeStaleCampaigns et son équivalent Telegram) :
+// n'annule QUE les campagnes dont aucun process n'a donné signe de vie
+// depuis plus de CAMPAIGN_STALE_HOURS (48h par défaut, configurable) —
+// jamais une campagne activement suivie (en cours d'envoi, ou en pause
+// manuelle/réseau/FLOOD_WAIT en cours de plusieurs heures à plusieurs jours,
+// voir le "battement de cœur" des moteurs de campagne), conformément à la
+// demande explicite de ne jamais annuler une campagne juste parce que du
+// temps a passé. Un cycle par heure suffit largement pour un seuil mesuré en
+// jours.
+const CAMPAIGN_PURGE_TICK_MS = 60 * 60 * 1000;
+const campaignPurgeInterval = setInterval(() => {
+  try {
+    campaignEngineModule.purgeStaleCampaigns();
+  } catch (err) {
+    console.error('Erreur pendant la purge des campagnes WhatsApp abandonnées:', err.message);
+  }
+  try {
+    telegramCampaignEngineModule.purgeStaleCampaigns();
+  } catch (err) {
+    console.error('Erreur pendant la purge des campagnes Telegram abandonnées:', err.message);
+  }
+}, CAMPAIGN_PURGE_TICK_MS);
+if (campaignPurgeInterval.unref) campaignPurgeInterval.unref();
 
 async function findGroupByName(session, name) {
   const groups = await session.getGroups();
@@ -1388,6 +1415,38 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
   });
 });
 
+// Pause manuelle (bouton "Mettre en Pause") : ne finalise rien, la
+// progression et la liste des destinataires restants sont conservées pour
+// une reprise via /api/messages/resume — voir CampaignEngine#pause.
+app.post('/api/messages/pause', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+  try {
+    req.campaignEngine.pause();
+    res.status(200).json({ status: 'pause_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(400).json({ error: 'Aucune campagne en cours à mettre en pause.' });
+    }
+    throw err;
+  }
+});
+
+app.post('/api/messages/resume', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+  try {
+    req.campaignEngine.resume();
+    res.status(200).json({ status: 'resume_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(400).json({ error: 'Aucune campagne en cours à reprendre.' });
+    }
+    throw err;
+  }
+});
+
+// Arrêt DÉFINITIF (bouton "Stopper définitivement") : voir
+// CampaignEngine#stop, qui finalise la campagne de façon SYNCHRONE — le
+// verrou (une seule campagne à la fois par tenant) est donc déjà libéré au
+// moment où cette réponse part, permettant de lancer une nouvelle campagne
+// sans attendre.
 app.post('/api/messages/stop', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
   try {
     req.campaignEngine.stop();
@@ -3093,6 +3152,49 @@ telegramManager
       console.error('Erreur lors de la reprise des campagnes Telegram interrompues :', err);
     });
   });
+
+// Arrêt propre du process (SIGTERM envoyé par Render avant de remplacer le
+// conteneur lors d'un redéploiement, SIGINT en local) : met en PAUSE (jamais
+// n'annule) toute campagne WhatsApp/Telegram active avant de laisser le
+// process se terminer — voir CampaignEngine#pauseForShutdown et son
+// équivalent Telegram. Sans ce gestionnaire, une campagne en cours d'envoi
+// resterait persistée au statut "running" jusqu'au prochain redémarrage
+// (déjà géré correctement par resumeIfPending, mais sans le signal explicite
+// "mise en pause propre, en attente d'une reprise volontaire" que ce
+// gestionnaire ajoute).
+let shuttingDown = false;
+
+function pauseAllActiveCampaignsForShutdown() {
+  for (const entry of whatsappManager.listActiveEntries()) {
+    try {
+      entry.campaignEngine.pauseForShutdown();
+    } catch (err) {
+      console.error(`Erreur lors de la mise en pause de la campagne WhatsApp (tenant "${entry.session.tenantId}") à l'arrêt :`, err.message);
+    }
+  }
+  for (const entry of telegramManager.listActiveEntries()) {
+    try {
+      entry.campaignEngine.pauseForShutdown();
+    } catch (err) {
+      console.error(`Erreur lors de la mise en pause de la campagne Telegram (tenant "${entry.session.tenantId}") à l'arrêt :`, err.message);
+    }
+  }
+}
+
+function handleShutdownSignal(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Signal ${signal} reçu : mise en pause des campagnes actives avant l'arrêt...`);
+  pauseAllActiveCampaignsForShutdown();
+  // Brève fenêtre avant de quitter pour de laisser une chance aux sauvegardes
+  // GitHub déclenchées par pauseForShutdown() (fire-and-forget, voir
+  // _persist()) de partir — la seule façon de retrouver cette campagne au
+  // démarrage du PROCHAIN conteneur si le redéploiement vide le disque local.
+  setTimeout(() => process.exit(0), 3000);
+}
+
+process.on('SIGTERM', () => handleShutdownSignal('SIGTERM'));
+process.on('SIGINT', () => handleShutdownSignal('SIGINT'));
 
 // Auto-ping interne : sur le plan gratuit Render, le service se met en
 // veille après ~15 min sans requête entrante, ce qui coupe aussi les
