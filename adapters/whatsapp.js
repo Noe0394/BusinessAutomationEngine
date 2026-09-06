@@ -8,6 +8,8 @@ const path = require('path');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
+  fetchLatestWaWebVersion,
+  fetchLatestBaileysVersion,
   DisconnectReason,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
@@ -46,6 +48,60 @@ if (!process.env.AUTH_DIR && !githubStore.enabled) {
 // sendPresenceUpdate('available') est un appel très léger, sans impact sur
 // les quotas d'envoi de messages.
 const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+
+// La version du protocole WhatsApp Web figée dans le paquet Baileys installé
+// devient obsolète dès que WhatsApp fait évoluer son protocole côté serveur —
+// WhatsApp rejette alors la connexion en pleine tentative d'appairage (QR
+// jamais validé / code d'association qui échoue, ou coupure en pleine
+// négociation, cf. incident du 2026-09-06), sans rapport avec les identifiants
+// ou le réseau. Résolution en deux temps :
+//   1. fetchLatestWaWebVersion() interroge directement web.whatsapp.com (le
+//      "client_revision" servi par WhatsApp lui-même) — la source la plus à
+//      jour possible, puisqu'elle ne dépend d'aucune mise à jour manuelle d'un
+//      mainteneur tiers.
+//   2. En cas d'échec (réseau, format de réponse changé...), repli sur
+//      fetchLatestBaileysVersion() qui lit le fichier de version publié dans
+//      le dépôt GitHub de Baileys — une source un peu moins fraîche mais
+//      indépendante de web.whatsapp.com.
+//   3. Si les deux échouent, on laisse `version` non défini : makeWASocket()
+//      retombe alors sur la version par défaut compilée dans la lib Baileys
+//      installée (comportement strictement identique à avant ce correctif) —
+//      l'appairage n'est donc jamais bloqué par une panne de résolution de
+//      version, seulement potentiellement moins à jour.
+// Mise en cache au niveau du module (partagé par tous les tenants) : un seul
+// aller-retour réseau par démarrage du process en cas de succès. Un timeout
+// court évite qu'un réseau capricieux ne retarde indéfiniment une tentative
+// de connexion WhatsApp.
+const WA_VERSION_FETCH_TIMEOUT_MS = 10_000;
+let cachedWAVersion = null;
+
+async function resolveWAVersion() {
+  if (cachedWAVersion) return cachedWAVersion;
+
+  let result = await fetchLatestWaWebVersion({ timeout: WA_VERSION_FETCH_TIMEOUT_MS });
+  let source = 'web.whatsapp.com';
+
+  if (result.error) {
+    console.warn(
+      `Version WhatsApp Web introuvable via ${source} (${result.error.message}) — tentative via le dépôt Baileys...`,
+    );
+    result = await fetchLatestBaileysVersion({ timeout: WA_VERSION_FETCH_TIMEOUT_MS });
+    source = 'dépôt Baileys';
+  }
+
+  cachedWAVersion = result.version;
+
+  if (result.error) {
+    console.warn(
+      `Impossible de confirmer la dernière version WhatsApp Web (${source} indisponible : ${result.error.message}) — ` +
+      `repli sur la version par défaut intégrée à Baileys : ${result.version.join('.')}.`,
+    );
+  } else {
+    console.log(`Version WhatsApp Web utilisée (source : ${source}) : ${result.version.join('.')}.`);
+  }
+
+  return cachedWAVersion;
+}
 
 function createSession(tenantId) {
   const AUTH_DIR = path.join(AUTH_DIR_BASE, tenantId);
@@ -246,7 +302,23 @@ function createSession(tenantId) {
     return authStore.restoreSessionFromRemote(AUTH_DIR);
   }
 
-  async function connect() {
+  // Sérialise toute opération qui touche à sock/AUTH_DIR (doConnect, logout) :
+  // sans ça, une reconnexion automatique programmée par scheduleReconnect()
+  // peut se déclencher au moment exact où l'utilisateur demande un nouveau
+  // code d'appairage (requestPairingCode -> logout), et les deux finissent par
+  // lire/écrire useMultiFileAuthState(AUTH_DIR) en parallèle — l'une pouvant
+  // supprimer (fs.rmSync) le dossier de session pendant que l'autre est en
+  // train d'y écrire les creds d'une tentative de connexion différente,
+  // corrompant la session locale. Chaque appel attend la fin du précédent,
+  // qu'il ait réussi ou échoué, avant de démarrer.
+  let lifecycleQueue = Promise.resolve();
+  function runSerialized(fn) {
+    const run = lifecycleQueue.then(fn, fn);
+    lifecycleQueue = run.then(() => {}, () => {});
+    return run;
+  }
+
+  async function doConnect() {
     // Un socket précédent encore vivant (ex: connect() rappelé pendant qu'un
     // ancien socket termine sa fermeture) est explicitement détaché et fermé
     // avant d'en créer un nouveau — voir le commentaire sur connectGeneration.
@@ -271,6 +343,7 @@ function createSession(tenantId) {
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     authState = state;
+    const waVersion = await resolveWAVersion();
     // Capturé UNE FOIS ici, avant toute tentative de connexion : Baileys peut
     // remettre creds.registered à false en interne dès qu'il détecte un rejet
     // (le close handler ci-dessous verrait alors toujours "jamais enregistré"
@@ -281,6 +354,7 @@ function createSession(tenantId) {
 
     sock = makeWASocket({
       auth: state,
+      ...(waVersion ? { version: waVersion } : {}),
       printQRInTerminal: false,
       // Par défaut, Baileys ne laisse vivre un QR que 60s pour le premier,
       // puis seulement 20s pour chaque QR suivant avant de fermer la
@@ -426,6 +500,10 @@ function createSession(tenantId) {
     return sock;
   }
 
+  function connect() {
+    return runSerialized(doConnect);
+  }
+
   async function sendMessage(to, text) {
     if (!sock) {
       throw new Error('Adaptateur WhatsApp non initialisé.');
@@ -526,36 +604,41 @@ function createSession(tenantId) {
   // enregistré sur l'ancien compte. On relance ensuite connect() tout de suite
   // pour que l'utilisateur obtienne un nouveau QR code sans devoir redémarrer
   // le serveur.
-  async function logout() {
-    // Voir onAccountReset ci-dessus : le prochain appairage sous ce tenant
-    // peut concerner un numéro totalement différent — le moteur de campagne
-    // ne doit jamais hériter d'un état "running"/"paused" de l'ancien.
-    notifyAccountReset();
+  function logout() {
+    // runSerialized (voir plus haut) : empêche qu'une reconnexion automatique
+    // en cours (doConnect() déclenché par scheduleReconnect) ne lise/écrive
+    // AUTH_DIR en parallèle de la purge ci-dessous.
+    return runSerialized(async () => {
+      // Voir onAccountReset ci-dessus : le prochain appairage sous ce tenant
+      // peut concerner un numéro totalement différent — le moteur de campagne
+      // ne doit jamais hériter d'un état "running"/"paused" de l'ancien.
+      notifyAccountReset();
 
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    stopHeartbeat();
-
-    if (sock) {
-      try {
-        await sock.logout();
-      } catch (err) {
-        console.warn(`Erreur lors du logout WhatsApp (tenant "${tenantId}", nettoyage local effectué quand même) :`, err.message);
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
       }
-    }
+      stopHeartbeat();
 
-    connected = false;
-    latestQR = null;
-    authState = null;
-    sock = null;
-    contactNames.clear();
+      if (sock) {
+        try {
+          await sock.logout();
+        } catch (err) {
+          console.warn(`Erreur lors du logout WhatsApp (tenant "${tenantId}", nettoyage local effectué quand même) :`, err.message);
+        }
+      }
 
-    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-    await authStore.clearRemote();
+      connected = false;
+      latestQR = null;
+      authState = null;
+      sock = null;
+      contactNames.clear();
 
-    await connect();
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      await authStore.clearRemote();
+
+      await doConnect();
+    });
   }
 
   // Libération "douce" déclenchée par le régulateur de sessions (voir
