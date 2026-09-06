@@ -692,6 +692,21 @@ class CampaignEngine {
         continue;
       }
 
+      // Synchronisation Auto <-> Manuel (Relance Manuelle Express) : ce
+      // destinataire a déjà été traité à la main pendant que la campagne
+      // automatique était en pause/arrêtée (voir markManualSent) — un
+      // Reprendre ne doit jamais lui renvoyer le message en double. On saute
+      // sans requête réseau, exactement comme un doublon Smart Screening.
+      if (campaign.results[i].status === 'sent_manual') {
+        campaign.sent += 1;
+        campaign.nextIndex = i + 1;
+        this._persist();
+        if (this.onActivity) this.onActivity();
+        console.log(`Campagne (tenant "${this.tenantId}"): destinataire ${campaign.results[i].to} ignoré (déjà relancé manuellement, ${i + 1}/${recipients.length}).`);
+        i += 1;
+        continue;
+      }
+
       const { to, vars } = normalizeRecipientEntry(recipients[i], this.session.getContactName);
       let status = 'failed';
       let overloadDetected = false;

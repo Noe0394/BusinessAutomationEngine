@@ -540,6 +540,21 @@ class TelegramCampaignEngine {
         continue;
       }
 
+      // Synchronisation Auto <-> Manuel (Relance Manuelle Express) : ce
+      // destinataire a déjà été traité à la main pendant que la campagne
+      // automatique était en pause/arrêtée (voir markManualSent, même
+      // principe que queues/campaignEngine.js#_runLoop) — un Reprendre ne
+      // doit jamais lui renvoyer le message en double.
+      if (campaign.results[i].status === 'sent_manual') {
+        campaign.sent += 1;
+        campaign.nextIndex = i + 1;
+        this._persist();
+        if (this.onActivity) this.onActivity();
+        console.log(`Campagne Telegram (tenant "${this.tenantId}"): destinataire ${campaign.results[i].to} ignoré (déjà relancé manuellement, ${i + 1}/${recipients.length}).`);
+        i += 1;
+        continue;
+      }
+
       const { identifier, vars } = normalizeTelegramRecipient(recipients[i]);
       let status = 'failed';
       let errorReason = null;

@@ -129,6 +129,13 @@
     .relance-launch-button.telegram { background: #2AABEE; }
     .relance-hint { font-size: 0.85rem; color: #777; margin-top: 0.5rem; }
 
+    /* Composant universel "Copywriter IA Intelligent" (SmartTextGenerator) —
+       monté sous chaque <textarea> de rédaction par createSmartTextGenerator. */
+    .smart-textgen { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin: 0.6rem 0 1.2rem; padding: 0.75rem; background: #f6f3ff; border: 1px solid #ded6fb; border-radius: 8px; }
+    .smart-textgen-intention { flex: 1 1 220px; min-height: 44px; padding: 0.6rem 0.75rem; border: 1px solid #ccc; border-radius: 6px; }
+    .smart-textgen-vary { flex: 0 0 auto; min-height: 44px; padding: 0.7rem 1.1rem; background: #6c4fd6; color: #fff; border: none; border-radius: 8px; font-weight: bold; white-space: nowrap; }
+    .smart-textgen-hint { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: #c0392b; }
+
     #import-result { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
     #import-result.ok { background: #d4f5dd; color: #1a7a3c; }
     #import-result.error { background: #fbdada; color: #c0392b; }
@@ -1837,6 +1844,7 @@
           textarea.value = step.text;
           textarea.addEventListener('input', () => { step.text = textarea.value; });
           card.appendChild(textarea);
+          createSmartTextGenerator(textarea);
         } else {
           const p = document.createElement('p');
           p.textContent = '📎 ' + step.file.name;
@@ -3710,6 +3718,7 @@
           textarea.value = step.text;
           textarea.addEventListener('input', () => { step.text = textarea.value; });
           card.appendChild(textarea);
+          createSmartTextGenerator(textarea);
         } else {
           const p = document.createElement('p');
           p.textContent = '📎 ' + step.file.name;
@@ -4492,6 +4501,7 @@
       }
     }
 
+    // ---------- Composant universel "Copywriter IA Intelligent" (SmartTextGenerator) ----------
     // Moteur "Copywriter Mille Variantes" côté client (aucun appel serveur,
     // aucune IA générative — un moteur de permutations façon Spintax) : pioche
     // au hasard une accroche, un cadrage de l'intention, 2 ou 3 puces
@@ -4504,7 +4514,22 @@
     // au-delà du "aucun prospect ne reçoit le même texte" demandé. Un lien
     // éventuellement collé dans l'intention est détecté et extrait plutôt
     // que répété dans le corps du message.
-    function relanceGenerateMessage(intentionRaw, name) {
+    //
+    // Partagé par TOUS les formulaires de rédaction du dashboard (Relance
+    // Manuelle Express, Programmation de Campagnes, Envois Automatiques
+    // WhatsApp/Telegram/Facebook, Templates de réponse auto) — voir
+    // createSmartTextGenerator ci-dessous, qui monte le petit composant
+    // "Mon Intention" + "🔄 Varier le texte" sous n'importe quel <textarea>.
+    // `name` reçoit soit un prénom déjà résolu (carte Relance Manuelle : un
+    // seul contact connu), soit littéralement une balise de personnalisation
+    // serveur (ex: "{first_name}", voir lib/personalization.js) pour les
+    // formulaires de campagne en masse — elle atterrit alors telle quelle
+    // dans l'accroche générée (ex: "Salut {first_name} !") et sera résolue
+    // par contact au moment de l'envoi. Passer une chaîne vide bascule sur
+    // les accroches génériques (aucune mention de nom) — utilisé pour les
+    // publications publiques (Page/Groupes Facebook) qui ne s'adressent à
+    // personne en particulier.
+    function smartTextGenerateVariant(intentionRaw, name) {
       const urlMatch = intentionRaw.match(/https?:\/\/\S+/i);
       const link = urlMatch ? urlMatch[0] : '';
       // Retire aussi un éventuel mot d'introduction du lien resté en fin de
@@ -4588,6 +4613,73 @@
       return lines.join('\n');
     }
 
+    // Monte le composant <SmartTextGenerator /> (champ "Mon Intention" +
+    // bouton "🔄 Varier le texte") juste après le <textarea> donné. Purement
+    // additif : n'importe quel texte déjà présent dans le <textarea> (import,
+    // brouillon manuel) reste intact tant que "Varier le texte" n'a pas été
+    // cliqué. `options.namePlaceholder` (par défaut "{first_name}") est la
+    // balise de personnalisation insérée dans les accroches générées —
+    // laisser `options.personalized: false` pour les formulaires qui
+    // s'adressent à un public (publication Page/Groupe) plutôt qu'à un
+    // contact nommé, auquel cas aucune balise n'est insérée.
+    function createSmartTextGenerator(textarea, options) {
+      const opts = options || {};
+      const namePlaceholder = opts.personalized === false ? '' : (opts.namePlaceholder || '{first_name}');
+
+      const wrap = document.createElement('div');
+      wrap.className = 'smart-textgen';
+
+      const intentionInput = document.createElement('input');
+      intentionInput.type = 'text';
+      intentionInput.className = 'smart-textgen-intention';
+      intentionInput.placeholder = "🧠 Mon Intention (ex: Promo -50% jusqu'à 18h)";
+
+      const varyBtn = document.createElement('button');
+      varyBtn.type = 'button';
+      varyBtn.className = 'smart-textgen-vary';
+      varyBtn.textContent = '🔄 Varier le texte';
+
+      const hint = document.createElement('p');
+      hint.className = 'smart-textgen-hint';
+      hint.hidden = true;
+
+      wrap.appendChild(intentionInput);
+      wrap.appendChild(varyBtn);
+      wrap.appendChild(hint);
+
+      function generate() {
+        const intention = intentionInput.value.trim();
+        if (!intention) {
+          hint.textContent = 'Renseignez "Mon Intention" pour activer le générateur.';
+          hint.hidden = false;
+          return;
+        }
+        hint.hidden = true;
+        textarea.value = smartTextGenerateVariant(intention, namePlaceholder);
+        // Notifie les autres écouteurs déjà attachés au textarea (ex:
+        // synchronisation d'une étape de séquence dans un tableau d'état) —
+        // exactement comme s'il s'agissait d'une saisie manuelle.
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      varyBtn.addEventListener('click', generate);
+      intentionInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); generate(); }
+      });
+
+      textarea.insertAdjacentElement('afterend', wrap);
+      return wrap;
+    }
+
+    // Variante pratique pour les <textarea> statiques du HTML (identifiées
+    // par leur id) — voir createSmartTextGenerator pour les <textarea>
+    // créés dynamiquement (étapes de séquence de campagne).
+    function mountSmartTextGenerator(textareaId, options) {
+      const el = document.getElementById(textareaId);
+      if (!el) return;
+      createSmartTextGenerator(el, options);
+    }
+
     function relanceGetIntention() {
       return document.getElementById('relance-intention').value.trim();
     }
@@ -4600,7 +4692,7 @@
       if (cursor >= items.length) return;
       const item = items[cursor];
       const intention = relanceGetIntention();
-      const message = intention ? relanceGenerateMessage(intention, item.name) : (item.message || '');
+      const message = intention ? smartTextGenerateVariant(intention, item.name) : (item.message || '');
       document.getElementById('relance-message-text').value = message;
     }
 
@@ -4785,6 +4877,24 @@
         relanceSkipCurrent();
       }
     });
+
+    // ---------- Composant "Copywriter IA Intelligent" : intégration sur tous
+    // les autres formulaires de rédaction (en plus de la Relance Manuelle
+    // Express, qui a sa propre carte dédiée déjà branchée sur le même
+    // moteur — voir smartTextGenerateVariant plus haut). Les champs qui
+    // s'adressent à un contact nommé (campagnes en masse, DM individuel)
+    // reçoivent le placeholder de personnalisation par défaut
+    // ("{first_name}") ; les publications publiques (Page/Groupes Facebook,
+    // réponse auto générique, texte de partage) passent personalized:false.
+    mountSmartTextGenerator('tg-message');
+    mountSmartTextGenerator('tg-dm-message');
+    mountSmartTextGenerator('fb-import-message', { namePlaceholder: '{prenom}' });
+    mountSmartTextGenerator('fb-publish-message', { personalized: false });
+    mountSmartTextGenerator('fb-sched-message', { personalized: false });
+    mountSmartTextGenerator('fb-groups-message', { personalized: false });
+    mountSmartTextGenerator('sched-message');
+    mountSmartTextGenerator('rule-message-input', { personalized: false });
+    mountSmartTextGenerator('share-message-text', { personalized: false });
 
     tryAutoLogin().then((ok) => { if (ok) init(); });
   </script>
