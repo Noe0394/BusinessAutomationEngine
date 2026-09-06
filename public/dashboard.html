@@ -13,18 +13,28 @@
     button, input, select, textarea { font-family: inherit; font-size: 1rem; }
 
     header {
-      display: flex; justify-content: space-between; align-items: center; padding: 1rem; color: #fff; flex-wrap: wrap; gap: 0.5rem;
+      display: flex; justify-content: space-between; align-items: center; padding: 0.55rem 1rem; color: #fff; flex-wrap: wrap; gap: 0.5rem;
       background: linear-gradient(120deg, #0b0b1a, #1a1244, #2d1b6e, #1a1244, #0b0b1a);
       background-size: 300% 300%;
       animation: cyrus-flow 16s ease infinite;
     }
     @keyframes cyrus-flow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-    header h1 { margin: 0; font-size: 1.15rem; letter-spacing: 0.04em; }
-    header button { background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.35); padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer; min-height: 44px; }
+    header h1 { margin: 0; font-size: 0.95rem; letter-spacing: 0.04em; }
+    header button { background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.35); padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; min-height: 34px; font-size: 0.85rem; }
 
     /* Écran de connexion : hero holographique en arrière-plan (voir
        initHeroCanvas) derrière une carte "verre dépoli" flottante. */
-    #login-screen { position: relative; min-height: 100vh; overflow: hidden; background: #05050f; display: flex; align-items: center; justify-content: center; }
+    /* IMPORTANT : `display` ne doit JAMAIS être posé inconditionnellement
+       sur #login-screen — un sélecteur d'ID passe toujours devant la règle
+       native du navigateur [hidden] { display: none }, quelle que soit sa
+       spécificité, ce qui empêchait `login-screen.hidden = true` (voir
+       showApp()) de masquer réellement l'écran de connexion une fois
+       authentifié (d'où la carte de connexion et le double en-tête qui
+       restaient superposés à l'application). `:not([hidden])` corrige ça :
+       aucune valeur de display n'est imposée quand l'attribut est présent,
+       laissant [hidden] s'appliquer normalement. */
+    #login-screen { position: relative; min-height: 100vh; overflow: hidden; background: #05050f; }
+    #login-screen:not([hidden]) { display: flex; align-items: center; justify-content: center; }
     #cyrus-hero-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
     .login-card { position: relative; z-index: 2; max-width: 360px; width: 90%; margin: 1.5rem; padding: 2rem 1.75rem; background: rgba(15, 12, 30, 0.6); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(124, 92, 255, 0.4); border-radius: 16px; text-align: center; color: #fff; box-shadow: 0 0 50px rgba(108, 79, 214, 0.25); }
     .login-card h1 { margin: 0 0 0.4rem; font-size: 1.5rem; letter-spacing: 0.05em; }
@@ -36,12 +46,26 @@
     .ok { color: #1a7a3c; }
     .login-card .error { color: #ff9a9a; }
 
-    nav#tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.75rem 1rem 0; background: #f2f2f3; position: sticky; top: 0; z-index: 5; }
-    nav#tabs button { padding: 0.7rem 1rem; border: none; border-radius: 8px 8px 0 0; background: #ddd; cursor: pointer; font-weight: bold; min-height: 44px; flex: 1 1 auto; }
+    /* Barre d'onglets compacte, sur une seule ligne : défilement horizontal
+       plutôt qu'un retour à la ligne qui empilait la barre sur plusieurs
+       rangées (voir la feuille de route : "réduire la taille des boutons...
+       rangés sur une seule ligne"). */
+    nav#tabs { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 0.3rem; padding: 0.4rem 0.75rem; background: #f2f2f3; position: sticky; top: 0; z-index: 5; -webkit-overflow-scrolling: touch; }
+    nav#tabs button { padding: 0.45rem 0.7rem; border: none; border-radius: 6px; background: #ddd; cursor: pointer; font-weight: bold; min-height: 34px; font-size: 0.82rem; flex: 0 0 auto; white-space: nowrap; }
     nav#tabs button.active { background: #fff; color: #6c4fd6; box-shadow: inset 0 -3px 0 #6c4fd6; }
 
     .panel { display: none; margin: 0 1rem 1.5rem; background: #fff; padding: 1.25rem; border-radius: 0 8px 8px 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
-    .panel.active { display: block; }
+    /* Chaque module actif occupe (au minimum) toute la hauteur restante sous
+       l'en-tête + la barre d'onglets, pour ne jamais paraître écrasé — voir
+       la feuille de route : "prend 100% de la largeur/hauteur disponible". */
+    .panel.active { display: block; min-height: calc(100vh - 130px); }
+    #panel-studio.active { display: flex; flex-direction: column; }
+    /* :not([hidden]) impératif ici aussi : #studio-assistant-view/
+       #studio-ebook-view basculent via .hidden en JS (sous-onglet
+       Assistant/Générateur de Livres) — un display imposé sans cette garde
+       reproduirait exactement le bug de #login-screen corrigé plus haut. */
+    #panel-studio.active .studio-assistant-view:not([hidden]) { flex: 1; min-height: 0; display: flex; }
+    #panel-studio.active .studio-layout { flex: 1; min-height: 0; }
 
     .conn-block { border: 1px solid #e0e0e0; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem; }
     .conn-block h3 { margin-top: 0; }
@@ -154,14 +178,14 @@
     .smart-textgen-hint { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: #c0392b; }
 
     /* Onglet Copywriter Studio IA (assistant + générateur de livres). */
-    .studio-layout { display: flex; gap: 1.25rem; margin-top: 1rem; }
-    .studio-sidebar { flex: 0 0 220px; display: flex; flex-direction: column; gap: 0.75rem; }
+    .studio-layout { display: flex; gap: 1.25rem; margin-top: 1rem; min-height: 0; }
+    .studio-sidebar { flex: 0 0 220px; display: flex; flex-direction: column; gap: 0.75rem; min-height: 0; }
     .studio-sidebar > button#studio-new-chat-btn { background: #6c4fd6; color: #fff; border: none; border-radius: 8px; padding: 0.8rem; font-weight: bold; min-height: 48px; }
-    .studio-sessions-list { display: flex; flex-direction: column; gap: 0.4rem; overflow-y: auto; max-height: 480px; }
+    .studio-sessions-list { display: flex; flex-direction: column; gap: 0.4rem; overflow-y: auto; flex: 1; min-height: 0; }
     .studio-session-item { text-align: left; padding: 0.7rem 0.8rem; border-radius: 8px; border: 1px solid #e0e0e0; background: #fff; font-size: 0.9rem; }
     .studio-session-item.active { background: #f0ecff; border-color: #6c4fd6; font-weight: bold; }
-    .studio-chat { flex: 1; display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
-    .studio-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.9rem; padding: 1rem; background: #fafafa; border: 1px solid #e6e6e6; border-radius: 10px; min-height: 360px; max-height: 480px; }
+    .studio-chat { flex: 1; display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; min-height: 0; }
+    .studio-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.9rem; padding: 1rem; background: #fafafa; border: 1px solid #e6e6e6; border-radius: 10px; min-height: 360px; }
     .studio-msg { max-width: 85%; padding: 0.9rem 1rem; border-radius: 12px; white-space: pre-wrap; line-height: 1.45; }
     .studio-msg.user { align-self: flex-end; background: #6c4fd6; color: #fff; }
     .studio-msg.assistant { align-self: flex-start; background: #fff; border: 1px solid #e0e0e0; }
@@ -203,7 +227,6 @@
 
     @media (max-width: 640px) {
       header { flex-direction: column; align-items: stretch; text-align: center; }
-      nav#tabs button { font-size: 0.85rem; padding: 0.6rem 0.5rem; }
       .panel { margin: 0 0.5rem 1rem; padding: 1rem; }
       .row { flex-direction: column; }
     }
