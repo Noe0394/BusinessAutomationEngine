@@ -2574,7 +2574,7 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
   }
 
-  const { message, delaySeconds, minDelaySeconds, maxDelaySeconds, batchSize, batchPauseSeconds, maxPerCycle } = req.body;
+  const { message, delaySeconds, minDelaySeconds, maxDelaySeconds, batchSize, batchPauseSeconds } = req.body;
   let { recipients } = req.body;
 
   if (typeof recipients === 'string') {
@@ -2606,7 +2606,6 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
       maxDelayMs: maxDelaySeconds !== undefined && maxDelaySeconds !== '' ? parseFloat(maxDelaySeconds) * 1000 : undefined,
       batchSize: batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined,
       batchPauseSeconds: batchPauseSeconds !== undefined && batchPauseSeconds !== '' ? parseFloat(batchPauseSeconds) : undefined,
-      maxPerCycle: maxPerCycle !== undefined && maxPerCycle !== '' ? parseInt(maxPerCycle, 10) : undefined,
       media,
     });
   } catch (err) {
@@ -2621,7 +2620,6 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
   res.status(202).json({
     status: 'tg_campaign_started',
     total: campaign.total,
-    truncated: campaign.truncated,
   });
 });
 

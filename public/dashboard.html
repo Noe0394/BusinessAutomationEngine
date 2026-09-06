@@ -509,11 +509,6 @@
             </div>
           </div>
 
-          <div class="field">
-            <label for="tg-dm-max-per-cycle">Limite maximale de messages pour ce cycle</label>
-            <input type="number" id="tg-dm-max-per-cycle" value="20" min="1" />
-          </div>
-
           <div class="row">
             <div class="field">
               <label for="tg-dm-batch-size">Nombre de messages par lot</label>
@@ -2363,7 +2358,6 @@
       const message = document.getElementById('tg-dm-message').value.trim();
       const minDelaySeconds = document.getElementById('tg-dm-min-delay').value;
       const maxDelaySeconds = document.getElementById('tg-dm-max-delay').value;
-      const maxPerCycle = document.getElementById('tg-dm-max-per-cycle').value;
       const batchSize = document.getElementById('tg-dm-batch-size').value;
       const batchPauseSeconds = document.getElementById('tg-dm-batch-pause-seconds').value;
 
@@ -2377,7 +2371,6 @@
       formData.append('message', message);
       formData.append('minDelaySeconds', minDelaySeconds);
       formData.append('maxDelaySeconds', maxDelaySeconds);
-      formData.append('maxPerCycle', maxPerCycle);
       formData.append('batchSize', batchSize);
       formData.append('batchPauseSeconds', batchPauseSeconds);
       // { identifier, name } plutôt qu'un simple identifiant : "name" alimente
@@ -2396,11 +2389,7 @@
           tgDmShowFeedback(data.error || 'Échec du lancement de la campagne.', true);
           sendBtn.disabled = false;
         } else {
-          tgDmShowFeedback(
-            '🚀 Campagne lancée : ' + data.total + ' destinataire(s)' +
-            (data.truncated ? ' (liste tronquée à la limite du cycle)' : '') + '.',
-            false,
-          );
+          tgDmShowFeedback('🚀 Campagne lancée : ' + data.total + ' destinataire(s).', false);
           tgDmStartPolling();
         }
       } catch (err) {

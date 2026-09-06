@@ -248,7 +248,6 @@ class TelegramCampaignEngine {
       userPaused: c.userPaused,
       stopRequested: c.stopRequested,
       total: c.total,
-      truncated: c.truncated,
       sent: c.sent,
       success: c.success,
       failed: c.failed,
@@ -292,9 +291,9 @@ class TelegramCampaignEngine {
 
   getStatus() {
     if (!this.campaign) return null;
-    const { total, truncated, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError, cancelReason } = this.campaign;
+    const { total, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError, cancelReason } = this.campaign;
     const base = {
-      total, truncated, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results,
+      total, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results,
       networkStatus: this.networkHealth.networkStatus,
     };
     if (resumeError) base.resumeError = resumeError;
@@ -518,11 +517,14 @@ class TelegramCampaignEngine {
       throw new Error('CAMPAIGN_IN_PROGRESS');
     }
 
-    const { maxPerCycle, media, delaySeconds, batchSize, batchPauseSeconds } = options;
+    // Aucune troncature du fichier importé, quelle que soit sa taille
+    // (400, 800, 1000+ contacts) : "batchSize"/"batchPauseSeconds" ci-dessous
+    // ne bornent que la taille d'une VAGUE d'envoi (voir _run()), pas le
+    // nombre total de destinataires traités — la boucle continue
+    // automatiquement vague après vague jusqu'à épuisement complet de la
+    // liste.
+    const { media, delaySeconds, batchSize, batchPauseSeconds } = options;
     const recipientType = options.recipientType === 'groups' ? 'groups' : 'contacts';
-    const limitedRecipients = Number.isInteger(maxPerCycle) && maxPerCycle > 0
-      ? recipients.slice(0, maxPerCycle)
-      : recipients;
 
     const minDelayMs = clampDelayMs(options.minDelayMs) || MIN_DELAY_MS;
     const maxDelayMs = Math.max(clampDelayMs(options.maxDelayMs) || MAX_DELAY_MS, minDelayMs);
@@ -531,8 +533,7 @@ class TelegramCampaignEngine {
     this.resolvedMedia = media ? { buffer: media.buffer, mimetype: media.mimetype, filename: media.filename } : null;
 
     this.campaign = {
-      total: limitedRecipients.length,
-      truncated: limitedRecipients.length < recipients.length,
+      total: recipients.length,
       sent: 0,
       success: 0,
       failed: 0,
@@ -545,7 +546,7 @@ class TelegramCampaignEngine {
       finishedAt: null,
       lastProgressAt: new Date().toISOString(),
       nextIndex: 0,
-      recipients: limitedRecipients,
+      recipients,
       recipientType,
       message,
       results: [],
