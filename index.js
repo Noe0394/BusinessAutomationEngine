@@ -1471,6 +1471,25 @@ app.get('/api/messages/status', requireAccess, requireModule('whatsapp'), attach
   res.status(200).json({ exists: true, ...status });
 });
 
+// Onglet dashboard "Relance Manuelle Express" (WhatsApp) : file d'attente
+// des contacts encore 'pending'/'failed' de la dernière campagne connue,
+// avec le message personnalisé prêt pour un deep link wa.me — voir
+// CampaignEngine#getManualRelaunchQueue.
+app.get('/api/messages/manual-queue', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+  res.status(200).json({ items: req.campaignEngine.getManualRelaunchQueue() });
+});
+
+// Trace l'ouverture manuelle d'un deep link WhatsApp pour un contact donné
+// (statut 'sent_manual') — voir CampaignEngine#markManualSent.
+app.post('/api/messages/manual-queue/:index/sent', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+  const index = parseInt(req.params.index, 10);
+  const result = req.campaignEngine.markManualSent(index);
+  if (!result) {
+    return res.status(404).json({ error: 'Contact introuvable dans la campagne en cours.' });
+  }
+  res.status(200).json({ status: 'sent_manual', result });
+});
+
 app.post('/api/contacts/import', requireAccess, requireModule('whatsapp'), upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Aucun fichier fourni (champ "file").' });
@@ -2688,6 +2707,24 @@ app.get('/api/telegram/campaign/status', requireAccess, requireModule('telegram'
   }
 
   res.status(200).json({ exists: true, ...status });
+});
+
+// Onglet dashboard "Relance Manuelle Express" (Telegram) — voir
+// /api/messages/manual-queue pour l'équivalent WhatsApp, même principe :
+// TelegramCampaignEngine#getManualRelaunchQueue.
+app.get('/api/telegram/campaign/manual-queue', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+  res.status(200).json({ items: req.telegramCampaignEngine.getManualRelaunchQueue() });
+});
+
+// Trace l'ouverture manuelle d'un deep link Telegram pour un contact donné
+// (statut 'sent_manual') — voir TelegramCampaignEngine#markManualSent.
+app.post('/api/telegram/campaign/manual-queue/:index/sent', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+  const index = parseInt(req.params.index, 10);
+  const result = req.telegramCampaignEngine.markManualSent(index);
+  if (!result) {
+    return res.status(404).json({ error: 'Contact introuvable dans la campagne en cours.' });
+  }
+  res.status(200).json({ status: 'sent_manual', result });
 });
 
 // Doit rester PUBLIQUE et sans authentification : c'est Meta (Instagram) qui

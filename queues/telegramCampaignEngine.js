@@ -377,6 +377,52 @@ class TelegramCampaignEngine {
     return base;
   }
 
+  // Relance Manuelle Express (voir queues/campaignEngine.js#getManualRelaunchQueue
+  // pour l'équivalent WhatsApp, même principe) : liste des destinataires
+  // encore 'pending' ou 'failed' de la dernière campagne DIRECTE (contacts,
+  // pas groupes/canaux — un deep link t.me/wa.me n'a de sens que pour un
+  // contact individuel) connue de ce tenant. this.campaign n'est remis à
+  // null que par reset(), jamais à la simple fin d'une campagne, donc ce
+  // rapport reste consultable après un Stop ou une complétion.
+  getManualRelaunchQueue() {
+    if (!this.campaign || this.campaign.recipientType !== 'contacts') return [];
+    const template = this.campaign.message || '';
+    const items = [];
+    this.campaign.results.forEach((result, index) => {
+      if (result.status !== 'pending' && result.status !== 'failed') return;
+      const { identifier, vars } = normalizeTelegramRecipient(this.campaign.recipients[index]);
+      // Un identifiant Telegram importé est soit un numéro (que t.me/tg://
+      // savent résoudre via ?phone=), soit un username (résolu par
+      // https://t.me/<username> directement) — jamais les deux.
+      const isPhone = /^\+?\d[\d\s-]{5,}$/.test(identifier);
+      items.push({
+        index,
+        to: result.to,
+        isPhone,
+        phone: isPhone ? identifier.replace(/[^\d]/g, '') : '',
+        username: !isPhone ? identifier.replace(/^@/, '') : '',
+        name: vars.name,
+        message: personalizeMessage(template, vars),
+        status: result.status,
+      });
+    });
+    return items;
+  }
+
+  // Voir queues/campaignEngine.js#markManualSent (même principe) : ne
+  // touche ni nextIndex ni les compteurs sent/success/failed, seulement une
+  // trace consultable dans le rapport de campagne.
+  markManualSent(index) {
+    if (!this.campaign || !this.campaign.results[index]) return null;
+    this.campaign.results[index] = {
+      ...this.campaign.results[index],
+      status: 'sent_manual',
+      timestamp: new Date().toISOString(),
+    };
+    this._persist();
+    return this.campaign.results[index];
+  }
+
   // Gère à la fois la pause volontaire (boutons Pause/Reprendre) et la perte
   // de connexion (auto-pause le temps que Telegram se reconnecte, voir le
   // heartbeat de adapters/telegram.js qui relance la connexion tout seul en

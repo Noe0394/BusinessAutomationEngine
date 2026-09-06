@@ -115,6 +115,17 @@
     .count-failed { color: #c0392b; font-weight: bold; }
     .count-skipped { color: #a67c00; font-weight: bold; }
 
+    .relance-card { border: 2px solid #075E54; border-radius: 10px; padding: 1.25rem; margin-top: 1rem; background: #fafffa; }
+    .relance-card-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.75rem; }
+    .relance-card-counter { font-weight: bold; color: #075E54; }
+    .relance-card-contact { font-size: 1.1rem; font-weight: bold; }
+    .relance-card textarea { min-height: 110px; }
+    .relance-card-actions { display: flex; gap: 0.6rem; margin-top: 0.9rem; flex-wrap: wrap; }
+    .relance-card-actions button { flex: 1; min-width: 160px; }
+    .relance-copy-button { background: #eee; border: 1px solid #ccc; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; }
+    .relance-open-button { background: #25D366; color: #fff; border: none; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; }
+    .relance-open-button.telegram { background: #2AABEE; }
+
     #import-result { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
     #import-result.ok { background: #d4f5dd; color: #1a7a3c; }
     #import-result.error { background: #fbdada; color: #c0392b; }
@@ -172,6 +183,7 @@
       <button type="button" class="tab-btn" data-tab="scheduler">🗓️ Programmation / Planning</button>
       <button type="button" class="tab-btn" data-tab="prospects">🎯 Contacts / Prospects</button>
       <button type="button" class="tab-btn" data-tab="share">🔗 Groupes / Diffusion</button>
+      <button type="button" class="tab-btn" data-tab="relance">📇 Relance Manuelle Express</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -1104,6 +1116,44 @@
       </div>
     </section>
 
+    <!-- Onglet Relance Manuelle Express : file d'attente interactive avec
+         deep linking WhatsApp/Telegram pour les contacts encore
+         'pending'/'failed' de la dernière campagne connue. -->
+    <section class="panel" id="panel-relance">
+      <h2>Relance Manuelle Express</h2>
+      <p class="empty">
+        Reprend les contacts encore en attente ou en échec de la dernière campagne (WhatsApp ou Telegram) et
+        prépare, un par un, le lien d'ouverture direct dans l'application ainsi que le message personnalisé à
+        coller — pour une relance manuelle rapide sans repasser par l'envoi automatique.
+      </p>
+
+      <div class="mode-toggle" id="relance-channel-toggle">
+        <button type="button" class="mode-btn active" data-channel="whatsapp">WhatsApp</button>
+        <button type="button" class="mode-btn" data-channel="telegram">Telegram</button>
+      </div>
+
+      <button type="button" id="relance-reload-btn">🔄 Charger la file d'attente</button>
+      <p id="relance-feedback" hidden></p>
+
+      <p id="relance-empty" class="empty">Cliquez sur "Charger la file d'attente" pour afficher les contacts à relancer.</p>
+
+      <div class="relance-card" id="relance-card" hidden>
+        <div class="relance-card-header">
+          <span class="relance-card-counter" id="relance-counter">Contact 1/1</span>
+          <span class="badge disconnected" id="relance-status-badge">pending</span>
+        </div>
+        <p class="relance-card-contact" id="relance-contact-label"></p>
+        <div class="field">
+          <label for="relance-message-text">Message (personnalisé)</label>
+          <textarea id="relance-message-text" readonly></textarea>
+        </div>
+        <div class="relance-card-actions">
+          <button type="button" class="relance-copy-button" id="relance-copy-btn">📋 Copier le texte</button>
+          <button type="button" class="relance-open-button" id="relance-open-btn">💬 Ouvrir dans WhatsApp</button>
+        </div>
+      </div>
+    </section>
+
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -1144,8 +1194,8 @@
     let authRole = null; // 'admin' | 'license'
     let currentAllowedModules = null; // null = tous les modules (admin, ou clé héritée sans restriction)
     const MODULE_TABS = {
-      whatsapp: ['whatsapp'],
-      telegram: ['telegram'],
+      whatsapp: ['whatsapp', 'relance'],
+      telegram: ['telegram', 'relance'],
       facebook: ['facebook'],
     };
 
@@ -1370,6 +1420,7 @@
         if (btn.dataset.tab === 'scheduler') { schedInit(); schedRefreshList(); }
         if (btn.dataset.tab === 'prospects') { prospectsLoadRules(); prospectsRefreshList(); }
         if (btn.dataset.tab === 'share') { shareLoadGroups(); }
+        if (btn.dataset.tab === 'relance') { relanceLoadQueue(); }
       });
     });
 
@@ -4388,6 +4439,127 @@
       prospectsLoadRules();
       handleOAuthRedirectFeedback();
     }
+
+    // ---------- Onglet "Relance Manuelle Express" ----------
+    // File d'attente interactive (WhatsApp ou Telegram) : charge les contacts
+    // encore 'pending'/'failed' de la dernière campagne connue via
+    // /api/messages/manual-queue ou /api/telegram/campaign/manual-queue,
+    // affiche une carte à la fois, et avance automatiquement à la suivante
+    // dès que "Ouvrir dans WhatsApp/Telegram" est cliqué (le clic marque le
+    // contact 'sent_manual' côté serveur avant de charger la carte
+    // suivante — voir CampaignEngine#markManualSent).
+    const relanceState = { channel: 'whatsapp', items: [], cursor: 0 };
+
+    function relanceFeedback(message, isError) {
+      const el = document.getElementById('relance-feedback');
+      el.textContent = message;
+      el.hidden = false;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    async function relanceLoadQueue() {
+      const url = relanceState.channel === 'telegram'
+        ? '/api/telegram/campaign/manual-queue'
+        : '/api/messages/manual-queue';
+      try {
+        const res = await apiFetch(url);
+        const data = await res.json();
+        relanceState.items = Array.isArray(data.items) ? data.items : [];
+        relanceState.cursor = 0;
+        document.getElementById('relance-feedback').hidden = true;
+        relanceRenderCard();
+      } catch (err) {
+        if (err.message !== 'unauthorized') relanceFeedback('Erreur de chargement de la file d\'attente.', true);
+      }
+    }
+
+    function relanceRenderCard() {
+      const card = document.getElementById('relance-card');
+      const empty = document.getElementById('relance-empty');
+      const { items, cursor, channel } = relanceState;
+
+      if (!items.length || cursor >= items.length) {
+        card.hidden = true;
+        empty.hidden = false;
+        empty.textContent = items.length
+          ? 'Tous les contacts de la file ont été traités. Rechargez pour vérifier s\'il en reste.'
+          : 'Aucun contact en attente ou en échec à relancer pour le moment.';
+        return;
+      }
+
+      empty.hidden = true;
+      card.hidden = false;
+
+      const item = items[cursor];
+      document.getElementById('relance-counter').textContent = `Contact ${cursor + 1}/${items.length}`;
+      const statusBadge = document.getElementById('relance-status-badge');
+      statusBadge.textContent = item.status;
+      statusBadge.className = 'badge ' + (item.status === 'failed' ? 'disconnected' : 'connected');
+
+      const identifier = channel === 'telegram'
+        ? (item.isPhone ? item.phone : ('@' + item.username))
+        : item.phone;
+      document.getElementById('relance-contact-label').textContent = item.name ? `${item.name} — ${identifier}` : identifier;
+      document.getElementById('relance-message-text').value = item.message || '';
+
+      const openBtn = document.getElementById('relance-open-btn');
+      openBtn.textContent = channel === 'telegram' ? '💬 Ouvrir dans Telegram' : '💬 Ouvrir dans WhatsApp';
+      openBtn.className = 'relance-open-button' + (channel === 'telegram' ? ' telegram' : '');
+    }
+
+    function relanceBuildDeepLink(item) {
+      const encodedText = encodeURIComponent(item.message || '');
+      if (relanceState.channel === 'telegram') {
+        // tg://resolve?phone=... ouvre directement l'app native quand elle
+        // est installée ; https://t.me/+<numéro> sert de repli navigateur
+        // (voir la feuille de route : les deux formes sont générées, seul le
+        // second est un lien cliquable classique côté web).
+        if (item.isPhone) return `https://t.me/+${item.phone}`;
+        return `https://t.me/${item.username}`;
+      }
+      return `https://wa.me/${item.phone.replace(/^\+/, '')}?text=${encodedText}`;
+    }
+
+    document.getElementById('relance-channel-toggle').addEventListener('click', (e) => {
+      const btn = e.target.closest('.mode-btn[data-channel]');
+      if (!btn) return;
+      document.querySelectorAll('#relance-channel-toggle .mode-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      relanceState.channel = btn.dataset.channel;
+      relanceLoadQueue();
+    });
+
+    document.getElementById('relance-reload-btn').addEventListener('click', relanceLoadQueue);
+
+    document.getElementById('relance-copy-btn').addEventListener('click', async () => {
+      const text = document.getElementById('relance-message-text').value;
+      try {
+        await navigator.clipboard.writeText(text);
+        relanceFeedback('Texte copié dans le presse-papiers.', false);
+      } catch (err) {
+        relanceFeedback('Impossible de copier automatiquement — sélectionnez et copiez le texte manuellement.', true);
+      }
+    });
+
+    document.getElementById('relance-open-btn').addEventListener('click', async () => {
+      const { items, cursor, channel } = relanceState;
+      if (cursor >= items.length) return;
+      const item = items[cursor];
+
+      window.open(relanceBuildDeepLink(item), '_blank', 'noopener');
+
+      const markUrl = channel === 'telegram'
+        ? `/api/telegram/campaign/manual-queue/${item.index}/sent`
+        : `/api/messages/manual-queue/${item.index}/sent`;
+      try {
+        await apiFetch(markUrl, { method: 'POST' });
+      } catch (err) {
+        if (err.message !== 'unauthorized') relanceFeedback('Le lien a été ouvert, mais le statut n\'a pas pu être enregistré.', true);
+      }
+
+      relanceState.cursor += 1;
+      relanceRenderCard();
+    });
 
     tryAutoLogin().then((ok) => { if (ok) init(); });
   </script>

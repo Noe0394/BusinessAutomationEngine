@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
-const { normalizeRecipientEntry } = require('../lib/whatsappRecipients');
+const { normalizeRecipientEntry, jidToE164 } = require('../lib/whatsappRecipients');
 const { personalizeMessage } = require('../lib/personalization');
 const circuitBreaker = require('../lib/circuitBreaker');
 const messageHistory = require('../lib/messageHistory');
@@ -530,6 +530,54 @@ class CampaignEngine {
     if (resumeError) base.resumeError = resumeError;
     if (cancelReason) base.cancelReason = cancelReason;
     return base;
+  }
+
+  // Relance Manuelle Express (module dashboard "Relance Manuelle Express") :
+  // liste des destinataires encore 'pending' ou 'failed' de la DERNIÈRE
+  // campagne connue de ce tenant, en cours ou déjà terminée — this.campaign
+  // n'est remis à null que par reset() (changement de compte WhatsApp
+  // connecté), jamais à la simple fin d'une campagne (voir _runLoop/stop()),
+  // donc ce rapport reste consultable après un Stop ou une complétion. Le
+  // texte proposé au clic est la personnalisation ({first_name}/{name}/
+  // {username}, voir lib/personalization.js) du PREMIER pas TEXTE de la
+  // séquence — un pas média ne peut pas être glissé dans le champ pré-rempli
+  // d'un lien wa.me/t.me.
+  getManualRelaunchQueue() {
+    if (!this.campaign) return [];
+    const textStep = (this.persistableSequence || []).find((step) => step && step.type !== 'media' && step.text);
+    const template = textStep ? textStep.text : '';
+    const items = [];
+    this.campaign.results.forEach((result, index) => {
+      if (result.status !== 'pending' && result.status !== 'failed') return;
+      const { nom, vars } = normalizeRecipientEntry(this.campaign.recipients[index], this.session.getContactName);
+      items.push({
+        index,
+        to: result.to,
+        phone: jidToE164(result.to),
+        name: nom,
+        message: personalizeMessage(template, vars),
+        status: result.status,
+      });
+    });
+    return items;
+  }
+
+  // Trace l'ouverture manuelle d'un deep link (bouton "Ouvrir dans
+  // WhatsApp" de la carte) : statut dédié 'sent_manual', distinct de 'sent'
+  // (envoi automatique confirmé) pour ne jamais laisser croire que le moteur
+  // a lui-même vérifié la livraison — ne touche ni nextIndex ni les
+  // compteurs sent/success/failed, ce n'est pas un envoi suivi par le moteur
+  // automatique, seulement une trace consultable dans le rapport de
+  // campagne.
+  markManualSent(index) {
+    if (!this.campaign || !this.campaign.results[index]) return null;
+    this.campaign.results[index] = {
+      ...this.campaign.results[index],
+      status: 'sent_manual',
+      timestamp: new Date().toISOString(),
+    };
+    this._persist();
+    return this.campaign.results[index];
   }
 
   // En cas de coupure réseau/Baileys en pleine campagne, on ne marque pas les
