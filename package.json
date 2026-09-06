@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "build": "node scripts/build-dashboard.js"
+    "build": "node scripts/build-dashboard.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.9",

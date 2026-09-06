@@ -4,6 +4,7 @@ const githubStore = require('../githubStore');
 const { normalizeRecipientEntry } = require('../lib/whatsappRecipients');
 const { personalizeMessage } = require('../lib/personalization');
 const circuitBreaker = require('../lib/circuitBreaker');
+const messageHistory = require('../lib/messageHistory');
 
 // Persistance de la progression d'une campagne WhatsApp, tenant par tenant
 // (voir adapters/whatsappManager.js) : sur un environnement Docker/Render où
@@ -197,6 +198,20 @@ function removeSequenceMedia(sequence) {
   }
 }
 
+// Empreinte du MODÈLE de séquence (avant personnalisation par destinataire),
+// pour l'anti-doublons (voir lib/messageHistory.js#hashTemplate) — le texte
+// brut de chaque étape "text" et le nom/type de chaque étape "media",
+// jamais le buffer lui-même (coûteux et inutile : deux campagnes envoyant la
+// même pièce jointe sous le même nom sont déjà considérées comme le même
+// modèle).
+function sequenceHashParts(sequence) {
+  return (sequence || []).map((step) => (
+    step.type === 'media'
+      ? `media:${step.filename || ''}:${step.mimetype || ''}`
+      : `text:${step.text || ''}`
+  ));
+}
+
 // Un moteur par tenant (voir adapters/whatsappManager.js), lié à l'instance
 // WhatsApp de ce même tenant : aucune campagne, aucun destinataire, aucun
 // résultat n'est jamais partagé entre deux clés de licence.
@@ -238,6 +253,12 @@ class CampaignEngine {
     // jamais relancée) plutôt que d'en faire tourner deux en parallèle sur
     // le même campaign.
     this._runActive = false;
+    // Historique des envois (voir lib/messageHistory.js), chargé une fois par
+    // start()/premier envoi après reprise — jamais rechargé à chaque
+    // destinataire. null tant qu'il n'a pas encore été chargé (voir
+    // _recordHistorySent, appelé après resumeIfPending()).
+    this._historyEntries = null;
+    this._messageHash = null;
   }
 
   // Rafraîchit lastProgressAt (voir _persist) pendant une attente
@@ -266,6 +287,69 @@ class CampaignEngine {
         `statut 'degraded_network', pause de ${circuitBreaker.DEGRADED_NETWORK_PAUSE_MS / 60000} min.`,
       );
     }
+  }
+
+  // Construit le tableau `results` PRÉ-REMPLI dès start() (voir _runLoop, qui
+  // le mute en place plutôt que d'y accumuler des entrées) : chaque
+  // destinataire reçoit immédiatement son statut définitif 'pending' ou
+  // 'skipped_duplicate' (Smart Screening anti-doublons), jamais recalculé
+  // ensuite — seul le passage de la boucle sur cet index peut le faire
+  // évoluer vers 'sent'/'failed', ou le laisser 'skipped_duplicate' avec un
+  // simple horodatage. Un contact apparaissant plusieurs fois dans LA MÊME
+  // liste importée est lui aussi dédoublonné (seule la première occurrence
+  // reste 'pending').
+  _buildInitialResults(recipients, windowMs, historyEntries, messageHash) {
+    const now = Date.now();
+    const historySeen = new Set();
+    for (const entry of historyEntries) {
+      if (!entry || entry.messageHash !== messageHash) continue;
+      const age = now - new Date(entry.sentAt).getTime();
+      if (age < windowMs) historySeen.add(entry.contactKey);
+    }
+
+    const seenInThisCampaign = new Set();
+    return recipients.map((recipient) => {
+      const { to } = normalizeRecipientEntry(recipient, this.session.getContactName);
+      const key = messageHistory.normalizeContactKey(to);
+      const isDuplicate = Boolean(key) && (historySeen.has(key) || seenInThisCampaign.has(key));
+      if (key) seenInThisCampaign.add(key);
+      return { to, status: isDuplicate ? 'skipped_duplicate' : 'pending', timestamp: null };
+    });
+  }
+
+  // Complète un `results` persisté AVANT ce déploiement (append-only,
+  // potentiellement plus court que `recipients`) avec des entrées 'pending'
+  // pour les destinataires jamais atteints, et aligne les anciens libellés
+  // ('delivered'/'interrupted') sur le nouveau vocabulaire — appelé
+  // uniquement depuis resumeIfPending(), pour qu'une campagne en cours pile
+  // au moment du redéploiement ne se retrouve jamais dans un état
+  // incohérent.
+  _migrateResults(results, recipients) {
+    const list = Array.isArray(results) ? results.slice() : [];
+    for (let i = list.length; i < recipients.length; i += 1) {
+      const { to } = normalizeRecipientEntry(recipients[i], this.session.getContactName);
+      list.push({ to, status: 'pending', timestamp: null });
+    }
+    return list.map((r) => {
+      if (r.status === 'delivered') return { ...r, status: 'sent' };
+      if (r.status === 'interrupted') return { ...r, status: 'pending' };
+      return r;
+    });
+  }
+
+  // Enregistre un envoi réellement effectué dans l'historique anti-doublons
+  // (voir lib/messageHistory.js) : chargé une seule fois (au premier envoi
+  // après start()/resumeIfPending()), tenu à jour en mémoire ensuite pour ne
+  // jamais relire le disque à chaque destinataire. Écriture locale
+  // synchrone + sauvegarde GitHub fire-and-forget (voir saveHistory),
+  // jamais bloquant au-delà du disque local.
+  async _recordHistorySent(contactKey) {
+    if (!contactKey) return;
+    if (!this._historyEntries) {
+      this._historyEntries = await messageHistory.loadHistory('whatsapp', this.tenantId);
+    }
+    this._historyEntries.push({ contactKey, messageHash: this._messageHash, sentAt: new Date().toISOString() });
+    this._historyEntries = messageHistory.saveHistory('whatsapp', this.tenantId, this._historyEntries);
   }
 
   // Bloque la file d'attente tant que le coupe-circuit est ouvert
@@ -369,6 +453,13 @@ class CampaignEngine {
       sent: this.campaign.sent,
       success: this.campaign.success,
       failed: this.campaign.failed,
+      // Voir lib/messageHistory.js : contacts sautés instantanément (sans
+      // requête réseau) car ils ont déjà reçu ce même modèle de message dans
+      // la fenêtre anti-doublons (duplicateWindowHours) — comptabilisés à
+      // part des échecs/réussites.
+      skippedDuplicates: this.campaign.skippedDuplicates,
+      messageHash: this.campaign.messageHash,
+      duplicateWindowHours: this.campaign.duplicateWindowHours,
       startedAt: this.campaign.startedAt,
       finishedAt: this.campaign.finishedAt,
       // Voir _heartbeat()/purgeStaleCampaigns() : dernier signe de vie d'un
@@ -423,10 +514,18 @@ class CampaignEngine {
   // longue n'a rien à y faire.
   getStatus() {
     if (!this.campaign) return null;
-    const { total, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError, cancelReason } = this.campaign;
+    const {
+      total, sent, success, failed, skippedDuplicates, duplicateWindowHours,
+      status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError, cancelReason,
+    } = this.campaign;
     const base = {
-      total, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results,
+      total, sent, success, failed, skippedDuplicates, duplicateWindowHours,
+      status, paused, userPaused, stopRequested, startedAt, finishedAt, results,
       networkStatus: this.networkHealth.networkStatus,
+      // Délai exact (secondes) avant reprise automatique — alimente le
+      // décompte dynamique du dashboard tant que le coupe-circuit est actif
+      // ('degraded_network'/'circuit_open'), 0 sinon.
+      retryAfterSeconds: this.networkHealth.getRetryAfterSeconds(),
     };
     if (resumeError) base.resumeError = resumeError;
     if (cancelReason) base.cancelReason = cancelReason;
@@ -457,15 +556,16 @@ class CampaignEngine {
     console.log(`Campagne (tenant "${this.tenantId}"): reprise après reconnexion WhatsApp.`);
   }
 
+  // Arrêt DÉFINITIF (voir stop()) : les destinataires non encore traités
+  // restent en statut 'pending' (ou 'skipped_duplicate' s'ils avaient déjà
+  // été identifiés comme doublons au Smart Screening — voir
+  // _buildInitialResults() dans start()) — `results[]` est pré-rempli dès
+  // start() et reflète déjà l'état correct de chaque contact, il n'y a donc
+  // plus rien à y écrire ici. Un Stop reste définitif (jamais de reprise
+  // automatique), mais un contact 'pending' au moment du Stop garde une
+  // trace honnête : il n'a jamais été contacté.
   _markRemainingInterrupted(fromIndex) {
     const campaign = this.campaign;
-    for (let j = fromIndex; j < campaign.recipients.length; j += 1) {
-      campaign.results.push({
-        to: normalizeRecipientEntry(campaign.recipients[j], this.session.getContactName).to,
-        status: 'interrupted',
-        timestamp: new Date().toISOString(),
-      });
-    }
     campaign.nextIndex = campaign.recipients.length;
     campaign.status = 'stopped';
     campaign.paused = false;
@@ -525,6 +625,25 @@ class CampaignEngine {
       await this._waitForNetworkHold();
       if (shouldAbort()) return;
 
+      // Smart Screening (voir start()) : ce contact a déjà reçu ce même
+      // modèle de message dans la fenêtre anti-doublons (ou apparaît en
+      // double dans la liste importée) — statut déjà déterminé dans
+      // campaign.results[i], on saute INSTANTANÉMENT, sans la moindre
+      // requête réseau ni délai inter-destinataire (contrairement à un envoi
+      // normal). Placé APRÈS les attentes ci-dessus : une pause/un arrêt
+      // gèle aussi le traitement des doublons, comme un envoi normal.
+      if (campaign.results[i].status === 'skipped_duplicate') {
+        campaign.results[i].timestamp = new Date().toISOString();
+        campaign.sent += 1;
+        campaign.skippedDuplicates += 1;
+        campaign.nextIndex = i + 1;
+        this._persist();
+        if (this.onActivity) this.onActivity();
+        console.log(`Campagne (tenant "${this.tenantId}"): destinataire ${campaign.results[i].to} ignoré (doublon détecté, ${i + 1}/${recipients.length}).`);
+        i += 1;
+        continue;
+      }
+
       const { to, vars } = normalizeRecipientEntry(recipients[i], this.session.getContactName);
       let status = 'failed';
       let overloadDetected = false;
@@ -548,9 +667,10 @@ class CampaignEngine {
             await sleep(randomDelay(seqMinMs, seqMaxMs));
           }
         }
-        status = 'delivered';
+        status = 'sent';
         campaign.success += 1;
         this.networkHealth.recordSuccess();
+        await this._recordHistorySent(messageHistory.normalizeContactKey(to));
         console.log(`Campagne (tenant "${this.tenantId}"): séquence envoyée à ${to} (${i + 1}/${recipients.length}).`);
       } catch (err) {
         if (circuitBreaker.isOverloadError(err)) {
@@ -587,7 +707,7 @@ class CampaignEngine {
 
       campaign.sent += 1;
       campaign.nextIndex = i + 1;
-      campaign.results.push({ to, status, timestamp: new Date().toISOString() });
+      campaign.results[i] = { to, status, timestamp: new Date().toISOString() };
       this._persist();
       if (this.onActivity) this.onActivity();
 
@@ -639,11 +759,26 @@ class CampaignEngine {
     this.persistableSequence = await persistSequenceMedia(this.tenantId, options.sequence || []);
     this.resolvedSequence = await resolveSequenceMedia(this.persistableSequence);
 
+    // Smart Screening anti-doublons (voir lib/messageHistory.js) : calculé
+    // UNE FOIS ici, avant le premier envoi — jamais réévalué en cours de
+    // route (voir _buildInitialResults). duplicateWindowHours par défaut à
+    // 48h (recommandation explicite de l'utilisateur), réglable de 1h à
+    // 720h (30 jours) par campagne.
+    const messageHash = messageHistory.hashTemplate(sequenceHashParts(this.persistableSequence));
+    const duplicateWindowHours = messageHistory.clampWindowHours(options.duplicateWindowHours);
+    const historyEntries = await messageHistory.loadHistory('whatsapp', this.tenantId);
+    const results = this._buildInitialResults(recipients, duplicateWindowHours * 3_600_000, historyEntries, messageHash);
+    this._historyEntries = historyEntries;
+    this._messageHash = messageHash;
+
     this.campaign = {
       total: recipients.length,
       sent: 0,
       success: 0,
       failed: 0,
+      skippedDuplicates: 0,
+      messageHash,
+      duplicateWindowHours,
       status: 'running',
       paused: false,
       userPaused: false,
@@ -654,7 +789,7 @@ class CampaignEngine {
       lastProgressAt: new Date().toISOString(),
       nextIndex: 0,
       recipients,
-      results: [],
+      results,
       options: {
         delaySeconds: options.delaySeconds,
         batchSize: options.batchSize,
@@ -701,6 +836,13 @@ class CampaignEngine {
     this.campaign.stopRequested = true;
     this._markRemainingInterrupted(this.campaign.nextIndex);
     this.campaign.superseded = true;
+    // Réinitialise IMMÉDIATEMENT le coupe-circuit pour ce tenant (isolation
+    // stricte par [licence + numéro connecté] — voir reset()) : un Stop
+    // manuel doit déverrouiller le formulaire tout de suite, même si le
+    // réseau était en pleine pause de sécurité ('degraded_network' ou
+    // 'circuit_open') au moment de l'arrêt — sans attendre qu'un nouveau
+    // start() n'en recrée un de toute façon.
+    this.networkHealth = new circuitBreaker.CircuitBreakerState();
     this._persist();
   }
 
@@ -792,6 +934,8 @@ class CampaignEngine {
     this.networkHealth = new circuitBreaker.CircuitBreakerState();
     this._lastHeartbeatAt = 0;
     this._runActive = false;
+    this._historyEntries = null;
+    this._messageHash = null;
   }
 
   // Essaie le disque local en premier (rapide, source normale après un
@@ -846,6 +990,14 @@ class CampaignEngine {
     }
 
     this.persistableSequence = record.options.sequence || [];
+    // Historique anti-doublons : jamais rechargé ici (voir
+    // _recordHistorySent, qui le charge paresseusement au premier envoi
+    // réel après la reprise) — seul messageHash doit survivre, restauré
+    // depuis le disque ou, à défaut (état persisté avant ce déploiement),
+    // recalculé depuis la séquence.
+    this._historyEntries = null;
+    this._messageHash = record.messageHash || messageHistory.hashTemplate(sequenceHashParts(this.persistableSequence));
+    const migratedResults = this._migrateResults(record.results, record.recipients);
 
     try {
       this.resolvedSequence = await resolveSequenceMedia(this.persistableSequence);
@@ -864,6 +1016,9 @@ class CampaignEngine {
         sent: record.sent,
         success: record.success,
         failed: record.failed,
+        skippedDuplicates: record.skippedDuplicates || 0,
+        messageHash: this._messageHash,
+        duplicateWindowHours: record.duplicateWindowHours || messageHistory.DEFAULT_WINDOW_HOURS,
         status: 'stopped',
         paused: false,
         userPaused: false,
@@ -873,7 +1028,7 @@ class CampaignEngine {
         finishedAt: new Date().toISOString(),
         nextIndex: record.nextIndex,
         recipients: record.recipients,
-        results: record.results,
+        results: migratedResults,
         options: record.options,
         resumeError: 'Pièce jointe introuvable après redéploiement — relancez la campagne.',
       };
@@ -886,6 +1041,9 @@ class CampaignEngine {
       sent: record.sent,
       success: record.success,
       failed: record.failed,
+      skippedDuplicates: record.skippedDuplicates || 0,
+      messageHash: this._messageHash,
+      duplicateWindowHours: record.duplicateWindowHours || messageHistory.DEFAULT_WINDOW_HOURS,
       status: 'running',
       paused: true,
       userPaused: true,
@@ -895,7 +1053,7 @@ class CampaignEngine {
       finishedAt: null,
       nextIndex: record.nextIndex,
       recipients: record.recipients,
-      results: record.results,
+      results: migratedResults,
       options: record.options,
     };
     // Restaure la pause de sécurité en cours (voir lib/circuitBreaker.js) le

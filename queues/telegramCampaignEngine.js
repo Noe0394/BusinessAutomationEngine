@@ -3,6 +3,7 @@ const path = require('path');
 const githubStore = require('../githubStore');
 const { personalizeMessage, buildPersonalizationVars } = require('../lib/personalization');
 const circuitBreaker = require('../lib/circuitBreaker');
+const messageHistory = require('../lib/messageHistory');
 
 // Normalise un destinataire Telegram pour l'envoi : un identifiant ("username
 // Telegram, numéro, ou identifiant de groupe/canal déjà résolu — voir
@@ -143,6 +144,15 @@ function removeMedia(persisted) {
   }
 }
 
+// Empreinte du MODÈLE de message (avant personnalisation par destinataire),
+// pour l'anti-doublons — voir queues/campaignEngine.js#sequenceHashParts
+// (même principe, adapté au message unique + média unique de Telegram).
+function messageHashParts(message, persistedMedia) {
+  const parts = [`text:${message || ''}`];
+  if (persistedMedia) parts.push(`media:${persistedMedia.filename || ''}:${persistedMedia.mimetype || ''}`);
+  return parts;
+}
+
 // Un moteur par tenant (voir adapters/telegramManager.js), lié à l'instance
 // Telegram de ce même tenant : aucune campagne, aucun destinataire, aucun
 // résultat n'est jamais partagé entre deux clés de licence.
@@ -173,6 +183,11 @@ class TelegramCampaignEngine {
     // principe côté WhatsApp).
     this._lastHeartbeatAt = 0;
     this._runActive = false;
+    // Voir queues/campaignEngine.js#_historyEntries/_messageHash (même
+    // principe : historique anti-doublons, chargé une fois par
+    // start()/premier envoi après reprise).
+    this._historyEntries = null;
+    this._messageHash = null;
   }
 
   // Voir queues/campaignEngine.js#_heartbeat (même principe).
@@ -201,6 +216,51 @@ class TelegramCampaignEngine {
         `statut 'degraded_network', pause de ${circuitBreaker.DEGRADED_NETWORK_PAUSE_MS / 60000} min.`,
       );
     }
+  }
+
+  // Voir queues/campaignEngine.js#_buildInitialResults (même principe,
+  // adapté à normalizeTelegramRecipient).
+  _buildInitialResults(recipients, windowMs, historyEntries, messageHash) {
+    const now = Date.now();
+    const historySeen = new Set();
+    for (const entry of historyEntries) {
+      if (!entry || entry.messageHash !== messageHash) continue;
+      const age = now - new Date(entry.sentAt).getTime();
+      if (age < windowMs) historySeen.add(entry.contactKey);
+    }
+
+    const seenInThisCampaign = new Set();
+    return recipients.map((recipient) => {
+      const { identifier } = normalizeTelegramRecipient(recipient);
+      const key = messageHistory.normalizeContactKey(identifier);
+      const isDuplicate = Boolean(key) && (historySeen.has(key) || seenInThisCampaign.has(key));
+      if (key) seenInThisCampaign.add(key);
+      return { to: String(identifier), status: isDuplicate ? 'skipped_duplicate' : 'pending', timestamp: null };
+    });
+  }
+
+  // Voir queues/campaignEngine.js#_migrateResults (même principe).
+  _migrateResults(results, recipients) {
+    const list = Array.isArray(results) ? results.slice() : [];
+    for (let i = list.length; i < recipients.length; i += 1) {
+      const { identifier } = normalizeTelegramRecipient(recipients[i]);
+      list.push({ to: String(identifier), status: 'pending', timestamp: null });
+    }
+    return list.map((r) => {
+      if (r.status === 'delivered') return { ...r, status: 'sent' };
+      if (r.status === 'interrupted') return { ...r, status: 'pending' };
+      return r;
+    });
+  }
+
+  // Voir queues/campaignEngine.js#_recordHistorySent (même principe).
+  async _recordHistorySent(contactKey) {
+    if (!contactKey) return;
+    if (!this._historyEntries) {
+      this._historyEntries = await messageHistory.loadHistory('telegram', this.tenantId);
+    }
+    this._historyEntries.push({ contactKey, messageHash: this._messageHash, sentAt: new Date().toISOString() });
+    this._historyEntries = messageHistory.saveHistory('telegram', this.tenantId, this._historyEntries);
   }
 
   // Voir queues/campaignEngine.js#_waitForNetworkHold (même principe).
@@ -251,6 +311,11 @@ class TelegramCampaignEngine {
       sent: c.sent,
       success: c.success,
       failed: c.failed,
+      // Voir queues/campaignEngine.js#skippedDuplicates/messageHash (même
+      // principe côté WhatsApp).
+      skippedDuplicates: c.skippedDuplicates,
+      messageHash: c.messageHash,
+      duplicateWindowHours: c.duplicateWindowHours,
       startedAt: c.startedAt,
       finishedAt: c.finishedAt,
       // Voir queues/campaignEngine.js#lastProgressAt (même principe et même
@@ -291,10 +356,21 @@ class TelegramCampaignEngine {
 
   getStatus() {
     if (!this.campaign) return null;
-    const { total, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError, cancelReason } = this.campaign;
+    const {
+      total, sent, success, failed, skippedDuplicates, duplicateWindowHours, recipientType,
+      status, paused, userPaused, stopRequested, startedAt, finishedAt, results, resumeError, cancelReason,
+    } = this.campaign;
     const base = {
-      total, sent, success, failed, status, paused, userPaused, stopRequested, startedAt, finishedAt, results,
+      total, sent, success, failed, skippedDuplicates, duplicateWindowHours,
+      // Un seul moteur/verrou de campagne par tenant sert à la fois les
+      // messages directs (contacts importés) et la diffusion vers des
+      // groupes/canaux (voir index.js#/api/telegram/queue) : exposé pour que
+      // le dashboard n'affiche/ne pilote jamais depuis le mauvais onglet la
+      // campagne réellement en cours.
+      recipientType: recipientType || 'contacts',
+      status, paused, userPaused, stopRequested, startedAt, finishedAt, results,
       networkStatus: this.networkHealth.networkStatus,
+      retryAfterSeconds: this.networkHealth.getRetryAfterSeconds(),
     };
     if (resumeError) base.resumeError = resumeError;
     if (cancelReason) base.cancelReason = cancelReason;
@@ -355,11 +431,12 @@ class TelegramCampaignEngine {
     }
   }
 
+  // Voir queues/campaignEngine.js#_markRemainingInterrupted (même principe) :
+  // `results[]` est pré-rempli dès start() et reflète déjà l'état correct
+  // ('pending' ou 'skipped_duplicate') de chaque destinataire non encore
+  // traité — rien à y réécrire ici.
   _markRemainingInterrupted(fromIndex) {
     const campaign = this.campaign;
-    for (let j = fromIndex; j < campaign.recipients.length; j += 1) {
-      campaign.results.push({ to: normalizeTelegramRecipient(campaign.recipients[j]).identifier, status: 'interrupted', timestamp: new Date().toISOString() });
-    }
     campaign.nextIndex = campaign.recipients.length;
     campaign.status = 'stopped';
     campaign.paused = false;
@@ -400,6 +477,23 @@ class TelegramCampaignEngine {
       await this._waitForNetworkHold();
       if (shouldAbort()) return;
 
+      // Voir queues/campaignEngine.js#_runLoop (même principe) : Smart
+      // Screening anti-doublons déjà tranché dans campaign.results[i] —
+      // saut instantané, sans requête réseau ni délai, placé APRÈS les
+      // attentes ci-dessus pour rester gelé par une pause/un arrêt comme un
+      // envoi normal.
+      if (campaign.results[i].status === 'skipped_duplicate') {
+        campaign.results[i].timestamp = new Date().toISOString();
+        campaign.sent += 1;
+        campaign.skippedDuplicates += 1;
+        campaign.nextIndex = i + 1;
+        this._persist();
+        if (this.onActivity) this.onActivity();
+        console.log(`Campagne Telegram (tenant "${this.tenantId}"): destinataire ${campaign.results[i].to} ignoré (doublon détecté, ${i + 1}/${recipients.length}).`);
+        i += 1;
+        continue;
+      }
+
       const { identifier, vars } = normalizeTelegramRecipient(recipients[i]);
       let status = 'failed';
       let errorReason = null;
@@ -435,9 +529,10 @@ class TelegramCampaignEngine {
           await this.session.sendMessage(entity, personalizedMessage);
           this._recordSendLatency(Date.now() - textStartedAt);
         }
-        status = 'delivered';
+        status = 'sent';
         campaign.success += 1;
         this.networkHealth.recordSuccess();
+        await this._recordHistorySent(messageHistory.normalizeContactKey(identifier));
         console.log(`Campagne Telegram (tenant "${this.tenantId}"): message envoyé à ${identifier} (${i + 1}/${recipients.length}).`);
       } catch (err) {
         if (circuitBreaker.isOverloadError(err)) {
@@ -473,7 +568,7 @@ class TelegramCampaignEngine {
 
       campaign.sent += 1;
       campaign.nextIndex = i + 1;
-      campaign.results.push({ to: String(identifier), status, error: errorReason, timestamp: new Date().toISOString() });
+      campaign.results[i] = { to: String(identifier), status, error: errorReason, timestamp: new Date().toISOString() };
       this._persist();
       if (this.onActivity) this.onActivity();
 
@@ -532,11 +627,27 @@ class TelegramCampaignEngine {
     this.persistedMedia = await persistMedia(this.tenantId, media);
     this.resolvedMedia = media ? { buffer: media.buffer, mimetype: media.mimetype, filename: media.filename } : null;
 
+    // Voir queues/campaignEngine.js#start (même principe) : Smart Screening
+    // anti-doublons calculé UNE FOIS ici, avant le premier envoi. Un même
+    // moteur/tenant sert aussi bien les messages directs (recipientType
+    // 'contacts') que la diffusion vers groupes/canaux (recipientType
+    // 'groups') — l'historique et le hash de modèle s'appliquent
+    // identiquement dans les deux cas.
+    const messageHash = messageHistory.hashTemplate(messageHashParts(message, this.persistedMedia));
+    const duplicateWindowHours = messageHistory.clampWindowHours(options.duplicateWindowHours);
+    const historyEntries = await messageHistory.loadHistory('telegram', this.tenantId);
+    const results = this._buildInitialResults(recipients, duplicateWindowHours * 3_600_000, historyEntries, messageHash);
+    this._historyEntries = historyEntries;
+    this._messageHash = messageHash;
+
     this.campaign = {
       total: recipients.length,
       sent: 0,
       success: 0,
       failed: 0,
+      skippedDuplicates: 0,
+      messageHash,
+      duplicateWindowHours,
       status: 'running',
       paused: false,
       userPaused: false,
@@ -549,7 +660,7 @@ class TelegramCampaignEngine {
       recipients,
       recipientType,
       message,
-      results: [],
+      results,
       delaySeconds: Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds : undefined,
       minDelayMs,
       maxDelayMs,
@@ -623,6 +734,10 @@ class TelegramCampaignEngine {
     this.campaign.stopRequested = true;
     this._markRemainingInterrupted(this.campaign.nextIndex);
     this.campaign.superseded = true;
+    // Voir queues/campaignEngine.js#stop (même principe) : libère
+    // immédiatement le coupe-circuit pour ce tenant, même en pleine pause de
+    // sécurité au moment de l'arrêt.
+    this.networkHealth = new circuitBreaker.CircuitBreakerState();
     this._persist();
   }
 
@@ -663,6 +778,8 @@ class TelegramCampaignEngine {
     this.networkHealth = new circuitBreaker.CircuitBreakerState();
     this._lastHeartbeatAt = 0;
     this._runActive = false;
+    this._historyEntries = null;
+    this._messageHash = null;
   }
 
   async _loadRecord() {
@@ -710,6 +827,14 @@ class TelegramCampaignEngine {
     }
 
     this.persistedMedia = record.media || null;
+    // Voir queues/campaignEngine.js#resumeIfPending (même principe) :
+    // l'historique lui-même est chargé paresseusement au premier envoi réel
+    // après la reprise (voir _recordHistorySent) ; seul messageHash doit
+    // survivre, restauré depuis le disque ou recalculé pour un état
+    // persisté avant ce déploiement.
+    this._historyEntries = null;
+    this._messageHash = record.messageHash || messageHistory.hashTemplate(messageHashParts(record.message, this.persistedMedia));
+    const migratedResults = this._migrateResults(record.results, record.recipients);
 
     try {
       this.resolvedMedia = await resolveMedia(this.persistedMedia);
@@ -720,6 +845,10 @@ class TelegramCampaignEngine {
       );
       this.campaign = {
         ...record,
+        skippedDuplicates: record.skippedDuplicates || 0,
+        messageHash: this._messageHash,
+        duplicateWindowHours: record.duplicateWindowHours || messageHistory.DEFAULT_WINDOW_HOURS,
+        results: migratedResults,
         status: 'stopped',
         paused: false,
         userPaused: false,
@@ -734,6 +863,10 @@ class TelegramCampaignEngine {
 
     this.campaign = {
       ...record,
+      skippedDuplicates: record.skippedDuplicates || 0,
+      messageHash: this._messageHash,
+      duplicateWindowHours: record.duplicateWindowHours || messageHistory.DEFAULT_WINDOW_HOURS,
+      results: migratedResults,
       status: 'running',
       paused: true,
       userPaused: true,

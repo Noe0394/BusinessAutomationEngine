@@ -106,13 +106,14 @@
     #campaign-feedback.ok, #tg-feedback.ok, #tg-dm-feedback.ok { background: #d4f5dd; color: #1a7a3c; }
     #campaign-feedback.error, #tg-feedback.error, #tg-dm-feedback.error { background: #fbdada; color: #c0392b; }
 
-    #progress-area, #tg-dm-progress-area { margin-top: 1.5rem; }
-    #progress-bar-outer, #tg-dm-progress-bar-outer { width: 100%; background: #eee; border-radius: 999px; height: 24px; overflow: hidden; }
-    #progress-bar-inner, #tg-dm-progress-bar-inner { height: 100%; width: 0%; background: #25D366; transition: width 0.3s; }
-    #progress-text, #tg-dm-progress-text { margin-top: 0.5rem; font-weight: bold; }
-    #progress-counters span, #tg-dm-progress-counters span { display: inline-block; margin-right: 1.5rem; }
+    #progress-area, #tg-dm-progress-area, #tg-groups-progress-area { margin-top: 1.5rem; }
+    #progress-bar-outer, #tg-dm-progress-bar-outer, #tg-groups-progress-bar-outer { width: 100%; background: #eee; border-radius: 999px; height: 24px; overflow: hidden; }
+    #progress-bar-inner, #tg-dm-progress-bar-inner, #tg-groups-progress-bar-inner { height: 100%; width: 0%; background: #25D366; transition: width 0.3s; }
+    #progress-text, #tg-dm-progress-text, #tg-groups-progress-text { margin-top: 0.5rem; font-weight: bold; }
+    #progress-counters span, #tg-dm-progress-counters span, #tg-groups-progress-counters span { display: inline-block; margin-right: 1.5rem; }
     .count-success { color: #1a7a3c; font-weight: bold; }
     .count-failed { color: #c0392b; font-weight: bold; }
+    .count-skipped { color: #a67c00; font-weight: bold; }
 
     #import-result { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
     #import-result.ok { background: #d4f5dd; color: #1a7a3c; }
@@ -132,9 +133,10 @@
     .modal-summary span { display: inline-block; margin-right: 1.5rem; font-weight: bold; }
     .modal-actions { margin-top: 1rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
     .modal-actions button { flex: 1; min-width: 140px; padding: 0.7rem; border-radius: 6px; border: 1px solid #075E54; background: #fff; color: #075E54; }
-    .status-delivered { color: #1a7a3c; font-weight: bold; }
+    .status-sent, .status-delivered { color: #1a7a3c; font-weight: bold; }
     .status-failed { color: #c0392b; font-weight: bold; }
-    .status-interrupted { color: #a67c00; font-weight: bold; }
+    .status-pending, .status-interrupted { color: #a67c00; font-weight: bold; }
+    .status-skipped_duplicate { color: #6c6c6c; font-weight: bold; }
 
     @media (max-width: 640px) {
       header { flex-direction: column; align-items: stretch; text-align: center; }
@@ -371,6 +373,10 @@
             <label for="batch-pause-seconds">Pause après un lot (secondes)</label>
             <input type="number" id="batch-pause-seconds" value="36" min="1" />
           </div>
+          <div class="field">
+            <label for="dedupe-window-hours">Ignorer les doublons envoyés depuis (heures)</label>
+            <input type="number" id="dedupe-window-hours" value="48" min="1" max="720" />
+          </div>
         </div>
 
         <button type="button" id="send-campaign-btn" class="send-button">🚀 Lancer l'envoi</button>
@@ -388,7 +394,8 @@
           </div>
           <p id="progress-text">Envoi 0/0 - 0%</p>
           <p id="progress-counters">
-            <span class="count-success">✅ Réussites : 0</span>
+            <span class="count-success">✅ Envoyés : 0</span>
+            <span class="count-skipped">⏭️ Ignorés (Doublons) : 0</span>
             <span class="count-failed">❌ Échecs : 0</span>
           </p>
           <p id="progress-network-status" class="warning-box" hidden></p>
@@ -454,10 +461,33 @@
             <label for="tg-batch-pause-seconds">Pause après un lot (secondes)</label>
             <input type="number" id="tg-batch-pause-seconds" value="36" min="1" />
           </div>
+          <div class="field">
+            <label for="tg-groups-dedupe-window-hours">Ignorer les doublons envoyés depuis (heures)</label>
+            <input type="number" id="tg-groups-dedupe-window-hours" value="48" min="1" max="720" />
+          </div>
         </div>
 
         <button type="button" id="send-tg-campaign-btn" class="send-button">🚀 Lancer l'envoi Telegram</button>
         <div id="tg-feedback" hidden></div>
+
+        <div id="tg-groups-progress-area" hidden>
+          <p id="tg-groups-campaign-alert" class="warning-box">⚠️ Diffusion Telegram en cours sur ce compte.</p>
+          <div id="tg-groups-campaign-controls">
+            <button type="button" id="tg-groups-pause-btn" class="pause-button" hidden>⏸️ Mettre en pause</button>
+            <button type="button" id="tg-groups-resume-btn" class="resume-button" hidden>▶️ Reprendre</button>
+            <button type="button" id="tg-groups-stop-btn" class="stop-button">🛑 Stopper la campagne</button>
+          </div>
+          <div id="tg-groups-progress-bar-outer">
+            <div id="tg-groups-progress-bar-inner"></div>
+          </div>
+          <p id="tg-groups-progress-text">Envoi 0/0 - 0%</p>
+          <p id="tg-groups-progress-counters">
+            <span class="count-success">✅ Envoyés : 0</span>
+            <span class="count-skipped">⏭️ Ignorés (Doublons) : 0</span>
+            <span class="count-failed">❌ Échecs : 0</span>
+          </p>
+          <p id="tg-groups-progress-network-status" class="warning-box" hidden></p>
+        </div>
 
         <div class="subsection" id="tg-dm-section">
           <h3>Gestionnaire de Contacts et Campagnes</h3>
@@ -518,6 +548,10 @@
               <label for="tg-dm-batch-pause-seconds">Pause après un lot (secondes)</label>
               <input type="number" id="tg-dm-batch-pause-seconds" value="90" min="1" />
             </div>
+            <div class="field">
+              <label for="tg-dm-dedupe-window-hours">Ignorer les doublons envoyés depuis (heures)</label>
+              <input type="number" id="tg-dm-dedupe-window-hours" value="48" min="1" max="720" />
+            </div>
           </div>
 
           <button type="button" id="tg-dm-send-btn" class="send-button">🚀 Lancer la diffusion</button>
@@ -535,7 +569,8 @@
             </div>
             <p id="tg-dm-progress-text">Envoi 0/0 - 0%</p>
             <p id="tg-dm-progress-counters">
-              <span class="count-success">✅ Réussites : 0</span>
+              <span class="count-success">✅ Envoyés : 0</span>
+              <span class="count-skipped">⏭️ Ignorés (Doublons) : 0</span>
               <span class="count-failed">❌ Échecs : 0</span>
             </p>
             <p id="tg-dm-progress-network-status" class="warning-box" hidden></p>
@@ -1077,7 +1112,8 @@
       <h2>Rapport Final de Campagne</h2>
       <p class="modal-summary">
         <span>Total : <span id="report-total">0</span></span>
-        <span class="status-delivered">Réussites : <span id="report-success">0</span></span>
+        <span class="status-sent">Envoyés : <span id="report-success">0</span></span>
+        <span class="status-skipped_duplicate">Ignorés (doublons) : <span id="report-skipped">0</span></span>
         <span class="status-failed">Échecs : <span id="report-failed">0</span></span>
       </p>
       <p>Statut de la campagne : <strong id="report-status"></strong></p>
@@ -1775,6 +1811,7 @@
       const batchPauseSeconds = document.getElementById('batch-pause-seconds').value;
       const seqDelayMin = document.getElementById('campaign-seq-delay-min').value;
       const seqDelayMax = document.getElementById('campaign-seq-delay-max').value;
+      const dedupeWindowHours = document.getElementById('dedupe-window-hours').value;
 
       if (campaignSequence.length === 0) {
         showCampaignFeedback('Ajoutez au moins un texte ou un média à la séquence.', true);
@@ -1804,6 +1841,7 @@
       formData.append('batchPauseSeconds', batchPauseSeconds);
       formData.append('sequenceDelayMin', seqDelayMin);
       formData.append('sequenceDelayMax', seqDelayMax);
+      formData.append('duplicateWindowHours', dedupeWindowHours);
 
       if (mode === 'groups') {
         formData.append('groupIds', JSON.stringify(Array.from(state.selectedGroupIds)));
@@ -1877,6 +1915,41 @@
     // ---------- Suivi en direct + rapport final (WhatsApp) ----------
     let campaignInterval = null;
 
+    // Décompte dynamique du coupe-circuit (voir lib/circuitBreaker.js côté
+    // serveur, retryAfterSeconds exposé par getStatus()) — partagé par les 3
+    // suivis de campagne (WhatsApp, Telegram contacts, Telegram
+    // groupes/canaux), un état de décompte indépendant par bloc pour ne
+    // jamais les mélanger. Resynchronisé sur la valeur serveur à chaque poll
+    // (1.5s) pour ne jamais dériver, avec un tick local d'1s entre deux
+    // polls pour un affichage vraiment temps réel.
+    function formatCountdownMMSS(totalSeconds) {
+      const s = Math.max(0, Math.floor(totalSeconds));
+      const m = Math.floor(s / 60);
+      const sec = s % 60;
+      return String(m).padStart(2, '0') + ' min ' + String(sec).padStart(2, '0') + ' sec';
+    }
+
+    function updateNetworkBanner(el, campaign, state) {
+      if (campaign.networkStatus === 'degraded_network' || campaign.networkStatus === 'circuit_open') {
+        el.hidden = false;
+        state.deadline = Date.now() + (campaign.retryAfterSeconds || 0) * 1000;
+        const baseText = campaign.networkStatus === 'circuit_open'
+          ? '⛔ Coupe-circuit actif : surcharge détectée.'
+          : '⚠️ Réseau dégradé : latence anormale détectée.';
+        const render = () => {
+          const remaining = Math.max(0, Math.round((state.deadline - Date.now()) / 1000));
+          el.textContent = baseText + ' Reprise automatique dans : ' + formatCountdownMMSS(remaining) + '.';
+        };
+        render();
+        if (!state.interval) state.interval = setInterval(render, 1000);
+      } else {
+        el.hidden = true;
+        if (state.interval) { clearInterval(state.interval); state.interval = null; }
+      }
+    }
+
+    const whatsappNetworkCountdown = { interval: null, deadline: 0 };
+
     function updateProgressUI(campaign) {
       const area = document.getElementById('progress-area');
       area.hidden = false;
@@ -1884,31 +1957,25 @@
       document.getElementById('progress-bar-inner').style.width = pct + '%';
       document.getElementById('progress-text').textContent = 'Envoi ' + campaign.sent + '/' + campaign.total + ' - ' + pct + '%';
       document.getElementById('progress-counters').innerHTML =
-        '<span class="count-success">✅ Réussites : ' + campaign.success + '</span>' +
+        '<span class="count-success">✅ Envoyés : ' + campaign.success + '</span>' +
+        '<span class="count-skipped">⏭️ Ignorés (Doublons) : ' + (campaign.skippedDuplicates || 0) + '</span>' +
         '<span class="count-failed">❌ Échecs : ' + campaign.failed + '</span>';
 
-      const networkEl = document.getElementById('progress-network-status');
-      if (campaign.networkStatus === 'degraded_network') {
-        networkEl.hidden = false;
-        networkEl.textContent = '⚠️ Réseau dégradé : latence anormale détectée, file en pause temporaire.';
-      } else if (campaign.networkStatus === 'circuit_open') {
-        networkEl.hidden = false;
-        networkEl.textContent = '⛔ Coupe-circuit ouvert : surcharge détectée côté serveur distant, reprise automatique après le délai de sécurité.';
-      } else {
-        networkEl.hidden = true;
-      }
+      updateNetworkBanner(document.getElementById('progress-network-status'), campaign, whatsappNetworkCountdown);
     }
 
     function statusLabel(status) {
-      if (status === 'delivered') return 'Livré';
+      if (status === 'sent' || status === 'delivered') return 'Envoyé';
       if (status === 'failed') return 'Échec';
-      if (status === 'interrupted') return 'Interrompu';
+      if (status === 'pending' || status === 'interrupted') return 'En attente';
+      if (status === 'skipped_duplicate') return 'Ignoré (doublon)';
       return status;
     }
 
     function showReportModal(campaign) {
       document.getElementById('report-total').textContent = campaign.total;
       document.getElementById('report-success').textContent = campaign.success;
+      document.getElementById('report-skipped').textContent = campaign.skippedDuplicates || 0;
       document.getElementById('report-failed').textContent = campaign.failed;
       document.getElementById('report-status').textContent =
         campaign.status === 'stopped' ? 'Interrompue' : 'Terminée';
@@ -1920,7 +1987,7 @@
         const toTd = document.createElement('td');
         toTd.textContent = (r.to || '').split('@')[0];
         const timeTd = document.createElement('td');
-        timeTd.textContent = new Date(r.timestamp).toLocaleTimeString();
+        timeTd.textContent = r.timestamp ? new Date(r.timestamp).toLocaleTimeString() : '—';
         const statusTd = document.createElement('td');
         statusTd.textContent = statusLabel(r.status);
         statusTd.className = 'status-' + r.status;
@@ -1977,7 +2044,7 @@
       window.__lastCampaignReport.results.forEach((r) => {
         rows.push([
           (r.to || '').split('@')[0],
-          new Date(r.timestamp).toLocaleString(),
+          r.timestamp ? new Date(r.timestamp).toLocaleString() : '',
           statusLabel(r.status),
         ].join(','));
       });
@@ -2143,11 +2210,122 @@
       el.className = isError ? 'error' : 'ok';
     }
 
+    // ---------- Telegram : diffusion vers groupes/canaux — suivi live ----------
+    // Voir queues/telegramCampaignEngine.js : ce flux partage désormais le
+    // même moteur/verrou de campagne que les messages directs (onglet
+    // ci-dessous) — Pause/Reprendre/Stop, anti-doublons et coupe-circuit
+    // fonctionnent donc à l'identique, sur les mêmes endpoints
+    // /api/telegram/campaign/*.
+    let tgGroupsInterval = null;
+    let tgGroupsObservedRunningStartedAt = null;
+    const tgGroupsNetworkCountdown = { interval: null, deadline: 0 };
+
+    function tgGroupsUpdateProgressUI(campaign) {
+      const area = document.getElementById('tg-groups-progress-area');
+      area.hidden = false;
+      const pct = campaign.total > 0 ? Math.round((campaign.sent / campaign.total) * 100) : 0;
+      document.getElementById('tg-groups-progress-bar-inner').style.width = pct + '%';
+      document.getElementById('tg-groups-progress-text').textContent = 'Envoi ' + campaign.sent + '/' + campaign.total + ' - ' + pct + '%';
+      document.getElementById('tg-groups-progress-counters').innerHTML =
+        '<span class="count-success">✅ Envoyés : ' + campaign.success + '</span>' +
+        '<span class="count-skipped">⏭️ Ignorés (Doublons) : ' + (campaign.skippedDuplicates || 0) + '</span>' +
+        '<span class="count-failed">❌ Échecs : ' + campaign.failed + '</span>';
+
+      updateNetworkBanner(document.getElementById('tg-groups-progress-network-status'), campaign, tgGroupsNetworkCountdown);
+    }
+
+    function tgGroupsStartPolling() {
+      if (tgGroupsInterval) clearInterval(tgGroupsInterval);
+      tgGroupsPollStatus();
+      tgGroupsInterval = setInterval(tgGroupsPollStatus, 1500);
+    }
+
+    async function tgGroupsPollStatus() {
+      try {
+        const res = await apiFetch('/api/telegram/campaign/status');
+        const data = await res.json();
+        if (!data.exists) return;
+
+        const sendBtn = document.getElementById('send-tg-campaign-btn');
+        const pauseBtn = document.getElementById('tg-groups-pause-btn');
+        const resumeBtn = document.getElementById('tg-groups-resume-btn');
+        const stopBtn = document.getElementById('tg-groups-stop-btn');
+        const alertEl = document.getElementById('tg-groups-campaign-alert');
+        // Voir tgDmPollStatus (même principe, symétrique) : un seul moteur
+        // partagé entre cet onglet et les messages directs.
+        const isMine = data.recipientType === 'groups';
+
+        if (data.status === 'running') {
+          sendBtn.disabled = true;
+          if (!isMine) {
+            document.getElementById('tg-groups-progress-area').hidden = true;
+            pauseBtn.hidden = true;
+            resumeBtn.hidden = true;
+            stopBtn.hidden = true;
+            tgShowFeedback('⚠️ Une campagne de messages directs est en cours sur ce compte Telegram (section "Gestionnaire de Contacts et Campagnes" ci-dessous) — attendez sa fin avant de lancer une diffusion de groupes/canaux.', false);
+            return;
+          }
+          tgGroupsObservedRunningStartedAt = data.startedAt;
+          stopBtn.hidden = false;
+          stopBtn.disabled = false;
+          pauseBtn.hidden = Boolean(data.userPaused);
+          resumeBtn.hidden = !data.userPaused;
+          alertEl.textContent = data.userPaused
+            ? '⏸️ Diffusion Telegram en pause sur ce compte — cliquez "Reprendre" pour continuer.'
+            : '⚠️ Diffusion Telegram en cours sur ce compte.';
+          tgGroupsUpdateProgressUI(data);
+        } else {
+          sendBtn.disabled = false;
+          pauseBtn.hidden = true;
+          resumeBtn.hidden = true;
+          stopBtn.hidden = true;
+          if (isMine) tgGroupsUpdateProgressUI(data);
+
+          if (tgGroupsInterval) { clearInterval(tgGroupsInterval); tgGroupsInterval = null; }
+
+          if (isMine && tgGroupsObservedRunningStartedAt === data.startedAt) {
+            tgShowFeedback(
+              (data.status === 'stopped' ? '⛔ Diffusion interrompue' : '✅ Diffusion terminée') +
+              ' — ' + data.success + ' envoyé(s), ' + (data.skippedDuplicates || 0) + ' doublon(s) ignoré(s), ' + data.failed + ' échec(s) sur ' + data.total + '.',
+              data.status === 'stopped',
+            );
+          }
+        }
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    document.getElementById('tg-groups-pause-btn').addEventListener('click', async () => {
+      try {
+        await apiFetch('/api/telegram/campaign/pause', { method: 'POST' });
+      } catch (err) {
+        // le prochain poll reflétera l'état réel
+      }
+    });
+
+    document.getElementById('tg-groups-resume-btn').addEventListener('click', async () => {
+      try {
+        await apiFetch('/api/telegram/campaign/resume', { method: 'POST' });
+      } catch (err) {
+        // le prochain poll reflétera l'état réel
+      }
+    });
+
+    document.getElementById('tg-groups-stop-btn').addEventListener('click', async () => {
+      try {
+        await apiFetch('/api/telegram/campaign/stop', { method: 'POST' });
+      } catch (err) {
+        // le prochain poll reflétera l'état réel
+      }
+    });
+
     document.getElementById('send-tg-campaign-btn').addEventListener('click', async () => {
       const message = document.getElementById('tg-message').value.trim();
       const batchSize = document.getElementById('tg-batch-size').value;
       const delaySeconds = document.getElementById('tg-delay-seconds').value;
       const batchPauseSeconds = document.getElementById('tg-batch-pause-seconds').value;
+      const dedupeWindowHours = document.getElementById('tg-groups-dedupe-window-hours').value;
 
       if (!message) { tgShowFeedback('Le message ne peut pas être vide.', true); return; }
       if (tgState.selectedIds.size === 0) { tgShowFeedback('Sélectionnez au moins un groupe/canal.', true); return; }
@@ -2157,6 +2335,7 @@
       formData.append('batchSize', batchSize);
       formData.append('delaySeconds', delaySeconds);
       formData.append('batchPauseSeconds', batchPauseSeconds);
+      formData.append('duplicateWindowHours', dedupeWindowHours);
       formData.append('recipients', JSON.stringify(Array.from(tgState.selectedIds)));
       if (selectedTgFile) formData.append('media', selectedTgFile);
 
@@ -2168,17 +2347,19 @@
         const data = await res.json();
         if (!res.ok) {
           tgShowFeedback(data.error || 'Échec du lancement de la campagne Telegram.', true);
+          sendBtn.disabled = false;
         } else {
           tgShowFeedback(
-            '🚀 Campagne Telegram lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
+            '🚀 Diffusion Telegram lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
             ', délai ' + data.delaySeconds + 's (pause de ' + data.batchPauseSeconds + 's après un lot)' +
-            (data.media ? ', pièce jointe : ' + data.media : '') + '.',
+            (data.media ? ', pièce jointe : ' + data.media : '') +
+            (data.skippedDuplicates ? ', ' + data.skippedDuplicates + ' doublon(s) déjà ignoré(s)' : '') + '.',
             false,
           );
+          tgGroupsStartPolling();
         }
       } catch (err) {
         tgShowFeedback('Erreur réseau lors du lancement de la campagne.', true);
-      } finally {
         sendBtn.disabled = false;
       }
     });
@@ -2281,6 +2462,8 @@
       }
     });
 
+    const tgDmNetworkCountdown = { interval: null, deadline: 0 };
+
     function tgDmUpdateProgressUI(campaign) {
       const area = document.getElementById('tg-dm-progress-area');
       area.hidden = false;
@@ -2288,19 +2471,11 @@
       document.getElementById('tg-dm-progress-bar-inner').style.width = pct + '%';
       document.getElementById('tg-dm-progress-text').textContent = 'Envoi ' + campaign.sent + '/' + campaign.total + ' - ' + pct + '%';
       document.getElementById('tg-dm-progress-counters').innerHTML =
-        '<span class="count-success">✅ Réussites : ' + campaign.success + '</span>' +
+        '<span class="count-success">✅ Envoyés : ' + campaign.success + '</span>' +
+        '<span class="count-skipped">⏭️ Ignorés (Doublons) : ' + (campaign.skippedDuplicates || 0) + '</span>' +
         '<span class="count-failed">❌ Échecs : ' + campaign.failed + '</span>';
 
-      const networkEl = document.getElementById('tg-dm-progress-network-status');
-      if (campaign.networkStatus === 'degraded_network') {
-        networkEl.hidden = false;
-        networkEl.textContent = '⚠️ Réseau dégradé : latence anormale détectée, file en pause temporaire.';
-      } else if (campaign.networkStatus === 'circuit_open') {
-        networkEl.hidden = false;
-        networkEl.textContent = '⛔ Coupe-circuit ouvert : surcharge détectée côté Telegram, reprise automatique après le délai de sécurité.';
-      } else {
-        networkEl.hidden = true;
-      }
+      updateNetworkBanner(document.getElementById('tg-dm-progress-network-status'), campaign, tgDmNetworkCountdown);
     }
 
     function tgDmStartPolling() {
@@ -2320,10 +2495,24 @@
         const resumeBtn = document.getElementById('tg-dm-resume-btn');
         const stopBtn = document.getElementById('tg-dm-stop-btn');
         const alertEl = document.getElementById('tg-dm-campaign-alert');
+        // Un seul moteur/verrou de campagne Telegram par tenant (voir
+        // queues/telegramCampaignEngine.js) sert à la fois les messages
+        // directs (cet onglet) et la diffusion vers des groupes/canaux
+        // (onglet séparé) : ne jamais afficher/piloter depuis ici une
+        // campagne qui n'est pas la sienne.
+        const isMine = data.recipientType !== 'groups';
 
         if (data.status === 'running') {
-          tgDmObservedRunningStartedAt = data.startedAt;
           sendBtn.disabled = true;
+          if (!isMine) {
+            document.getElementById('tg-dm-progress-area').hidden = true;
+            pauseBtn.hidden = true;
+            resumeBtn.hidden = true;
+            stopBtn.hidden = true;
+            tgDmShowFeedback('⚠️ Une diffusion vers des groupes/canaux est en cours sur ce compte Telegram (onglet Groupes) — attendez sa fin avant de lancer une campagne de messages directs.', false);
+            return;
+          }
+          tgDmObservedRunningStartedAt = data.startedAt;
           stopBtn.hidden = false;
           stopBtn.disabled = false;
           pauseBtn.hidden = Boolean(data.userPaused);
@@ -2337,14 +2526,14 @@
           pauseBtn.hidden = true;
           resumeBtn.hidden = true;
           stopBtn.hidden = true;
-          tgDmUpdateProgressUI(data);
+          if (isMine) tgDmUpdateProgressUI(data);
 
           if (tgDmInterval) { clearInterval(tgDmInterval); tgDmInterval = null; }
 
-          if (tgDmObservedRunningStartedAt === data.startedAt) {
+          if (isMine && tgDmObservedRunningStartedAt === data.startedAt) {
             tgDmShowFeedback(
               (data.status === 'stopped' ? '⛔ Campagne interrompue' : '✅ Campagne terminée') +
-              ' — ' + data.success + ' réussite(s), ' + data.failed + ' échec(s) sur ' + data.total + '.',
+              ' — ' + data.success + ' envoyé(s), ' + (data.skippedDuplicates || 0) + ' doublon(s) ignoré(s), ' + data.failed + ' échec(s) sur ' + data.total + '.',
               data.status === 'stopped',
             );
           }
@@ -4185,8 +4374,13 @@
         // Même correctif que ci-dessus côté WhatsApp : sans cet appel, une
         // campagne Telegram déjà en cours/en pause ne montre JAMAIS ses
         // boutons de contrôle avant un nouveau clic sur "Lancer la
-        // diffusion" dans cette même page.
+        // diffusion" dans cette même page. Les deux pollings partagent le
+        // même endpoint de statut (un seul moteur/verrou de campagne
+        // Telegram par tenant) et se filtrent eux-mêmes via
+        // data.recipientType — sans risque d'afficher/piloter l'un depuis
+        // l'onglet de l'autre.
         tgDmStartPolling();
+        tgGroupsStartPolling();
       }
       if (hasModule('facebook')) fbRefreshStatus();
       if (hasModule('studio_video')) mediaRefreshStatus();

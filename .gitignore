@@ -18,4 +18,5 @@ scraped_numbers.json
 keyword_rules.json
 keyword_media/
 campaigns_state/
+message_history/
 public/dist/

@@ -1283,7 +1283,7 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
 });
 
 app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attachWhatsapp, whatsappMediaUpload.array('media', 10), async (req, res) => {
-  const { message, groupId, delaySeconds, batchSize, batchPauseSeconds, sequenceDelayMin, sequenceDelayMax } = req.body;
+  const { message, groupId, delaySeconds, batchSize, batchPauseSeconds, sequenceDelayMin, sequenceDelayMax, duplicateWindowHours } = req.body;
   let { recipients, groupIds, sequence } = req.body;
 
   if (typeof recipients === 'string') {
@@ -1395,6 +1395,7 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
       sequence: resolvedSequence,
       sequenceDelayMinMs: seqDelayMinMs,
       sequenceDelayMaxMs: seqDelayMaxMs,
+      duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
     });
   } catch (err) {
     if (err.message === 'CAMPAIGN_IN_PROGRESS') {
@@ -1412,6 +1413,8 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
     batchSize: parsedBatchSize || recipients.length,
     batchPauseSeconds: parsedBatchPauseSeconds || (fixedDelaySeconds || 15) * 3,
     steps: resolvedSequence.length,
+    duplicateWindowHours: campaign.duplicateWindowHours,
+    skippedDuplicates: campaign.skippedDuplicates,
   });
 });
 
@@ -2477,12 +2480,21 @@ app.get('/api/telegram/groups', requireAccess, requireModule('telegram'), attach
   }
 });
 
+// Diffusion vers des groupes/canaux Telegram sélectionnés — passe désormais
+// par TelegramCampaignEngine (recipientType: 'groups', déjà supporté par le
+// moteur : voir queues/telegramCampaignEngine.js#_runLoop, qui utilise
+// l'identifiant de groupe/canal directement, sans resolveRecipient) au lieu
+// de l'ancien envoi "fire-and-forget" (adapters/telegram.js#sendBulk,
+// supprimé) : bénéficie ainsi de la même Pause/Reprendre/Stop, du même
+// suivi live, du même coupe-circuit et de la même détection anti-doublons
+// que les messages directs vers des contacts — un seul moteur, un seul
+// verrou de campagne par tenant, quel que soit le type de destinataire.
 app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), attachTelegram, upload.single('media'), async (req, res) => {
   if (!req.telegram.isConnected()) {
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
   }
 
-  const { message, delaySeconds, batchSize, batchPauseSeconds } = req.body;
+  const { message, delaySeconds, batchSize, batchPauseSeconds, duplicateWindowHours } = req.body;
   let { recipients } = req.body;
 
   if (typeof recipients === 'string') {
@@ -2505,28 +2517,35 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), attach
   const media = req.file
     ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
     : null;
-  const tenantTelegram = req.telegram;
-  const tenantLabel = req.isAdmin ? telegramManager.ADMIN_TENANT_ID : req.licenseKey;
+
+  let campaign;
+  try {
+    campaign = await req.telegramCampaignEngine.start(recipients, message, {
+      recipientType: 'groups',
+      delaySeconds: fixedDelaySeconds,
+      batchSize: parsedBatchSize,
+      batchPauseSeconds: parsedBatchPauseSeconds,
+      duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
+      media,
+    });
+  } catch (err) {
+    if (err.message === 'CAMPAIGN_IN_PROGRESS') {
+      return res.status(409).json({
+        error: 'Une campagne Telegram est déjà en cours (messages directs ou diffusion de groupes). Attendez sa fin ou interrompez-la (Pause/Arrêt) avant d\'en lancer une nouvelle.',
+      });
+    }
+    throw err;
+  }
 
   res.status(202).json({
     status: 'tg_queue_started',
-    total: recipients.length,
+    total: campaign.total,
     delaySeconds: fixedDelaySeconds || 12,
     batchSize: parsedBatchSize || recipients.length,
     batchPauseSeconds: parsedBatchPauseSeconds || (fixedDelaySeconds || 12) * 3,
     media: media ? media.filename : null,
-  });
-
-  tenantTelegram.sendBulk(recipients, message, {
-    delaySeconds: fixedDelaySeconds,
-    batchSize: parsedBatchSize,
-    batchPauseSeconds: parsedBatchPauseSeconds,
-    media,
-  }).then((results) => {
-    const success = results.filter((r) => r.status === 'delivered').length;
-    console.log(`Telegram (tenant "${tenantLabel}"): diffusion terminée (${success}/${results.length} réussite(s)).`);
-  }).catch((err) => {
-    console.error(`Erreur pendant la diffusion Telegram (tenant "${tenantLabel}"):`, err);
+    duplicateWindowHours: campaign.duplicateWindowHours,
+    skippedDuplicates: campaign.skippedDuplicates,
   });
 });
 
@@ -2574,7 +2593,7 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
     return res.status(409).json({ error: 'Telegram non connecté. Connectez-vous via l\'onglet Telegram avant d\'envoyer.' });
   }
 
-  const { message, delaySeconds, minDelaySeconds, maxDelaySeconds, batchSize, batchPauseSeconds } = req.body;
+  const { message, delaySeconds, minDelaySeconds, maxDelaySeconds, batchSize, batchPauseSeconds, duplicateWindowHours } = req.body;
   let { recipients } = req.body;
 
   if (typeof recipients === 'string') {
@@ -2606,6 +2625,7 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
       maxDelayMs: maxDelaySeconds !== undefined && maxDelaySeconds !== '' ? parseFloat(maxDelaySeconds) * 1000 : undefined,
       batchSize: batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined,
       batchPauseSeconds: batchPauseSeconds !== undefined && batchPauseSeconds !== '' ? parseFloat(batchPauseSeconds) : undefined,
+      duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
       media,
     });
   } catch (err) {
@@ -2620,6 +2640,8 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
   res.status(202).json({
     status: 'tg_campaign_started',
     total: campaign.total,
+    duplicateWindowHours: campaign.duplicateWindowHours,
+    skippedDuplicates: campaign.skippedDuplicates,
   });
 });
 
