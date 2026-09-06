@@ -1,0 +1,15 @@
+{
+  "name": "CYRUS SUPER ASSISTANT",
+  "short_name": "CYRUS",
+  "description": "Assistant marketing, closing et automatisation multi-plateformes (WhatsApp, Telegram, Facebook) avec Copywriter Studio IA local.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05050f",
+  "theme_color": "#6c4fd6",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

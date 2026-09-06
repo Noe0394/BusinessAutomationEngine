@@ -3,25 +3,42 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>Orchestrateur Multi-Plateformes</title>
+  <title>CYRUS SUPER ASSISTANT</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <meta name="theme-color" content="#6c4fd6" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     body { font-family: sans-serif; margin: 0; background: #f2f2f3; color: #1a1a1a; }
     button, input, select, textarea { font-family: inherit; font-size: 1rem; }
 
-    header { display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: #075E54; color: #fff; flex-wrap: wrap; gap: 0.5rem; }
-    header h1 { margin: 0; font-size: 1.15rem; }
-    header button { background: #fff; color: #075E54; border: none; padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer; min-height: 44px; }
+    header {
+      display: flex; justify-content: space-between; align-items: center; padding: 1rem; color: #fff; flex-wrap: wrap; gap: 0.5rem;
+      background: linear-gradient(120deg, #0b0b1a, #1a1244, #2d1b6e, #1a1244, #0b0b1a);
+      background-size: 300% 300%;
+      animation: cyrus-flow 16s ease infinite;
+    }
+    @keyframes cyrus-flow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+    header h1 { margin: 0; font-size: 1.15rem; letter-spacing: 0.04em; }
+    header button { background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.35); padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer; min-height: 44px; }
 
-    #login-screen { max-width: 340px; margin: 3rem auto; padding: 2rem 1.5rem; background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); text-align: center; }
-    #login-screen input { width: 100%; padding: 0.75rem; margin-bottom: 1rem; min-height: 44px; border: 1px solid #ccc; border-radius: 6px; }
-    #login-screen button { width: 100%; padding: 0.75rem; background: #075E54; color: #fff; border: none; border-radius: 6px; cursor: pointer; min-height: 44px; }
+    /* Écran de connexion : hero holographique en arrière-plan (voir
+       initHeroCanvas) derrière une carte "verre dépoli" flottante. */
+    #login-screen { position: relative; min-height: 100vh; overflow: hidden; background: #05050f; display: flex; align-items: center; justify-content: center; }
+    #cyrus-hero-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    .login-card { position: relative; z-index: 2; max-width: 360px; width: 90%; margin: 1.5rem; padding: 2rem 1.75rem; background: rgba(15, 12, 30, 0.6); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(124, 92, 255, 0.4); border-radius: 16px; text-align: center; color: #fff; box-shadow: 0 0 50px rgba(108, 79, 214, 0.25); }
+    .login-card h1 { margin: 0 0 0.4rem; font-size: 1.5rem; letter-spacing: 0.05em; }
+    .login-card .cyrus-tagline { font-size: 0.85rem; color: #cfc9e8; margin: 0 0 1.4rem; }
+    #login-screen input { width: 100%; padding: 0.75rem; margin-bottom: 1rem; min-height: 44px; border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; background: rgba(255,255,255,0.08); color: #fff; }
+    #login-screen input::placeholder { color: rgba(255,255,255,0.5); }
+    #login-screen button { width: 100%; padding: 0.75rem; background: linear-gradient(120deg, #6c4fd6, #8f6fff); color: #fff; border: none; border-radius: 6px; cursor: pointer; min-height: 44px; font-weight: bold; }
     .error { color: #c0392b; }
     .ok { color: #1a7a3c; }
+    .login-card .error { color: #ff9a9a; }
 
     nav#tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.75rem 1rem 0; background: #f2f2f3; position: sticky; top: 0; z-index: 5; }
     nav#tabs button { padding: 0.7rem 1rem; border: none; border-radius: 8px 8px 0 0; background: #ddd; cursor: pointer; font-weight: bold; min-height: 44px; flex: 1 1 auto; }
-    nav#tabs button.active { background: #fff; color: #075E54; }
+    nav#tabs button.active { background: #fff; color: #6c4fd6; box-shadow: inset 0 -3px 0 #6c4fd6; }
 
     .panel { display: none; margin: 0 1rem 1.5rem; background: #fff; padding: 1.25rem; border-radius: 0 8px 8px 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
     .panel.active { display: block; }
@@ -194,19 +211,23 @@
 </head>
 <body>
   <div id="login-screen">
-    <h1>Connexion</h1>
+    <canvas id="cyrus-hero-canvas"></canvas>
+    <div class="login-card">
+      <h1>CYRUS SUPER ASSISTANT</h1>
+      <p class="cyrus-tagline">Votre orchestrateur marketing &amp; automatisation, propulsé par une IA locale.</p>
 
-    <form id="login-form-license">
-      <input type="text" id="login-license-key" placeholder="Clé de licence (ex: KEY-XXXX-2026)" required />
-      <button type="submit">Débloquer le tableau de bord</button>
-    </form>
+      <form id="login-form-license">
+        <input type="text" id="login-license-key" placeholder="Clé de licence (ex: KEY-XXXX-2026)" required />
+        <button type="submit">Débloquer le tableau de bord</button>
+      </form>
 
-    <p id="login-error" class="error" hidden></p>
+      <p id="login-error" class="error" hidden></p>
+    </div>
   </div>
 
   <div id="app" hidden>
     <header>
-      <h1>Orchestrateur Multi-Plateformes</h1>
+      <h1>CYRUS SUPER ASSISTANT</h1>
       <button id="logout-btn" type="button">Se déconnecter</button>
     </header>
 
@@ -1329,6 +1350,7 @@
     const AUTH_TYPE_KEY = 'auth_type'; // 'admin' | 'license'
     const AUTH_VALUE_KEY = 'auth_value';
     const state = { groups: [], selectedGroupIds: new Set(), importedContacts: [] };
+    let cyrusHero = null; // instance active du hero holographique (voir initHeroCanvas) — null tant qu'il n'a jamais démarré, ou une fois arrêté.
     let lastReportShownAt = null;
     let observedRunningStartedAt = null;
     let authRole = null; // 'admin' | 'license'
@@ -1430,10 +1452,15 @@
       document.getElementById('login-screen').hidden = false;
       const errEl = document.getElementById('login-error');
       if (errorMessage) { errEl.textContent = errorMessage; errEl.hidden = false; } else { errEl.hidden = true; }
+      // Le hero holographique ne tourne QUE pendant que l'écran de connexion
+      // est visible — jamais en arrière-plan une fois connecté (économie
+      // CPU, voir initHeroCanvas plus bas).
+      if (!cyrusHero) cyrusHero = initHeroCanvas();
     }
     function showApp() {
       document.getElementById('login-screen').hidden = true;
       document.getElementById('app').hidden = false;
+      if (cyrusHero) { cyrusHero.stop(); cyrusHero = null; }
       applyModuleVisibility();
     }
 
@@ -1516,6 +1543,219 @@
       clearStoredAuth();
       showLogin();
     });
+
+    // ---------- CYRUS SUPER ASSISTANT : hero holographique (écran de connexion) ----------
+    // Silhouette humanoïde stylisée en "constellation" de nœuds lumineux
+    // reliés par des traits fins + grille de sol en perspective + anneaux
+    // holographiques rotatifs + particules ambiantes — 100% canvas 2D natif
+    // (aucun asset vidéo/image externe), cohérent avec l'esthétique
+    // "Cyber/Holographique" demandée. Suivi interactif : toute la scène se
+    // décale doucement (lerp, jamais brutalement) vers la position du
+    // curseur — et un clic déclenche une impulsion visuelle éphémère au
+    // point cliqué (voir la feuille de route : "selon la position du clic /
+    // curseur"). Démarré/arrêté par showLogin()/showApp() — ne tourne
+    // jamais une fois connecté (économie CPU).
+    function initHeroCanvas() {
+      const canvas = document.getElementById('cyrus-hero-canvas');
+      if (!canvas) return null;
+      const ctx = canvas.getContext('2d');
+      let width = 0;
+      let height = 0;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+      function resize() {
+        width = canvas.clientWidth;
+        height = canvas.clientHeight;
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      window.addEventListener('resize', resize);
+      resize();
+
+      // Cible de parallaxe (position normalisée -1..1 depuis le centre du
+      // canvas) et valeur ACTUELLE lissée par interpolation à chaque frame.
+      let targetX = 0;
+      let targetY = 0;
+      let currentX = 0;
+      let currentY = 0;
+
+      function updateTargetFromPoint(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        targetX = ((clientX - rect.left) / rect.width - 0.5) * 2;
+        targetY = ((clientY - rect.top) / rect.height - 0.5) * 2;
+      }
+      function onMouseMove(e) { updateTargetFromPoint(e.clientX, e.clientY); }
+      function onTouchMove(e) { if (e.touches && e.touches[0]) updateTargetFromPoint(e.touches[0].clientX, e.touches[0].clientY); }
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('touchmove', onTouchMove, { passive: true });
+
+      const pulses = [];
+      function onClick(e) {
+        const rect = canvas.getBoundingClientRect();
+        if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+        pulses.push({ x: e.clientX - rect.left, y: e.clientY - rect.top, radius: 0, alpha: 0.6 });
+      }
+      document.addEventListener('click', onClick);
+
+      const PARTICLE_COUNT = 46;
+      const particles = Array.from({ length: PARTICLE_COUNT }, () => ({
+        x: Math.random(), y: Math.random(), speed: 0.05 + Math.random() * 0.08, size: 1 + Math.random() * 1.8,
+      }));
+
+      // Squelette simplifié (coordonnées normalisées 0..1) — suffit à
+      // évoquer une silhouette humanoïde sans nécessiter d'asset externe.
+      const NODES = {
+        head: [0.5, 0.12], neck: [0.5, 0.22],
+        shoulderL: [0.36, 0.26], shoulderR: [0.64, 0.26],
+        elbowL: [0.28, 0.42], elbowR: [0.72, 0.42],
+        handL: [0.24, 0.58], handR: [0.76, 0.58],
+        spine: [0.5, 0.46], hipL: [0.42, 0.55], hipR: [0.58, 0.55],
+        kneeL: [0.4, 0.74], kneeR: [0.6, 0.74],
+        footL: [0.38, 0.92], footR: [0.62, 0.92],
+      };
+      const BONES = [
+        ['head', 'neck'], ['neck', 'shoulderL'], ['neck', 'shoulderR'],
+        ['shoulderL', 'elbowL'], ['elbowL', 'handL'],
+        ['shoulderR', 'elbowR'], ['elbowR', 'handR'],
+        ['neck', 'spine'], ['spine', 'hipL'], ['spine', 'hipR'],
+        ['hipL', 'kneeL'], ['kneeL', 'footL'],
+        ['hipR', 'kneeR'], ['kneeR', 'footR'],
+      ];
+
+      let frame = 0;
+      let rafHandle = null;
+
+      function draw() {
+        frame += 1;
+        currentX += (targetX - currentX) * 0.04;
+        currentY += (targetY - currentY) * 0.04;
+
+        ctx.clearRect(0, 0, width, height);
+
+        const bg = ctx.createRadialGradient(width / 2, height * 0.4, 0, width / 2, height * 0.4, Math.max(width, height) * 0.75);
+        bg.addColorStop(0, '#150f30');
+        bg.addColorStop(1, '#05050f');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, width, height);
+
+        const shiftX = currentX * 18;
+        const shiftY = currentY * 12;
+
+        // Grille de sol en perspective
+        ctx.save();
+        ctx.strokeStyle = 'rgba(124, 92, 255, 0.18)';
+        ctx.lineWidth = 1;
+        const horizon = height * 0.68 + shiftY * 0.4;
+        for (let i = -10; i <= 10; i += 1) {
+          const xTop = width / 2 + i * 26 + shiftX * 0.6;
+          const xBottom = width / 2 + i * 90 + shiftX;
+          ctx.beginPath();
+          ctx.moveTo(xTop, horizon);
+          ctx.lineTo(xBottom, height);
+          ctx.stroke();
+        }
+        for (let j = 0; j < 6; j += 1) {
+          const y = horizon + (height - horizon) * (j / 6) * (j / 6);
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        // Anneaux holographiques rotatifs
+        const centerX = width / 2 + shiftX;
+        const centerY = height * 0.42 + shiftY;
+        [1, 1.5, 2].forEach((mult, idx) => {
+          ctx.save();
+          ctx.translate(centerX, centerY);
+          ctx.rotate(frame * (idx % 2 === 0 ? 1 : -1) * 0.0025 + idx);
+          ctx.strokeStyle = `rgba(90, 220, 255, ${0.22 - idx * 0.05})`;
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 90 * mult, 26 * mult, 0, 0, Math.PI * 1.4);
+          ctx.stroke();
+          ctx.restore();
+        });
+
+        // Particules ambiantes (dérive lente vers le haut)
+        ctx.fillStyle = 'rgba(160, 200, 255, 0.55)';
+        particles.forEach((p) => {
+          p.y -= p.speed / height;
+          if (p.y < -0.02) p.y = 1.02;
+          const px = p.x * width + shiftX * 0.3;
+          const py = p.y * height + shiftY * 0.3;
+          ctx.beginPath();
+          ctx.arc(px, py, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        // Silhouette humanoïde (nœuds lumineux + os)
+        const boxW = Math.min(width * 0.5, 320);
+        const boxH = boxW * 1.7;
+        const originX = width / 2 - boxW / 2 + shiftX;
+        const originY = height * 0.5 - boxH / 2 + shiftY;
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(140, 200, 255, 0.65)';
+        ctx.lineWidth = 1.6;
+        BONES.forEach(([a, b]) => {
+          const [ax, ay] = NODES[a];
+          const [bx, by] = NODES[b];
+          ctx.beginPath();
+          ctx.moveTo(originX + ax * boxW, originY + ay * boxH);
+          ctx.lineTo(originX + bx * boxW, originY + by * boxH);
+          ctx.stroke();
+        });
+
+        const pulseGlow = 0.5 + 0.5 * Math.sin(frame * 0.05);
+        Object.values(NODES).forEach(([nx, ny]) => {
+          const px = originX + nx * boxW;
+          const py = originY + ny * boxH;
+          const glow = ctx.createRadialGradient(px, py, 0, px, py, 10);
+          glow.addColorStop(0, 'rgba(180, 220, 255, 0.85)');
+          glow.addColorStop(1, 'rgba(180, 220, 255, 0)');
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.arc(px, py, 10, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = `rgba(255, 255, 255, ${0.7 + pulseGlow * 0.3})`;
+          ctx.beginPath();
+          ctx.arc(px, py, 2.4, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        ctx.restore();
+
+        // Impulsions de clic (voir onClick)
+        for (let i = pulses.length - 1; i >= 0; i -= 1) {
+          const p = pulses[i];
+          p.radius += 4;
+          p.alpha -= 0.02;
+          if (p.alpha <= 0) { pulses.splice(i, 1); continue; }
+          ctx.beginPath();
+          ctx.strokeStyle = `rgba(160, 130, 255, ${p.alpha})`;
+          ctx.lineWidth = 2;
+          ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        rafHandle = requestAnimationFrame(draw);
+      }
+
+      rafHandle = requestAnimationFrame(draw);
+
+      return {
+        stop() {
+          if (rafHandle) cancelAnimationFrame(rafHandle);
+          window.removeEventListener('resize', resize);
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('touchmove', onTouchMove);
+          document.removeEventListener('click', onClick);
+        },
+      };
+    }
 
     async function tryAutoLogin() {
       const { value } = getStoredAuth();
@@ -5196,21 +5436,29 @@
 
     document.getElementById('studio-new-chat-btn').addEventListener('click', studioCreateNewChat);
 
-    function studioBuildBubble(msg) {
+    // `options.animate: true` retarde l'affichage du texte (voir
+    // studioStartTypewriter) et masque les boutons d'action tant que
+    // l'effet dactylographique n'est pas terminé — jamais utilisé pour un
+    // historique déjà lu (studioRenderMessages, chargement d'une discussion
+    // existante), uniquement pour la toute dernière réponse qui vient
+    // d'arriver (voir studioSendMessage).
+    function studioBuildBubble(msg, options) {
+      const opts = options || {};
       const bubble = document.createElement('div');
       bubble.className = 'studio-msg ' + (msg.role === 'user' ? 'user' : 'assistant');
       const textEl = document.createElement('div');
-      textEl.textContent = msg.text;
       bubble.appendChild(textEl);
 
-      // "📌 Utiliser pour la campagne" : transmet le texte de l'assistant
-      // vers la Relance Manuelle Express (alimente immédiatement le moteur
-      // de Spintax local via relance-intention) OU vers la campagne
+      // "📌 Utiliser pour la campagne" : transmet le texte de CYRUS vers la
+      // Relance Manuelle Express (alimente immédiatement le moteur de
+      // Spintax local via relance-intention) OU vers la campagne
       // automatique WhatsApp (1er pas texte de la séquence) — voir
       // studioHandoffToManual/studioHandoffToAuto ci-dessous.
+      let actions = null;
       if (msg.role === 'assistant') {
-        const actions = document.createElement('div');
+        actions = document.createElement('div');
         actions.className = 'studio-msg-actions';
+        if (opts.animate) actions.hidden = true;
         const manualBtn = document.createElement('button');
         manualBtn.type = 'button';
         manualBtn.className = 'studio-handoff-btn';
@@ -5225,7 +5473,41 @@
         actions.appendChild(autoBtn);
         bubble.appendChild(actions);
       }
+
+      if (opts.animate) {
+        bubble._pendingText = msg.text;
+        bubble._pendingTextEl = textEl;
+        bubble._pendingActions = actions;
+      } else {
+        textEl.textContent = msg.text;
+      }
       return bubble;
+    }
+
+    // Effet de dactylographie fluide ("Typewriter") — avance de 2
+    // caractères par tick plutôt qu'1 seul pour rester agréable même sur
+    // une réponse de plusieurs centaines de caractères, sans ralentir
+    // l'affichage à une vitesse perceptible comme lente. Les boutons
+    // d'action ("📌"/"🚀") ne réapparaissent qu'une fois le texte entier
+    // affiché, pour ne jamais transmettre un texte encore incomplet.
+    function studioStartTypewriter(bubble) {
+      const fullText = bubble._pendingText;
+      const textEl = bubble._pendingTextEl;
+      const actions = bubble._pendingActions;
+      const container = document.getElementById('studio-messages');
+      let i = 0;
+      function step() {
+        i += 2;
+        textEl.textContent = fullText.slice(0, i);
+        container.scrollTop = container.scrollHeight;
+        if (i < fullText.length) {
+          setTimeout(step, 10);
+        } else {
+          textEl.textContent = fullText;
+          if (actions) actions.hidden = false;
+        }
+      }
+      step();
     }
 
     function studioRenderMessages(session) {
@@ -5245,7 +5527,7 @@
       const bubble = document.createElement('div');
       bubble.className = 'studio-msg assistant thinking';
       bubble.id = 'studio-thinking-bubble';
-      bubble.textContent = "🧠 L'assistant élabore la stratégie...";
+      bubble.textContent = '🧠 CYRUS analyse la stratégie...';
       container.appendChild(bubble);
       container.scrollTop = container.scrollHeight;
     }
@@ -5270,8 +5552,8 @@
 
       // Affichage optimiste : bulle utilisateur + indicateur de réflexion
       // affichés immédiatement, avant même la réponse serveur — voir la
-      // feuille de route ("indicateur de réflexion... temps de réponse
-      // naturel", le serveur ajoute lui-même un léger délai artificiel).
+      // feuille de route ("indicateur de réflexion... délai naturel de
+      // réflexion 1.5s à 3s", appliqué côté serveur, voir index.js).
       const container = document.getElementById('studio-messages');
       const emptyHint = container.querySelector('.empty');
       if (emptyHint) emptyHint.remove();
@@ -5290,7 +5572,13 @@
         if (!res.ok) {
           studioFeedback(data.error || "Échec de l'envoi du message.", true);
         } else {
-          studioRenderMessages(data.session);
+          // Seule la dernière réponse (celle qui vient d'arriver) est
+          // révélée en dactylographie — l'historique déjà rendu (bulle
+          // utilisateur ci-dessus) n'est jamais retracé.
+          const lastMessage = data.session.messages[data.session.messages.length - 1];
+          const assistantBubble = studioBuildBubble(lastMessage, { animate: true });
+          container.appendChild(assistantBubble);
+          studioStartTypewriter(assistantBubble);
           await studioLoadSessionsList();
         }
       } catch (err) {
@@ -5527,6 +5815,14 @@
         btn.disabled = false;
       }
     });
+
+    // PWA : installation optionnelle sous le nom "CYRUS SUPER ASSISTANT"
+    // (voir public/manifest.json et public/sw.js) — échec silencieux sur un
+    // navigateur qui ne supporte pas les service workers, l'app fonctionne
+    // normalement sans.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => { /* PWA optionnelle */ });
+    }
 
     tryAutoLogin().then((ok) => { if (ok) init(); });
   </script>

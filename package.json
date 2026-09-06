@@ -1,7 +1,7 @@
 {
   "name": "business-automation-engine",
   "version": "1.0.0",
-  "description": "Serveur d'orchestration de services",
+  "description": "CYRUS SUPER ASSISTANT — serveur d'orchestration de services",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

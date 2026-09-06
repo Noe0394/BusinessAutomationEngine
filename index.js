@@ -98,7 +98,7 @@ const ADMIN_PORTAL_URL = `${PUBLIC_BASE_URL}/admin-secret-portal`;
 function printAndWriteAdminAccessInstructions() {
   const banner = [
     '========================================================================',
-    '  ACCES ADMINISTRATEUR — Orchestrateur multi-plateformes',
+    '  ACCES ADMINISTRATEUR — CYRUS SUPER ASSISTANT',
     '========================================================================',
     `  URL du portail secret : ${ADMIN_PORTAL_URL}`,
     `  Mot de passe           : ${ADMIN_PASSWORD}`,
@@ -881,6 +881,20 @@ app.get('/ping', (req, res) => {
 
 app.get(['/', '/dashboard'], (req, res) => {
   res.sendFile(DASHBOARD_PATH);
+});
+
+// Manifest PWA + icône + service worker (voir public/manifest.json,
+// public/icon.svg, public/sw.js) : aucune authentification, le navigateur
+// doit pouvoir les récupérer librement pour proposer "Ajouter à l'écran
+// d'accueil" sous le nom CYRUS SUPER ASSISTANT.
+app.get('/manifest.json', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'manifest.json'));
+});
+app.get('/icon.svg', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'icon.svg'));
+});
+app.get('/sw.js', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'sw.js'));
 });
 
 // Pages légales publiques (Politique de confidentialité, CGU, suppression des
@@ -3193,10 +3207,12 @@ app.delete('/api/ai-studio/sessions/:id', requireAccess, async (req, res) => {
 
 // Compose la réponse de l'assistant (voir lib/ai/localCopywriterEngine.js —
 // 100% local, aucun appel externe) puis persiste le tour complet (message
-// utilisateur + réponse) en un seul appel. Un délai artificiel (voir sleep
-// ci-dessus) simule un temps de réflexion "naturel" — le moteur répond
+// utilisateur + réponse) en un seul appel. Un délai artificiel de 1.5 à 3
+// secondes (voir sleep ci-dessus) simule le temps de réflexion "naturel"
+// demandé par la feuille de route CYRUS SUPER ASSISTANT — le moteur répond
 // instantanément, un temps de réponse à 0ms romprait l'illusion
-// conversationnelle demandée par la feuille de route.
+// conversationnelle recherchée (voir aussi l'effet de dactylographie côté
+// client, public/dashboard.html#studioStartTypewriter).
 app.post('/api/ai-studio/sessions/:id/messages', requireAccess, async (req, res) => {
   const tenantId = resolveTenantId(req);
   const text = String((req.body || {}).text || '').trim();
@@ -3213,7 +3229,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, async (req, res)
   const { text: replyText } = copywriterEngine.composeReply(text);
   const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
 
-  await sleep(500 + Math.floor(Math.random() * 700));
+  await sleep(1500 + Math.floor(Math.random() * 1500));
 
   const userMessage = { role: 'user', text, createdAt: new Date().toISOString() };
   const assistantMessage = { role: 'assistant', text: replyText, createdAt: new Date().toISOString() };

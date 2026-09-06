@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="CYRUS SUPER ASSISTANT">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1244" />
+      <stop offset="55%" stop-color="#2d1b6e" />
+      <stop offset="100%" stop-color="#05050f" />
+    </linearGradient>
+    <linearGradient id="glyph" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#b9a6ff" />
+      <stop offset="100%" stop-color="#5adcff" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="512" height="512" fill="url(#bg)" />
+
+  <!-- Anneau holographique -->
+  <circle cx="256" cy="256" r="176" fill="none" stroke="#5adcff" stroke-opacity="0.35" stroke-width="6" />
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#b9a6ff" stroke-opacity="0.25" stroke-width="3" stroke-dasharray="10 14" />
+
+  <!-- Glyphe "C" (CYRUS) : arc ouvert évoquant à la fois une lettre et un
+       symbole "connexion/orbite" -->
+  <path d="M 320 176 A 100 100 0 1 0 320 336" fill="none" stroke="url(#glyph)" stroke-width="34" stroke-linecap="round" />
+
+  <!-- Nœud lumineux central (écho du hero holographique de l'écran de
+       connexion) -->
+  <circle cx="322" cy="256" r="16" fill="#ffffff" />
+  <circle cx="322" cy="256" r="30" fill="#5adcff" fill-opacity="0.35" />
+</svg>
