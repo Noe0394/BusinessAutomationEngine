@@ -123,8 +123,11 @@
     .relance-card-actions { display: flex; gap: 0.6rem; margin-top: 0.9rem; flex-wrap: wrap; }
     .relance-card-actions button { flex: 1; min-width: 160px; }
     .relance-copy-button { background: #eee; border: 1px solid #ccc; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; }
-    .relance-open-button { background: #25D366; color: #fff; border: none; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; }
-    .relance-open-button.telegram { background: #2AABEE; }
+    .relance-regenerate-button { background: #fff3cd; border: 1px solid #ffcc00; color: #7a5c00; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; }
+    .relance-skip-button { background: #fff; border: 2px solid #c0392b; color: #c0392b; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; }
+    .relance-launch-button { background: #25D366; color: #fff; border: none; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; font-size: 1.05rem; flex-basis: 100%; }
+    .relance-launch-button.telegram { background: #2AABEE; }
+    .relance-hint { font-size: 0.85rem; color: #777; margin-top: 0.5rem; }
 
     #import-result { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; }
     #import-result.ok { background: #d4f5dd; color: #1a7a3c; }
@@ -1132,6 +1135,16 @@
         <button type="button" class="mode-btn" data-channel="telegram">Telegram</button>
       </div>
 
+      <div class="field">
+        <label for="relance-intention">Mon Intention de Campagne (optionnel)</label>
+        <textarea id="relance-intention" placeholder="Ex: Promo -50% sur la formation pâtisserie, lien: https://..." style="min-height: 60px;"></textarea>
+        <p class="relance-hint">
+          Laissez vide pour garder le message de la campagne d'origine. Renseignée, cette intention alimente le
+          générateur de texte : accroche + avantages + lien (s'il est détecté dans le texte ci-dessus) + emojis,
+          reformulés différemment pour chaque contact — utilisez "🎲 Régénérer" pour changer la tournure.
+        </p>
+      </div>
+
       <button type="button" id="relance-reload-btn">🔄 Charger la file d'attente</button>
       <p id="relance-feedback" hidden></p>
 
@@ -1144,13 +1157,16 @@
         </div>
         <p class="relance-card-contact" id="relance-contact-label"></p>
         <div class="field">
-          <label for="relance-message-text">Message (personnalisé)</label>
-          <textarea id="relance-message-text" readonly></textarea>
+          <label for="relance-message-text">Message (personnalisé — modifiable avant l'envoi)</label>
+          <textarea id="relance-message-text"></textarea>
         </div>
         <div class="relance-card-actions">
           <button type="button" class="relance-copy-button" id="relance-copy-btn">📋 Copier le texte</button>
-          <button type="button" class="relance-open-button" id="relance-open-btn">💬 Ouvrir dans WhatsApp</button>
+          <button type="button" class="relance-regenerate-button" id="relance-regenerate-btn">🎲 Régénérer / Varier</button>
+          <button type="button" class="relance-skip-button" id="relance-skip-btn">⏭️ Ignorer / Suivant</button>
+          <button type="button" class="relance-launch-button" id="relance-launch-btn">🚀 Lancer</button>
         </div>
+        <p class="relance-hint">Raccourcis clavier : <strong>Espace</strong> = Lancer, <strong>Flèche droite</strong> = Ignorer/Suivant (inactifs pendant la saisie dans un champ texte).</p>
       </div>
     </section>
 
@@ -4445,10 +4461,11 @@
     // encore 'pending'/'failed' de la dernière campagne connue via
     // /api/messages/manual-queue ou /api/telegram/campaign/manual-queue,
     // affiche une carte à la fois, et avance automatiquement à la suivante
-    // dès que "Ouvrir dans WhatsApp/Telegram" est cliqué (le clic marque le
-    // contact 'sent_manual' côté serveur avant de charger la carte
-    // suivante — voir CampaignEngine#markManualSent).
+    // dès que "🚀 Lancer" est cliqué (le clic copie le texte, ouvre le deep
+    // link, marque le contact 'sent_manual' côté serveur — voir
+    // CampaignEngine#markManualSent — puis charge la carte suivante).
     const relanceState = { channel: 'whatsapp', items: [], cursor: 0 };
+    const RELANCE_TIMEOUT_MS = 8000;
 
     function relanceFeedback(message, isError) {
       const el = document.getElementById('relance-feedback');
@@ -4457,19 +4474,111 @@
       el.className = isError ? 'error' : 'ok';
     }
 
+    // Enveloppe apiFetch d'un délai maximal (AbortController) : une requête
+    // qui traîne (réseau instable, Render qui se réveille...) ne doit jamais
+    // laisser le bouton "Charger"/"Lancer" bloqué indéfiniment — voir les
+    // appelants ci-dessous, qui retombent toujours sur un état exploitable
+    // (file vide rechargeable, ou carte suivante quand même affichée) plutôt
+    // que de laisser l'utilisateur face à un spinner sans issue.
+    async function relanceFetchWithTimeout(url, options, timeoutMs) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs || RELANCE_TIMEOUT_MS);
+      try {
+        return await apiFetch(url, Object.assign({}, options, { signal: controller.signal }));
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // Générateur de texte naturel côté client (pas d'appel serveur) : pioche
+    // au hasard une accroche, une formulation de l'intention, un avantage et
+    // un appel à l'action parmi des variantes courtes et "humaines" —
+    // rejouée à chaque nouvelle carte ET à la demande ("🎲 Régénérer") pour
+    // qu'aucun contact ne reçoive mot pour mot le même message. Un lien
+    // éventuellement collé dans l'intention est détecté et extrait plutôt
+    // que répété dans le corps du message.
+    function relanceGenerateMessage(intentionRaw, name) {
+      const urlMatch = intentionRaw.match(/https?:\/\/\S+/i);
+      const link = urlMatch ? urlMatch[0] : '';
+      const core = intentionRaw.replace(link, '').trim().replace(/[\s,;:.-]+$/, '');
+
+      const HOOKS = name
+        ? [`🔥 Salut ${name} !`, `👋 Coucou ${name},`, `✨ Hey ${name} !`, `😊 Bonjour ${name},`, `🙌 Salut ${name}, j'espère que tu vas bien !`]
+        : [`🔥 Salut !`, `👋 Bonjour,`, `✨ Hey !`, `😊 Bonjour à vous,`];
+
+      const BODIES = core
+        ? [
+          `${core} 🎉`,
+          `J'ai une offre qui devrait te plaire : ${core} 😉`,
+          `Petite info avant qu'il ne soit trop tard : ${core} ⏳`,
+          `${core} — je voulais t'en parler directement 🙂`,
+          `Je te préviens en avant-première : ${core} 🚀`,
+        ]
+        : [''];
+
+      const BENEFITS = [
+        `💡 Simple, rapide, et sans engagement.`,
+        `⭐ Une occasion à ne pas laisser passer.`,
+        `🎁 Une offre pensée spécialement pour toi.`,
+        `⏳ Disponible seulement pour une durée limitée.`,
+        `💯 Que des avantages, aucune contrainte.`,
+      ];
+
+      const CTAS = [
+        `👉 Dis-moi si ça t'intéresse !`,
+        `📩 Réponds-moi pour en savoir plus.`,
+        `✅ Je reste dispo pour toute question !`,
+        `🙏 Hâte d'avoir ton retour !`,
+        `💬 On en discute ?`,
+      ];
+
+      const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+      const parts = [pick(HOOKS), pick(BODIES), pick(BENEFITS)];
+      if (link) parts.push(`🔗 ${link}`);
+      parts.push(pick(CTAS));
+
+      return parts.filter(Boolean).join('\n\n');
+    }
+
+    function relanceGetIntention() {
+      return document.getElementById('relance-intention').value.trim();
+    }
+
+    // Recalcule et affiche le message de la carte COURANTE : le message
+    // généré (si une intention est renseignée) ou, à défaut, le message de
+    // la campagne d'origine (comportement historique de la Phase 1).
+    function relanceRefreshMessage() {
+      const { items, cursor } = relanceState;
+      if (cursor >= items.length) return;
+      const item = items[cursor];
+      const intention = relanceGetIntention();
+      const message = intention ? relanceGenerateMessage(intention, item.name) : (item.message || '');
+      document.getElementById('relance-message-text').value = message;
+    }
+
     async function relanceLoadQueue() {
       const url = relanceState.channel === 'telegram'
         ? '/api/telegram/campaign/manual-queue'
         : '/api/messages/manual-queue';
+      const reloadBtn = document.getElementById('relance-reload-btn');
+      reloadBtn.disabled = true;
       try {
-        const res = await apiFetch(url);
+        const res = await relanceFetchWithTimeout(url, {}, RELANCE_TIMEOUT_MS);
         const data = await res.json();
         relanceState.items = Array.isArray(data.items) ? data.items : [];
         relanceState.cursor = 0;
         document.getElementById('relance-feedback').hidden = true;
         relanceRenderCard();
       } catch (err) {
-        if (err.message !== 'unauthorized') relanceFeedback('Erreur de chargement de la file d\'attente.', true);
+        // Fallback local : la file affichée reste celle déjà chargée (le
+        // bouton redevient immédiatement cliquable pour réessayer) plutôt
+        // que de bloquer l'UI sur un échec réseau ou un délai dépassé.
+        if (err.message !== 'unauthorized') {
+          const reason = err.name === 'AbortError' ? 'délai réseau dépassé' : 'erreur réseau';
+          relanceFeedback(`Échec du chargement de la file d'attente (${reason}) — réessayez.`, true);
+        }
+      } finally {
+        reloadBtn.disabled = false;
       }
     }
 
@@ -4500,24 +4609,79 @@
         ? (item.isPhone ? item.phone : ('@' + item.username))
         : item.phone;
       document.getElementById('relance-contact-label').textContent = item.name ? `${item.name} — ${identifier}` : identifier;
-      document.getElementById('relance-message-text').value = item.message || '';
 
-      const openBtn = document.getElementById('relance-open-btn');
-      openBtn.textContent = channel === 'telegram' ? '💬 Ouvrir dans Telegram' : '💬 Ouvrir dans WhatsApp';
-      openBtn.className = 'relance-open-button' + (channel === 'telegram' ? ' telegram' : '');
+      // Variation automatique : une nouvelle formulation est piochée à
+      // chaque fois qu'une NOUVELLE carte s'affiche (voir relanceRefreshMessage) —
+      // le bouton "🎲 Régénérer" permet d'en repiocher une autre sans changer
+      // de contact.
+      relanceRefreshMessage();
+
+      const launchBtn = document.getElementById('relance-launch-btn');
+      launchBtn.textContent = `🚀 Lancer ${item.name || ''}`.trim();
+      launchBtn.className = 'relance-launch-button' + (channel === 'telegram' ? ' telegram' : '');
     }
 
-    function relanceBuildDeepLink(item) {
-      const encodedText = encodeURIComponent(item.message || '');
+    function relanceBuildDeepLink(item, text) {
+      const encodedText = encodeURIComponent(text || '');
       if (relanceState.channel === 'telegram') {
         // tg://resolve?phone=... ouvre directement l'app native quand elle
         // est installée ; https://t.me/+<numéro> sert de repli navigateur
         // (voir la feuille de route : les deux formes sont générées, seul le
-        // second est un lien cliquable classique côté web).
+        // second est un lien cliquable classique côté web). Un deep link
+        // Telegram ne pré-remplit jamais le texte (contrairement à wa.me) —
+        // c'est pour ça que "🚀 Lancer" copie AUSSI le texte dans le
+        // presse-papiers avant d'ouvrir le lien.
         if (item.isPhone) return `https://t.me/+${item.phone}`;
         return `https://t.me/${item.username}`;
       }
       return `https://wa.me/${item.phone.replace(/^\+/, '')}?text=${encodedText}`;
+    }
+
+    // Skip local UNIQUEMENT (pas d'appel serveur, pas de statut
+    // 'sent_manual') : un numéro invalide ou une erreur ne doit jamais
+    // bloquer le défilement de la file — voir la Phase 3 de la feuille de
+    // route ("sans bloquer le défilement"). Le contact réapparaîtra à un
+    // prochain rechargement tant qu'il reste 'pending'/'failed' côté serveur.
+    function relanceSkipCurrent() {
+      if (relanceState.cursor >= relanceState.items.length) return;
+      relanceState.cursor += 1;
+      relanceRenderCard();
+    }
+
+    // Action "Turbo 1-clic" : copie + ouverture du deep link + traçabilité
+    // serveur + carte suivante, en un seul geste. La marque 'sent_manual'
+    // est volontairement non bloquante (délai + échec réseau n'empêchent
+    // jamais d'avancer) : le lien a déjà été ouvert et le texte déjà copié,
+    // l'utilisateur a déjà agi — seule la TRACE peut échouer.
+    async function relanceLaunchCurrent() {
+      const { items, cursor, channel } = relanceState;
+      if (cursor >= items.length) return;
+      const item = items[cursor];
+      const text = document.getElementById('relance-message-text').value;
+
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (err) {
+        // Non fatal : le deep link WhatsApp pré-remplit quand même le texte
+        // via son paramètre ?text= ; seul le repli manuel "coller dans
+        // Telegram" en pâtirait, sans bloquer la suite de l'action.
+      }
+
+      window.open(relanceBuildDeepLink(item, text), '_blank', 'noopener');
+
+      const markUrl = channel === 'telegram'
+        ? `/api/telegram/campaign/manual-queue/${item.index}/sent`
+        : `/api/messages/manual-queue/${item.index}/sent`;
+      try {
+        await relanceFetchWithTimeout(markUrl, { method: 'POST' }, RELANCE_TIMEOUT_MS);
+      } catch (err) {
+        if (err.message !== 'unauthorized') {
+          relanceFeedback('Le lien a été ouvert et le texte copié, mais le statut n\'a pas pu être enregistré (réseau).', true);
+        }
+      }
+
+      relanceState.cursor += 1;
+      relanceRenderCard();
     }
 
     document.getElementById('relance-channel-toggle').addEventListener('click', (e) => {
@@ -4531,6 +4695,16 @@
 
     document.getElementById('relance-reload-btn').addEventListener('click', relanceLoadQueue);
 
+    document.getElementById('relance-intention').addEventListener('change', relanceRefreshMessage);
+
+    document.getElementById('relance-regenerate-btn').addEventListener('click', () => {
+      if (!relanceGetIntention()) {
+        relanceFeedback('Renseignez d\'abord "Mon Intention de Campagne" pour activer le générateur.', true);
+        return;
+      }
+      relanceRefreshMessage();
+    });
+
     document.getElementById('relance-copy-btn').addEventListener('click', async () => {
       const text = document.getElementById('relance-message-text').value;
       try {
@@ -4541,24 +4715,27 @@
       }
     });
 
-    document.getElementById('relance-open-btn').addEventListener('click', async () => {
-      const { items, cursor, channel } = relanceState;
-      if (cursor >= items.length) return;
-      const item = items[cursor];
+    document.getElementById('relance-skip-btn').addEventListener('click', relanceSkipCurrent);
+    document.getElementById('relance-launch-btn').addEventListener('click', relanceLaunchCurrent);
 
-      window.open(relanceBuildDeepLink(item), '_blank', 'noopener');
+    // Raccourcis clavier Desktop (Espace = Lancer, Flèche droite = Ignorer) :
+    // actifs uniquement quand l'onglet "Relance Manuelle Express" est visible
+    // et que le focus n'est pas dans un champ texte (intention ou message),
+    // pour ne jamais intercepter une frappe normale de saisie.
+    document.addEventListener('keydown', (e) => {
+      const panel = document.getElementById('panel-relance');
+      if (!panel.classList.contains('active')) return;
+      const activeTag = document.activeElement ? document.activeElement.tagName : '';
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+      if (document.getElementById('relance-card').hidden) return;
 
-      const markUrl = channel === 'telegram'
-        ? `/api/telegram/campaign/manual-queue/${item.index}/sent`
-        : `/api/messages/manual-queue/${item.index}/sent`;
-      try {
-        await apiFetch(markUrl, { method: 'POST' });
-      } catch (err) {
-        if (err.message !== 'unauthorized') relanceFeedback('Le lien a été ouvert, mais le statut n\'a pas pu être enregistré.', true);
+      if (e.code === 'Space') {
+        e.preventDefault();
+        relanceLaunchCurrent();
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        relanceSkipCurrent();
       }
-
-      relanceState.cursor += 1;
-      relanceRenderCard();
     });
 
     tryAutoLogin().then((ok) => { if (ok) init(); });
