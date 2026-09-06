@@ -1,3 +1,56 @@
+# MÉMOIRE CONTINUE (ECC) — À LIRE EN PREMIER
+
+La persistance de contexte entre sessions est déjà active sur cette machine,
+via le plugin ECC (`ecc@ecc`, activé dans `~/.claude/settings.json`) et le
+système de mémoire auto de Claude Code — aucune configuration de hooks
+supplémentaire n'est nécessaire ni ne doit être ajoutée (un doublon créerait
+des exécutions en double des mêmes scripts) :
+- **Début de session** : le hook `SessionStart` du plugin ECC recharge
+  automatiquement un résumé borné de la session précédente (tâches,
+  décisions, fichiers modifiés) — visible en tout début de conversation sous
+  forme d'un bloc "HISTORICAL REFERENCE ONLY".
+- **Fin de session / compaction** : les hooks `SessionEnd` et `PreCompact`
+  d'ECC sauvegardent automatiquement un résumé daté dans
+  `~/.claude/session-data/`.
+- **Leçons durables** (préférences utilisateur, corrections apprises) :
+  stockées par Claude Code dans
+  `~/.claude/projects/-workspaces-BusinessAutomationEngine/memory/` (un
+  fichier par leçon, lu/écrit automatiquement à chaque session).
+- **Instincts ECC** (patterns de code appris via `/learn` ou `/evolve`) :
+  stockés séparément par projet dans
+  `~/.local/share/ecc-homunculus/projects/<id>/instincts/{personal,inherited}/`
+  — consultable via `/instinct-status`, exportable via `/instinct-export`.
+- Pour forcer l'extraction et la sauvegarde immédiate d'une leçon depuis la
+  session en cours (sans attendre la fin de session), invoquer `/learn`.
+
+## État actuel du projet (résumé)
+
+**CYRUS SUPER ASSISTANT** — plateforme Node.js/Express (`index.js`) déployée
+en continu (GitOps GitHub → Render) sur Render, service web Docker en plan
+**Free** (région Oregon). Dashboard servi en HTML/JS statique unique
+(`public/dashboard.html`), avec export PWA (`manifest.json`, `sw.js`,
+`icon.svg`) et un build d'obfuscation (`npm run build` →
+`public/dist/dashboard.html`).
+
+- **WhatsApp** (`adapters/whatsapp.js`, Baileys) : appairage QR + code
+  d'association, isolation stricte par tenant (une session par clé de
+  licence). Durci le 2026-09-06 : résolution dynamique de la version du
+  protocole WA Web (`fetchLatestWaWebVersion` → repli `fetchLatestBaileysVersion`
+  → repli version compilée) et sérialisation `connect()`/`logout()` pour
+  éviter toute corruption du dossier de session en cas de reconnexion
+  concurrente. Un incident de blocage d'IP sortante Render (anti-abus
+  WhatsApp sur les plages cloud partagées) a été résolu par redéploiement ;
+  solution durable (VPS dédié / proxy) non encore mise en œuvre par choix de
+  coût.
+- **Telegram** (`adapters/telegram.js`, MTProto) : fonctionne indépendamment
+  de WhatsApp, non affecté par l'incident ci-dessus.
+- **Studio IA local** : moteur de copywriting local (`lib/ai/localCopywriterEngine.js`),
+  base de connaissances marketing, générateur de livres PDF
+  (`lib/pdf/ebookGenerator.js`), historique de discussions.
+- Persistance des sessions/licences : disque local éphémère sur Render, avec
+  sauvegarde de secours sur un dépôt GitHub dédié (`githubStore.js`) si
+  `GITHUB_TOKEN`/`GITHUB_DATA_REPO` sont configurés.
+
 # ARCHITECTURE SYSTEME & DIRECTIVES DE DEVELOPPEMENT PROFESSIONNEL
 
 ## 1. VISION ET CADRE D'UTILISATION
