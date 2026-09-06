@@ -1140,8 +1140,10 @@
         <textarea id="relance-intention" placeholder="Ex: Promo -50% sur la formation pâtisserie, lien: https://..." style="min-height: 60px;"></textarea>
         <p class="relance-hint">
           Laissez vide pour garder le message de la campagne d'origine. Renseignée, cette intention alimente le
-          générateur de texte : accroche + avantages + lien (s'il est détecté dans le texte ci-dessus) + emojis,
-          reformulés différemment pour chaque contact — utilisez "🎲 Régénérer" pour changer la tournure.
+          moteur copywriter : accroche courte + 2-3 puces d'avantages + appel à l'action avec lien (s'il est
+          détecté dans le texte ci-dessus) + emojis — des dizaines de milliers de combinaisons possibles, jamais
+          le même texte pour deux prospects. Utilisez "🔄 Varier / Tourner le Texte" pour tirer une autre
+          déclinaison.
         </p>
       </div>
 
@@ -1162,7 +1164,7 @@
         </div>
         <div class="relance-card-actions">
           <button type="button" class="relance-copy-button" id="relance-copy-btn">📋 Copier le texte</button>
-          <button type="button" class="relance-regenerate-button" id="relance-regenerate-btn">🎲 Régénérer / Varier</button>
+          <button type="button" class="relance-regenerate-button" id="relance-regenerate-btn">🔄 Varier / Tourner le Texte</button>
           <button type="button" class="relance-skip-button" id="relance-skip-btn">⏭️ Ignorer / Suivant</button>
           <button type="button" class="relance-launch-button" id="relance-launch-btn">🚀 Lancer</button>
         </div>
@@ -4490,54 +4492,100 @@
       }
     }
 
-    // Générateur de texte naturel côté client (pas d'appel serveur) : pioche
-    // au hasard une accroche, une formulation de l'intention, un avantage et
-    // un appel à l'action parmi des variantes courtes et "humaines" —
-    // rejouée à chaque nouvelle carte ET à la demande ("🎲 Régénérer") pour
-    // qu'aucun contact ne reçoive mot pour mot le même message. Un lien
+    // Moteur "Copywriter Mille Variantes" côté client (aucun appel serveur,
+    // aucune IA générative — un moteur de permutations façon Spintax) : pioche
+    // au hasard une accroche, un cadrage de l'intention, 2 ou 3 puces
+    // d'avantages (sans répétition) et un appel à l'action, chacun dans un
+    // pool de variantes courtes — rejoué à chaque nouvelle carte ET à la
+    // demande ("🔄 Varier") pour qu'aucun prospect ne reçoive mot pour mot le
+    // même texte. Avec les tailles de pools ci-dessous (accroches × cadrages
+    // × puces choisies-et-ordonnées × appels à l'action), le nombre de
+    // combinaisons distinctes se compte en dizaines de milliers — largement
+    // au-delà du "aucun prospect ne reçoit le même texte" demandé. Un lien
     // éventuellement collé dans l'intention est détecté et extrait plutôt
     // que répété dans le corps du message.
     function relanceGenerateMessage(intentionRaw, name) {
       const urlMatch = intentionRaw.match(/https?:\/\/\S+/i);
       const link = urlMatch ? urlMatch[0] : '';
-      const core = intentionRaw.replace(link, '').trim().replace(/[\s,;:.-]+$/, '');
+      // Retire aussi un éventuel mot d'introduction du lien resté en fin de
+      // phrase ("..., lien : https://...") — le placeholder du champ suggère
+      // exactement cette formulation, sans ce nettoyage la puce générée
+      // garderait "lien" qui traîne après extraction de l'URL.
+      const core = intentionRaw.replace(link, '').trim()
+        .replace(/[,;:\s-]*\b(lien|link)\s*:?\s*$/i, '')
+        .trim()
+        .replace(/[\s,;:.-]+$/, '');
 
       const HOOKS = name
-        ? [`🔥 Salut ${name} !`, `👋 Coucou ${name},`, `✨ Hey ${name} !`, `😊 Bonjour ${name},`, `🙌 Salut ${name}, j'espère que tu vas bien !`]
-        : [`🔥 Salut !`, `👋 Bonjour,`, `✨ Hey !`, `😊 Bonjour à vous,`];
-
-      const BODIES = core
         ? [
-          `${core} 🎉`,
-          `J'ai une offre qui devrait te plaire : ${core} 😉`,
-          `Petite info avant qu'il ne soit trop tard : ${core} ⏳`,
-          `${core} — je voulais t'en parler directement 🙂`,
-          `Je te préviens en avant-première : ${core} 🚀`,
+          `🔥 Salut ${name} !`, `👋 Coucou ${name},`, `✨ Hey ${name} !`, `😊 Bonjour ${name},`,
+          `🙌 Salut ${name}, j'espère que tu vas bien !`, `💌 Hello ${name} !`, `🌟 ${name}, j'ai une info pour toi !`,
+          `👋 Petit coucou, ${name} !`, `😄 Salut ${name}, ça faisait longtemps !`, `🎯 ${name}, j'ai pensé à toi !`,
         ]
-        : [''];
+        : [
+          `🔥 Salut !`, `👋 Bonjour,`, `✨ Hey !`, `😊 Bonjour à vous,`, `💌 Hello !`,
+          `🌟 J'ai une info pour vous !`, `🎯 Petite info du jour :`,
+        ];
 
+      // Cadrages alternatifs de l'intention (même contenu, tournure
+      // différente à chaque tirage) — sert de PREMIÈRE puce quand une
+      // intention est renseignée.
+      const CORE_FRAMES = core
+        ? [
+          `🎯 ${core}`, `🔥 ${core}`, `📢 ${core}`, `💥 ${core}`, `👀 ${core}`,
+          `🚀 ${core}`, `⚡ ${core}`, `✨ À ne pas manquer : ${core}`,
+        ]
+        : [];
+
+      // Puces d'avantages génériques (2ᵉ/3ᵉ puce) — choisies SANS répétition
+      // à chaque génération, dans un ordre tiré au hasard.
       const BENEFITS = [
-        `💡 Simple, rapide, et sans engagement.`,
-        `⭐ Une occasion à ne pas laisser passer.`,
-        `🎁 Une offre pensée spécialement pour toi.`,
-        `⏳ Disponible seulement pour une durée limitée.`,
-        `💯 Que des avantages, aucune contrainte.`,
+        `⏳ Offre valable pour une durée limitée`,
+        `🎁 Sans engagement`,
+        `💯 Satisfait ou remboursé`,
+        `🙌 Déjà des dizaines de clients conquis`,
+        `🔒 Paiement 100% sécurisé`,
+        `📦 Accès ou livraison immédiat`,
+        `🏆 Qualité garantie`,
+        `💸 Un prix imbattable`,
+        `🕒 Places limitées`,
+        `🎯 Des résultats rapides`,
+        `👍 Simple et rapide à obtenir`,
+        `🌟 Une occasion à ne pas laisser passer`,
       ];
 
       const CTAS = [
-        `👉 Dis-moi si ça t'intéresse !`,
-        `📩 Réponds-moi pour en savoir plus.`,
-        `✅ Je reste dispo pour toute question !`,
-        `🙏 Hâte d'avoir ton retour !`,
-        `💬 On en discute ?`,
+        `👉 Dis-moi si ça t'intéresse !`, `📩 Réponds-moi pour en savoir plus.`,
+        `✅ Je reste dispo pour toute question !`, `🙏 Hâte d'avoir ton retour !`,
+        `💬 On en discute ?`, `🤝 Ça te dit ?`, `⚡ Fonce avant qu'il ne soit trop tard !`,
+        `🎯 Réserve ta place dès maintenant !`, `📲 Écris-moi pour valider !`, `🚀 Ne rate pas cette occasion !`,
       ];
 
       const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-      const parts = [pick(HOOKS), pick(BODIES), pick(BENEFITS)];
-      if (link) parts.push(`🔗 ${link}`);
-      parts.push(pick(CTAS));
+      // Tire N éléments distincts d'un pool, dans un ordre aléatoire (Fisher-
+      // Yates partiel) — c'est l'ORDRE des puces, pas seulement leur choix,
+      // qui varie d'un tirage à l'autre.
+      const pickN = (arr, n) => {
+        const pool = arr.slice();
+        const picked = [];
+        for (let i = 0; i < n && pool.length; i += 1) {
+          picked.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+        }
+        return picked;
+      };
 
-      return parts.filter(Boolean).join('\n\n');
+      // 2 ou 3 puces au total, aussi courtes et aérées que l'accroche —
+      // jamais de pavé de texte.
+      const bulletCount = 2 + Math.round(Math.random());
+      const bullets = core
+        ? [pick(CORE_FRAMES), ...pickN(BENEFITS, bulletCount - 1)]
+        : pickN(BENEFITS, bulletCount);
+
+      const lines = [pick(HOOKS), '', ...bullets, ''];
+      if (link) lines.push(`🔗 ${link}`);
+      lines.push(pick(CTAS));
+
+      return lines.join('\n');
     }
 
     function relanceGetIntention() {
