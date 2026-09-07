@@ -3433,22 +3433,27 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, async (req, res)
   const { text: localReplyText, category } = copywriterEngine.composeReply(text, existing.messages);
   const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
 
-  // LLM Multi-Provider Fallback (lib/ai/llmFallbackEngine.js) : uniquement
-  // pour le cas 'UNKNOWN' du moteur local (aucun sujet CYRUS/marketing
-  // précis identifié — la réponse locale se limite alors à "précisez votre
-  // besoin"). Les catégories SUPPORT/QUESTION/OBJECTION/CLOSING restent
-  // TOUJOURS servies par le moteur local déterministe, jamais par un modèle
-  // externe susceptible d'halluciner une information sur la plateforme
-  // elle-même. Si la cascade échoue entièrement (panne réseau totale), on
-  // retombe silencieusement sur la réponse locale déjà calculée.
+  // LLM Multi-Provider Fallback (lib/ai/llmFallbackEngine.js) : réponse
+  // PRINCIPALE pour CHAQUE message, plus seulement pour le cas 'UNKNOWN' —
+  // demande explicite de la feuille de route : l'assistant ne doit plus se
+  // limiter aux sujets CYRUS/marketing connus du moteur local, il doit
+  // pouvoir répondre à n'importe quelle question, dans n'importe quel
+  // domaine, comme un assistant IA généraliste (voir SYSTEM_PROMPT). Quand
+  // le moteur local a identifié un sujet CYRUS précis (category !==
+  // 'UNKNOWN' — SUPPORT en particulier), sa réponse déjà composée est
+  // transmise en CONTEXTE au LLM pour qu'il reste factuellement exact sur
+  // le fonctionnement de la plateforme elle-même plutôt que d'halluciner,
+  // sans pour autant l'empêcher de répondre normalement à toute autre
+  // question. Si la cascade échoue entièrement (panne réseau totale), on
+  // retombe silencieusement sur la réponse locale déjà calculée — jamais
+  // d'échec visible pour l'utilisateur.
+  const guideContext = category !== 'UNKNOWN' ? localReplyText : null;
   let replyText = localReplyText;
-  if (category === 'UNKNOWN') {
-    try {
-      const { text: llmText } = await llmFallbackEngine.generateAIResponse(text, existing.messages);
-      replyText = llmText;
-    } catch (err) {
-      console.warn('LLM Fallback — cascade entièrement indisponible, réponse locale conservée :', err.message);
-    }
+  try {
+    const { text: llmText } = await llmFallbackEngine.generateAIResponse(text, existing.messages, guideContext);
+    replyText = llmText;
+  } catch (err) {
+    console.warn('LLM Fallback — cascade entièrement indisponible, réponse locale conservée :', err.message);
   }
 
   await sleep(1500 + Math.floor(Math.random() * 1500));
