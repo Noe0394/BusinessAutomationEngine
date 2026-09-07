@@ -1477,6 +1477,9 @@
           <textarea id="media-concept" placeholder='Ex : "Affiche promo -30% sur nos pâtisseries, livraison gratuite, contact WhatsApp 07 XX XX XX XX"'></textarea>
         </div>
 
+        <button type="button" class="relance-regenerate-button" id="media-creative-director-btn">🧠 Diriger avec l'IA (secteur, accroche, prompt HD, script vidéo)</button>
+        <p id="media-creative-director-feedback" hidden></p>
+
         <div class="field">
           <label for="media-sector">Secteur d'activité (optionnel — adapte le style photo du fond généré)</label>
           <select id="media-sector">
@@ -6604,12 +6607,86 @@
     let mediaCurrentCreation = null;
     let mediaVariantSeq = 0;
 
+    // Creative Director IA (voir POST /api/media/creative-direction) :
+    // directive structurée {detectedSector, marketingHook, imagePromptEnglish,
+    // videoScript, suggestedFormats} pour la description actuellement dans
+    // #media-concept. `forConcept` mémorise le texte pour lequel elle a été
+    // générée — mediaBuildEnrichedPrompt() ignore la directive si la
+    // description a changé depuis (jamais de prompt image lié à une autre
+    // demande que celle affichée à l'écran).
+    let mediaCreativeDirection = null;
+
     function mediaFeedback(message, isError) {
       const el = document.getElementById('media-feedback');
       el.textContent = message;
       el.hidden = false;
       el.className = isError ? 'error' : 'ok';
     }
+
+    function mediaCreativeDirectorFeedback(message, isError) {
+      const el = document.getElementById('media-creative-director-feedback');
+      el.textContent = message;
+      el.hidden = false;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    // Interroge la cascade LLM serveur (Groq -> Gemini -> Hugging Face ->
+    // Pollinations, voir lib/ai/llmFallbackEngine.js) pour pré-remplir
+    // secteur/titre/script/formats à partir de la seule description libre —
+    // action déclenchée explicitement par un clic, jamais automatique (appel
+    // réseau + coût de latence). Purement additif : en cas d'échec (503, les
+    // 4 niveaux de la cascade ont échoué), les champs manuels existants
+    // restent utilisables exactement comme avant cette fonctionnalité.
+    async function mediaFetchCreativeDirection() {
+      const concept = document.getElementById('media-concept').value.trim();
+      if (!concept) { mediaCreativeDirectorFeedback('Décrivez le visuel avant de demander une direction créative IA.', true); return; }
+
+      const btn = document.getElementById('media-creative-director-btn');
+      btn.disabled = true;
+      mediaCreativeDirectorFeedback('🧠 Analyse de la demande par l\'IA en cours...', false);
+
+      try {
+        const res = await apiFetch('/api/media/creative-direction', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ concept }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          mediaCreativeDirectorFeedback(data.error || 'Direction créative IA indisponible pour le moment — renseignez les champs manuellement ci-dessous.', true);
+          return;
+        }
+        const { directive, provider } = data;
+        mediaCreativeDirection = { ...directive, forConcept: concept };
+
+        if (directive.detectedSector) {
+          document.getElementById('media-sector').value = directive.detectedSector;
+        }
+        if (directive.marketingHook) {
+          document.getElementById('media-title').value = directive.marketingHook;
+        }
+        if (directive.videoScript) {
+          document.getElementById('media-script').value = directive.videoScript;
+        }
+        // Même règle de non-écrasement que la pré-sélection automatique
+        // existante (voir l'écouteur 'change' de #media-concept ci-dessous) :
+        // un format déjà choisi par l'utilisateur n'est jamais remplacé.
+        const suggestedRatio = (directive.suggestedFormats || [])[0];
+        if (suggestedRatio && !mediaState.ratio) {
+          document.querySelector(`#media-ratio-toggle .mode-btn[data-ratio="${suggestedRatio}"]`)?.click();
+        }
+
+        mediaCreativeDirectorFeedback(`✅ Direction créative générée (${provider}) — champs pré-remplis, modifiez-les librement avant de générer.`, false);
+      } catch (err) {
+        if (err.message !== 'unauthorized') {
+          mediaCreativeDirectorFeedback('Direction créative IA indisponible pour le moment — renseignez les champs manuellement ci-dessous.', true);
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('media-creative-director-btn').addEventListener('click', mediaFetchCreativeDirection);
 
     document.getElementById('media-ratio-toggle').addEventListener('click', (e) => {
       const btn = e.target.closest('.mode-btn[data-ratio]');
@@ -6720,12 +6797,21 @@
     ];
 
     function mediaBuildEnrichedPrompt(conceptRaw, deliverable, sector, extraNote) {
-      // Étape 1 : traduction best-effort du concept saisi (voir
-      // mediaTranslateConceptToEnglish/MEDIA_FR_EN_GLOSSARY) — ex: "une image
-      // de poulet grillé" devient "une image de grilled chicken", suffisant
-      // pour orienter le modèle vers le bon sujet même sans traduction
-      // grammaticale complète.
-      const base = mediaTranslateConceptToEnglish(conceptRaw.trim()) || 'professional studio photography of a modern product, photorealistic';
+      // Étape 1 : si une direction créative IA a été générée pour CETTE
+      // description exacte (voir mediaFetchCreativeDirection), son
+      // imagePromptEnglish — déjà un prompt HD complet écrit par le LLM —
+      // remplace la traduction locale best-effort pour un résultat "100%
+      // fidèle à l'intention marketing" (feuille de route). Le glossaire
+      // local (mediaTranslateConceptToEnglish/MEDIA_FR_EN_GLOSSARY) reste le
+      // filet de sécurité par défaut, sans dépendance réseau, quand aucune
+      // direction créative n'a été demandée ou qu'elle ne correspond plus au
+      // texte actuel.
+      const hasFreshDirection = mediaCreativeDirection
+        && mediaCreativeDirection.forConcept === conceptRaw.trim()
+        && mediaCreativeDirection.imagePromptEnglish;
+      const base = hasFreshDirection
+        ? mediaCreativeDirection.imagePromptEnglish
+        : (mediaTranslateConceptToEnglish(conceptRaw.trim()) || 'professional studio photography of a modern product, photorealistic');
       const stylesByDeliverable = {
         IMAGE_PHOTO: 'professional studio photography, photorealistic, natural lighting, high detail',
         FLYER_AFFICHE: 'photorealistic marketing background, cinematic lighting, shallow depth of field, high detail, professional advertising photography, clean negative space for text overlay',

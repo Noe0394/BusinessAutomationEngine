@@ -3344,6 +3344,67 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, async (req, res)
   res.json({ session: updated });
 });
 
+// ---------- Creative Director IA (Studio Média) ----------
+// Directive créative structurée pour PRÉ-REMPLIR les champs existants du
+// Studio Média (public/dashboard.html#studio-media-view) — secteur,
+// accroche/titre, script vidéo, formats suggérés — et enrichir le prompt
+// image envoyé à mediaBuildEnrichedPrompt côté client. N'appelle QUE la
+// cascade LLM (lib/ai/llmFallbackEngine.js) ; en cas d'échec total, renvoie
+// une erreur 503 explicite et le client continue avec les champs manuels
+// existants (aucune régression du pipeline 100% local déjà en place).
+const MEDIA_CREATIVE_SECTORS = ['restauration', 'immobilier', 'ecommerce', 'hightech', 'formation'];
+const MEDIA_CREATIVE_FORMATS = ['9:16', '1:1', '16:9', '4:5'];
+
+function parseCreativeDirective(rawText) {
+  const match = String(rawText || '').match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch (err) {
+    return null;
+  }
+  return {
+    detectedSector: MEDIA_CREATIVE_SECTORS.includes(parsed.detectedSector) ? parsed.detectedSector : '',
+    marketingHook: typeof parsed.marketingHook === 'string' ? parsed.marketingHook.trim().slice(0, 120) : '',
+    imagePromptEnglish: typeof parsed.imagePromptEnglish === 'string' ? parsed.imagePromptEnglish.trim().slice(0, 800) : '',
+    videoScript: typeof parsed.videoScript === 'string' ? parsed.videoScript.trim().slice(0, 600) : '',
+    suggestedFormats: Array.isArray(parsed.suggestedFormats)
+      ? parsed.suggestedFormats.filter((f) => MEDIA_CREATIVE_FORMATS.includes(f))
+      : [],
+  };
+}
+
+app.post('/api/media/creative-direction', requireAccess, async (req, res) => {
+  const concept = String((req.body || {}).concept || '').trim();
+  if (!concept) {
+    return res.status(400).json({ error: 'Décrivez le visuel avant de demander une direction créative IA.' });
+  }
+
+  // Instruction stricte "JSON seul" : les 4 niveaux de la cascade
+  // (lib/ai/llmFallbackEngine.js) sont des modèles de complétion généraux,
+  // pas une API structurée — parseCreativeDirective() ci-dessus reste
+  // tolérant (extrait le premier bloc {...}, ignore les champs invalides)
+  // plutôt que d'exiger un JSON parfait du premier coup.
+  const instructionPrompt = [
+    'Tu es un directeur artistique marketing expert. Réponds UNIQUEMENT avec un objet JSON valide (aucun texte avant/après, aucun markdown), exactement dans ce format :',
+    `{"detectedSector":"une valeur parmi ${MEDIA_CREATIVE_SECTORS.join('|')}","marketingHook":"accroche courte et percutante en français pour une affiche","imagePromptEnglish":"prompt visuel photoréaliste ultra-détaillé en anglais avec éclairage et détails HD, pour un générateur d'image IA","videoScript":"script court en français pour une voix off vidéo (2 à 3 phrases)","suggestedFormats":["deux valeurs parmi ${MEDIA_CREATIVE_FORMATS.join(', ')}"]}`,
+    `Demande du client : "${concept}"`,
+  ].join('\n');
+
+  try {
+    const { text: llmText, provider } = await llmFallbackEngine.generateAIResponse(instructionPrompt, []);
+    const directive = parseCreativeDirective(llmText);
+    if (!directive) {
+      throw new Error('Aucun JSON de directive créative exploitable dans la réponse du LLM.');
+    }
+    res.json({ directive, provider });
+  } catch (err) {
+    console.warn('Creative Director IA — cascade LLM indisponible :', err.message);
+    res.status(503).json({ error: 'Direction créative IA indisponible pour le moment — renseignez les champs manuellement.' });
+  }
+});
+
 // ---------- Générateur de livres/ebooks PDF (moteur local, voir lib/pdf/ebookGenerator.js) ----------
 // upload.any() plutôt que upload.fields([...]) : le nombre de chapitres (et
 // donc de champs fichier "chapterImage_<index>") est dynamique, décidé côté
