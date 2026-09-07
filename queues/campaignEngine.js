@@ -84,6 +84,21 @@ function randomDelay(minMs, maxMs) {
   return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
 }
 
+// Cadencement naturel par défaut (feuille de route "Régulation et délais
+// naturels d'envoi") : intervalle aléatoire entre deux destinataires, et
+// pause de courtoisie régulière au-delà d'un certain nombre de messages —
+// non contournable depuis le frontend, seulement ajustable dans une
+// fourchette raisonnable via options.minDelayMs/maxDelayMs.
+const MIN_DELAY_MS = 45_000;
+const MAX_DELAY_MS = 120_000;
+const COURTESY_BATCH_SIZE = 10;
+const COURTESY_PAUSE_MS = 15 * 60_000;
+
+function clampDelayMs(ms) {
+  if (!Number.isFinite(ms)) return null;
+  return Math.min(Math.max(ms, MIN_DELAY_MS), MAX_DELAY_MS);
+}
+
 // Durée de la pause appliquée à la file d'attente dès qu'un contact répond
 // pendant l'envoi d'une campagne (voir CampaignEngine#_pauseForIncomingReply) :
 // laisse le temps à l'opérateur de lire/traiter la réponse avant que la
@@ -636,9 +651,9 @@ class CampaignEngine {
   }
 
   async _runLoop(campaign, startIndex) {
-    const { delaySeconds, batchSize, batchPauseSeconds, sequenceDelayMinMs, sequenceDelayMaxMs } = campaign.options;
+    const { delaySeconds, minDelayMs, maxDelayMs, batchSize, batchPauseSeconds, sequenceDelayMinMs, sequenceDelayMaxMs } = campaign.options;
     const recipients = campaign.recipients;
-    const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipients.length;
+    const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : COURTESY_BATCH_SIZE;
     const seqMinMs = Number.isFinite(sequenceDelayMinMs) ? sequenceDelayMinMs : 2000;
     const seqMaxMs = Number.isFinite(sequenceDelayMaxMs) ? Math.max(seqMinMs, sequenceDelayMaxMs) : Math.max(seqMinMs, 5000);
     const sequence = this.resolvedSequences.get(campaign.id) || [];
@@ -745,11 +760,13 @@ class CampaignEngine {
       i += 1;
 
       if (i < recipients.length && !shouldAbort()) {
-        const baseDelayMs = Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds * 1000 : 15_000;
+        const baseDelayMs = Number.isFinite(delaySeconds) && delaySeconds > 0
+          ? delaySeconds * 1000
+          : randomDelay(minDelayMs || MIN_DELAY_MS, maxDelayMs || MAX_DELAY_MS);
         const endOfBatch = i % batch === 0;
         const batchPauseMs = Number.isFinite(batchPauseSeconds) && batchPauseSeconds > 0
           ? batchPauseSeconds * 1000
-          : baseDelayMs * 3;
+          : COURTESY_PAUSE_MS;
         const delayMs = endOfBatch ? batchPauseMs : baseDelayMs;
         await interruptibleSleep(delayMs, shouldAbort);
       }
@@ -831,6 +848,8 @@ class CampaignEngine {
       pendingContactIds: [],
       options: {
         delaySeconds: options.delaySeconds,
+        minDelayMs: clampDelayMs(options.minDelayMs) || MIN_DELAY_MS,
+        maxDelayMs: Math.max(clampDelayMs(options.maxDelayMs) || MAX_DELAY_MS, clampDelayMs(options.minDelayMs) || MIN_DELAY_MS),
         batchSize: options.batchSize,
         batchPauseSeconds: options.batchPauseSeconds,
         sequenceDelayMinMs: options.sequenceDelayMinMs,

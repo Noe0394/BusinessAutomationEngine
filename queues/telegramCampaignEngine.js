@@ -77,13 +77,21 @@ function randomDelay(minMs, maxMs) {
 // Fenêtre de délai imposée entre deux envois individuels — non contournable
 // depuis le frontend (recommandation explicite de l'utilisateur pour rester
 // dans un usage raisonnable de l'API Telegram).
-const MIN_DELAY_MS = 30_000;
-const MAX_DELAY_MS = 60_000;
+const MIN_DELAY_MS = 45_000;
+const MAX_DELAY_MS = 120_000;
 
 function clampDelayMs(ms) {
   if (!Number.isFinite(ms)) return null;
   return Math.min(Math.max(ms, MIN_DELAY_MS), MAX_DELAY_MS);
 }
+
+// Pause de courtoisie par défaut (feuille de route "Régulation et délais
+// naturels d'envoi", même principe que queues/campaignEngine.js) : au-delà
+// de COURTESY_BATCH_SIZE messages envoyés d'affilée, on marque une pause
+// plus longue avant de reprendre — sans que l'appelant ait besoin de
+// préciser batchSize/batchPauseSeconds explicitement.
+const COURTESY_BATCH_SIZE = 10;
+const COURTESY_PAUSE_MS = 15 * 60_000;
 
 // Voir queues/campaignEngine.js#INCOMING_REPLY_PAUSE_MS (même principe).
 const INCOMING_REPLY_PAUSE_MS = 30_000;
@@ -611,11 +619,11 @@ class TelegramCampaignEngine {
         const baseDelayMs = Number.isFinite(campaign.delaySeconds) && campaign.delaySeconds > 0
           ? campaign.delaySeconds * 1000
           : randomDelay(campaign.minDelayMs, campaign.maxDelayMs);
-        const batch = Number.isInteger(campaign.batchSize) && campaign.batchSize > 0 ? campaign.batchSize : recipients.length;
+        const batch = Number.isInteger(campaign.batchSize) && campaign.batchSize > 0 ? campaign.batchSize : COURTESY_BATCH_SIZE;
         const endOfBatch = i % batch === 0;
         const batchPauseMs = Number.isFinite(campaign.batchPauseSeconds) && campaign.batchPauseSeconds > 0
           ? campaign.batchPauseSeconds * 1000
-          : baseDelayMs * 3;
+          : COURTESY_PAUSE_MS;
         await this._interruptibleSleep(endOfBatch ? batchPauseMs : baseDelayMs, shouldAbort);
       }
     }
