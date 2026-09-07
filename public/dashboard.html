@@ -212,6 +212,22 @@
        (16:9) sans jamais déformer l'aperçu. */
     #media-canvas-frame { max-width: 380px; margin: 1rem 0; border-radius: 10px; overflow: hidden; border: 1px solid #e0e0e0; background: #111; }
     #media-canvas { width: 100%; height: auto; display: block; }
+
+    /* Grille des 3 propositions (voir mediaGenerateVariants) */
+    #media-variants-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1rem 0; }
+    .media-variant-card { border: 1px solid #e0e0e0; border-radius: 10px; overflow: hidden; background: #fff; display: flex; flex-direction: column; }
+    .media-variant-card .media-variant-canvas-frame { background: #111; }
+    .media-variant-card canvas { width: 100%; height: auto; display: block; }
+    .media-variant-card-label { padding: 0.5rem 0.7rem 0; font-size: 0.82rem; font-weight: bold; color: #6c4fd6; }
+    .media-variant-card-actions { display: flex; gap: 0.4rem; padding: 0.6rem 0.7rem; flex-wrap: wrap; }
+    .media-variant-card-actions button { flex: 1; min-width: 100px; font-size: 0.82rem; padding: 0.5rem; }
+    .media-variant-select-btn { background: #22c55e; color: #fff; border: none; border-radius: 6px; font-weight: bold; }
+
+    /* Grille de déclinaison multi-format (voir mediaDeclineAllFormats) —
+       même style de carte que les propositions, réutilise .media-variant-*
+       pour chaque vignette générée par ratio. */
+    #media-declinations-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin: 1rem 0; }
+    #media-edit-panel { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px dashed #e0e0e0; }
     @media (max-width: 720px) {
       .studio-layout { flex-direction: column; }
       .studio-sidebar { flex: none; }
@@ -1364,14 +1380,27 @@
            mediaGenerateVideo). 100% client — aucun appel serveur. -->
       <div id="studio-media-view" hidden>
         <p class="empty">
-          Décrivez le visuel souhaité, choisissez le format, et générez une image (fond photoréaliste IA + texte/
-          badges) ou une vidéo courte (zoom + sous-titres mot-à-mot + narration à l'aperçu). Fond généré via l'API
-          publique et gratuite Pollinations — aucune clé, aucun coût.
+          Décrivez le visuel souhaité, choisissez le format et générez 3 propositions de styles différents. Une
+          fois une proposition sélectionnée, modifiez-la autant de fois que nécessaire (texte instantané, ou
+          changement de style/ambiance régénéré par l'IA) avant de télécharger l'image ou d'exporter la vidéo.
+          Fond généré via l'API publique et gratuite Pollinations — aucune clé, aucun coût.
         </p>
 
         <div class="field">
           <label for="media-concept">Décrivez le visuel</label>
           <textarea id="media-concept" placeholder='Ex : "Affiche promo -30% sur nos pâtisseries, livraison gratuite, contact WhatsApp 07 XX XX XX XX"'></textarea>
+        </div>
+
+        <div class="field">
+          <label for="media-sector">Secteur d'activité (optionnel — adapte le style photo du fond généré)</label>
+          <select id="media-sector">
+            <option value="">Général</option>
+            <option value="restauration">🍽️ Restauration</option>
+            <option value="immobilier">🏠 Immobilier</option>
+            <option value="ecommerce">🛍️ E-commerce</option>
+            <option value="hightech">💻 High-Tech</option>
+            <option value="formation">🎓 Formation</option>
+          </select>
         </div>
 
         <div class="field">
@@ -1425,13 +1454,23 @@
             <label for="media-script">Script de vente (sous-titres mot-à-mot + narration à l'aperçu)</label>
             <textarea id="media-script" placeholder="Laissez vide pour réutiliser automatiquement la description ci-dessus comme script."></textarea>
           </div>
-          <div class="field">
-            <label for="media-video-duration">Durée approximative</label>
-            <select id="media-video-duration">
-              <option value="8">Courte (~8s)</option>
-              <option value="15" selected>Standard (~15s)</option>
-              <option value="25">Longue (~25s)</option>
-            </select>
+          <div class="row">
+            <div class="field">
+              <label for="media-video-duration">Durée approximative</label>
+              <select id="media-video-duration">
+                <option value="8">Courte (~8s)</option>
+                <option value="15" selected>Standard (~15s)</option>
+                <option value="25">Longue (~25s)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="media-voice-rate">Vitesse de la narration (aperçu)</label>
+              <select id="media-voice-rate">
+                <option value="0.85">🐢 Plus lente</option>
+                <option value="1" selected>Normale</option>
+                <option value="1.25">⚡ Plus rapide</option>
+              </select>
+            </div>
           </div>
           <div class="warning-box">
             ⚠️ La narration (voix off) est audible en direct pendant la génération (synthèse vocale du navigateur),
@@ -1441,17 +1480,61 @@
           </div>
         </div>
 
-        <button type="button" id="media-generate-btn" class="send-button">✨ Générer</button>
+        <button type="button" id="media-generate-btn" class="send-button">✨ Générer 3 propositions</button>
         <p id="media-feedback" hidden></p>
 
+        <!-- Grille de 3 propositions (styles/compositions différents, voir
+             MEDIA_VARIANT_STYLES) — chaque carte a son propre mini-canvas
+             déjà entièrement composé (fond + calques), prête à être
+             sélectionnée ou téléchargée directement sans passer par la
+             sélection (voir mediaGenerateVariants/mediaBuildVariantCard). -->
+        <div id="media-variants-grid" hidden></div>
+
         <div id="media-preview-wrap" hidden>
+          <p class="empty">✅ Création sélectionnée — modifiez-la ci-dessous ou téléchargez-la.</p>
           <div id="media-canvas-frame">
             <canvas id="media-canvas"></canvas>
           </div>
           <div class="studio-msg-actions">
             <button type="button" id="media-download-png-btn" class="studio-handoff-btn">📥 Télécharger HD (PNG)</button>
             <button type="button" id="media-export-video-btn" class="studio-handoff-btn" hidden>🎬 Exporter en vidéo</button>
-            <button type="button" id="media-regenerate-btn" class="studio-handoff-btn">🔄 Ajuster le texte / Régénérer</button>
+            <button type="button" id="media-back-to-variants-btn" class="studio-handoff-btn">🔁 Nouvelles propositions</button>
+          </div>
+
+          <!-- Boucle d'itération/modification illimitée : le texte reste
+               éditable directement (source de vérité, voir
+               mediaApplyTextEdits — pas d'appel réseau, instantané) et un
+               changement de style/ambiance libre est ajouté au prompt
+               d'enrichissement puis renvoyé à Pollinations pour un nouveau
+               fond (voir mediaRegenerateBackgroundWithNote). Conserve tout
+               le contexte de la création sélectionnée (mediaCurrentCreation)
+               entre chaque itération. -->
+          <div class="subsection" id="media-edit-panel">
+            <h3>✏️ Modifier cette création</h3>
+            <p class="empty">
+              Changez directement le titre/sous-titre/prix/badge/CTA ci-dessus puis cliquez sur "Appliquer le texte"
+              (instantané), ou décrivez un changement de style/ambiance (ex : "fond noir néon", "ambiance plus
+              lumineuse") pour régénérer le fond avec l'IA.
+            </p>
+            <button type="button" id="media-apply-text-btn" class="studio-handoff-btn">🔄 Appliquer le texte</button>
+            <div class="field" style="margin-top: 0.75rem;">
+              <label for="media-style-note">Changement de style/ambiance (optionnel)</label>
+              <textarea id="media-style-note" placeholder='Ex : "fond noir néon", "ambiance plus chaleureuse", "angle différent"'></textarea>
+            </div>
+            <button type="button" id="media-regen-bg-btn" class="studio-handoff-btn">🎨 Régénérer le fond avec ce changement</button>
+          </div>
+
+          <!-- Déclinaison multi-format : reprend le fond + les calques de la
+               création sélectionnée et regénère un fond par ratio restant
+               (même prompt enrichi, seed différente par appel) — voir
+               mediaDeclineAllFormats. Usine de production multi-formats en un
+               clic plutôt que de refaire "Générer" manuellement pour chaque
+               format. -->
+          <div class="subsection">
+            <h3>🎞️ Décliner dans tous les formats</h3>
+            <p class="empty">Regénère cette création dans les 3 formats restants (9:16, 1:1, 16:9, 4:5) en un clic.</p>
+            <button type="button" id="media-decline-formats-btn" class="studio-handoff-btn">🎞️ Décliner dans tous les formats</button>
+            <div id="media-declinations-grid" hidden></div>
           </div>
         </div>
       </div>
@@ -6115,7 +6198,13 @@
     }
 
     const mediaState = { ratio: null, deliverable: null };
-    let mediaLastBackgroundImg = null;
+    // Création actuellement sélectionnée dans le panneau d'édition (voir
+    // mediaSelectVariant) — { img, promptEnriched, width, height, ratio,
+    // deliverable } — conserve tout le contexte nécessaire pour appliquer
+    // des modifications illimitées (texte instantané, ou régénération du
+    // fond avec une note de style) sans jamais perdre la création choisie.
+    let mediaCurrentCreation = null;
+    let mediaVariantSeq = 0;
 
     function mediaFeedback(message, isError) {
       const el = document.getElementById('media-feedback');
@@ -6160,15 +6249,54 @@
     // payante) — le concept lui-même reste tel que saisi par l'utilisateur,
     // les modèles de génération d'image tolèrent raisonnablement le
     // français mélangé à des descripteurs de style anglais.
-    function mediaBuildEnrichedPrompt(conceptRaw, deliverable) {
+    const MEDIA_SECTOR_STYLES = {
+      restauration: 'appetizing food photography, warm ambient restaurant lighting, rich textures',
+      immobilier: 'architectural real estate photography, wide angle lens, natural daylight, clean modern interior or exterior',
+      ecommerce: 'clean studio product photography, softbox lighting, neutral background, sharp product focus',
+      hightech: 'sleek modern tech product photography, cool blue accent lighting, minimalist futuristic background',
+      formation: 'professional educational setting, confident presenter, clean modern classroom or office environment',
+    };
+
+    // 3 propositions par génération (voir mediaGenerateVariants) : chaque
+    // variante applique un style photographique distinct + un seed aléatoire
+    // différent (voir mediaFetchBackgroundImage) pour une vraie diversité
+    // visuelle. Volontairement 3 et non 4 : l'API Pollinations anonyme reste
+    // fiable sur un petit lot séquentiel, un lot plus large dégraderait le
+    // temps d'attente sans bénéfice proportionnel.
+    const MEDIA_VARIANT_STYLES = [
+      { label: 'Studio épuré', prompt: 'clean commercial studio lighting, minimal composition, centered subject' },
+      { label: 'Lifestyle chaleureux', prompt: 'warm lifestyle candid photography, natural light, authentic atmosphere' },
+      { label: 'Cinématique dramatique', prompt: 'bold dramatic cinematic lighting, high contrast, dynamic angle' },
+    ];
+
+    function mediaBuildEnrichedPrompt(conceptRaw, deliverable, sector, extraNote) {
       const base = conceptRaw.trim() || 'modern professional product background';
       const stylesByDeliverable = {
         IMAGE_PHOTO: 'photorealistic, natural lighting, high detail, 8k, professional photography',
         FLYER_AFFICHE: 'photorealistic marketing background, cinematic lighting, shallow depth of field, high detail, professional advertising photography, clean negative space for text overlay',
         VIDEO_SHORT: 'photorealistic, dynamic cinematic lighting, high detail, professional advertising photography, clean negative space for text overlay',
       };
-      return `${base}, ${stylesByDeliverable[deliverable] || stylesByDeliverable.FLYER_AFFICHE}`;
+      const parts = [base, stylesByDeliverable[deliverable] || stylesByDeliverable.FLYER_AFFICHE];
+      if (sector && MEDIA_SECTOR_STYLES[sector]) parts.push(MEDIA_SECTOR_STYLES[sector]);
+      if (extraNote) parts.push(extraNote);
+      return parts.join(', ');
     }
+
+    // Respecte le rate-limit anonyme de Pollinations (~1 requête/15s) lors
+    // d'appels séquentiels (mediaGenerateVariants, mediaDeclineAllFormats) —
+    // sans cette pause, les requêtes suivantes échouent quasi-
+    // systématiquement (403/429, vérifié en test réel).
+    function mediaSleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    const MEDIA_RATE_LIMIT_MS = 15500;
+
+    // Délai maximal d'attente d'un fond IA — sans ceci, une réponse qui
+    // reste "en vol" sans jamais déclencher onload/onerror (ex : service
+    // saturé/limite de débit anonyme atteinte, voir MEDIA_VARIANT_STYLES)
+    // bloquerait indéfiniment mediaGenerateVariants sur cette variante,
+    // sans jamais afficher la grille ni permettre de réessayer.
+    const MEDIA_FETCH_TIMEOUT_MS = 25000;
 
     function mediaFetchBackgroundImage(promptEnriched, w, h) {
       return new Promise((resolve, reject) => {
@@ -6176,10 +6304,72 @@
         const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(promptEnriched)}?width=${w}&height=${h}&nologo=true&seed=${seed}`;
         const img = new Image();
         img.crossOrigin = 'anonymous';
-        img.onload = () => resolve(img);
-        img.onerror = () => reject(new Error('Échec de génération du fond IA (service indisponible ou requête trop rapide — réessayez dans quelques secondes).'));
+        const timer = setTimeout(() => {
+          img.onload = null;
+          img.onerror = null;
+          img.src = '';
+          reject(new Error('Le service de génération met trop de temps à répondre (limite de débit anonyme probable) — réessayez dans quelques secondes.'));
+        }, MEDIA_FETCH_TIMEOUT_MS);
+        img.onload = () => { clearTimeout(timer); resolve(img); };
+        img.onerror = () => { clearTimeout(timer); reject(new Error('Échec de génération du fond IA (service indisponible ou requête trop rapide — réessayez dans quelques secondes).')); };
         img.src = url;
       });
+    }
+
+    // Fond de secours 100% local (aucun réseau, ne peut jamais échouer) :
+    // dégradé "marketing" + quelques halos flous pour donner du relief.
+    // Utilisé UNIQUEMENT si Pollinations échoue/expire (voir
+    // mediaFetchBackgroundWithFallback) — un HTMLCanvasElement est un
+    // ctx.drawImage() source tout aussi valide qu'un HTMLImageElement, donc
+    // le reste du pipeline (cover-fit, Ken Burns, déclinaisons...) n'a besoin
+    // d'aucune adaptation pour l'accepter.
+    const MEDIA_FALLBACK_PALETTES = [
+      ['#6c4fd6', '#ff6b9d'], ['#075E54', '#25D366'], ['#0f2027', '#2c5364'],
+      ['#ff9966', '#ff5e62'], ['#1e3c72', '#2a5298'], ['#e65c00', '#f9d423'],
+    ];
+
+    function mediaGenerateLocalPlaceholder(w, h) {
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+
+      const [c1, c2] = MEDIA_FALLBACK_PALETTES[Math.floor(Math.random() * MEDIA_FALLBACK_PALETTES.length)];
+      const grad = ctx.createLinearGradient(0, 0, w, h);
+      grad.addColorStop(0, c1);
+      grad.addColorStop(1, c2);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      for (let i = 0; i < 4; i += 1) {
+        const bx = Math.random() * w;
+        const by = Math.random() * h;
+        const radius = w * (0.25 + Math.random() * 0.25);
+        const blobGrad = ctx.createRadialGradient(bx, by, 0, bx, by, radius);
+        blobGrad.addColorStop(0, 'rgba(255,255,255,0.16)');
+        blobGrad.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = blobGrad;
+        ctx.beginPath();
+        ctx.arc(bx, by, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      return canvas;
+    }
+
+    // Point d'entrée UNIQUE utilisé par mediaGenerateVariants/
+    // mediaRegenerateBackgroundWithNote/mediaDeclineAllFormats : ne rejette
+    // JAMAIS — bascule automatiquement sur le fond local si Pollinations
+    // échoue ou dépasse MEDIA_FETCH_TIMEOUT_MS, garantissant un résultat
+    // visuel dans tous les cas (aucune carte "Échec" ne devrait plus
+    // apparaître, sauf bug navigateur imprévu au niveau du Canvas lui-même).
+    async function mediaFetchBackgroundWithFallback(promptEnriched, w, h) {
+      try {
+        const img = await mediaFetchBackgroundImage(promptEnriched, w, h);
+        return { img, usedFallback: false };
+      } catch (err) {
+        return { img: mediaGenerateLocalPlaceholder(w, h), usedFallback: true };
+      }
     }
 
     function mediaDrawCoverImage(ctx, img, w, h) {
@@ -6283,58 +6473,298 @@
       ctx.restore();
     }
 
-    async function mediaGenerateImage() {
-      const concept = document.getElementById('media-concept').value.trim();
-      if (!concept) { mediaFeedback('Décrivez le visuel souhaité avant de générer.', true); return; }
-      if (!mediaState.ratio) { mediaFeedback('Choisissez un format (📱 🔲 🖥️ 📸) avant de générer.', true); return; }
-
-      const deliverable = mediaState.deliverable || 'FLYER_AFFICHE';
-      const { width, height } = MEDIA_FORMATS[mediaState.ratio];
-      const canvas = document.getElementById('media-canvas');
+    function mediaCreateVariantCanvas(img, width, height, deliverable) {
+      const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
-
-      const btn = document.getElementById('media-generate-btn');
-      btn.disabled = true;
-      document.getElementById('media-preview-wrap').hidden = true;
-      mediaFeedback('🎨 Génération du fond photoréaliste en cours (10-20s)...', false);
-
-      try {
-        const promptEnriched = mediaBuildEnrichedPrompt(concept, deliverable);
-        const img = await mediaFetchBackgroundImage(promptEnriched, width, height);
-        mediaLastBackgroundImg = img;
-        mediaDrawCoverImage(ctx, img, width, height);
-        if (deliverable === 'FLYER_AFFICHE') {
-          mediaDrawFlyerLayers(ctx, width, height, mediaGetFlyerFields());
-        }
-        document.getElementById('media-preview-wrap').hidden = false;
-        mediaFeedback(deliverable === 'VIDEO_SHORT'
-          ? '✅ Fond généré — cliquez sur "🎬 Exporter en vidéo" pour lancer l\'animation.'
-          : '✅ Visuel généré.', false);
-      } catch (err) {
-        mediaFeedback(err.message || 'Erreur lors de la génération.', true);
-      } finally {
-        btn.disabled = false;
+      mediaDrawCoverImage(ctx, img, width, height);
+      if (deliverable === 'FLYER_AFFICHE') {
+        mediaDrawFlyerLayers(ctx, width, height, mediaGetFlyerFields());
       }
+      return canvas;
     }
 
-    document.getElementById('media-generate-btn').addEventListener('click', mediaGenerateImage);
-    document.getElementById('media-regenerate-btn').addEventListener('click', mediaGenerateImage);
-
-    document.getElementById('media-download-png-btn').addEventListener('click', () => {
-      const canvas = document.getElementById('media-canvas');
+    function mediaDownloadCanvasPng(canvas, filename) {
       canvas.toBlob((blob) => {
         if (!blob) { mediaFeedback("Échec de l'export PNG.", true); return; }
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `cyrus-visuel-${Date.now()}.png`;
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 5000);
       }, 'image/png');
+    }
+
+    // Construit une carte de la grille de propositions (voir
+    // mediaGenerateVariants) : mini-canvas déjà entièrement composé +
+    // boutons [🟢 Sélectionner] / [📥 Télécharger HD] indépendants — chaque
+    // proposition est utilisable directement sans passer par la sélection.
+    function mediaBuildVariantCard(result, index) {
+      const card = document.createElement('div');
+      card.className = 'media-variant-card';
+
+      const label = document.createElement('div');
+      label.className = 'media-variant-card-label';
+      label.textContent = `Proposition ${index + 1} — ${result.label}${result.usedFallback ? ' (fond local de secours)' : ''}`;
+      card.appendChild(label);
+
+      const frame = document.createElement('div');
+      frame.className = 'media-variant-canvas-frame';
+      card.appendChild(frame);
+
+      const actions = document.createElement('div');
+      actions.className = 'media-variant-card-actions';
+      card.appendChild(actions);
+
+      if (!result.ok) {
+        frame.innerHTML = '<p class="empty" style="padding:1rem;color:#c0392b;">Échec de cette proposition.</p>';
+        return card;
+      }
+
+      const canvas = mediaCreateVariantCanvas(result.img, result.width, result.height, result.deliverable);
+      frame.appendChild(canvas);
+
+      const selectBtn = document.createElement('button');
+      selectBtn.type = 'button';
+      selectBtn.className = 'media-variant-select-btn';
+      selectBtn.textContent = '🟢 Sélectionner';
+      selectBtn.addEventListener('click', () => mediaSelectVariant(result));
+      actions.appendChild(selectBtn);
+
+      const downloadBtn = document.createElement('button');
+      downloadBtn.type = 'button';
+      downloadBtn.className = 'studio-handoff-btn';
+      downloadBtn.textContent = '📥 Télécharger HD';
+      downloadBtn.addEventListener('click', () => mediaDownloadCanvasPng(canvas, `cyrus-visuel-${Date.now()}-v${index + 1}.png`));
+      actions.appendChild(downloadBtn);
+
+      return card;
+    }
+
+    // Point d'entrée "✨ Générer 3 propositions" / "🔁 Nouvelles propositions" :
+    // génère MEDIA_VARIANT_STYLES.length fonds distincts en séquence (jamais
+    // en parallèle, pour rester raisonnable vis-à-vis de l'API anonyme) et
+    // les affiche en grille. mediaVariantSeq permet d'ignorer un lot devenu
+    // obsolète si l'utilisateur relance une génération avant la fin de la
+    // précédente (garde-fou simple contre une course de promesses).
+    async function mediaGenerateVariants() {
+      const concept = document.getElementById('media-concept').value.trim();
+      if (!concept) { mediaFeedback('Décrivez le visuel souhaité avant de générer.', true); return; }
+      if (!mediaState.ratio) { mediaFeedback('Choisissez un format (📱 🔲 🖥️ 📸) avant de générer.', true); return; }
+
+      const deliverable = mediaState.deliverable || 'FLYER_AFFICHE';
+      const sector = document.getElementById('media-sector').value;
+      const { width, height } = MEDIA_FORMATS[mediaState.ratio];
+
+      const btn = document.getElementById('media-generate-btn');
+      btn.disabled = true;
+      document.getElementById('media-preview-wrap').hidden = true;
+      const grid = document.getElementById('media-variants-grid');
+      grid.hidden = true;
+      grid.innerHTML = '';
+      mediaFeedback(`🎨 Génération de ${MEDIA_VARIANT_STYLES.length} propositions en cours (peut prendre 1 à 2 minutes — génération + pause anti-limite entre chaque proposition, service gratuit)...`, false);
+
+      const generation = ++mediaVariantSeq;
+      const results = [];
+      for (let i = 0; i < MEDIA_VARIANT_STYLES.length; i += 1) {
+        if (generation !== mediaVariantSeq) return;
+        if (i > 0) {
+          mediaFeedback(`🎨 ${i}/${MEDIA_VARIANT_STYLES.length} — pause anti-limite (${Math.round(MEDIA_RATE_LIMIT_MS / 1000)}s) avant la proposition suivante...`, false);
+          await mediaSleep(MEDIA_RATE_LIMIT_MS);
+          if (generation !== mediaVariantSeq) return;
+        }
+        const variantStyle = MEDIA_VARIANT_STYLES[i];
+        try {
+          const promptEnriched = mediaBuildEnrichedPrompt(concept, deliverable, sector, variantStyle.prompt);
+          const { img, usedFallback } = await mediaFetchBackgroundWithFallback(promptEnriched, width, height);
+          results.push({ ok: true, img, usedFallback, promptEnriched, label: variantStyle.label, width, height, deliverable, ratio: mediaState.ratio });
+        } catch (err) {
+          // Ne devrait plus se produire (mediaFetchBackgroundWithFallback ne
+          // rejette jamais) — gardé par robustesse défensive uniquement.
+          results.push({ ok: false, label: variantStyle.label });
+        }
+        if (generation !== mediaVariantSeq) return;
+        mediaFeedback(`🎨 ${i + 1}/${MEDIA_VARIANT_STYLES.length} proposition(s) générée(s)...`, false);
+      }
+
+      if (generation !== mediaVariantSeq) return;
+
+      grid.hidden = false;
+      results.forEach((result, idx) => grid.appendChild(mediaBuildVariantCard(result, idx)));
+
+      const successCount = results.filter((r) => r.ok).length;
+      btn.disabled = false;
+      if (successCount === 0) {
+        mediaFeedback('Échec de génération des propositions (service indisponible — réessayez).', true);
+      } else {
+        mediaFeedback(`✅ ${successCount}/${results.length} proposition(s) prête(s) — sélectionnez-en une.`, false);
+      }
+    }
+
+    // Sélection d'une proposition : promeut la variante en "création
+    // actuelle" (mediaCurrentCreation) et bascule sur le panneau d'édition —
+    // point de départ de la boucle d'itération/modification illimitée.
+    function mediaSelectVariant(result) {
+      mediaCurrentCreation = {
+        img: result.img, promptEnriched: result.promptEnriched,
+        width: result.width, height: result.height, ratio: result.ratio, deliverable: result.deliverable,
+      };
+      const canvas = document.getElementById('media-canvas');
+      canvas.width = result.width;
+      canvas.height = result.height;
+      const ctx = canvas.getContext('2d');
+      mediaDrawCoverImage(ctx, result.img, result.width, result.height);
+      if (result.deliverable === 'FLYER_AFFICHE') {
+        mediaDrawFlyerLayers(ctx, result.width, result.height, mediaGetFlyerFields());
+      }
+      document.getElementById('media-variants-grid').hidden = true;
+      document.getElementById('media-preview-wrap').hidden = false;
+      document.getElementById('media-style-note').value = '';
+      mediaFeedback('✅ Création sélectionnée — modifiez-la ci-dessous si besoin.', false);
+    }
+
+    // Itération #1 (instantanée, aucun appel réseau) : redessine la création
+    // sélectionnée avec les valeurs ACTUELLES des champs texte — couvre
+    // "change le titre", "ajoute 20% de réduction", etc. Le texte reste la
+    // source de vérité (les champs, pas une commande en langage libre) :
+    // fiable et immédiat, contrairement à une tentative d'interprétation
+    // heuristique d'instructions en français libre.
+    function mediaApplyTextEdits() {
+      if (!mediaCurrentCreation) { mediaFeedback('Sélectionnez ou générez une création avant de la modifier.', true); return; }
+      const canvas = document.getElementById('media-canvas');
+      const ctx = canvas.getContext('2d');
+      mediaDrawCoverImage(ctx, mediaCurrentCreation.img, mediaCurrentCreation.width, mediaCurrentCreation.height);
+      if (mediaCurrentCreation.deliverable === 'FLYER_AFFICHE') {
+        mediaDrawFlyerLayers(ctx, mediaCurrentCreation.width, mediaCurrentCreation.height, mediaGetFlyerFields());
+      }
+      mediaFeedback('✅ Texte mis à jour.', false);
+    }
+
+    // Itération #2 (appel réseau ciblé) : régénère UN seul nouveau fond en
+    // ajoutant la note de style libre ("fond noir néon"...) au prompt
+    // enrichi — le modèle de diffusion interprète directement la demande, ce
+    // qui couvre les changements de style/ambiance sans nécessiter de
+    // parseur NLP local. Remplace uniquement l'image de fond de la création
+    // sélectionnée ; le texte (titre/prix/badge/CTA) n'est jamais perdu.
+    async function mediaRegenerateBackgroundWithNote() {
+      if (!mediaCurrentCreation) { mediaFeedback('Sélectionnez ou générez une création avant de la modifier.', true); return; }
+      const note = document.getElementById('media-style-note').value.trim();
+      if (!note) { mediaFeedback('Décrivez le changement de style/ambiance souhaité.', true); return; }
+
+      const concept = document.getElementById('media-concept').value.trim();
+      const sector = document.getElementById('media-sector').value;
+      const btn = document.getElementById('media-regen-bg-btn');
+      btn.disabled = true;
+      mediaFeedback('🎨 Régénération du fond en cours...', false);
+
+      try {
+        const promptEnriched = mediaBuildEnrichedPrompt(concept, mediaCurrentCreation.deliverable, sector, note);
+        const { img, usedFallback } = await mediaFetchBackgroundWithFallback(promptEnriched, mediaCurrentCreation.width, mediaCurrentCreation.height);
+        mediaCurrentCreation.img = img;
+        mediaCurrentCreation.promptEnriched = promptEnriched;
+        const canvas = document.getElementById('media-canvas');
+        const ctx = canvas.getContext('2d');
+        mediaDrawCoverImage(ctx, img, mediaCurrentCreation.width, mediaCurrentCreation.height);
+        if (mediaCurrentCreation.deliverable === 'FLYER_AFFICHE') {
+          mediaDrawFlyerLayers(ctx, mediaCurrentCreation.width, mediaCurrentCreation.height, mediaGetFlyerFields());
+        }
+        mediaFeedback(usedFallback
+          ? '⚠️ Service IA indisponible — fond de secours local appliqué (le changement de style demandé n\'a pas pu être pris en compte, réessayez dans quelques instants).'
+          : '✅ Fond régénéré avec le changement demandé.', usedFallback);
+      } catch (err) {
+        mediaFeedback(err.message || 'Erreur lors de la régénération.', true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // Déclinaison multi-format ("usine de production multi-formats") :
+    // reprend le prompt enrichi et les champs texte ACTUELS de la création
+    // sélectionnée et régénère un fond pour chaque ratio autre que celui déjà
+    // affiché (celui-ci reste dans l'aperçu principal, téléchargeable via le
+    // bouton PNG existant) — un clic plutôt que de relancer "Générer"
+    // manuellement pour chaque format. Séquentiel comme mediaGenerateVariants,
+    // pour la même raison (API anonyme Pollinations).
+    async function mediaDeclineAllFormats() {
+      if (!mediaCurrentCreation) { mediaFeedback('Sélectionnez ou générez une création avant de la décliner.', true); return; }
+      const concept = document.getElementById('media-concept').value.trim();
+      const sector = document.getElementById('media-sector').value;
+      const btn = document.getElementById('media-decline-formats-btn');
+      const grid = document.getElementById('media-declinations-grid');
+      const otherRatios = Object.keys(MEDIA_FORMATS).filter((r) => r !== mediaCurrentCreation.ratio);
+
+      btn.disabled = true;
+      grid.hidden = true;
+      grid.innerHTML = '';
+      mediaFeedback(`🎞️ Déclinaison en cours (${otherRatios.length} format(s) restant(s), peut prendre 1 à 2 minutes — service gratuit)...`, false);
+
+      const results = [];
+      for (let i = 0; i < otherRatios.length; i += 1) {
+        if (i > 0) {
+          mediaFeedback(`🎞️ ${i}/${otherRatios.length} — pause anti-limite (${Math.round(MEDIA_RATE_LIMIT_MS / 1000)}s) avant le format suivant...`, false);
+          await mediaSleep(MEDIA_RATE_LIMIT_MS);
+        }
+        const ratio = otherRatios[i];
+        const { width, height } = MEDIA_FORMATS[ratio];
+        try {
+          const promptEnriched = mediaCurrentCreation.promptEnriched
+            || mediaBuildEnrichedPrompt(concept, mediaCurrentCreation.deliverable, sector, null);
+          const { img, usedFallback } = await mediaFetchBackgroundWithFallback(promptEnriched, width, height);
+          results.push({ ok: true, ratio, usedFallback, canvas: mediaCreateVariantCanvas(img, width, height, mediaCurrentCreation.deliverable) });
+        } catch (err) {
+          results.push({ ok: false, ratio });
+        }
+        mediaFeedback(`🎞️ ${i + 1}/${otherRatios.length} format(s) décliné(s)...`, false);
+      }
+
+      grid.hidden = false;
+      results.forEach(({ ok, ratio, canvas, usedFallback }) => {
+        const card = document.createElement('div');
+        card.className = 'media-variant-card';
+        const label = document.createElement('div');
+        label.className = 'media-variant-card-label';
+        label.textContent = ratio + (usedFallback ? ' (fond local de secours)' : '');
+        card.appendChild(label);
+        const frame = document.createElement('div');
+        frame.className = 'media-variant-canvas-frame';
+        card.appendChild(frame);
+        if (!ok) {
+          frame.innerHTML = '<p class="empty" style="padding:1rem;color:#c0392b;">Échec pour ce format.</p>';
+          grid.appendChild(card);
+          return;
+        }
+        frame.appendChild(canvas);
+        const actions = document.createElement('div');
+        actions.className = 'media-variant-card-actions';
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'studio-handoff-btn';
+        dlBtn.textContent = '📥 Télécharger HD';
+        dlBtn.addEventListener('click', () => mediaDownloadCanvasPng(canvas, `cyrus-visuel-${ratio.replace(':', 'x')}-${Date.now()}.png`));
+        actions.appendChild(dlBtn);
+        card.appendChild(actions);
+        grid.appendChild(card);
+      });
+
+      const successCount = results.filter((r) => r.ok).length;
+      btn.disabled = false;
+      mediaFeedback(successCount > 0
+        ? `✅ ${successCount}/${otherRatios.length} format(s) décliné(s) — le format actuel (${mediaCurrentCreation.ratio}) reste dans l'aperçu ci-dessus.`
+        : 'Échec de la déclinaison (service indisponible — réessayez).', successCount === 0);
+    }
+
+    document.getElementById('media-generate-btn').addEventListener('click', mediaGenerateVariants);
+    document.getElementById('media-back-to-variants-btn').addEventListener('click', mediaGenerateVariants);
+    document.getElementById('media-apply-text-btn').addEventListener('click', mediaApplyTextEdits);
+    document.getElementById('media-regen-bg-btn').addEventListener('click', mediaRegenerateBackgroundWithNote);
+    document.getElementById('media-decline-formats-btn').addEventListener('click', mediaDeclineAllFormats);
+
+    document.getElementById('media-download-png-btn').addEventListener('click', () => {
+      mediaDownloadCanvasPng(document.getElementById('media-canvas'), `cyrus-visuel-${Date.now()}.png`);
     });
 
     // ---------- Studio Vidéo : Ken Burns + sous-titres mot-à-mot + export ----------
@@ -6363,18 +6793,22 @@
     // Sous-titrage mot-à-mot façon CapCut/Alex Hormozi : un mot en gros à la
     // fois, centré, contour marqué pour rester lisible sur n'importe quel
     // fond — reste incrusté dans l'image même si le fichier exporté est
-    // silencieux (voir l'avertissement de l'onglet Studio Média).
-    function mediaDrawSubtitleWord(ctx, word, w, h) {
+    // silencieux (voir l'avertissement de l'onglet Studio Média). `scale`
+    // (1 par défaut) permet un effet d'entrée "pop" (voir mediaGenerateVideo)
+    // pour une animation de texte dynamique plutôt qu'un simple texte figé.
+    function mediaDrawSubtitleWord(ctx, word, w, h, scale) {
       if (!word) return;
       ctx.save();
+      ctx.translate(w / 2, h * 0.82);
+      ctx.scale(scale || 1, scale || 1);
       ctx.font = `900 ${Math.round(w * 0.09)}px Arial, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.lineWidth = w * 0.012;
       ctx.strokeStyle = 'rgba(0,0,0,0.85)';
       ctx.fillStyle = '#ffd166';
-      ctx.strokeText(word.toUpperCase(), w / 2, h * 0.82);
-      ctx.fillText(word.toUpperCase(), w / 2, h * 0.82);
+      ctx.strokeText(word.toUpperCase(), 0, 0);
+      ctx.fillText(word.toUpperCase(), 0, 0);
       ctx.restore();
     }
 
@@ -6389,7 +6823,7 @@
     }
 
     async function mediaGenerateVideo() {
-      if (!mediaLastBackgroundImg) { mediaFeedback("Générez d'abord le visuel (fond) avant d'exporter la vidéo.", true); return; }
+      if (!mediaCurrentCreation) { mediaFeedback("Sélectionnez d'abord une création (voir les propositions) avant d'exporter la vidéo.", true); return; }
       if (!window.MediaRecorder) { mediaFeedback("Votre navigateur ne supporte pas l'enregistrement vidéo (MediaRecorder).", true); return; }
       const picked = mediaPickRecorderFormat();
       if (!picked) { mediaFeedback('Aucun format vidéo supporté par ce navigateur.', true); return; }
@@ -6399,7 +6833,8 @@
       if (!words.length) { mediaFeedback('Renseignez un script (ou une description) à sous-titrer.', true); return; }
 
       const durationSec = parseInt(document.getElementById('media-video-duration').value, 10) || 15;
-      const { width, height } = MEDIA_FORMATS[mediaState.ratio];
+      const voiceRate = parseFloat(document.getElementById('media-voice-rate').value) || 1;
+      const { width, height, img: backgroundImg } = mediaCurrentCreation;
       const canvas = document.getElementById('media-canvas');
       canvas.width = width;
       canvas.height = height;
@@ -6419,6 +6854,7 @@
         try {
           const utterance = new SpeechSynthesisUtterance(scriptText);
           utterance.lang = 'fr-FR';
+          utterance.rate = voiceRate;
           utterance.onboundary = (ev) => {
             boundarySupported = true;
             const spoken = scriptText.slice(0, ev.charIndex).trim();
@@ -6439,15 +6875,25 @@
       const durationMs = durationSec * 1000;
       const msPerWordFallback = durationMs / words.length;
       const startTime = performance.now();
+      // Animation de texte dynamique : chaque nouveau mot "pop" (léger
+      // sur-agrandissement qui se résorbe en ~160ms) plutôt que de rester
+      // figé à l'écran — repéré via un changement d'index de mot.
+      let lastWordIndex = -1;
+      let wordChangedAt = startTime;
+      const POP_MS = 160;
 
       await new Promise((resolve) => {
         function frame(now) {
           const elapsed = now - startTime;
           const progress = Math.min(elapsed / durationMs, 1);
-          mediaDrawKenBurnsFrame(ctx, mediaLastBackgroundImg, width, height, progress);
+          mediaDrawKenBurnsFrame(ctx, backgroundImg, width, height, progress);
           mediaDrawGradientOverlay(ctx, width, height);
           const idx = boundarySupported ? currentWordIndex : Math.floor(elapsed / msPerWordFallback);
-          mediaDrawSubtitleWord(ctx, words[Math.min(Math.max(idx, 0), words.length - 1)], width, height);
+          const clampedIdx = Math.min(Math.max(idx, 0), words.length - 1);
+          if (clampedIdx !== lastWordIndex) { lastWordIndex = clampedIdx; wordChangedAt = now; }
+          const popProgress = Math.min((now - wordChangedAt) / POP_MS, 1);
+          const scale = 1.3 - 0.3 * popProgress;
+          mediaDrawSubtitleWord(ctx, words[clampedIdx], width, height, scale);
           if (elapsed < durationMs) requestAnimationFrame(frame); else resolve();
         }
         requestAnimationFrame(frame);
