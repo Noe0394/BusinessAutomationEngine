@@ -245,6 +245,7 @@
     .image-link-uploader-label { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.7rem; background: #075E54; color: #fff; border-radius: 6px; font-weight: bold; cursor: pointer; white-space: nowrap; }
     .image-link-uploader-label input[type="file"] { display: none; }
     .image-link-uploader-status { color: #444; word-break: break-all; }
+    .image-link-uploader button:not(.image-link-uploader-label) { padding: 0.4rem 0.7rem; border-radius: 6px; border: 1px solid #075E54; background: #fff; color: #075E54; font-weight: bold; white-space: nowrap; }
 
     /* Onglet Copywriter Studio IA (assistant + générateur de livres). */
     .studio-layout { display: flex; gap: 1.25rem; margin-top: 1rem; min-height: 0; }
@@ -1348,8 +1349,19 @@
         </p>
       </div>
 
-      <details class="relance-abtest-panel" id="relance-abtest-panel" open>
-        <summary>🖼️ Mon affiche / Test A/B/C (importez une image ci-dessous — son lien est ajouté automatiquement à votre message)</summary>
+      <!-- Cas d'usage le plus courant (une seule image jointe) : un contrôle
+           compact toujours visible, plutôt qu'enterré dans le panneau
+           "Options avancées" ci-dessous — même style visuel que le
+           composant universel ImageToLinkUploader utilisé ailleurs dans le
+           dashboard, pour rester cohérent et léger. -->
+      <div class="image-link-uploader" id="relance-simple-image-uploader">
+        <label class="image-link-uploader-label" for="relance-image-1">🖼️ Joindre une image (lien d'aperçu auto)<input type="file" id="relance-image-1" accept="image/*"></label>
+        <button type="button" id="relance-image-1-studio-btn">Depuis Studio IA</button>
+        <span class="image-link-uploader-status" id="relance-image-1-status"></span>
+      </div>
+
+      <details class="relance-abtest-panel" id="relance-abtest-panel">
+        <summary>⚙️ Options avancées (Test A/B/C, 2e visuel, numéro de contact)</summary>
         <p class="relance-hint">
           Renseignez 2 ou 3 variantes pour les faire alterner automatiquement sur la file (A → B → C → A...). Le jeton
           <code>{IMAGE_LINK}</code> est optionnel dans le texte — que vous l'utilisiez ou non, dès qu'un visuel est
@@ -1376,17 +1388,11 @@
           <p class="relance-hint">Affiche un bouton "Nous contacter sur WhatsApp" sur la page ouverte par le prospect (voir le lien d'image).</p>
         </div>
 
-        <div class="relance-dropzone" id="relance-dropzone">📥 Glissez-déposez une image ici (Visuel 1 ou 2, premier emplacement libre)</div>
+        <div class="relance-dropzone" id="relance-dropzone">📥 Glissez-déposez une image ici (2e visuel ou remplacement du 1er)</div>
 
         <div class="relance-image-slots">
           <div class="relance-image-slot">
-            <label for="relance-image-1">Visuel 1</label>
-            <input type="file" id="relance-image-1" accept="image/*">
-            <button type="button" id="relance-image-1-studio-btn">🖼️ Depuis Studio IA</button>
-            <span id="relance-image-1-status"></span>
-          </div>
-          <div class="relance-image-slot">
-            <label for="relance-image-2">Visuel 2</label>
+            <label for="relance-image-2">Visuel 2 (pour l'alternance A/B avec le visuel ci-dessus)</label>
             <input type="file" id="relance-image-2" accept="image/*">
             <button type="button" id="relance-image-2-studio-btn">🖼️ Depuis Studio IA</button>
             <span id="relance-image-2-status"></span>
@@ -1412,7 +1418,7 @@
 
       <div class="relance-series-panel" id="relance-series-panel" hidden>
         <label><input type="checkbox" id="relance-series-toggle"> Mode Série Continu (envoi cadencé automatique)</label>
-        <label>Tempo
+        <label id="relance-series-tempo-field" hidden>Tempo
           <input type="range" id="relance-series-tempo" min="5" max="15" value="8" step="1">
           <span id="relance-series-tempo-value">8s</span>
         </label>
@@ -6104,22 +6110,27 @@
 
     // Support des images personnalisées (module 3) : Drag & Drop — dépose
     // dans le premier emplacement visuel libre (1 puis 2), même pipeline
-    // d'upload que la sélection de fichier classique.
-    const relanceDropzone = document.getElementById('relance-dropzone');
-    ['dragover', 'dragenter'].forEach((evt) => {
-      relanceDropzone.addEventListener(evt, (e) => { e.preventDefault(); relanceDropzone.classList.add('dragover'); });
-    });
-    ['dragleave', 'dragend'].forEach((evt) => {
-      relanceDropzone.addEventListener(evt, () => relanceDropzone.classList.remove('dragover'));
-    });
-    relanceDropzone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      relanceDropzone.classList.remove('dragover');
-      const file = e.dataTransfer.files && e.dataTransfer.files[0];
-      if (!file || !file.type.startsWith('image/')) return;
-      const freeSlot = relanceState.imageUrls[0] ? (relanceState.imageUrls[1] ? 0 : 1) : 0;
-      relanceUploadImage(freeSlot, file);
-    });
+    // d'upload que la sélection de fichier classique. Deux zones de dépôt
+    // (le contrôle compact toujours visible, et la zone dédiée du panneau
+    // avancé) partagent la même logique de sélection d'emplacement libre.
+    function relanceWireDropzone(el) {
+      ['dragover', 'dragenter'].forEach((evt) => {
+        el.addEventListener(evt, (e) => { e.preventDefault(); el.classList.add('dragover'); });
+      });
+      ['dragleave', 'dragend'].forEach((evt) => {
+        el.addEventListener(evt, () => el.classList.remove('dragover'));
+      });
+      el.addEventListener('drop', (e) => {
+        e.preventDefault();
+        el.classList.remove('dragover');
+        const file = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!file || !file.type.startsWith('image/')) return;
+        const freeSlot = relanceState.imageUrls[0] ? (relanceState.imageUrls[1] ? 0 : 1) : 0;
+        relanceUploadImage(freeSlot, file);
+      });
+    }
+    relanceWireDropzone(document.getElementById('relance-dropzone'));
+    relanceWireDropzone(document.getElementById('relance-simple-image-uploader'));
 
     async function relanceLoadQueue() {
       const url = relanceState.channel === 'telegram'
@@ -6420,6 +6431,7 @@
     document.getElementById('relance-series-toggle').addEventListener('change', (e) => {
       seriesState.active = e.target.checked;
       seriesState.running = e.target.checked;
+      document.getElementById('relance-series-tempo-field').hidden = !e.target.checked;
       document.getElementById('relance-series-pause-btn').hidden = !e.target.checked;
       document.getElementById('relance-series-pause-btn').textContent = '⏸️ Pause la série';
       document.getElementById('relance-series-pause-btn').classList.add('active');
