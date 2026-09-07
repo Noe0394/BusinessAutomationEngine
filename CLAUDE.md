@@ -34,12 +34,20 @@ en continu (GitOps GitHub → Render) sur Render, service web Docker en plan
 
 - **WhatsApp** (`adapters/whatsapp.js`, Baileys) : appairage QR + code
   d'association, isolation stricte par tenant (une session par clé de
-  licence). Durci le 2026-09-06 : résolution dynamique de la version du
-  protocole WA Web (`fetchLatestWaWebVersion` → repli `fetchLatestBaileysVersion`
-  → repli version compilée) et sérialisation `connect()`/`logout()` pour
-  éviter toute corruption du dossier de session en cas de reconnexion
-  concurrente. Un incident de blocage d'IP sortante Render (anti-abus
-  WhatsApp sur les plages cloud partagées) a été résolu par redéploiement ;
+  licence). `makeWASocket()` n'override PAS la version du protocole WA Web —
+  la valeur par défaut compilée dans le paquet `@whiskeysockets/baileys`
+  installé est utilisée telle quelle. Une tentative de résolution dynamique
+  (`fetchLatestWaWebVersion`) a été ajoutée le 2026-09-06 puis retirée le
+  2026-09-07 après avoir causé un rejet systématique du QR en production —
+  la FAQ officielle Baileys déconseille explicitement cette pratique (le
+  numéro de version seul ne garantit pas la compatibilité du protocole
+  binaire réellement implémenté). Pour suivre l'évolution du protocole
+  WhatsApp : mettre à jour le paquet Baileys lui-même, jamais substituer un
+  numéro de version à l'exécution. La sérialisation `connect()`/`logout()`
+  (anti-corruption du dossier de session en cas de reconnexion concurrente,
+  2026-09-06) reste en place et n'est pas concernée par ce retrait. Un
+  incident de blocage d'IP sortante Render (anti-abus WhatsApp sur les
+  plages cloud partagées) a par ailleurs été résolu par redéploiement ;
   solution durable (VPS dédié / proxy) non encore mise en œuvre par choix de
   coût.
 - **Telegram** (`adapters/telegram.js`, MTProto) : fonctionne indépendamment
