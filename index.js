@@ -3226,7 +3226,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, async (req, res)
   }
 
   const isFirstMessage = !Array.isArray(existing.messages) || existing.messages.length === 0;
-  const { text: replyText } = copywriterEngine.composeReply(text);
+  const { text: replyText } = copywriterEngine.composeReply(text, existing.messages);
   const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
 
   await sleep(1500 + Math.floor(Math.random() * 1500));

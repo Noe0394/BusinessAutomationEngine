@@ -294,7 +294,7 @@
             <label for="pairing-phone">Numéro de téléphone (avec indicatif pays, ex: 225xxxxxxxxx)</label>
             <input type="tel" id="pairing-phone" placeholder="225xxxxxxxxx" />
           </div>
-          <button type="button" id="generate-pairing-btn" class="send-button" style="width:auto;">Générer mon Code d'Association</button>
+          <button type="button" id="generate-pairing-btn" class="send-button" style="width:auto;">📲 Valider via Deep Link (1-clic)</button>
           <div id="pairing-result"></div>
         </div>
 
@@ -1861,6 +1861,30 @@
       window.open('https://web.whatsapp.com', '_blank', 'noopener');
     });
 
+    // Tente d'ouvrir l'app WhatsApp native via le schéma d'URL "whatsapp://"
+    // (fonctionne sur mobile si l'app est installée) ; si la page reste
+    // visible après un court délai (aucun blur/masquage détecté), on
+    // considère que l'app n'a pas pu s'ouvrir (desktop sans app installée,
+    // navigateur qui bloque le schéma...) et on replie automatiquement sur
+    // WhatsApp Web (https://api.whatsapp.com/), qui fonctionne partout.
+    function openWhatsAppWithFallback() {
+      const fallbackUrl = 'https://api.whatsapp.com/send/?app_absent=0';
+      let switchedAway = false;
+      const onHide = () => { switchedAway = true; };
+      document.addEventListener('visibilitychange', onHide);
+      window.addEventListener('blur', onHide);
+
+      window.location.href = 'whatsapp://';
+
+      setTimeout(() => {
+        document.removeEventListener('visibilitychange', onHide);
+        window.removeEventListener('blur', onHide);
+        if (!switchedAway && !document.hidden) {
+          window.open(fallbackUrl, '_blank', 'noopener');
+        }
+      }, 1500);
+    }
+
     document.getElementById('generate-pairing-btn').addEventListener('click', async () => {
       const phone = document.getElementById('pairing-phone').value.trim();
       const resultEl = document.getElementById('pairing-result');
@@ -1883,31 +1907,53 @@
           resultEl.innerHTML = '<p class="error">' + (data.error || 'Échec de la génération du code.') + '</p>';
           return;
         }
-        resultEl.innerHTML =
-          '<div id="pairing-code-display">' + data.code + '</div>' +
-          '<p>Sur votre téléphone : WhatsApp &gt; Appareils liés &gt; Lier un appareil &gt; Lier avec le numéro de téléphone, puis saisissez ce code.</p>' +
-          '<div class="pairing-actions">' +
-          '<button type="button" id="copy-pairing-code-btn" class="send-button" style="width:auto;">📋 Copier le code</button>' +
-          '<a class="open-whatsapp-btn" href="whatsapp://">📲 Ouvrir WhatsApp</a>' +
-          '</div>';
 
+        // Copie automatique immédiate (avant même l'ouverture de l'app) :
         // WhatsApp n'expose aucun deep link officiel qui pré-remplirait ce
         // code dans l'app (contrairement à wa.me pour démarrer une
-        // discussion) : le code doit être tapé manuellement par l'utilisateur
-        // dans Appareils liés — copier automatiquement dans le presse-papier
-        // ici, puis proposer d'ouvrir l'app juste à côté (bouton ci-dessus),
-        // est le rapprochement le plus proche possible d'un "1-clic" réel.
-        document.getElementById('copy-pairing-code-btn').addEventListener('click', async (evt) => {
-          const btnEl = evt.currentTarget;
-          try {
-            await navigator.clipboard.writeText(data.code);
-            const original = btnEl.textContent;
-            btnEl.textContent = '✅ Copié';
-            setTimeout(() => { btnEl.textContent = original; }, 2000);
-          } catch (err) {
-            btnEl.textContent = '❌ Échec de la copie';
-          }
-        });
+        // discussion) — le code doit être collé manuellement par
+        // l'utilisateur dans "Appareils liés". L'avoir déjà dans le
+        // presse-papier au moment où l'app s'ouvre est le rapprochement le
+        // plus proche possible d'un "1-clic" réel.
+        let autoCopyOk = true;
+        try {
+          await navigator.clipboard.writeText(data.code);
+        } catch (err) {
+          autoCopyOk = false;
+        }
+
+        resultEl.innerHTML =
+          '<div id="pairing-code-display">' + data.code + '</div>' +
+          '<p class="ok">' +
+          (autoCopyOk
+            ? '1. Le code <strong>' + data.code + '</strong> est copié. '
+            : '1. Copiez le code <strong>' + data.code + '</strong> ci-dessus. ') +
+          '2. Collez-le dans WhatsApp (Appareils liés &gt; Lier un appareil &gt; Lier avec le numéro de téléphone) pour valider.</p>' +
+          '<div class="pairing-actions">' +
+          (autoCopyOk ? '' : '<button type="button" id="copy-pairing-code-btn" class="send-button" style="width:auto;">📋 Copier le code</button>') +
+          '<button type="button" id="open-whatsapp-app-btn" class="open-whatsapp-btn">📲 Ouvrir WhatsApp</button>' +
+          '</div>' +
+          '<p class="empty" id="pairing-waiting-hint">⏳ En attente de la validation dans WhatsApp — le tableau de bord basculera automatiquement dès que la connexion sera établie.</p>';
+
+        if (!autoCopyOk) {
+          document.getElementById('copy-pairing-code-btn').addEventListener('click', async (evt) => {
+            const btnEl = evt.currentTarget;
+            try {
+              await navigator.clipboard.writeText(data.code);
+              const original = btnEl.textContent;
+              btnEl.textContent = '✅ Copié';
+              setTimeout(() => { btnEl.textContent = original; }, 2000);
+            } catch (err) {
+              btnEl.textContent = '❌ Échec de la copie';
+            }
+          });
+        }
+
+        document.getElementById('open-whatsapp-app-btn').addEventListener('click', openWhatsAppWithFallback);
+        // Ouverture automatique dès l'obtention du code : l'utilisateur n'a
+        // besoin de cliquer sur "Ouvrir WhatsApp" que si l'ouverture
+        // automatique a été bloquée par le navigateur (politique anti-popup).
+        openWhatsAppWithFallback();
       } catch (err) {
         resultEl.innerHTML = '<p class="error">Erreur réseau lors de la génération du code.</p>';
       }
