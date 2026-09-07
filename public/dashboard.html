@@ -200,6 +200,9 @@
     .relance-launch-button { background: #25D366; color: #fff; border: none; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; font-size: 1.05rem; flex-basis: 100%; }
     .relance-launch-button.telegram { background: #2AABEE; }
     .relance-call-button { background: #fff; border: 2px solid #075E54; color: #075E54; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; }
+    .relance-prefill-notice { margin: -0.4rem 0 0.6rem; padding: 0.5rem 0.7rem; border-radius: 6px; font-size: 0.82rem; font-weight: bold; }
+    .relance-prefill-notice.ok { background: #e8f8ee; color: #1a7a3c; }
+    .relance-prefill-notice.warn { background: #fff3cd; color: #7a5c00; }
     .relance-call-button:disabled { opacity: 0.4; cursor: not-allowed; }
     .relance-hint { font-size: 0.85rem; color: #777; margin-top: 0.5rem; }
 
@@ -1345,8 +1348,8 @@
         </p>
       </div>
 
-      <details class="relance-abtest-panel" id="relance-abtest-panel">
-        <summary>🧪 Test A/B/C &amp; Visuels (optionnel — jusqu'à 3 variantes de texte et 2 visuels, rotation automatique)</summary>
+      <details class="relance-abtest-panel" id="relance-abtest-panel" open>
+        <summary>🖼️ Mon affiche / Test A/B/C (importez une image ci-dessous — son lien est ajouté automatiquement à votre message)</summary>
         <p class="relance-hint">
           Renseignez 2 ou 3 variantes pour les faire alterner automatiquement sur la file (A → B → C → A...). Le jeton
           <code>{IMAGE_LINK}</code> est optionnel dans le texte — que vous l'utilisiez ou non, dès qu'un visuel est
@@ -1427,6 +1430,7 @@
           <label for="relance-message-text">Message (personnalisé — modifiable avant l'envoi)</label>
           <textarea id="relance-message-text"></textarea>
         </div>
+        <p class="relance-prefill-notice" id="relance-prefill-notice"></p>
         <div class="relance-card-actions">
           <button type="button" class="relance-copy-button" id="relance-copy-btn">📋 Copier le texte</button>
           <button type="button" class="relance-regenerate-button" id="relance-regenerate-btn">🔄 Varier / Tourner le Texte</button>
@@ -6197,6 +6201,21 @@
       const launchBtn = document.getElementById('relance-launch-btn');
       launchBtn.textContent = '🚀 Envoyer & Suivant';
       launchBtn.className = 'relance-launch-button' + (channel === 'telegram' ? ' telegram' : '');
+
+      // Signale CLAIREMENT la différence de comportement WhatsApp/Telegram à
+      // l'ouverture du Deep Link (source de confusion réelle signalée par
+      // l'utilisateur) : WhatsApp pré-remplit le texte via wa.me?text=, mais
+      // Telegram n'a AUCUN mécanisme officiel de pré-remplissage par deep
+      // link (voir relanceBuildDeepLink) — seul un collage manuel (Ctrl+V)
+      // du texte déjà copié dans le presse-papiers fonctionne pour Telegram.
+      const notice = document.getElementById('relance-prefill-notice');
+      if (channel === 'telegram') {
+        notice.className = 'relance-prefill-notice warn';
+        notice.textContent = '⚠️ Telegram ne permet pas le pré-remplissage automatique du texte : il est copié dans le presse-papiers — collez-le (Ctrl+V ou appui long) une fois la conversation ouverte.';
+      } else {
+        notice.className = 'relance-prefill-notice ok';
+        notice.textContent = '✅ Le texte s\'affiche automatiquement dans le champ de saisie WhatsApp à l\'ouverture.';
+      }
 
       // Appel direct (module 7, "Appeler") : uniquement disponible quand un
       // numéro est connu — un contact Telegram identifié par @username n'a
