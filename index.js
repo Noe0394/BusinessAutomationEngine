@@ -30,6 +30,8 @@ const aiStudioStore = require('./lib/aiStudioStore');
 const copywriterEngine = require('./lib/ai/localCopywriterEngine');
 const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const imageLinkStore = require('./lib/media/imageLinkStore');
+const messageHistory = require('./lib/messageHistory');
+const { personalizeMessage, buildPersonalizationVars } = require('./lib/personalization');
 const ebookGenerator = require('./lib/pdf/ebookGenerator');
 
 const app = express();
@@ -1593,6 +1595,99 @@ app.post('/api/contacts/import', requireAccess, requireModule('whatsapp'), uploa
   }
 });
 
+// ---------- Import direct d'un fichier Excel/CSV dans la Relance Manuelle Express ----------
+// À la différence de /api/contacts/import (qui alimente une CAMPAGNE), ce
+// point d'entrée sert directement la file d'attente de relance manuelle
+// (public/dashboard.html#relanceLoadQueue) sans jamais créer ni démarrer de
+// campagne (aucun risque d'envoi automatique) — mais applique EXACTEMENT le
+// même Smart Screening anti-doublons que CampaignEngine#_buildInitialResults
+// (même module lib/messageHistory.js, même fenêtre 48h par défaut) : un
+// contact déjà destinataire de ce même modèle de message dans la fenêtre est
+// marqué 'skipped_duplicate' au lieu de 'pending'.
+app.post('/api/messages/manual-import', requireAccess, requireModule('whatsapp'), upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Aucun fichier fourni (champ "file").' });
+  }
+  const template = String((req.body || {}).message || '').trim();
+
+  let rows;
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(sheet);
+  } catch (err) {
+    return res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .xlsx ou .csv avec une colonne "telephone".' });
+  }
+
+  const contacts = rows
+    .map((row) => {
+      const prenom = String(row.prenom || row.Prenom || row.name || row.Name || '').trim();
+      return {
+        telephone: String(row.telephone || row.Telephone || row.phone || row.Phone || row.numero || row.Numero || '').trim(),
+        nom: String(row.nom || row.Nom || prenom || '').trim(),
+      };
+    })
+    .filter((c) => c.telephone);
+
+  const tenantId = resolveTenantId(req);
+  const messageHash = messageHistory.hashTemplate([template]);
+  const duplicateWindowHours = messageHistory.clampWindowHours((req.body || {}).duplicateWindowHours);
+  const windowMs = duplicateWindowHours * 3_600_000;
+  const historyEntries = await messageHistory.loadHistory('whatsapp', tenantId);
+
+  const now = Date.now();
+  const historySeen = new Set();
+  historyEntries.forEach((entry) => {
+    if (!entry || entry.messageHash !== messageHash) return;
+    if (now - new Date(entry.sentAt).getTime() < windowMs) historySeen.add(entry.contactKey);
+  });
+
+  // Même comportement que CampaignEngine#getManualRelaunchQueue : un
+  // doublon détecté n'apparaît PAS du tout dans la file (pas seulement
+  // marqué) — jamais présenté comme un contact à traiter manuellement.
+  const seenInThisImport = new Set();
+  let skippedDuplicates = 0;
+  const items = [];
+  contacts.forEach((contact) => {
+    const key = messageHistory.normalizeContactKey(contact.telephone);
+    const isDuplicate = Boolean(key) && (historySeen.has(key) || seenInThisImport.has(key));
+    if (key) seenInThisImport.add(key);
+    if (isDuplicate) { skippedDuplicates += 1; return; }
+    const vars = buildPersonalizationVars(contact.nom, contact.telephone);
+    items.push({
+      index: items.length,
+      to: contact.telephone,
+      phone: contact.telephone,
+      name: contact.nom,
+      message: personalizeMessage(template, vars),
+      status: 'pending',
+    });
+  });
+
+  res.status(200).json({ items, messageHash, total: items.length, skippedDuplicates });
+});
+
+// Trace un envoi effectué depuis la file importée ci-dessus dans le MÊME
+// historique anti-doublons que les campagnes automatiques (voir
+// CampaignEngine#_recordHistorySent) — sans ça, une relance manuelle
+// n'ayant jamais transité par une vraie campagne resterait invisible du
+// Smart Screening et pourrait se faire recontacter sans le savoir.
+app.post('/api/messages/manual-import/sent', requireAccess, requireModule('whatsapp'), async (req, res) => {
+  const to = String((req.body || {}).to || '').trim();
+  const messageHash = String((req.body || {}).messageHash || '').trim();
+  const contactKey = messageHistory.normalizeContactKey(to);
+  if (!contactKey || !messageHash) {
+    return res.status(400).json({ error: 'Paramètres "to" et "messageHash" requis.' });
+  }
+
+  const tenantId = resolveTenantId(req);
+  const historyEntries = await messageHistory.loadHistory('whatsapp', tenantId);
+  historyEntries.push({ contactKey, messageHash, sentAt: new Date().toISOString() });
+  messageHistory.saveHistory('whatsapp', tenantId, historyEntries);
+
+  res.status(200).json({ status: 'recorded' });
+});
+
 app.post('/api/chat-natural', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   const { message } = req.body || {};
 
@@ -2670,6 +2765,90 @@ app.post('/api/telegram/contacts/import', requireAccess, requireModule('telegram
     .filter((c) => c.identifier);
 
   res.status(200).json({ contacts, total: contacts.length });
+});
+
+// Voir /api/messages/manual-import (même principe côté WhatsApp) : sert
+// directement la Relance Manuelle Express Telegram sans jamais créer ni
+// démarrer de campagne, avec le même Smart Screening anti-doublons 48h.
+app.post('/api/telegram/campaign/manual-import', requireAccess, requireModule('telegram'), upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Aucun fichier fourni (champ "file").' });
+  }
+  const template = String((req.body || {}).message || '').trim();
+
+  let rows;
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(sheet);
+  } catch (err) {
+    return res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .xlsx ou .csv avec une colonne "identifiant"/"username"/"telephone".' });
+  }
+
+  const contacts = rows
+    .map((row) => ({
+      identifier: String(
+        row.identifiant || row.username || row.Username || row.telegram || row.Telegram
+        || row.contact || row.Contact || row.telephone || row.Telephone || row.phone || row.Phone || '',
+      ).trim(),
+      name: String(row.prenom || row.Prenom || row.nom || row.Nom || row.name || row.Name || '').trim(),
+    }))
+    .filter((c) => c.identifier);
+
+  const tenantId = resolveTenantId(req);
+  const messageHash = messageHistory.hashTemplate([template]);
+  const duplicateWindowHours = messageHistory.clampWindowHours((req.body || {}).duplicateWindowHours);
+  const windowMs = duplicateWindowHours * 3_600_000;
+  const historyEntries = await messageHistory.loadHistory('telegram', tenantId);
+
+  const now = Date.now();
+  const historySeen = new Set();
+  historyEntries.forEach((entry) => {
+    if (!entry || entry.messageHash !== messageHash) return;
+    if (now - new Date(entry.sentAt).getTime() < windowMs) historySeen.add(entry.contactKey);
+  });
+
+  // Même comportement que TelegramCampaignEngine#getManualRelaunchQueue :
+  // un doublon détecté n'apparaît pas du tout dans la file.
+  const seenInThisImport = new Set();
+  let skippedDuplicates = 0;
+  const items = [];
+  contacts.forEach((contact) => {
+    const key = messageHistory.normalizeContactKey(contact.identifier);
+    const isDuplicate = Boolean(key) && (historySeen.has(key) || seenInThisImport.has(key));
+    if (key) seenInThisImport.add(key);
+    if (isDuplicate) { skippedDuplicates += 1; return; }
+    const isPhone = /^\+?\d[\d\s-]{5,}$/.test(contact.identifier);
+    const vars = buildPersonalizationVars(contact.name, contact.identifier);
+    items.push({
+      index: items.length,
+      to: contact.identifier,
+      isPhone,
+      phone: isPhone ? contact.identifier.replace(/[^\d]/g, '') : '',
+      username: !isPhone ? contact.identifier.replace(/^@/, '') : '',
+      name: contact.name,
+      message: personalizeMessage(template, vars),
+      status: 'pending',
+    });
+  });
+
+  res.status(200).json({ items, messageHash, total: items.length, skippedDuplicates });
+});
+
+app.post('/api/telegram/campaign/manual-import/sent', requireAccess, requireModule('telegram'), async (req, res) => {
+  const to = String((req.body || {}).to || '').trim();
+  const messageHash = String((req.body || {}).messageHash || '').trim();
+  const contactKey = messageHistory.normalizeContactKey(to);
+  if (!contactKey || !messageHash) {
+    return res.status(400).json({ error: 'Paramètres "to" et "messageHash" requis.' });
+  }
+
+  const tenantId = resolveTenantId(req);
+  const historyEntries = await messageHistory.loadHistory('telegram', tenantId);
+  historyEntries.push({ contactKey, messageHash, sentAt: new Date().toISOString() });
+  messageHistory.saveHistory('telegram', tenantId, historyEntries);
+
+  res.status(200).json({ status: 'recorded' });
 });
 
 app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram'), attachTelegram, upload.single('media'), async (req, res) => {

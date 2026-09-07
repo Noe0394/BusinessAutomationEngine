@@ -1402,15 +1402,18 @@
 
       <div class="relance-toolbar">
         <button type="button" id="relance-reload-btn">🔄 Charger la file d'attente</button>
-        <label for="relance-batch-size">Lot à charger
-          <select id="relance-batch-size">
-            <option value="0">Tous</option>
-            <option value="10">10 contacts</option>
-            <option value="20">20 contacts</option>
-            <option value="50">50 contacts</option>
-          </select>
-        </label>
         <span class="relance-rhythm-counter" id="relance-rhythm-counter" hidden></span>
+      </div>
+
+      <!-- Import direct (feuille de route) : source alternative à la file
+           "reprise d'une campagne" ci-dessus — un contact provenant d'un
+           fichier fraîchement importé bénéficie du MÊME anti-doublons 48h
+           (voir POST /api/messages/manual-import), sans jamais créer ni
+           démarrer de campagne automatique. -->
+      <div class="field">
+        <label for="relance-import-file">📂 Ou importer directement un fichier Excel/CSV de contacts (sans passer par une campagne)</label>
+        <input type="file" id="relance-import-file" accept=".csv,.xlsx,.xls">
+        <p class="relance-hint">Colonnes attendues : "telephone" (WhatsApp) ou "identifiant"/"username" (Telegram), et optionnellement "nom"/"prenom". Le message utilisé est celui de "Mon Intention" ci-dessus (ou la 1ère variante A/B/C si renseignée).</p>
       </div>
       <p id="relance-feedback" hidden></p>
 
@@ -2727,6 +2730,7 @@
             },
             namePlaceholder: '{nom}',
           });
+          createImageToLinkUploader(textarea);
         } else {
           const p = document.createElement('p');
           p.textContent = '📎 ' + step.file.name;
@@ -4776,6 +4780,7 @@
           textarea.addEventListener('input', () => { step.text = textarea.value; });
           card.appendChild(textarea);
           createSmartTextGenerator(textarea, { mode: schedTextGenMode });
+          createImageToLinkUploader(textarea);
         } else {
           const p = document.createElement('p');
           p.textContent = '📎 ' + step.file.name;
@@ -5542,7 +5547,16 @@
     // relanceUseStudioImage) mis en rotation avec les variantes de texte
     // (relanceComputeMessageForItem) — sessionStartAt/sentCount alimentent le
     // compteur de rythme en temps réel (voir relanceStartRhythmTimer).
-    const relanceState = { channel: 'whatsapp', items: [], cursor: 0, imageUrls: [null, null], sessionStartAt: null, sentCount: 0 };
+    // source : 'campaign' (file reprise d'une campagne existante, voir
+    // relanceLoadQueue) ou 'import' (fichier Excel/CSV importé directement,
+    // voir relanceImportContactsFile) — détermine quel endpoint "marquer
+    // comme envoyé" utiliser (voir relanceLaunchCurrent). messageHash n'est
+    // renseigné que pour la source 'import' (nécessaire pour tracer l'envoi
+    // dans le même historique anti-doublons que les campagnes).
+    const relanceState = {
+      channel: 'whatsapp', items: [], cursor: 0, imageUrls: [null, null], sessionStartAt: null, sentCount: 0,
+      source: 'campaign', messageHash: null,
+    };
     let relanceRhythmTimerId = null;
     const RELANCE_TIMEOUT_MS = 8000;
 
@@ -5853,10 +5867,17 @@
       return withoutToken ? `${withoutToken}\n\n${imageUrl}` : imageUrl;
     }
 
+    // Variante pratique pour un <textarea> statique identifié par son id —
+    // voir createImageToLinkUploader pour les <textarea> créés dynamiquement
+    // (étapes de séquence du Centre d'Envoi WhatsApp / Programmation, voir
+    // les appels à createSmartTextGenerator plus bas, même principe).
     function mountImageToLinkUploader(textareaId) {
       const textarea = document.getElementById(textareaId);
       if (!textarea) return;
+      createImageToLinkUploader(textarea);
+    }
 
+    function createImageToLinkUploader(textarea) {
       const wrap = document.createElement('div');
       wrap.className = 'image-link-uploader';
 
@@ -6141,13 +6162,13 @@
       try {
         const res = await relanceFetchWithTimeout(url, {}, RELANCE_TIMEOUT_MS);
         const data = await res.json();
-        const allItems = Array.isArray(data.items) ? data.items : [];
-        // Lot à charger (feuille de route module 8) : 0 = "Tous" (comportement
-        // historique), sinon ne garde que les N premiers contacts de la file
-        // pour cette session d'envoi manuel.
-        const batchLimit = parseInt(document.getElementById('relance-batch-size').value, 10) || 0;
-        relanceState.items = batchLimit > 0 ? allItems.slice(0, batchLimit) : allItems;
+        // Toujours la file complète, sans plafond — la limite de lot a été
+        // retirée sur demande explicite (elle bridait inutilement le nombre
+        // de contacts traitables en une session).
+        relanceState.items = Array.isArray(data.items) ? data.items : [];
         relanceState.cursor = 0;
+        relanceState.source = 'campaign';
+        relanceState.messageHash = null;
         document.getElementById('relance-feedback').hidden = true;
         document.getElementById('relance-series-panel').hidden = relanceState.items.length === 0;
         // Pré-génération immédiate de TOUTE la file (voir relancePrerenderAll)
@@ -6167,6 +6188,66 @@
         reloadBtn.disabled = false;
       }
     }
+
+    // Import direct d'un fichier Excel/CSV (feuille de route) : source
+    // ALTERNATIVE à relanceLoadQueue (reprise d'une campagne) — sert la
+    // même file d'attente sans jamais créer ni démarrer de campagne
+    // automatique, en appliquant le même Smart Screening anti-doublons 48h
+    // côté serveur (voir POST /api/messages/manual-import). Le "template"
+    // envoyé au serveur (pour le hash anti-doublons + une valeur de secours)
+    // est la 1ère variante A/B/C si renseignée, sinon l'intention — le texte
+    // réellement affiché par carte reste ensuite calculé côté client comme
+    // pour toute autre source (voir relancePrerenderAll).
+    async function relanceImportContactsFile(file) {
+      const url = relanceState.channel === 'telegram'
+        ? '/api/telegram/campaign/manual-import'
+        : '/api/messages/manual-import';
+      const variants = relanceGetVariantTexts();
+      const template = variants.length ? variants[0] : relanceGetIntention();
+      if (!template) {
+        relanceFeedback('Renseignez "Mon Intention de Campagne" (ou une variante A/B/C) avant d\'importer un fichier — c\'est le message qui sera envoyé.', true);
+        return;
+      }
+
+      const reloadBtn = document.getElementById('relance-reload-btn');
+      reloadBtn.disabled = true;
+      relanceFeedback('📂 Import du fichier en cours...', false);
+      try {
+        const form = new FormData();
+        form.append('file', file);
+        form.append('message', template);
+        const res = await relanceFetchWithTimeout(url, { method: 'POST', body: form }, RELANCE_TIMEOUT_MS * 2);
+        const data = await res.json();
+        if (!res.ok) {
+          relanceFeedback(data.error || 'Échec de l\'import du fichier.', true);
+          return;
+        }
+        relanceState.items = Array.isArray(data.items) ? data.items : [];
+        relanceState.cursor = 0;
+        relanceState.source = 'import';
+        relanceState.messageHash = data.messageHash;
+        document.getElementById('relance-feedback').hidden = true;
+        document.getElementById('relance-series-panel').hidden = relanceState.items.length === 0;
+        relancePrerenderAll();
+        if (relanceState.items.length > 0) relanceStartRhythmTimer();
+        relanceRenderCard();
+        const skipped = data.skippedDuplicates || 0;
+        relanceFeedback(`✅ ${relanceState.items.length} contact(s) importé(s)${skipped ? ` (${skipped} doublon(s) des dernières 48h ignoré(s))` : ''}.`, false);
+      } catch (err) {
+        if (err.message !== 'unauthorized') {
+          const reason = err.name === 'AbortError' ? 'délai réseau dépassé' : 'erreur réseau';
+          relanceFeedback(`Échec de l'import du fichier (${reason}) — réessayez.`, true);
+        }
+      } finally {
+        reloadBtn.disabled = false;
+      }
+    }
+
+    document.getElementById('relance-import-file').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) relanceImportContactsFile(file);
+      e.target.value = '';
+    });
 
     function relanceRenderCard() {
       const card = document.getElementById('relance-card');
@@ -6402,10 +6483,19 @@
       // Fire-and-forget : ne jamais laisser la latence réseau (jusqu'à
       // RELANCE_TIMEOUT_MS) retarder le passage au contact suivant — le lien
       // est déjà ouvert et le texte déjà copié, seule la TRACE peut échouer.
-      const markUrl = channel === 'telegram'
-        ? `/api/telegram/campaign/manual-queue/${item.index}/sent`
-        : `/api/messages/manual-queue/${item.index}/sent`;
-      relanceFetchWithTimeout(markUrl, { method: 'POST' }, RELANCE_TIMEOUT_MS).catch((err) => {
+      // Deux endpoints possibles selon l'origine de la file (voir
+      // relanceState.source) : une file reprise d'une campagne marque le
+      // résultat de CETTE campagne, un fichier importé directement (aucune
+      // campagne associée) trace l'envoi dans le même historique
+      // anti-doublons 48h que les campagnes (voir POST .../manual-import/sent).
+      const isImportSource = relanceState.source === 'import';
+      const markUrl = isImportSource
+        ? (channel === 'telegram' ? '/api/telegram/campaign/manual-import/sent' : '/api/messages/manual-import/sent')
+        : (channel === 'telegram' ? `/api/telegram/campaign/manual-queue/${item.index}/sent` : `/api/messages/manual-queue/${item.index}/sent`);
+      const markOptions = isImportSource
+        ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: item.to, messageHash: relanceState.messageHash }) }
+        : { method: 'POST' };
+      relanceFetchWithTimeout(markUrl, markOptions, RELANCE_TIMEOUT_MS).catch((err) => {
         if (err.message !== 'unauthorized') {
           relanceFeedback('Le lien a été ouvert et le texte copié, mais le statut n\'a pas pu être enregistré (réseau).', true);
         }
