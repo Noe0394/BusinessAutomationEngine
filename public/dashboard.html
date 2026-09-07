@@ -7450,15 +7450,28 @@
     // sur un timeout (une lenteur réseau générale ne serait pas résolue plus
     // vite par une 2e attente de MEDIA_FETCH_TIMEOUT_MS, ça doublerait
     // l'attente pour rien) — nouveau seed à chaque tentative.
+    // Jusqu'à 2 nouvelles tentatives (3 essais au total, backoff croissant),
+    // UNIQUEMENT sur un échec immédiat (onerror — typiquement un 429 de la
+    // limite de débit anonyme), jamais sur un timeout (une lenteur réseau
+    // générale ne serait pas résolue plus vite par une attente identique).
+    // Le service anonyme gratuit reste intrinsèquement sujet à des refus
+    // occasionnels ; ceci réduit concrètement la fréquence à laquelle un
+    // utilisateur voit le fond de secours local plutôt qu'un vrai visuel
+    // généré, sans faire attendre indéfiniment pour autant.
     async function mediaFetchBackgroundImage(promptEnriched, w, h) {
-      try {
-        return await mediaFetchBackgroundImageOnce(promptEnriched, w, h);
-      } catch (err) {
-        if (err.kind !== 'error') throw err;
-        console.warn('[ImageEngine] Premier essai échoué, nouvelle tentative...');
-        await mediaSleep(1500);
-        return mediaFetchBackgroundImageOnce(promptEnriched, w, h);
+      const backoffsMs = [1500, 3000];
+      let lastErr;
+      for (let attempt = 0; attempt <= backoffsMs.length; attempt += 1) {
+        try {
+          return await mediaFetchBackgroundImageOnce(promptEnriched, w, h);
+        } catch (err) {
+          lastErr = err;
+          if (err.kind !== 'error' || attempt === backoffsMs.length) break;
+          console.warn(`[ImageEngine] Essai ${attempt + 1} échoué, nouvelle tentative...`);
+          await mediaSleep(backoffsMs[attempt]);
+        }
       }
+      throw lastErr;
     }
 
     // Fond de secours 100% local (aucun réseau, ne peut jamais échouer) :
@@ -8031,6 +8044,17 @@
 
     async function mediaGenerateVideo() {
       if (!mediaCurrentCreation) { mediaFeedback("Sélectionnez d'abord une création (voir les propositions) avant d'exporter la vidéo.", true); return; }
+      // La vidéo réutilise directement mediaCurrentCreation.img (voir plus
+      // bas) : un fond de secours local (dégradé uni, voir
+      // mediaGenerateLocalPlaceholder) donnerait une vidéo au fond plat sans
+      // aucun visuel généré. L'enregistrement prend un temps réel (contraire
+      // à un simple téléchargement PNG instantané) — mieux vaut bloquer AVANT
+      // de lancer l'export que de faire attendre l'utilisateur pour un
+      // résultat déjà connu comme non professionnel.
+      if (mediaCurrentCreation.usedFallback) {
+        mediaFeedback('⚠️ Cette création utilise le fond de secours local (pas une image générée) — régénérez le fond ci-dessus avant d\'exporter la vidéo.', true);
+        return;
+      }
       if (!window.MediaRecorder) { mediaFeedback("Votre navigateur ne supporte pas l'enregistrement vidéo (MediaRecorder).", true); return; }
       const picked = mediaPickRecorderFormat();
       if (!picked) { mediaFeedback('Aucun format vidéo supporté par ce navigateur.', true); return; }
