@@ -29,6 +29,7 @@ const { replaceVariables, normalizeJid, jidToE164 } = require('./lib/whatsappRec
 const aiStudioStore = require('./lib/aiStudioStore');
 const copywriterEngine = require('./lib/ai/localCopywriterEngine');
 const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
+const imageLinkStore = require('./lib/media/imageLinkStore');
 const ebookGenerator = require('./lib/pdf/ebookGenerator');
 
 const app = express();
@@ -2847,6 +2848,82 @@ app.get('/api/media/temp/:token', (req, res) => {
   }
 
   res.set('Content-Type', entry.mimetype || 'video/mp4');
+  res.send(entry.buffer);
+});
+
+// ---------- Image-to-Link (aperçu visuel WhatsApp/Telegram, voir lib/media/imageLinkStore.js) ----------
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// Accepte soit un fichier importé (multipart, champ "image"), soit une
+// affiche Studio IA exportée côté client en data URL (canvas.toDataURL(),
+// champ JSON "imageDataUrl") — couvre les deux sources demandées par la
+// feuille de route sans dupliquer la logique d'upload.
+app.post('/api/media/image-link', requireAccess, upload.single('image'), (req, res) => {
+  let buffer;
+  let mimetype;
+
+  if (req.file) {
+    buffer = req.file.buffer;
+    mimetype = req.file.mimetype;
+  } else {
+    const dataUrl = String((req.body || {}).imageDataUrl || '');
+    const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) {
+      return res.status(400).json({ error: 'Aucune image reçue (fichier importé ou affiche Studio IA attendus).' });
+    }
+    mimetype = match[1];
+    buffer = Buffer.from(match[2], 'base64');
+  }
+
+  const title = String((req.body || {}).title || '').trim().slice(0, 120) || 'Aperçu image — CYRUS SUPER ASSISTANT';
+  const id = imageLinkStore.register(buffer, mimetype, { title });
+  res.json({ url: `${PUBLIC_BASE_URL}/v/${id}`, expiresInHours: 6 });
+});
+
+// Doit rester PUBLIQUE et sans authentification, même principe que
+// /api/media/temp/:token ci-dessus : c'est le "crawler" de prévisualisation
+// de lien de WhatsApp/Telegram lui-même qui va chercher cette page pour en
+// extraire les balises Open Graph — il n'envoie jamais nos en-têtes
+// d'authentification. Le jeton (32 caractères hex) fait office de
+// protection contre la découverte, et le lien expire après 6h (voir
+// lib/media/imageLinkStore.js).
+app.get('/v/:id', (req, res) => {
+  const entry = imageLinkStore.get(req.params.id);
+  if (!entry) {
+    return res.status(404).send('<!doctype html><html><body>Image expirée ou introuvable.</body></html>');
+  }
+
+  const imageUrl = `${PUBLIC_BASE_URL}/v/${req.params.id}/raw`;
+  const title = escapeHtml(entry.meta.title);
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${title}</title>
+<meta property="og:type" content="website">
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="Partagé via CYRUS SUPER ASSISTANT">
+<meta property="og:image" content="${imageUrl}">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh;">
+<img src="${imageUrl}" alt="${title}" style="max-width:100%;max-height:100vh;">
+</body>
+</html>`);
+});
+
+app.get('/v/:id/raw', (req, res) => {
+  const entry = imageLinkStore.get(req.params.id);
+  if (!entry) {
+    return res.status(404).send('Image expirée ou introuvable.');
+  }
+  res.set('Content-Type', entry.mimetype || 'image/png');
+  res.set('Cache-Control', 'public, max-age=21600');
   res.send(entry.buffer);
 });
 

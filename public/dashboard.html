@@ -206,6 +206,15 @@
     .relance-toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; }
     .relance-toolbar label { font-size: 0.85rem; color: #555; display: flex; align-items: center; gap: 0.4rem; }
     .relance-toolbar select { padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid #ccc; }
+    .relance-rhythm-counter { font-weight: bold; color: #075E54; font-size: 0.9rem; }
+
+    .relance-abtest-panel { border: 1px solid #ded6fb; border-radius: 8px; padding: 0.75rem 1rem; margin-top: 0.75rem; background: #f9f8ff; }
+    .relance-abtest-panel summary { font-weight: bold; cursor: pointer; color: #6c4fd6; }
+    .relance-abtest-panel textarea { min-height: 50px; }
+    .relance-image-slots { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+    .relance-image-slot { flex: 1 1 220px; display: flex; flex-direction: column; gap: 0.35rem; padding: 0.6rem; border: 1px dashed #ccc; border-radius: 6px; }
+    .relance-image-slot button { padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+    .relance-image-slot span { font-size: 0.8rem; color: #666; }
 
     /* Mode Série Continu (Manual Runner / tempo interactif) : quand actif,
        relanceLaunchCurrent() se redéclenche automatiquement à intervalle
@@ -1324,6 +1333,42 @@
         </p>
       </div>
 
+      <details class="relance-abtest-panel" id="relance-abtest-panel">
+        <summary>🧪 Test A/B/C &amp; Visuels (optionnel — jusqu'à 3 variantes de texte et 2 visuels, rotation automatique)</summary>
+        <p class="relance-hint">
+          Renseignez 2 ou 3 variantes pour les faire alterner automatiquement sur la file (A → B → C → A...). Utilisez
+          <code>{IMAGE_LINK}</code> dans une variante pour placer précisément le lien d'aperçu visuel — sinon, si un
+          visuel est configuré, son lien est ajouté automatiquement en fin de message. Laissez tout vide pour garder
+          le comportement par défaut (message de la campagne ou intention ci-dessus).
+        </p>
+        <div class="field">
+          <label for="relance-variant-a">Variante A</label>
+          <textarea id="relance-variant-a" placeholder="Ex: Salut {IMAGE_LINK} nouvelle collection dispo !" style="min-height: 50px;"></textarea>
+        </div>
+        <div class="field">
+          <label for="relance-variant-b">Variante B</label>
+          <textarea id="relance-variant-b" style="min-height: 50px;"></textarea>
+        </div>
+        <div class="field">
+          <label for="relance-variant-c">Variante C</label>
+          <textarea id="relance-variant-c" style="min-height: 50px;"></textarea>
+        </div>
+        <div class="relance-image-slots">
+          <div class="relance-image-slot">
+            <label for="relance-image-1">Visuel 1</label>
+            <input type="file" id="relance-image-1" accept="image/*">
+            <button type="button" id="relance-image-1-studio-btn">🖼️ Depuis Studio IA</button>
+            <span id="relance-image-1-status"></span>
+          </div>
+          <div class="relance-image-slot">
+            <label for="relance-image-2">Visuel 2</label>
+            <input type="file" id="relance-image-2" accept="image/*">
+            <button type="button" id="relance-image-2-studio-btn">🖼️ Depuis Studio IA</button>
+            <span id="relance-image-2-status"></span>
+          </div>
+        </div>
+      </details>
+
       <div class="relance-toolbar">
         <button type="button" id="relance-reload-btn">🔄 Charger la file d'attente</button>
         <label for="relance-batch-size">Lot à charger
@@ -1334,6 +1379,7 @@
             <option value="50">50 contacts</option>
           </select>
         </label>
+        <span class="relance-rhythm-counter" id="relance-rhythm-counter" hidden></span>
       </div>
       <p id="relance-feedback" hidden></p>
 
@@ -5460,7 +5506,12 @@
     // dès que "🚀 Lancer" est cliqué (le clic copie le texte, ouvre le deep
     // link, marque le contact 'sent_manual' côté serveur — voir
     // CampaignEngine#markManualSent — puis charge la carte suivante).
-    const relanceState = { channel: 'whatsapp', items: [], cursor: 0 };
+    // imageUrls : jusqu'à 2 liens d'aperçu visuel (voir relanceUploadImage/
+    // relanceUseStudioImage) mis en rotation avec les variantes de texte
+    // (relanceComputeMessageForItem) — sessionStartAt/sentCount alimentent le
+    // compteur de rythme en temps réel (voir relanceStartRhythmTimer).
+    const relanceState = { channel: 'whatsapp', items: [], cursor: 0, imageUrls: [null, null], sessionStartAt: null, sentCount: 0 };
+    let relanceRhythmTimerId = null;
     const RELANCE_TIMEOUT_MS = 8000;
 
     // Mode Série Continu (Manual Runner, feuille de route module 8) : quand
@@ -5759,17 +5810,171 @@
       return document.getElementById('relance-intention').value.trim();
     }
 
-    // Recalcule et affiche le message de la carte COURANTE : le message
-    // généré (si une intention est renseignée) ou, à défaut, le message de
-    // la campagne d'origine (comportement historique de la Phase 1).
+    // Test A/B/C (feuille de route "Gestion des lots et variations
+    // multi-tests") : jusqu'à 3 variantes de texte, en rotation A→B→C→A sur
+    // l'index du contact dans la file — vide si aucune variante n'est
+    // renseignée (comportement par défaut inchangé).
+    function relanceGetVariantTexts() {
+      return ['relance-variant-a', 'relance-variant-b', 'relance-variant-c']
+        .map((id) => document.getElementById(id).value.trim())
+        .filter(Boolean);
+    }
+
+    // Insère le lien d'aperçu visuel (voir relanceUploadImage) à l'endroit
+    // exact du jeton {IMAGE_LINK} s'il est présent dans le texte, sinon
+    // l'ajoute en fin de message — garantit que le lien est TOUJOURS présent
+    // dès qu'un visuel est configuré, même si l'utilisateur oublie le jeton
+    // (conserve le geste à 1 clic unique demandé par la feuille de route).
+    function relanceApplyImageLink(text, imageUrl) {
+      if (!imageUrl) return text;
+      if (text.includes('{IMAGE_LINK}')) return text.split('{IMAGE_LINK}').join(imageUrl);
+      return text ? `${text}\n\n${imageUrl}` : imageUrl;
+    }
+
+    // Calcul PUR et synchrone du message d'un contact donné (aucun appel
+    // réseau) : variantes A/B/C en rotation si configurées, sinon intention
+    // Spintax, sinon message de campagne d'origine (comportement historique)
+    // — puis substitution du lien visuel. Être purement synchrone est ce qui
+    // permet de pré-générer TOUTE la file en une seule passe (voir
+    // relancePrerenderAll) et donc une transition à 0ms entre deux cartes
+    // (feuille de route "Speed-Optimization").
+    function relanceComputeMessageForItem(item, index) {
+      const variants = relanceGetVariantTexts();
+      const intention = relanceGetIntention();
+      let text;
+      if (variants.length) {
+        text = variants[index % variants.length];
+      } else if (intention) {
+        text = smartTextGenerateVariant(intention, 'private', item.name);
+      } else {
+        text = item.message || '';
+      }
+
+      const images = relanceState.imageUrls.filter(Boolean);
+      const imageUrl = images.length ? images[index % images.length] : null;
+      return relanceApplyImageLink(text, imageUrl);
+    }
+
+    // Pré-génère le message de CHAQUE contact de la file en une seule passe,
+    // dès le chargement du lot (voir relanceLoadQueue) — relanceRenderCard()
+    // n'a alors plus qu'à LIRE item.renderedMessage, sans aucun calcul au
+    // moment de l'affichage.
+    function relancePrerenderAll() {
+      relanceState.items.forEach((item, index) => {
+        item.renderedMessage = relanceComputeMessageForItem(item, index);
+      });
+    }
+
+    // Force le RECALCUL du message de la carte COURANTE et met à jour le
+    // cache (item.renderedMessage) — utilisé par "🔄 Varier / Tourner le
+    // Texte" et par un changement de "Mon Intention" : contrairement à
+    // relanceRenderCard (qui lit le cache tel quel pour rester instantané),
+    // ces deux actions doivent explicitement piocher une nouvelle
+    // formulation.
     function relanceRefreshMessage() {
       const { items, cursor } = relanceState;
       if (cursor >= items.length) return;
       const item = items[cursor];
-      const intention = relanceGetIntention();
-      const message = intention ? smartTextGenerateVariant(intention, 'private', item.name) : (item.message || '');
-      document.getElementById('relance-message-text').value = message;
+      item.renderedMessage = relanceComputeMessageForItem(item, cursor);
+      document.getElementById('relance-message-text').value = item.renderedMessage;
     }
+
+    // ---------- Compteur de rythme en temps réel (feuille de route "Speed-Optimization") ----------
+    function relanceFormatElapsed(ms) {
+      const totalSec = Math.floor(ms / 1000);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return m > 0 ? `${m}min ${String(s).padStart(2, '0')}s` : `${s}s`;
+    }
+
+    function relanceUpdateRhythmDisplay() {
+      const el = document.getElementById('relance-rhythm-counter');
+      if (!relanceState.sessionStartAt || relanceState.sentCount === 0) { el.hidden = true; return; }
+      const elapsedMs = Date.now() - relanceState.sessionStartAt;
+      const elapsedMin = elapsedMs / 60000;
+      const rate = elapsedMin > 0 ? (relanceState.sentCount / elapsedMin) : 0;
+      el.hidden = false;
+      el.textContent = `⏱️ ${relanceState.sentCount} message(s) traité(s) en ${relanceFormatElapsed(elapsedMs)} — Rythme : ${rate.toFixed(1)} msg/min`;
+    }
+
+    function relanceStopRhythmTimer() {
+      if (relanceRhythmTimerId) { clearInterval(relanceRhythmTimerId); relanceRhythmTimerId = null; }
+    }
+
+    // Nouvelle session de rythme à chaque chargement de lot (voir
+    // relanceLoadQueue) : compteur et chrono repartent de zéro.
+    function relanceStartRhythmTimer() {
+      relanceStopRhythmTimer();
+      relanceState.sessionStartAt = Date.now();
+      relanceState.sentCount = 0;
+      relanceUpdateRhythmDisplay();
+      relanceRhythmTimerId = setInterval(relanceUpdateRhythmDisplay, 1000);
+    }
+
+    // ---------- Image-to-Link (aperçu visuel WhatsApp/Telegram, voir POST /api/media/creative-direction... /api/media/image-link) ----------
+    async function relanceUploadImage(slot, file) {
+      const statusEl = document.getElementById(`relance-image-${slot + 1}-status`);
+      statusEl.textContent = '⏳ Envoi en cours...';
+      try {
+        const form = new FormData();
+        form.append('image', file);
+        const res = await apiFetch('/api/media/image-link', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = data.error || 'Échec de l\'envoi.';
+          return;
+        }
+        relanceState.imageUrls[slot] = data.url;
+        statusEl.textContent = `✅ ${data.url}`;
+        relancePrerenderAll();
+        relanceRenderCard();
+      } catch (err) {
+        if (err.message !== 'unauthorized') statusEl.textContent = 'Échec de l\'envoi (réseau).';
+      }
+    }
+
+    // Réutilise directement la dernière création du Studio Média
+    // (mediaCurrentCreation, voir plus bas dans ce fichier) : exporte le
+    // canvas actuel en PNG et l'envoie au même endpoint que l'upload de
+    // fichier — couvre "utiliser une affiche du Studio IA" sans dupliquer le
+    // pipeline d'upload.
+    async function relanceUseStudioImage(slot) {
+      const statusEl = document.getElementById(`relance-image-${slot + 1}-status`);
+      if (typeof mediaCurrentCreation === 'undefined' || !mediaCurrentCreation) {
+        statusEl.textContent = 'Aucune création Studio IA disponible — générez-en une dans l\'onglet Studio Média.';
+        return;
+      }
+      statusEl.textContent = '⏳ Envoi en cours...';
+      try {
+        const canvas = document.getElementById('media-canvas');
+        const dataUrl = canvas.toDataURL('image/png');
+        const res = await apiFetch('/api/media/image-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageDataUrl: dataUrl, title: 'Affiche Studio IA — CYRUS' }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = data.error || 'Échec de l\'envoi.';
+          return;
+        }
+        relanceState.imageUrls[slot] = data.url;
+        statusEl.textContent = `✅ ${data.url}`;
+        relancePrerenderAll();
+        relanceRenderCard();
+      } catch (err) {
+        if (err.message !== 'unauthorized') statusEl.textContent = 'Échec de l\'envoi (réseau).';
+      }
+    }
+
+    document.getElementById('relance-image-1').addEventListener('change', (e) => {
+      if (e.target.files[0]) relanceUploadImage(0, e.target.files[0]);
+    });
+    document.getElementById('relance-image-2').addEventListener('change', (e) => {
+      if (e.target.files[0]) relanceUploadImage(1, e.target.files[0]);
+    });
+    document.getElementById('relance-image-1-studio-btn').addEventListener('click', () => relanceUseStudioImage(0));
+    document.getElementById('relance-image-2-studio-btn').addEventListener('click', () => relanceUseStudioImage(1));
 
     async function relanceLoadQueue() {
       const url = relanceState.channel === 'telegram'
@@ -5789,6 +5994,10 @@
         relanceState.cursor = 0;
         document.getElementById('relance-feedback').hidden = true;
         document.getElementById('relance-series-panel').hidden = relanceState.items.length === 0;
+        // Pré-génération immédiate de TOUTE la file (voir relancePrerenderAll)
+        // et nouvelle session de rythme — voir relanceStartRhythmTimer.
+        relancePrerenderAll();
+        if (relanceState.items.length > 0) relanceStartRhythmTimer();
         relanceRenderCard();
       } catch (err) {
         // Fallback local : la file affichée reste celle déjà chargée (le
@@ -5815,6 +6024,8 @@
           ? `Tous les contacts de la file ont été traités (${items.length}/${items.length} envoyés). Rechargez pour vérifier s'il en reste.`
           : 'Aucun contact en attente ou en échec à relancer pour le moment.';
         seriesClearTimer();
+        relanceUpdateRhythmDisplay();
+        relanceStopRhythmTimer();
         return;
       }
 
@@ -5832,11 +6043,15 @@
         : item.phone;
       document.getElementById('relance-contact-label').textContent = item.name ? `${item.name} — ${identifier}` : identifier;
 
-      // Variation automatique : une nouvelle formulation est piochée à
-      // chaque fois qu'une NOUVELLE carte s'affiche (voir relanceRefreshMessage) —
-      // le bouton "🎲 Régénérer" permet d'en repiocher une autre sans changer
-      // de contact.
-      relanceRefreshMessage();
+      // Affichage à 0ms (feuille de route "Speed-Optimization") : le message
+      // est déjà calculé pour CE contact (voir relancePrerenderAll, appelé au
+      // chargement du lot) — simple lecture, aucun calcul ici. Filet de
+      // sécurité si jamais un item n'a pas encore été pré-généré (ex: lot
+      // modifié entre-temps) : calcul unique à la volée.
+      if (typeof item.renderedMessage !== 'string') {
+        item.renderedMessage = relanceComputeMessageForItem(item, cursor);
+      }
+      document.getElementById('relance-message-text').value = item.renderedMessage;
 
       const launchBtn = document.getElementById('relance-launch-btn');
       launchBtn.textContent = '🚀 Envoyer & Suivant';
@@ -5982,6 +6197,8 @@
         }
       });
 
+      relanceState.sentCount += 1;
+      relanceUpdateRhythmDisplay();
       relanceState.cursor += 1;
       relanceRenderCard();
     }
@@ -6020,6 +6237,16 @@
     });
 
     document.getElementById('relance-intention').addEventListener('change', relanceRefreshMessage);
+
+    // Toute variante A/B/C modifiée après le chargement du lot re-génère
+    // l'ensemble de la file (voir relancePrerenderAll) — la rotation reste
+    // cohérente sur tous les contacts, pas seulement la carte affichée.
+    ['relance-variant-a', 'relance-variant-b', 'relance-variant-c'].forEach((id) => {
+      document.getElementById(id).addEventListener('change', () => {
+        relancePrerenderAll();
+        relanceRenderCard();
+      });
+    });
 
     document.getElementById('relance-regenerate-btn').addEventListener('click', () => {
       if (!relanceGetIntention()) {
