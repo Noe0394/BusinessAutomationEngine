@@ -1662,6 +1662,7 @@
 
         <div id="media-preview-wrap" hidden>
           <p class="empty">✅ Création sélectionnée — modifiez-la ci-dessous ou téléchargez-la.</p>
+          <p class="media-fallback-badge" id="media-current-fallback-warning" hidden>⚠️ Cette création utilise le fond de secours local (génération IA indisponible au moment de la génération) — ce n'est PAS une image générée. Régénérez le fond ci-dessous avant de télécharger pour un rendu professionnel.</p>
           <div id="media-canvas-frame">
             <canvas id="media-canvas"></canvas>
           </div>
@@ -7585,6 +7586,37 @@
       };
     }
 
+    // Nombre de lignes qu'un texte occuperait à la police ACTUELLEMENT
+    // définie sur `ctx` (voir ctx.font) — même logique de retour à la ligne
+    // que mediaWrapText, mais sans rien dessiner (sert uniquement à
+    // dimensionner avant de choisir la taille de police définitive).
+    function mediaCountWrappedLines(ctx, text, maxWidth) {
+      const words = String(text || '').split(/\s+/).filter(Boolean);
+      if (!words.length) return 0;
+      let lines = 1;
+      let line = '';
+      words.forEach((word) => {
+        const test = line ? `${line} ${word}` : word;
+        if (line && ctx.measureText(test).width > maxWidth) { lines += 1; line = word; } else { line = test; }
+      });
+      return lines;
+    }
+
+    // Réduit progressivement la taille de police jusqu'à ce que le texte
+    // tienne en `maxLines` lignes maximum (jamais en-dessous de `minSizePx`)
+    // — corrige le bug remonté où un titre long (4 lignes) repoussait son
+    // texte jusqu'à chevaucher l'appel à l'action/numéro de téléphone,
+    // dessiné plus bas à une position fixe.
+    function mediaFitFontSize(ctx, text, maxWidth, maxLines, weight, baseSizePx, minSizePx) {
+      let size = baseSizePx;
+      while (size > minSizePx) {
+        ctx.font = `${weight} ${Math.round(size)}px Arial, sans-serif`;
+        if (mediaCountWrappedLines(ctx, text, maxWidth) <= maxLines) break;
+        size -= 2;
+      }
+      return size;
+    }
+
     function mediaDrawFlyerLayers(ctx, w, h, fields) {
       mediaDrawGradientOverlay(ctx, w, h);
       mediaDrawBadge(ctx, fields.badge, w, h);
@@ -7595,16 +7627,28 @@
       ctx.shadowBlur = w * 0.01;
       ctx.textBaseline = 'alphabetic';
 
+      // Zone réservée à l'appel à l'action / numéro (position fixe en bas,
+      // voir plus bas) : titre + sous-titre + prix ne doivent JAMAIS
+      // dépasser cette limite, quelle que soit leur longueur.
+      const ctaSafeTop = h * 0.86;
       let cursorY = h * 0.72;
+
       if (fields.title) {
-        ctx.font = `900 ${Math.round(w * 0.075)}px Arial, sans-serif`;
-        cursorY = mediaWrapText(ctx, fields.title, w / 2, w * 0.88, w * 0.082, cursorY, 'center');
+        const maxTitleWidth = w * 0.88;
+        // Priorise un titre tenant en 3 lignes maximum, quitte à réduire la
+        // police (jusqu'à 40% de sa taille de base) plutôt que de laisser
+        // un titre long grossir indéfiniment vers le bas de l'affiche.
+        const fittedSize = mediaFitFontSize(ctx, fields.title, maxTitleWidth, 3, 900, w * 0.075, w * 0.03);
+        ctx.font = `900 ${Math.round(fittedSize)}px Arial, sans-serif`;
+        const lineHeight = fittedSize * 1.15;
+        cursorY = mediaWrapText(ctx, fields.title, w / 2, maxTitleWidth, lineHeight, cursorY, 'center');
+        cursorY = Math.min(cursorY, ctaSafeTop);
       }
-      if (fields.subtitle) {
+      if (fields.subtitle && cursorY < ctaSafeTop - h * 0.03) {
         ctx.font = `600 ${Math.round(w * 0.036)}px Arial, sans-serif`;
-        cursorY = mediaWrapText(ctx, fields.subtitle, w / 2, w * 0.86, w * 0.05, cursorY + h * 0.015, 'center');
+        cursorY = Math.min(mediaWrapText(ctx, fields.subtitle, w / 2, w * 0.86, w * 0.05, cursorY + h * 0.015, 'center'), ctaSafeTop);
       }
-      if (fields.price) {
+      if (fields.price && cursorY < ctaSafeTop - h * 0.02) {
         ctx.font = `900 ${Math.round(w * 0.05)}px Arial, sans-serif`;
         ctx.fillStyle = '#ffd166';
         mediaWrapText(ctx, fields.price, w / 2, w * 0.86, w * 0.06, cursorY + h * 0.02, 'center');
@@ -7763,10 +7807,15 @@
     // Sélection d'une proposition : promeut la variante en "création
     // actuelle" (mediaCurrentCreation) et bascule sur le panneau d'édition —
     // point de départ de la boucle d'itération/modification illimitée.
+    function mediaUpdateFallbackWarning() {
+      document.getElementById('media-current-fallback-warning').hidden = !(mediaCurrentCreation && mediaCurrentCreation.usedFallback);
+    }
+
     function mediaSelectVariant(result) {
       mediaCurrentCreation = {
         img: result.img, promptEnriched: result.promptEnriched,
         width: result.width, height: result.height, ratio: result.ratio, deliverable: result.deliverable,
+        usedFallback: Boolean(result.usedFallback),
       };
       const canvas = document.getElementById('media-canvas');
       canvas.width = result.width;
@@ -7779,6 +7828,7 @@
       document.getElementById('media-variants-grid').hidden = true;
       document.getElementById('media-preview-wrap').hidden = false;
       document.getElementById('media-style-note').value = '';
+      mediaUpdateFallbackWarning();
       mediaFeedback('✅ Création sélectionnée — modifiez-la ci-dessous si besoin.', false);
     }
 
@@ -7821,12 +7871,14 @@
         const { img, usedFallback } = await mediaFetchBackgroundWithFallback(promptEnriched, mediaCurrentCreation.width, mediaCurrentCreation.height);
         mediaCurrentCreation.img = img;
         mediaCurrentCreation.promptEnriched = promptEnriched;
+        mediaCurrentCreation.usedFallback = usedFallback;
         const canvas = document.getElementById('media-canvas');
         const ctx = canvas.getContext('2d');
         mediaDrawCoverImage(ctx, img, mediaCurrentCreation.width, mediaCurrentCreation.height);
         if (mediaCurrentCreation.deliverable === 'FLYER_AFFICHE') {
           mediaDrawFlyerLayers(ctx, mediaCurrentCreation.width, mediaCurrentCreation.height, mediaGetFlyerFields());
         }
+        mediaUpdateFallbackWarning();
         mediaFeedback(usedFallback
           ? '⚠️ Service IA indisponible — fond de secours local appliqué (le changement de style demandé n\'a pas pu être pris en compte, réessayez dans quelques instants).'
           : '✅ Fond régénéré avec le changement demandé.', usedFallback);
