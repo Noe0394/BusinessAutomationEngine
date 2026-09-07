@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 const githubStore = require('../githubStore');
 
 // Isolation stricte par tenant (une clé de licence = un tenant = un compte
@@ -37,6 +38,15 @@ function createAuthStore(tenantId) {
     try {
       const remote = await store.fetchRemote();
       if (remote && remote.content) {
+        // Sur un conteneur Render fraîchement redéployé, le disque éphémère
+        // ne contient pas encore SESSION_DIR_BASE (voir adapters/telegram.js) :
+        // sans ce mkdirSync, cette écriture levait ENOENT, silencieusement
+        // avalée par le catch ci-dessous — la session restait donc "restaurée
+        // avec succès" en apparence (aucune erreur visible) mais jamais
+        // effectivement écrite sur disque, forçant une réauthentification SMS
+        // à chaque redémarrage malgré la sauvegarde GitHub intacte. Même
+        // correctif que writeCreds() dans whatsappAuthStore.js.
+        fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
         fs.writeFileSync(sessionPath, remote.content, 'utf8');
         lastPushedContent = remote.content;
         console.log(`Session Telegram restaurée depuis GitHub pour le tenant "${tenantId}".`);
