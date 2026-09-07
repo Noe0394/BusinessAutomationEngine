@@ -7,7 +7,10 @@
 // réellement effectif (voir CLAUDE.md : "tous les identifiants sont lus
 // depuis le fichier .env local" — jusqu'ici vrai seulement si l'on
 // sourçait .env manuellement avant `node index.js`).
-require('dotenv').config();
+// quiet: true supprime les "tips" promotionnels que dotenv >= 17 affiche
+// aléatoirement au chargement (fonctionnalité officielle du package, pas un
+// souci de sécurité — juste du bruit dans les logs de production).
+require('dotenv').config({ quiet: true });
 
 const crypto = require('crypto');
 if (!globalThis.crypto) {
@@ -43,6 +46,7 @@ const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const imageLinkStore = require('./lib/media/imageLinkStore');
 const videoAiEngine = require('./lib/media/videoAiEngine');
 const storyboardEngine = require('./lib/media/storyboardEngine');
+const videoMixerEngine = require('./lib/media/videoMixerEngine');
 const messageHistory = require('./lib/messageHistory');
 const { personalizeMessage, buildPersonalizationVars } = require('./lib/personalization');
 const ebookGenerator = require('./lib/pdf/ebookGenerator');
@@ -269,13 +273,13 @@ async function requireAccess(req, res, next) {
 // (req.allowedModules === null signifie "aucune restriction").
 function requireModule(moduleName) {
   return (req, res, next) => {
-    // "facebook" et "studio_video" (YouTube/TikTok) sont forcés disponibles
-    // pour toute clé, sans passer par allowedModules : licenses.js exclut ces
-    // modules de la vente/attribution (ALL_MODULES = ['whatsapp', 'telegram'])
-    // depuis leur retrait du système de licences, ce qui bloquerait ces
-    // routes pour toute clé existante — y compris celles déjà émises — tant
-    // qu'ils n'y sont pas réintégrés.
-    if (moduleName === 'facebook' || moduleName === 'studio_video') {
+    // "facebook" (YouTube/TikTok) reste hors du système de licences — accès
+    // libre pour toute clé (voir licenses.js#ALL_MODULES). "studio_video" a
+    // été réintégré (verrouillage du Studio IA) : les clés déjà émises AVANT
+    // cette réintégration ont été migrées pour le conserver (voir
+    // licenses.js#migrateStudioVideoModule) — seules les clés créées après
+    // sans ce module sélectionné sont désormais réellement bloquées ci-dessous.
+    if (moduleName === 'facebook') {
       return next();
     }
     if (req.allowedModules === null || req.allowedModules === undefined) {
@@ -3333,6 +3337,47 @@ app.get('/api/studio/storyboard/status/:id', requireAccess, requireModule('studi
   res.json({ status: 'done', url: `${PUBLIC_BASE_URL}/v/${id}`, expiresInHours: 6 });
 });
 
+// ---------- Import vidéo personnelle & habillage TikTok/Reels (voir lib/media/videoMixerEngine.js) ----------
+// Traitement 100% local (ffmpeg), pas d'appel à un fournisseur externe — donc
+// synchrone (pas de job/poll comme /api/studio/video-ai ou /api/studio/storyboard
+// ci-dessus) : quelques clips courts se montent en quelques secondes à
+// quelques dizaines de secondes, largement dans le budget d'une requête HTTP
+// classique. whatsappMediaUpload (déjà configuré à 100 Mo/fichier, voir plus
+// haut) est réutilisé tel quel plutôt que de définir une nouvelle instance
+// multer dédiée pour ce seul besoin, identique en pratique.
+app.post('/api/studio/video-mixer', requireAccess, requireModule('studio_video'), whatsappMediaUpload.fields([
+  { name: 'clips', maxCount: 10 },
+  { name: 'music', maxCount: 1 },
+  { name: 'logo', maxCount: 1 },
+]), async (req, res) => {
+  try {
+    const files = req.files || {};
+    const clipFiles = files.clips || [];
+    if (clipFiles.length === 0) {
+      return res.status(400).json({ error: 'Importez au moins un clip vidéo.' });
+    }
+
+    const body = req.body || {};
+    const buffer = await videoMixerEngine.mixVideos({
+      clipBuffers: clipFiles.map((f) => f.buffer),
+      autoStyle916: String(body.autoStyle916) === 'true',
+      musicBuffer: (files.music && files.music[0]) ? files.music[0].buffer : null,
+      musicVolume: parseFloat(body.musicVolume),
+      fadeAudio: String(body.fadeAudio) === 'true',
+      titleText: String(body.titleText || '').trim().slice(0, 100),
+      priceText: String(body.priceText || '').trim().slice(0, 60),
+      contactText: String(body.contactText || '').trim().slice(0, 60),
+      logoBuffer: (files.logo && files.logo[0]) ? files.logo[0].buffer : null,
+    });
+
+    const id = imageLinkStore.register(buffer, 'video/mp4', { title: 'Montage vidéo — CYRUS SUPER ASSISTANT' });
+    res.json({ url: `${PUBLIC_BASE_URL}/v/${id}`, expiresInHours: 6 });
+  } catch (err) {
+    console.error('Erreur lors du montage vidéo:', err.message);
+    res.status(500).json({ error: err.message || 'Échec du montage vidéo.' });
+  }
+});
+
 app.get('/api/media/status', requireAccess, requireModule('studio_video'), (req, res) => {
   res.status(200).json({
     youtube: { configured: mediaPublisher.isYoutubeConfigured(), connectAvailable: mediaPublisher.isYoutubeConnectAvailable() },
@@ -3996,8 +4041,9 @@ app.use((err, req, res, next) => {
 
 licenses
   .initFromRemote()
+  .then(() => licenses.migrateStudioVideoModule())
   .catch((err) => {
-    console.error('Erreur lors de la restauration des licences depuis GitHub :', err);
+    console.error('Erreur lors de la restauration/migration des licences :', err);
   })
   .finally(() => {
     app.listen(PORT, () => {

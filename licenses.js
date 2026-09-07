@@ -76,6 +76,33 @@ async function initFromRemote() {
   }
 }
 
+// À appeler une fois au démarrage (voir index.js, juste après
+// initFromRemote()) : réattribue 'studio_video' à toute licence créée avant
+// STUDIO_VIDEO_MIGRATION_CUTOFF qui ne l'a pas déjà dans son
+// allowedModules stocké — idempotent (ne réécrit rien si déjà migré), donc
+// sans risque à réexécuter à chaque redémarrage.
+async function migrateStudioVideoModule() {
+  const licensesList = loadLicenses();
+  const cutoffMs = new Date(STUDIO_VIDEO_MIGRATION_CUTOFF).getTime();
+  let changed = false;
+
+  licensesList.forEach((license) => {
+    const isPreExisting = license.createdAt && new Date(license.createdAt).getTime() < cutoffMs;
+    if (!isPreExisting) return;
+
+    const modules = Array.isArray(license.allowedModules) ? license.allowedModules : ALL_MODULES.slice();
+    if (!modules.includes('studio_video')) {
+      license.allowedModules = [...modules, 'studio_video'];
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    await saveLicenses(licensesList);
+    console.log('Migration licences : module "studio_video" réattribué aux clés existantes (créées avant réintroduction du verrouillage).');
+  }
+}
+
 function generateKeyString() {
   const random = crypto.randomBytes(4).toString('hex').toUpperCase();
   const year = new Date().getFullYear();
@@ -83,11 +110,24 @@ function generateKeyString() {
 }
 
 // Modules disponibles à la vente/à l'attribution. Facebook/Instagram/YouTube/
-// TikTok (ex-module "studio_video") ont été retirés du système de licences —
-// seuls WhatsApp et Telegram restent proposables. Toute clé existante qui
-// portait encore "facebook"/"studio_video" perd silencieusement ces modules
-// dès la prochaine vérification (normalizeModules filtre sur ALL_MODULES).
-const ALL_MODULES = ['whatsapp', 'telegram'];
+// TikTok sont restés hors du système de licences (accès libre, voir
+// requireModule('facebook') dans index.js). "studio_video" (Studio IA :
+// Copywriter IA, Studio Média, générateur de livres, vidéo IA) a été
+// réintroduit ici sur demande explicite (verrouillage du Studio IA derrière
+// une licence) — voir STUDIO_VIDEO_MIGRATION_CUTOFF et migrateStudioVideoModule()
+// ci-dessous, qui réattribue automatiquement ce module à toute clé créée
+// AVANT cette réintroduction pour ne jamais couper l'accès d'un client déjà
+// équipé (ce module était forcé ouvert pour tous jusqu'ici, voir l'historique
+// de requireModule dans index.js).
+const ALL_MODULES = ['whatsapp', 'telegram', 'studio_video'];
+
+// Toute licence créée avant cette date a par définition accès à
+// 'studio_video' de fait (le module était forcé ouvert pour tout le monde
+// jusqu'à cette réintroduction) — migrateStudioVideoModule() s'appuie
+// dessus pour réattribuer le module UNIQUEMENT à ces clés-là, sans jamais
+// l'accorder automatiquement à une clé créée après (qui suit désormais la
+// sélection normale du formulaire admin).
+const STUDIO_VIDEO_MIGRATION_CUTOFF = '2026-09-08T00:00:00.000Z';
 
 function normalizeModules(allowedModules) {
   if (!Array.isArray(allowedModules)) {
@@ -278,6 +318,7 @@ function getStorageStatus() {
 module.exports = {
   ALL_MODULES,
   initFromRemote,
+  migrateStudioVideoModule,
   createLicense,
   deleteLicense,
   listLicenses,

@@ -282,6 +282,12 @@
     #media-canvas-frame { max-width: 380px; margin: 1rem 0; border-radius: 10px; overflow: hidden; border: 1px solid #e0e0e0; background: #111; }
     #media-canvas { width: 100%; height: auto; display: block; }
     #media-video-preview-wrap { max-width: 380px; margin: 1rem 0; }
+    /* Mockup d'écran de smartphone (feuille de route "Import vidéo perso") :
+       cadre sombre arrondi + encoche, la vidéo 9:16 remplit tout l'écran —
+       CSS pur, aucun asset image externe. */
+    .phone-mockup { max-width: 260px; margin: 1rem auto; padding: 14px 10px; background: #111; border-radius: 32px; box-shadow: 0 8px 28px rgba(0,0,0,0.35); position: relative; }
+    .phone-mockup::before { content: ''; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: 70px; height: 14px; background: #111; border-radius: 8px; }
+    .phone-mockup video { width: 100%; aspect-ratio: 9/16; object-fit: cover; border-radius: 18px; display: block; background: #000; }
     #media-video-preview { width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid #e0e0e0; background: #111; }
 
     /* Grille des 3 propositions (voir mediaGenerateVariants) */
@@ -1462,6 +1468,28 @@
         dépendance à une API externe. Posez une question ou générez un livre complet en PDF.
       </p>
 
+      <!-- Verrouillage d'accès (feuille de route) : le Studio IA (Copywriter
+           IA, Studio Média, Générateur de Livres, Vidéo IA) fait désormais
+           partie du module de licence "studio_video" (voir licenses.js) —
+           affiché uniquement si la clé de licence utilisée ne l'inclut pas
+           (hasModule('studio_video'), voir applyStudioLockState). Un admin
+           ou une clé sans restriction (currentAllowedModules === null) ne
+           voit jamais cet écran. -->
+      <div id="studio-lock-screen" hidden>
+        <p class="empty">
+          🔒 Le Studio IA (Copywriter IA, Studio Média, Générateur de Livres, Vidéo IA) est une fonctionnalité
+          sous licence. Activez une clé incluant le module "Studio IA" pour y accéder.
+        </p>
+        <form id="studio-unlock-form">
+          <div class="field">
+            <label for="studio-unlock-key">Clé de licence</label>
+            <input type="text" id="studio-unlock-key" placeholder="KEY-XXXXXXXX-2026" autocomplete="off" />
+          </div>
+          <button type="submit" class="send-button">🔓 Activer le Studio IA</button>
+          <p id="studio-unlock-feedback" hidden></p>
+        </form>
+      </div>
+
       <div class="mode-toggle" id="studio-subtab-toggle">
         <button type="button" class="mode-btn active" data-view="assistant">💬 Assistant IA</button>
         <button type="button" class="mode-btn" data-view="ebook">📖 Générateur de Livres</button>
@@ -1781,6 +1809,76 @@
             <div id="media-declinations-grid" hidden></div>
           </div>
         </div>
+
+        <!-- Import de vidéos personnelles & habillage TikTok/Reels (feuille de
+             route) : outil indépendant du Studio IA ci-dessus, travaille sur
+             des clips réellement importés (téléphone) — voir
+             lib/media/videoMixerEngine.js (fusion + recadrage 9:16 +
+             musique + bannières texte/logo, 100% ffmpeg local). -->
+        <div class="subsection">
+          <h3>📱 Import vidéo perso & habillage TikTok/Reels</h3>
+          <p class="empty">Importez un ou plusieurs clips filmés au téléphone, fusionnez-les et habillez-les pour TikTok/Reels.</p>
+
+          <div class="field">
+            <label for="mixer-clips-input">Ajouter des clips (MP4/WebM)</label>
+            <input type="file" id="mixer-clips-input" accept="video/*" multiple />
+          </div>
+          <div id="mixer-clips-list"></div>
+
+          <label style="display:flex; align-items:center; gap:0.5rem; margin: 0.5rem 0;">
+            <input type="checkbox" id="mixer-916-toggle" checked /> Format vertical 9:16 (TikTok/Reels)
+          </label>
+
+          <div class="row">
+            <div class="field">
+              <label for="mixer-title-text">Titre accrocheur (optionnel)</label>
+              <input type="text" id="mixer-title-text" placeholder="ex : NOUVEAU !" />
+            </div>
+            <div class="field">
+              <label for="mixer-price-text">Bannière prix (optionnel)</label>
+              <input type="text" id="mixer-price-text" placeholder="ex : 19,99€" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="mixer-contact-text">Numéro de contact (optionnel)</label>
+              <input type="text" id="mixer-contact-text" placeholder="ex : 07 XX XX XX XX" />
+            </div>
+            <div class="field">
+              <label for="mixer-logo-input">Logo (optionnel)</label>
+              <input type="file" id="mixer-logo-input" accept="image/*" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="mixer-music-input">Musique de fond (optionnel — remplace le son des clips)</label>
+            <input type="file" id="mixer-music-input" accept="audio/*" />
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="mixer-music-volume">Volume musique</label>
+              <input type="range" id="mixer-music-volume" min="0" max="1.5" step="0.1" value="0.8" />
+            </div>
+            <label style="display:flex; align-items:center; gap:0.5rem; margin-top: 1.6rem;">
+              <input type="checkbox" id="mixer-fade-toggle" checked /> Fondu d'entrée/sortie
+            </label>
+          </div>
+
+          <button type="button" id="mixer-generate-btn" class="send-button">🎬 Fusionner et habiller</button>
+          <button type="button" id="mixer-v2v-btn" class="studio-handoff-btn">🎨 Variante IA du 1er clip (Video-to-Video)</button>
+          <p id="mixer-feedback" hidden></p>
+
+          <div id="mixer-result-wrap" hidden>
+            <p class="empty">🎞️ Résultat :</p>
+            <div class="phone-mockup">
+              <video id="mixer-result-preview" controls autoplay muted loop playsinline></video>
+            </div>
+            <p class="studio-msg-actions">
+              <a id="mixer-result-download" class="studio-handoff-btn" href="#" download="cyrus-tiktok.mp4">📥 Télécharger le fichier MP4</a>
+              <a id="mixer-result-link" class="studio-handoff-btn" href="#" target="_blank" rel="noopener">🔗 Ouvrir le lien de partage</a>
+            </p>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1831,14 +1929,39 @@
     };
 
     function hasModule(moduleName) {
-      // "facebook" et "studio_video" (YouTube/TikTok) sont forcés disponibles
-      // pour toute clé : licenses.js ne les propose plus à la vente/
-      // attribution (ALL_MODULES ne contient que whatsapp/telegram) depuis
-      // leur retrait du système de licences, ce qui les masquerait pour toute
-      // clé existante sinon — même contournement que requireModule() côté
-      // serveur pour les routes /api/facebook/* et /api/media/*.
-      if (moduleName === 'facebook' || moduleName === 'studio_video') return true;
+      // "facebook" (YouTube/TikTok) reste hors du système de licences — accès
+      // libre pour toute clé (voir requireModule('facebook') côté serveur).
+      // "studio_video" (Studio IA) est désormais un module de licence à part
+      // entière (voir licenses.js) — les clés déjà émises ont été migrées
+      // pour le conserver (migrateStudioVideoModule), les nouvelles suivent
+      // la sélection du formulaire admin.
+      if (moduleName === 'facebook') return true;
       return currentAllowedModules === null || currentAllowedModules.includes(moduleName);
+    }
+
+    // Bascule l'écran de verrouillage du Studio IA (voir #studio-lock-screen)
+    // — appelée après chaque connexion/activation de clé, jamais au chargement
+    // seul (currentAllowedModules n'est connu qu'une fois le statut renvoyé
+    // par le serveur, voir showApp()/init() et le formulaire de déverrouillage
+    // ci-dessous).
+    function applyStudioLockState() {
+      const locked = !hasModule('studio_video');
+      document.getElementById('studio-lock-screen').hidden = !locked;
+      document.getElementById('studio-subtab-toggle').hidden = locked;
+      if (locked) {
+        document.getElementById('studio-assistant-view').hidden = true;
+        document.getElementById('studio-ebook-view').hidden = true;
+        document.getElementById('studio-media-view').hidden = true;
+      } else {
+        // Réaffiche la vue active du sous-onglet (assistant par défaut) —
+        // ne force jamais un onglet particulier si l'utilisateur en avait
+        // déjà choisi un autre avant un verrouillage transitoire.
+        const activeView = document.querySelector('#studio-subtab-toggle .mode-btn.active');
+        const view = activeView ? activeView.dataset.view : 'assistant';
+        document.getElementById('studio-assistant-view').hidden = view !== 'assistant';
+        document.getElementById('studio-ebook-view').hidden = view !== 'ebook';
+        document.getElementById('studio-media-view').hidden = view !== 'media';
+      }
     }
 
     // ---------- Identifiant d'appareil (verrouillage un-appareil-par-clé) ----------
@@ -1943,13 +2066,16 @@
       // "connections" : le module Facebook y est toujours autorisé (voir
       // requireModule('facebook')/channelAllowed() côté serveur), et
       // "scheduler" filtre lui-même les canaux Telegram/WhatsApp selon
-      // hasModule() — pas besoin de masquer ces onglets entiers. "studio"
-      // (Copywriter Studio IA) n'a, lui, tout simplement AUCUNE restriction
-      // de module côté serveur (voir index.js, routes /api/ai-studio/* et
-      // /api/ebooks/generate : requireAccess seul, jamais requireModule) —
-      // disponible à toute clé de licence valide.
+      // hasModule() — pas besoin de masquer ces onglets entiers. L'onglet
+      // "studio" (Copywriter Studio IA) reste lui aussi toujours VISIBLE
+      // (jamais masqué comme whatsapp/telegram ci-dessous) même sans le
+      // module "studio_video" : un clic dessus affiche l'écran d'activation
+      // (voir applyStudioLockState) plutôt que de cacher complètement la
+      // fonctionnalité — meilleure incitation à l'achat qu'un onglet absent.
       const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'))
         .filter((btn) => !['connections', 'scheduler', 'prospects', 'share', 'studio'].includes(btn.dataset.tab));
+
+      applyStudioLockState();
 
       if (currentAllowedModules === null) {
         tabButtons.forEach((btn) => { btn.hidden = false; });
@@ -2005,6 +2131,52 @@
       } catch (err) {
         document.getElementById('login-error').textContent = 'Erreur de connexion au serveur.';
         document.getElementById('login-error').hidden = false;
+      }
+    });
+
+    // Écran de verrouillage du Studio IA (voir #studio-lock-screen) : même
+    // endpoint de vérification que la connexion principale
+    // (POST /api/auth/verify-key), mais SANS déconnecter la session en cours
+    // — remplace juste la clé stockée par la nouvelle si elle est valide et
+    // inclut le module, pour permettre de "monter en gamme" une session déjà
+    // ouverte sans re-basculer par l'écran de connexion.
+    document.getElementById('studio-unlock-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const key = document.getElementById('studio-unlock-key').value.trim().toUpperCase();
+      const feedback = document.getElementById('studio-unlock-feedback');
+      feedback.hidden = true;
+      if (!key) return;
+      try {
+        const res = await fetch('/api/auth/verify-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, deviceId: getDeviceId() }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          feedback.textContent = data.error || 'Clé de licence invalide.';
+          feedback.hidden = false;
+          feedback.className = 'error';
+          return;
+        }
+        const allowedModules = Array.isArray(data.allowedModules) ? data.allowedModules : null;
+        if (allowedModules !== null && !allowedModules.includes('studio_video')) {
+          feedback.textContent = 'Cette clé est valide mais n\'inclut pas le module "Studio IA".';
+          feedback.hidden = false;
+          feedback.className = 'error';
+          return;
+        }
+        setStoredAuth('license', key);
+        authRole = 'license';
+        currentAllowedModules = allowedModules;
+        applyModuleVisibility();
+        feedback.textContent = '✅ Studio IA débloqué !';
+        feedback.hidden = false;
+        feedback.className = 'ok';
+      } catch (err) {
+        feedback.textContent = 'Erreur de connexion au serveur.';
+        feedback.hidden = false;
+        feedback.className = 'error';
       }
     });
 
@@ -8504,6 +8676,159 @@
     }
 
     document.getElementById('media-storyboard-generate-btn').addEventListener('click', mediaGenerateStoryboard);
+
+    // ---------- Import vidéo perso & habillage TikTok/Reels (voir lib/media/videoMixerEngine.js) ----------
+    let mixerClips = []; // File[] dans l'ordre de fusion
+
+    function mixerFeedback(message, isError) {
+      const el = document.getElementById('mixer-feedback');
+      el.textContent = message;
+      el.hidden = false;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    function renderMixerClipsList() {
+      const list = document.getElementById('mixer-clips-list');
+      list.innerHTML = '';
+      if (mixerClips.length === 0) {
+        list.innerHTML = '<p class="empty">Aucun clip importé.</p>';
+        return;
+      }
+      mixerClips.forEach((file, idx) => {
+        const row = document.createElement('div');
+        row.className = 'sequence-step-header';
+        const label = document.createElement('span');
+        label.className = 'sequence-step-badge';
+        label.textContent = `${idx + 1}. ${file.name}`;
+        row.appendChild(label);
+
+        const actions = document.createElement('div');
+        actions.className = 'sequence-step-actions';
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button'; upBtn.textContent = '▲'; upBtn.disabled = idx === 0;
+        upBtn.addEventListener('click', () => { [mixerClips[idx - 1], mixerClips[idx]] = [mixerClips[idx], mixerClips[idx - 1]]; renderMixerClipsList(); });
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button'; downBtn.textContent = '▼'; downBtn.disabled = idx === mixerClips.length - 1;
+        downBtn.addEventListener('click', () => { [mixerClips[idx + 1], mixerClips[idx]] = [mixerClips[idx], mixerClips[idx + 1]]; renderMixerClipsList(); });
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button'; delBtn.textContent = '🗑️';
+        delBtn.addEventListener('click', () => { mixerClips.splice(idx, 1); renderMixerClipsList(); });
+        actions.appendChild(upBtn); actions.appendChild(downBtn); actions.appendChild(delBtn);
+        row.appendChild(actions);
+        list.appendChild(row);
+      });
+    }
+
+    document.getElementById('mixer-clips-input').addEventListener('change', (e) => {
+      mixerClips = mixerClips.concat(Array.from(e.target.files || []));
+      renderMixerClipsList();
+      e.target.value = '';
+    });
+    renderMixerClipsList();
+
+    function mixerShowResult(url) {
+      document.getElementById('mixer-result-preview').src = `${url}/raw`;
+      document.getElementById('mixer-result-download').href = `${url}/raw`;
+      document.getElementById('mixer-result-link').href = url;
+      document.getElementById('mixer-result-wrap').hidden = false;
+    }
+
+    document.getElementById('mixer-generate-btn').addEventListener('click', async () => {
+      if (mixerClips.length === 0) { mixerFeedback('Importez au moins un clip vidéo.', true); return; }
+      const btn = document.getElementById('mixer-generate-btn');
+      btn.disabled = true;
+      mixerFeedback('🎬 Fusion et habillage en cours (peut prendre jusqu\'à quelques minutes)...', false);
+      try {
+        const form = new FormData();
+        mixerClips.forEach((file) => form.append('clips', file));
+        form.append('autoStyle916', document.getElementById('mixer-916-toggle').checked ? 'true' : 'false');
+        form.append('fadeAudio', document.getElementById('mixer-fade-toggle').checked ? 'true' : 'false');
+        form.append('musicVolume', document.getElementById('mixer-music-volume').value);
+        const titleText = document.getElementById('mixer-title-text').value.trim();
+        const priceText = document.getElementById('mixer-price-text').value.trim();
+        const contactText = document.getElementById('mixer-contact-text').value.trim();
+        if (titleText) form.append('titleText', titleText);
+        if (priceText) form.append('priceText', priceText);
+        if (contactText) form.append('contactText', contactText);
+        const musicFile = document.getElementById('mixer-music-input').files[0];
+        if (musicFile) form.append('music', musicFile);
+        const logoFile = document.getElementById('mixer-logo-input').files[0];
+        if (logoFile) form.append('logo', logoFile);
+
+        const res = await apiFetch('/api/studio/video-mixer', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Échec du montage vidéo.');
+
+        mixerShowResult(data.url);
+        mixerFeedback('✅ Vidéo habillée générée — lien de partage prêt (expire dans 6h).', false);
+      } catch (err) {
+        if (err.message !== 'unauthorized') mixerFeedback(`❌ ${err.message}`, true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // Video-to-Video (feuille de route) : extrait la PREMIÈRE frame du 1er
+    // clip importé (côté client, <video>+<canvas>, aucun traitement serveur
+    // supplémentaire nécessaire) puis la réutilise comme image de départ du
+    // pipeline vidéo IA déjà en place (POST /api/studio/video-ai/start —
+    // même endpoint que mediaGenerateAiVideo ci-dessus) pour produire une
+    // variante stylisée par IA du tout premier plan du clip.
+    function mixerExtractFirstFrame(file) {
+      return new Promise((resolve, reject) => {
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.src = URL.createObjectURL(file);
+        video.addEventListener('loadeddata', () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          canvas.getContext('2d').drawImage(video, 0, 0);
+          canvas.toBlob((blob) => {
+            URL.revokeObjectURL(video.src);
+            if (blob) resolve(blob); else reject(new Error("Échec d'extraction de la première image du clip."));
+          }, 'image/png');
+        });
+        video.addEventListener('error', () => reject(new Error('Clip vidéo illisible par le navigateur.')));
+      });
+    }
+
+    document.getElementById('mixer-v2v-btn').addEventListener('click', async () => {
+      if (mixerClips.length === 0) { mixerFeedback('Importez au moins un clip vidéo avant de générer une variante IA.', true); return; }
+      const btn = document.getElementById('mixer-v2v-btn');
+      btn.disabled = true;
+      mixerFeedback('🎨 Extraction de la première image du clip...', false);
+      try {
+        const frameBlob = await mixerExtractFirstFrame(mixerClips[0]);
+
+        const form = new FormData();
+        form.append('image', frameBlob, 'first-frame.png');
+        form.append('prompt', document.getElementById('mixer-title-text').value.trim());
+
+        mixerFeedback('🤖 Génération de la variante IA (LTX-Video) en cours — 1 à 3 minutes...', false);
+        const startRes = await apiFetch('/api/studio/video-ai/start', { method: 'POST', body: form });
+        const startData = await startRes.json();
+        if (!startRes.ok) throw new Error(startData.error || 'Échec du démarrage de la variante IA.');
+
+        let result = null;
+        for (let attempt = 0; attempt < MEDIA_AI_VIDEO_MAX_POLLS; attempt += 1) {
+          await mediaSleep(MEDIA_AI_VIDEO_POLL_MS);
+          const statusRes = await apiFetch(`/api/studio/video-ai/status?jobToken=${encodeURIComponent(startData.jobToken)}`);
+          const statusData = await statusRes.json();
+          if (statusData.status === 'done') { result = statusData; break; }
+          if (statusData.status === 'error') throw new Error(statusData.message || 'Échec de la variante IA.');
+        }
+        if (!result) throw new Error('La génération prend trop de temps — réessayez plus tard.');
+
+        mixerShowResult(result.url);
+        mixerFeedback('✅ Variante IA générée à partir du premier clip.', false);
+      } catch (err) {
+        if (err.message !== 'unauthorized') mixerFeedback(`❌ ${err.message}`, true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
 
     // PWA : installation optionnelle sous le nom "CYRUS SUPER ASSISTANT"
     // (voir public/manifest.json et public/sw.js) — échec silencieux sur un
