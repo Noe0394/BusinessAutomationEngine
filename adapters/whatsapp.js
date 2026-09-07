@@ -8,8 +8,6 @@ const path = require('path');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
-  fetchLatestWaWebVersion,
-  fetchLatestBaileysVersion,
   DisconnectReason,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
@@ -49,59 +47,24 @@ if (!process.env.AUTH_DIR && !githubStore.enabled) {
 // les quotas d'envoi de messages.
 const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 
-// La version du protocole WhatsApp Web figée dans le paquet Baileys installé
-// devient obsolète dès que WhatsApp fait évoluer son protocole côté serveur —
-// WhatsApp rejette alors la connexion en pleine tentative d'appairage (QR
-// jamais validé / code d'association qui échoue, ou coupure en pleine
-// négociation, cf. incident du 2026-09-06), sans rapport avec les identifiants
-// ou le réseau. Résolution en deux temps :
-//   1. fetchLatestWaWebVersion() interroge directement web.whatsapp.com (le
-//      "client_revision" servi par WhatsApp lui-même) — la source la plus à
-//      jour possible, puisqu'elle ne dépend d'aucune mise à jour manuelle d'un
-//      mainteneur tiers.
-//   2. En cas d'échec (réseau, format de réponse changé...), repli sur
-//      fetchLatestBaileysVersion() qui lit le fichier de version publié dans
-//      le dépôt GitHub de Baileys — une source un peu moins fraîche mais
-//      indépendante de web.whatsapp.com.
-//   3. Si les deux échouent, on laisse `version` non défini : makeWASocket()
-//      retombe alors sur la version par défaut compilée dans la lib Baileys
-//      installée (comportement strictement identique à avant ce correctif) —
-//      l'appairage n'est donc jamais bloqué par une panne de résolution de
-//      version, seulement potentiellement moins à jour.
-// Mise en cache au niveau du module (partagé par tous les tenants) : un seul
-// aller-retour réseau par démarrage du process en cas de succès. Un timeout
-// court évite qu'un réseau capricieux ne retarde indéfiniment une tentative
-// de connexion WhatsApp.
-const WA_VERSION_FETCH_TIMEOUT_MS = 10_000;
-let cachedWAVersion = null;
-
-async function resolveWAVersion() {
-  if (cachedWAVersion) return cachedWAVersion;
-
-  let result = await fetchLatestWaWebVersion({ timeout: WA_VERSION_FETCH_TIMEOUT_MS });
-  let source = 'web.whatsapp.com';
-
-  if (result.error) {
-    console.warn(
-      `Version WhatsApp Web introuvable via ${source} (${result.error.message}) — tentative via le dépôt Baileys...`,
-    );
-    result = await fetchLatestBaileysVersion({ timeout: WA_VERSION_FETCH_TIMEOUT_MS });
-    source = 'dépôt Baileys';
-  }
-
-  cachedWAVersion = result.version;
-
-  if (result.error) {
-    console.warn(
-      `Impossible de confirmer la dernière version WhatsApp Web (${source} indisponible : ${result.error.message}) — ` +
-      `repli sur la version par défaut intégrée à Baileys : ${result.version.join('.')}.`,
-    );
-  } else {
-    console.log(`Version WhatsApp Web utilisée (source : ${source}) : ${result.version.join('.')}.`);
-  }
-
-  return cachedWAVersion;
-}
+// Pas de résolution dynamique de version WA Web ici — testé en production le
+// 2026-09-07 : fetchLatestWaWebVersion() (ajouté lors d'une tentative de
+// "futureproofing" précédente) a provoqué un rejet SYSTÉMATIQUE du QR par
+// WhatsApp. Cause : le numéro de version à lui seul ne garantit rien, seul le
+// format binaire (protobufs) réellement implémenté dans la lib Baileys
+// installée compte — annoncer à WhatsApp une version plus récente que ce que
+// Baileys sait effectivement parler fait que ses serveurs s'attendent à des
+// champs/comportements que la lib ne fournit pas, et rejettent la session.
+// La FAQ officielle Baileys (https://baileys.wiki/faq) est explicite :
+// "Avoid calling fetchLatestWaWebVersion on every connect — newer versions
+// can be incompatible. [...] The default version Baileys ships with is the
+// recommended one." La bonne façon de rester à jour vis-à-vis du protocole
+// WhatsApp est de mettre à jour le paquet @whiskeysockets/baileys lui-même
+// (nouveau protobufs + nouvelle version par défaut assortie), pas de
+// substituer un numéro de version à l'exécution. makeWASocket() ci-dessous
+// n'a donc PAS d'option `version` — la valeur compilée dans la lib installée
+// (voir node_modules/@whiskeysockets/baileys/lib/Defaults/baileys-version.json)
+// est utilisée telle quelle.
 
 function createSession(tenantId) {
   const AUTH_DIR = path.join(AUTH_DIR_BASE, tenantId);
@@ -343,7 +306,6 @@ function createSession(tenantId) {
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     authState = state;
-    const waVersion = await resolveWAVersion();
     // Capturé UNE FOIS ici, avant toute tentative de connexion : Baileys peut
     // remettre creds.registered à false en interne dès qu'il détecte un rejet
     // (le close handler ci-dessous verrait alors toujours "jamais enregistré"
@@ -354,7 +316,6 @@ function createSession(tenantId) {
 
     sock = makeWASocket({
       auth: state,
-      ...(waVersion ? { version: waVersion } : {}),
       printQRInTerminal: false,
       // Par défaut, Baileys ne laisse vivre un QR que 60s pour le premier,
       // puis seulement 20s pour chaque QR suivant avant de fermer la
