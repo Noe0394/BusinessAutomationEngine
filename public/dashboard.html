@@ -199,7 +199,22 @@
     .relance-skip-button { background: #fff; border: 2px solid #c0392b; color: #c0392b; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; }
     .relance-launch-button { background: #25D366; color: #fff; border: none; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; font-size: 1.05rem; flex-basis: 100%; }
     .relance-launch-button.telegram { background: #2AABEE; }
+    .relance-call-button { background: #fff; border: 2px solid #075E54; color: #075E54; border-radius: 8px; padding: 0.9rem 1rem; font-weight: bold; min-height: 52px; }
+    .relance-call-button:disabled { opacity: 0.4; cursor: not-allowed; }
     .relance-hint { font-size: 0.85rem; color: #777; margin-top: 0.5rem; }
+
+    .relance-toolbar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; }
+    .relance-toolbar label { font-size: 0.85rem; color: #555; display: flex; align-items: center; gap: 0.4rem; }
+    .relance-toolbar select { padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid #ccc; }
+
+    /* Mode Série Continu (Manual Runner / tempo interactif) : quand actif,
+       relanceLaunchCurrent() se redéclenche automatiquement à intervalle
+       réglable au lieu d'attendre un clic — voir seriesArmCountdown(). */
+    .relance-series-panel { border: 1px dashed #075E54; border-radius: 8px; padding: 0.75rem 1rem; margin-top: 0.75rem; background: #f2fbf5; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .relance-series-panel label { font-size: 0.85rem; color: #444; display: flex; align-items: center; gap: 0.4rem; }
+    .relance-series-countdown { font-weight: bold; color: #075E54; }
+    .relance-series-panel button { padding: 0.5rem 0.9rem; border-radius: 6px; border: 1px solid #075E54; background: #fff; color: #075E54; font-weight: bold; }
+    .relance-series-panel button.active { background: #075E54; color: #fff; }
 
     /* Composant universel "Copywriter IA Intelligent" (SmartTextGenerator) —
        monté sous chaque <textarea> de rédaction par createSmartTextGenerator. */
@@ -1309,10 +1324,30 @@
         </p>
       </div>
 
-      <button type="button" id="relance-reload-btn">🔄 Charger la file d'attente</button>
+      <div class="relance-toolbar">
+        <button type="button" id="relance-reload-btn">🔄 Charger la file d'attente</button>
+        <label for="relance-batch-size">Lot à charger
+          <select id="relance-batch-size">
+            <option value="0">Tous</option>
+            <option value="10">10 contacts</option>
+            <option value="20">20 contacts</option>
+            <option value="50">50 contacts</option>
+          </select>
+        </label>
+      </div>
       <p id="relance-feedback" hidden></p>
 
       <p id="relance-empty" class="empty">Cliquez sur "Charger la file d'attente" pour afficher les contacts à relancer.</p>
+
+      <div class="relance-series-panel" id="relance-series-panel" hidden>
+        <label><input type="checkbox" id="relance-series-toggle"> Mode Série Continu (envoi cadencé automatique)</label>
+        <label>Tempo
+          <input type="range" id="relance-series-tempo" min="5" max="15" value="8" step="1">
+          <span id="relance-series-tempo-value">8s</span>
+        </label>
+        <span class="relance-series-countdown" id="relance-series-countdown" hidden></span>
+        <button type="button" id="relance-series-pause-btn" hidden>⏸️ Pause la série</button>
+      </div>
 
       <div class="relance-card" id="relance-card" hidden>
         <div class="relance-card-header">
@@ -1327,10 +1362,11 @@
         <div class="relance-card-actions">
           <button type="button" class="relance-copy-button" id="relance-copy-btn">📋 Copier le texte</button>
           <button type="button" class="relance-regenerate-button" id="relance-regenerate-btn">🔄 Varier / Tourner le Texte</button>
+          <button type="button" class="relance-call-button" id="relance-call-btn">📞 Appeler</button>
           <button type="button" class="relance-skip-button" id="relance-skip-btn">⏭️ Ignorer / Suivant</button>
-          <button type="button" class="relance-launch-button" id="relance-launch-btn">🚀 Lancer</button>
+          <button type="button" class="relance-launch-button" id="relance-launch-btn">🚀 Envoyer &amp; Suivant</button>
         </div>
-        <p class="relance-hint">Raccourcis clavier : <strong>Espace</strong> = Lancer, <strong>Flèche droite</strong> = Ignorer/Suivant (inactifs pendant la saisie dans un champ texte).</p>
+        <p class="relance-hint">Raccourcis clavier : <strong>Espace</strong> = Envoyer &amp; Suivant, <strong>Flèche droite</strong> = Ignorer/Suivant (inactifs pendant la saisie dans un champ texte). Le texte du message ci-dessus est modifiable directement avant l'envoi.</p>
       </div>
     </section>
 
@@ -5424,6 +5460,20 @@
     const relanceState = { channel: 'whatsapp', items: [], cursor: 0 };
     const RELANCE_TIMEOUT_MS = 8000;
 
+    // Mode Série Continu (Manual Runner, feuille de route module 8) : quand
+    // `active`, chaque nouvelle carte affichée réarme un décompte de
+    // `tempoSeconds` (voir seriesArmCountdown) qui déclenche automatiquement
+    // relanceLaunchCurrent(true) à zéro — sans clic. `running` permet une
+    // pause temporaire (bouton "Pause la série") sans désactiver le mode.
+    // IMPORTANT (limite navigateur) : window.open() appelé hors d'un geste
+    // utilisateur direct (ce qui est le cas ici, déclenché par un
+    // setInterval) est bloqué comme pop-up par la plupart des navigateurs —
+    // voir la gestion du retour de window.open() dans relanceLaunchCurrent,
+    // qui met la série en pause et repasse en clic manuel plutôt que de
+    // marquer silencieusement un contact comme traité sans que le lien ait
+    // réellement pu s'ouvrir.
+    const seriesState = { active: false, running: false, tempoSeconds: 8, timerId: null, remaining: 0 };
+
     function relanceFeedback(message, isError) {
       const el = document.getElementById('relance-feedback');
       el.textContent = message;
@@ -5727,9 +5777,15 @@
       try {
         const res = await relanceFetchWithTimeout(url, {}, RELANCE_TIMEOUT_MS);
         const data = await res.json();
-        relanceState.items = Array.isArray(data.items) ? data.items : [];
+        const allItems = Array.isArray(data.items) ? data.items : [];
+        // Lot à charger (feuille de route module 8) : 0 = "Tous" (comportement
+        // historique), sinon ne garde que les N premiers contacts de la file
+        // pour cette session d'envoi manuel.
+        const batchLimit = parseInt(document.getElementById('relance-batch-size').value, 10) || 0;
+        relanceState.items = batchLimit > 0 ? allItems.slice(0, batchLimit) : allItems;
         relanceState.cursor = 0;
         document.getElementById('relance-feedback').hidden = true;
+        document.getElementById('relance-series-panel').hidden = relanceState.items.length === 0;
         relanceRenderCard();
       } catch (err) {
         // Fallback local : la file affichée reste celle déjà chargée (le
@@ -5753,8 +5809,9 @@
         card.hidden = true;
         empty.hidden = false;
         empty.textContent = items.length
-          ? 'Tous les contacts de la file ont été traités. Rechargez pour vérifier s\'il en reste.'
+          ? `Tous les contacts de la file ont été traités (${items.length}/${items.length} envoyés). Rechargez pour vérifier s'il en reste.`
           : 'Aucun contact en attente ou en échec à relancer pour le moment.';
+        seriesClearTimer();
         return;
       }
 
@@ -5762,7 +5819,7 @@
       card.hidden = false;
 
       const item = items[cursor];
-      document.getElementById('relance-counter').textContent = `Contact ${cursor + 1}/${items.length}`;
+      document.getElementById('relance-counter').textContent = `${cursor} / ${items.length} envoyés — Contact ${cursor + 1}/${items.length}`;
       const statusBadge = document.getElementById('relance-status-badge');
       statusBadge.textContent = item.status;
       statusBadge.className = 'badge ' + (item.status === 'failed' ? 'disconnected' : 'connected');
@@ -5779,8 +5836,20 @@
       relanceRefreshMessage();
 
       const launchBtn = document.getElementById('relance-launch-btn');
-      launchBtn.textContent = `🚀 Lancer ${item.name || ''}`.trim();
+      launchBtn.textContent = '🚀 Envoyer & Suivant';
       launchBtn.className = 'relance-launch-button' + (channel === 'telegram' ? ' telegram' : '');
+
+      // Appel direct (module 7, "Appeler") : uniquement disponible quand un
+      // numéro est connu — un contact Telegram identifié par @username n'a
+      // pas de numéro exploitable pour un lien tel:.
+      const callBtn = document.getElementById('relance-call-btn');
+      callBtn.disabled = !item.phone;
+      callBtn.onclick = item.phone ? () => { window.location.href = `tel:${item.phone}`; } : null;
+
+      // Mode Série Continu : réarme le décompte pour CETTE nouvelle carte,
+      // quelle que soit la source du changement (chargement initial, Ignorer,
+      // ou Envoyer & Suivant) — voir seriesArmCountdown.
+      seriesArmCountdown();
     }
 
     function relanceBuildDeepLink(item, text) {
@@ -5806,8 +5875,69 @@
     // prochain rechargement tant qu'il reste 'pending'/'failed' côté serveur.
     function relanceSkipCurrent() {
       if (relanceState.cursor >= relanceState.items.length) return;
+      seriesClearTimer();
       relanceState.cursor += 1;
       relanceRenderCard();
+    }
+
+    // ---------- Mode Série Continu (Manual Runner, feuille de route module 8) ----------
+    function seriesClearTimer() {
+      if (seriesState.timerId) {
+        clearInterval(seriesState.timerId);
+        seriesState.timerId = null;
+      }
+    }
+
+    function seriesUpdateCountdownLabel() {
+      const el = document.getElementById('relance-series-countdown');
+      if (!seriesState.active || !seriesState.running) {
+        el.hidden = true;
+        return;
+      }
+      el.hidden = false;
+      el.textContent = seriesState.remaining > 0
+        ? `⏱️ Contact suivant dans ${seriesState.remaining}s...`
+        : '⚡ Envoi en cours...';
+    }
+
+    // Réarme le décompte pour la carte actuellement affichée. Appelé à
+    // chaque nouvelle carte (voir relanceRenderCard) : sans effet si le mode
+    // Série n'est pas actif/en cours, ou si la file est vide.
+    function seriesArmCountdown() {
+      seriesClearTimer();
+      if (!seriesState.active || !seriesState.running) {
+        seriesUpdateCountdownLabel();
+        return;
+      }
+      if (relanceState.cursor >= relanceState.items.length) return;
+
+      seriesState.remaining = seriesState.tempoSeconds;
+      seriesUpdateCountdownLabel();
+      seriesState.timerId = setInterval(() => {
+        seriesState.remaining -= 1;
+        if (seriesState.remaining <= 0) {
+          seriesClearTimer();
+          seriesUpdateCountdownLabel();
+          relanceLaunchCurrent(true);
+        } else {
+          seriesUpdateCountdownLabel();
+        }
+      }, 1000);
+    }
+
+    // window.open() déclenché par le décompte automatique (pas par un clic)
+    // est bloqué comme pop-up par la plupart des navigateurs — voir la note
+    // sur seriesState. Plutôt que de marquer silencieusement le contact
+    // comme traité sans que le lien ait pu s'ouvrir, on met la série en
+    // pause et on laisse la carte actuelle affichée pour un clic manuel sur
+    // "Envoyer & Suivant" (qui, lui, fonctionne toujours : un vrai clic).
+    function seriesPauseForBlockedPopup() {
+      seriesClearTimer();
+      seriesState.running = false;
+      document.getElementById('relance-series-pause-btn').textContent = '▶️ Reprendre la série';
+      document.getElementById('relance-series-pause-btn').classList.remove('active');
+      seriesUpdateCountdownLabel();
+      relanceFeedback('Le navigateur a bloqué l\'ouverture automatique du lien (pop-up). Série mise en pause — cliquez sur "Envoyer & Suivant" pour continuer.', true);
     }
 
     // Action "Turbo 1-clic" : copie + ouverture du deep link + traçabilité
@@ -5815,7 +5945,9 @@
     // est volontairement non bloquante (délai + échec réseau n'empêchent
     // jamais d'avancer) : le lien a déjà été ouvert et le texte déjà copié,
     // l'utilisateur a déjà agi — seule la TRACE peut échouer.
-    async function relanceLaunchCurrent() {
+    // `auto` = true quand l'appel vient du décompte du Mode Série Continu
+    // (pas d'un clic direct) — voir seriesArmCountdown/seriesPauseForBlockedPopup.
+    async function relanceLaunchCurrent(auto) {
       const { items, cursor, channel } = relanceState;
       if (cursor >= items.length) return;
       const item = items[cursor];
@@ -5829,18 +5961,23 @@
         // Telegram" en pâtirait, sans bloquer la suite de l'action.
       }
 
-      window.open(relanceBuildDeepLink(item, text), '_blank', 'noopener');
+      const opened = window.open(relanceBuildDeepLink(item, text), '_blank', 'noopener');
+      if (auto && !opened) {
+        seriesPauseForBlockedPopup();
+        return;
+      }
 
+      // Fire-and-forget : ne jamais laisser la latence réseau (jusqu'à
+      // RELANCE_TIMEOUT_MS) retarder le passage au contact suivant — le lien
+      // est déjà ouvert et le texte déjà copié, seule la TRACE peut échouer.
       const markUrl = channel === 'telegram'
         ? `/api/telegram/campaign/manual-queue/${item.index}/sent`
         : `/api/messages/manual-queue/${item.index}/sent`;
-      try {
-        await relanceFetchWithTimeout(markUrl, { method: 'POST' }, RELANCE_TIMEOUT_MS);
-      } catch (err) {
+      relanceFetchWithTimeout(markUrl, { method: 'POST' }, RELANCE_TIMEOUT_MS).catch((err) => {
         if (err.message !== 'unauthorized') {
           relanceFeedback('Le lien a été ouvert et le texte copié, mais le statut n\'a pas pu être enregistré (réseau).', true);
         }
-      }
+      });
 
       relanceState.cursor += 1;
       relanceRenderCard();
@@ -5856,6 +5993,28 @@
     });
 
     document.getElementById('relance-reload-btn').addEventListener('click', relanceLoadQueue);
+
+    document.getElementById('relance-series-toggle').addEventListener('change', (e) => {
+      seriesState.active = e.target.checked;
+      seriesState.running = e.target.checked;
+      document.getElementById('relance-series-pause-btn').hidden = !e.target.checked;
+      document.getElementById('relance-series-pause-btn').textContent = '⏸️ Pause la série';
+      document.getElementById('relance-series-pause-btn').classList.add('active');
+      seriesArmCountdown();
+    });
+
+    document.getElementById('relance-series-tempo').addEventListener('input', (e) => {
+      seriesState.tempoSeconds = parseInt(e.target.value, 10) || 8;
+      document.getElementById('relance-series-tempo-value').textContent = `${seriesState.tempoSeconds}s`;
+    });
+
+    document.getElementById('relance-series-pause-btn').addEventListener('click', () => {
+      const btn = document.getElementById('relance-series-pause-btn');
+      seriesState.running = !seriesState.running;
+      btn.textContent = seriesState.running ? '⏸️ Pause la série' : '▶️ Reprendre la série';
+      btn.classList.toggle('active', seriesState.running);
+      seriesArmCountdown();
+    });
 
     document.getElementById('relance-intention').addEventListener('change', relanceRefreshMessage);
 
@@ -5878,7 +6037,7 @@
     });
 
     document.getElementById('relance-skip-btn').addEventListener('click', relanceSkipCurrent);
-    document.getElementById('relance-launch-btn').addEventListener('click', relanceLaunchCurrent);
+    document.getElementById('relance-launch-btn').addEventListener('click', () => relanceLaunchCurrent(false));
 
     // Raccourcis clavier Desktop (Espace = Lancer, Flèche droite = Ignorer) :
     // actifs uniquement quand l'onglet "Relance Manuelle Express" est visible
