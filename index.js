@@ -3223,9 +3223,20 @@ app.get('/api/studio/video-ai/status', requireAccess, requireModule('studio_vide
       return res.json({ status: 'pending' });
     }
 
-    const videoRes = await axios.get(result.videoUrl, { responseType: 'arraybuffer', timeout: 60_000 });
-    const mimetype = videoRes.headers['content-type'] || 'video/mp4';
-    const id = imageLinkStore.register(Buffer.from(videoRes.data), mimetype, { title: 'Vidéo IA — CYRUS SUPER ASSISTANT' });
+    // fal.ai/Replicate renvoient une URL à télécharger nous-mêmes ;
+    // Hugging Face (voir videoAiEngine.js#pollHuggingFaceJob) renvoie
+    // directement les octets de la vidéo, sans URL intermédiaire.
+    let buffer;
+    let mimetype;
+    if (result.videoUrl) {
+      const videoRes = await axios.get(result.videoUrl, { responseType: 'arraybuffer', timeout: 60_000 });
+      buffer = Buffer.from(videoRes.data);
+      mimetype = videoRes.headers['content-type'] || 'video/mp4';
+    } else {
+      buffer = result.videoBuffer;
+      mimetype = result.videoMimetype || 'video/mp4';
+    }
+    const id = imageLinkStore.register(buffer, mimetype, { title: 'Vidéo IA — CYRUS SUPER ASSISTANT' });
     res.json({ status: 'done', url: `${PUBLIC_BASE_URL}/v/${id}`, expiresInHours: 6 });
   } catch (err) {
     console.error('Erreur pendant le suivi du job vidéo IA:', err.message);

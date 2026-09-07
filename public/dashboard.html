@@ -8260,7 +8260,8 @@
         const startData = await startRes.json();
         if (!startRes.ok) throw new Error(startData.error || 'Échec du démarrage de la génération vidéo IA.');
 
-        mediaFeedback(`🤖 Génération en cours via ${startData.provider === 'fal' ? 'fal.ai' : 'Replicate'} (LTX-Video) — cela peut prendre 1 à 3 minutes...`, false);
+        const providerLabels = { fal: 'fal.ai', replicate: 'Replicate', huggingface: 'Hugging Face (essai gratuit, non garanti)' };
+        mediaFeedback(`🤖 Génération en cours via ${providerLabels[startData.provider] || startData.provider} (LTX-Video) — cela peut prendre 1 à 3 minutes...`, false);
 
         let result = null;
         for (let attempt = 0; attempt < MEDIA_AI_VIDEO_MAX_POLLS; attempt += 1) {
