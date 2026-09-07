@@ -242,6 +242,8 @@
        (16:9) sans jamais déformer l'aperçu. */
     #media-canvas-frame { max-width: 380px; margin: 1rem 0; border-radius: 10px; overflow: hidden; border: 1px solid #e0e0e0; background: #111; }
     #media-canvas { width: 100%; height: auto; display: block; }
+    #media-video-preview-wrap { max-width: 380px; margin: 1rem 0; }
+    #media-video-preview { width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid #e0e0e0; background: #111; }
 
     /* Grille des 3 propositions (voir mediaGenerateVariants) */
     #media-variants-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1rem 0; }
@@ -1547,6 +1549,23 @@
             <button type="button" id="media-download-png-btn" class="studio-handoff-btn">📥 Télécharger HD (PNG)</button>
             <button type="button" id="media-export-video-btn" class="studio-handoff-btn" hidden>🎬 Exporter en vidéo</button>
             <button type="button" id="media-back-to-variants-btn" class="studio-handoff-btn">🔁 Nouvelles propositions</button>
+          </div>
+
+          <!-- Aperçu de relecture IN-APP de la vidéo tout juste exportée (voir
+               mediaGenerateVideo) : lit directement le Blob produit par
+               MediaRecorder (garanti compatible, même moteur de rendu que
+               l'export) — évite de faire juger le résultat via un lecteur
+               externe potentiellement incompatible avec le codec choisi
+               (webm/vp9 ou vp8, mp4 en repli selon le navigateur, voir
+               mediaPickRecorderFormat). controls + autoplay (muet, requis
+               par les navigateurs pour l'autoplay — cohérent avec un export
+               volontairement silencieux, voir l'avertissement ci-dessus). -->
+          <div id="media-video-preview-wrap" hidden>
+            <p class="empty">🎬 Aperçu de la vidéo exportée :</p>
+            <video id="media-video-preview" controls autoplay muted loop playsinline></video>
+            <p class="studio-msg-actions">
+              <button type="button" id="media-video-download-btn" class="studio-handoff-btn">📥 Télécharger la vidéo</button>
+            </p>
           </div>
 
           <!-- Boucle d'itération/modification illimitée : le texte reste
@@ -6464,13 +6483,65 @@
       }
     });
 
-    // Enrichissement du prompt (styles photoréalistes en anglais, seul
-    // vocabulaire fiable pour le modèle image sans dépendance de traduction
-    // payante) — le concept lui-même reste tel que saisi par l'utilisateur,
-    // les modèles de génération d'image tolèrent raisonnablement le
-    // français mélangé à des descripteurs de style anglais.
+    // Traducteur/enrichisseur de prompt automatique (voir mediaBuildEnrichedPrompt
+    // ci-dessous) : dictionnaire FR→EN "best effort" pour les mots/expressions
+    // les plus courants d'une description de visuel marketing (plats,
+    // produits, formats) — PAS un traducteur généraliste (aucun service de
+    // traduction gratuit/sans-clé fiable n'est disponible localement), donc
+    // volontairement limité à un lexique ciblé plutôt que de prétendre à tort
+    // traduire n'importe quelle phrase. Les mots non reconnus restent tels
+    // quels (les modèles de génération d'image tolèrent raisonnablement un
+    // mélange français/anglais). Trié PAR LONGUEUR DÉCROISSANTE avant
+    // application (voir mediaTranslateConceptToEnglish) pour que les
+    // expressions composées ("poulet grillé") soient remplacées avant leurs
+    // mots isolés ("poulet", "grillé").
+    const MEDIA_FR_EN_GLOSSARY = {
+      'poulet grillé': 'grilled chicken', 'poulet braisé': 'braised chicken', 'poulet frit': 'fried chicken',
+      'poisson grillé': 'grilled fish', 'viande grillée': 'grilled meat', 'brochettes de bœuf': 'beef skewers',
+      'riz au gras': 'jollof rice', 'attiéké poisson': 'attiéké with fish', 'plat traditionnel': 'traditional dish',
+      'jus de fruits frais': 'fresh fruit juice', 'pâtisserie maison': 'homemade pastry', 'gâteau anniversaire': 'birthday cake',
+      'plateau de fruits': 'fruit platter', 'salade fraîche': 'fresh salad', 'burger maison': 'homemade burger',
+      'pizza artisanale': 'artisanal pizza', 'café glacé': 'iced coffee', 'smoothie fruits': 'fruit smoothie',
+      'poulet': 'chicken', 'poisson': 'fish', 'viande': 'meat', 'grillé': 'grilled', 'braisé': 'braised',
+      'frit': 'fried', 'brochette': 'skewer', 'riz': 'rice', 'sauce': 'sauce', 'épicé': 'spicy',
+      'gâteau': 'cake', 'pâtisserie': 'pastry', 'boisson': 'drink', 'jus': 'juice', 'fruits': 'fruits',
+      'salade': 'salad', 'burger': 'burger', 'pizza': 'pizza', 'café': 'coffee', 'plat': 'dish',
+      'restaurant': 'restaurant', 'cuisine': 'cuisine',
+      'appartement': 'apartment', 'maison': 'house', 'villa': 'villa', 'terrain': 'land plot',
+      'immeuble': 'building', 'bureau': 'office', 'chambre': 'bedroom', 'salon': 'living room',
+      'chaussures': 'shoes', 'vêtements': 'clothes', 'robe': 'dress', 'sac à main': 'handbag', 'sac': 'bag',
+      'montre': 'watch', 'bijoux': 'jewelry', 'parfum': 'perfume', 'cosmétiques': 'cosmetics',
+      'téléphone': 'smartphone', 'ordinateur': 'laptop', 'écouteurs': 'earbuds', 'voiture': 'car', 'moto': 'motorcycle',
+      'promotion': 'promotion', 'nouveau': 'new', 'nouvelle collection': 'new collection', 'soldes': 'sale',
+      'livraison gratuite': 'free delivery', 'qualité premium': 'premium quality', 'fait main': 'handmade',
+    };
+    const MEDIA_FR_EN_GLOSSARY_ENTRIES = Object.entries(MEDIA_FR_EN_GLOSSARY).sort((a, b) => b[0].length - a[0].length);
+
+    function mediaTranslateConceptToEnglish(text) {
+      let result = String(text || '');
+      MEDIA_FR_EN_GLOSSARY_ENTRIES.forEach(([fr, en]) => {
+        const escaped = fr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Frontières de mot Unicode via lookaround (\p{L}/\p{N}) plutôt que
+        // \b natif : \b considère les lettres accentuées (é, è, à...) comme
+        // "non-mot" en JS, ce qui casse le matching d'expressions comme
+        // "poulet grillé" (le \b après le "é" final ne se déclenche jamais
+        // correctement, testé empiriquement) — capital pour un glossaire
+        // majoritairement composé de mots français accentués.
+        const re = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'giu');
+        result = result.replace(re, en);
+      });
+      return result;
+    }
+
+    // Styles photoréalistes en anglais (seul vocabulaire fiable pour le
+    // modèle image, voir mediaBuildEnrichedPrompt) — descripteurs qualité
+    // explicites (résolution, éclairage, absence de flou/distorsion) pour
+    // garantir des visuels présentables et professionnels dans tous les cas,
+    // conformément à la demande explicite de filtres de qualité stricts.
+    const MEDIA_QUALITY_SUFFIX = 'ultra-detailed, sharp focus, 8k resolution, professional color grading, no blur, no distortion, no low quality, no watermark, no text errors';
+
     const MEDIA_SECTOR_STYLES = {
-      restauration: 'appetizing food photography, warm ambient restaurant lighting, rich textures',
+      restauration: 'professional studio food photography, appetizing crispy details, mouth-watering close-up, warm ambient restaurant lighting, rich textures, food magazine quality',
       immobilier: 'architectural real estate photography, wide angle lens, natural daylight, clean modern interior or exterior',
       ecommerce: 'clean studio product photography, softbox lighting, neutral background, sharp product focus',
       hightech: 'sleek modern tech product photography, cool blue accent lighting, minimalist futuristic background',
@@ -6490,15 +6561,24 @@
     ];
 
     function mediaBuildEnrichedPrompt(conceptRaw, deliverable, sector, extraNote) {
-      const base = conceptRaw.trim() || 'modern professional product background';
+      // Étape 1 : traduction best-effort du concept saisi (voir
+      // mediaTranslateConceptToEnglish/MEDIA_FR_EN_GLOSSARY) — ex: "une image
+      // de poulet grillé" devient "une image de grilled chicken", suffisant
+      // pour orienter le modèle vers le bon sujet même sans traduction
+      // grammaticale complète.
+      const base = mediaTranslateConceptToEnglish(conceptRaw.trim()) || 'professional studio photography of a modern product, photorealistic';
       const stylesByDeliverable = {
-        IMAGE_PHOTO: 'photorealistic, natural lighting, high detail, 8k, professional photography',
+        IMAGE_PHOTO: 'professional studio photography, photorealistic, natural lighting, high detail',
         FLYER_AFFICHE: 'photorealistic marketing background, cinematic lighting, shallow depth of field, high detail, professional advertising photography, clean negative space for text overlay',
         VIDEO_SHORT: 'photorealistic, dynamic cinematic lighting, high detail, professional advertising photography, clean negative space for text overlay',
       };
       const parts = [base, stylesByDeliverable[deliverable] || stylesByDeliverable.FLYER_AFFICHE];
       if (sector && MEDIA_SECTOR_STYLES[sector]) parts.push(MEDIA_SECTOR_STYLES[sector]);
-      if (extraNote) parts.push(extraNote);
+      if (extraNote) parts.push(mediaTranslateConceptToEnglish(extraNote));
+      // Étape 2 : suffixe qualité strict (voir MEDIA_QUALITY_SUFFIX) — appliqué
+      // systématiquement, quel que soit le secteur/livrable, pour garantir des
+      // visuels présentables et professionnels dans tous les cas.
+      parts.push(MEDIA_QUALITY_SUFFIX);
       return parts.join(', ');
     }
 
@@ -6521,7 +6601,15 @@
     function mediaFetchBackgroundImage(promptEnriched, w, h) {
       return new Promise((resolve, reject) => {
         const seed = Math.floor(Math.random() * 1000000);
-        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(promptEnriched)}?width=${w}&height=${h}&nologo=true&seed=${seed}`;
+        // enhance=true et safe=true : paramètres officiels de l'API Pollinations
+        // (voir APIDOCS.md) — enhance laisse le modèle lui-même améliorer/
+        // compléter le prompt côté serveur (traduction/enrichissement
+        // supplémentaire au-delà du glossaire local ci-dessus), safe rejette
+        // les résultats inappropriés plutôt que de les renvoyer tels quels —
+        // ensemble, ils renforcent la garantie de visuels présentables et
+        // professionnels demandée, sans dépendance à un paramètre "negative"
+        // NON documenté par l'API (jamais inventé un comportement non vérifié).
+        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(promptEnriched)}?width=${w}&height=${h}&nologo=true&seed=${seed}&enhance=true&safe=true`;
         const img = new Image();
         img.crossOrigin = 'anonymous';
         const timer = setTimeout(() => {
@@ -7085,6 +7173,17 @@
         } catch (err) { /* synthèse vocale indisponible : l'export continue sans narration live */ }
       }
 
+      // Dessine une PREMIÈRE frame réelle (fond + dégradé + premier mot)
+      // AVANT de démarrer captureStream()/MediaRecorder : sans ça, le canvas
+      // reste vierge (transparent → composé en noir par l'encodeur) le temps
+      // qu'un premier requestAnimationFrame se déclenche, ce qui produit une
+      // frame de tête noire — cause probable d'un aperçu qui semble "figé en
+      // noir" si le lecteur externe affiche cette toute première frame comme
+      // vignette plutôt que de lancer la lecture.
+      mediaDrawKenBurnsFrame(ctx, backgroundImg, width, height, 0);
+      mediaDrawGradientOverlay(ctx, width, height);
+      mediaDrawSubtitleWord(ctx, words[0], width, height, 1);
+
       const stream = canvas.captureStream(60);
       const recorder = new MediaRecorder(stream, { mimeType: picked.mime });
       const chunks = [];
@@ -7123,18 +7222,45 @@
       if (window.speechSynthesis) window.speechSynthesis.cancel();
       const blob = await recordedPromise;
 
+      // Révoque l'URL du précédent export (le cas échéant) avant d'en créer
+      // une nouvelle — évite d'accumuler des Blob URLs en mémoire sur des
+      // exports répétés dans la même session.
+      if (mediaLastVideoUrl) URL.revokeObjectURL(mediaLastVideoUrl);
       const url = URL.createObjectURL(blob);
+      mediaLastVideoUrl = url;
+      mediaLastVideoFilename = `cyrus-video-${Date.now()}.${picked.ext}`;
+
+      // Aperçu de relecture IN-APP (voir #media-video-preview-wrap) : lit le
+      // Blob fraîchement produit avec le même codec que l'export final
+      // (.webm vp9/vp8 ou .mp4 selon ce que le navigateur supporte, voir
+      // mediaPickRecorderFormat) — la lecture ici garantit que l'animation
+      // (Ken Burns + sous-titres) est bien présente dans le fichier, sans
+      // dépendre d'un lecteur externe qui pourrait ne pas savoir décoder ce
+      // codec précis.
+      const videoEl = document.getElementById('media-video-preview');
+      videoEl.src = url;
+      document.getElementById('media-video-preview-wrap').hidden = false;
+
+      exportBtn.disabled = false;
+      mediaFeedback(`✅ Vidéo exportée (.${picked.ext}, silencieuse — sous-titres incrustés, voir l'avertissement). Vérifiez l'aperçu ci-dessous avant de télécharger.`, false);
+    }
+
+    // Blob URL + nom de fichier du DERNIER export vidéo — le téléchargement
+    // effectif est déclenché par un clic explicite sur "Télécharger la
+    // vidéo" (voir mediaGenerateVideo ci-dessus) plutôt que forcé
+    // automatiquement, pour laisser l'utilisateur vérifier l'aperçu d'abord.
+    let mediaLastVideoUrl = null;
+    let mediaLastVideoFilename = '';
+
+    document.getElementById('media-video-download-btn').addEventListener('click', () => {
+      if (!mediaLastVideoUrl) return;
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `cyrus-video-${Date.now()}.${picked.ext}`;
+      a.href = mediaLastVideoUrl;
+      a.download = mediaLastVideoFilename || `cyrus-video-${Date.now()}.webm`;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 8000);
-
-      exportBtn.disabled = false;
-      mediaFeedback(`✅ Vidéo exportée (.${picked.ext}, silencieuse — sous-titres incrustés, voir l'avertissement).`, false);
-    }
+    });
 
     document.getElementById('media-export-video-btn').addEventListener('click', mediaGenerateVideo);
 
