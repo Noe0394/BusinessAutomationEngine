@@ -1,3 +1,14 @@
+// Charge .env dans process.env AVANT tout autre require (plusieurs modules,
+// ex. lib/media/videoAiEngine.js, lisent des variables d'environnement dès
+// leur chargement, au niveau racine du fichier) — sur Render, les variables
+// sont injectées directement par la plateforme et .env n'existe pas
+// (config() échoue silencieusement, sans erreur ni effet, voir la doc
+// dotenv) ; en local, c'est le seul mécanisme qui rend le fichier .env
+// réellement effectif (voir CLAUDE.md : "tous les identifiants sont lus
+// depuis le fichier .env local" — jusqu'ici vrai seulement si l'on
+// sourçait .env manuellement avant `node index.js`).
+require('dotenv').config();
+
 const crypto = require('crypto');
 if (!globalThis.crypto) {
   globalThis.crypto = crypto.webcrypto || crypto;
@@ -31,6 +42,7 @@ const copywriterEngine = require('./lib/ai/localCopywriterEngine');
 const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const imageLinkStore = require('./lib/media/imageLinkStore');
 const videoAiEngine = require('./lib/media/videoAiEngine');
+const storyboardEngine = require('./lib/media/storyboardEngine');
 const messageHistory = require('./lib/messageHistory');
 const { personalizeMessage, buildPersonalizationVars } = require('./lib/personalization');
 const ebookGenerator = require('./lib/pdf/ebookGenerator');
@@ -3244,6 +3256,83 @@ app.get('/api/studio/video-ai/status', requireAccess, requireModule('studio_vide
   }
 });
 
+// ---------- Storyboard vidéo IA multi-scènes (voir lib/media/storyboardEngine.js) ----------
+// Pipeline long (une génération vidéo par scène, potentiellement plusieurs
+// minutes au total) orchestré entièrement côté serveur — startStoryboard()
+// renvoie immédiatement un id, l'avancement réel se lit via le polling de
+// /status ci-dessous, sur le même principe que /api/studio/video-ai/* mais
+// avec plusieurs étapes internes (voir storyboardEngine.js) plutôt qu'un
+// simple relais vers un job de fournisseur externe.
+app.post('/api/studio/storyboard/start', requireAccess, requireModule('studio_video'), upload.single('image'), async (req, res) => {
+  try {
+    let buffer;
+    let mimetype;
+    if (req.file) {
+      buffer = req.file.buffer;
+      mimetype = req.file.mimetype;
+    } else {
+      const dataUrl = String((req.body || {}).imageDataUrl || '');
+      const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+      if (!match) {
+        return res.status(400).json({ error: 'Aucune image de départ reçue (fichier importé ou affiche Studio IA attendus).' });
+      }
+      mimetype = match[1];
+      buffer = Buffer.from(match[2], 'base64');
+    }
+
+    let scenes;
+    try {
+      scenes = JSON.parse((req.body || {}).scenes || '[]');
+    } catch (err) {
+      scenes = [];
+    }
+    scenes = (Array.isArray(scenes) ? scenes : [])
+      .map((s) => String(s || '').trim().slice(0, 300))
+      .filter(Boolean)
+      .slice(0, 8); // limite raisonnable : chaque scène = plusieurs minutes de génération
+    if (scenes.length < 2) {
+      return res.status(400).json({ error: 'Renseignez au moins 2 scènes pour générer un storyboard multi-scènes.' });
+    }
+    const baseStyle = String((req.body || {}).baseStyle || '').trim().slice(0, 200);
+
+    // Vérifié AVANT de lancer le pipeline (plutôt que de le découvrir en
+    // pleine scène 1, après avoir déjà consommé un slot du store d'images).
+    const providers = videoAiEngine.isConfigured();
+    if (!providers.fal && !providers.replicate && !providers.huggingface) {
+      return res.status(503).json({ error: "Aucun fournisseur vidéo IA configuré côté serveur (FAL_KEY, REPLICATE_API_TOKEN ou HUGGINGFACE_API_KEY absents dans .env)." });
+    }
+
+    const storyboardId = storyboardEngine.startStoryboard({
+      imageBuffer: buffer,
+      imageMimetype: mimetype,
+      scenes,
+      baseStyle,
+      publicBaseUrl: PUBLIC_BASE_URL,
+    });
+    res.json({ storyboardId, totalScenes: scenes.length });
+  } catch (err) {
+    console.error('Erreur lors du démarrage du storyboard vidéo IA:', err.message);
+    res.status(500).json({ error: 'Échec du démarrage du storyboard vidéo IA.' });
+  }
+});
+
+app.get('/api/studio/storyboard/status/:id', requireAccess, requireModule('studio_video'), (req, res) => {
+  const state = storyboardEngine.getStoryboardStatus(req.params.id);
+  if (!state) {
+    return res.status(404).json({ status: 'error', message: 'Storyboard introuvable ou expiré.' });
+  }
+  if (state.status === 'error') {
+    return res.json({ status: 'error', message: state.error || 'Échec du storyboard vidéo IA.' });
+  }
+  if (state.status !== 'done') {
+    return res.json({ status: state.status, currentScene: state.currentScene, totalScenes: state.totalScenes });
+  }
+
+  const id = imageLinkStore.register(state.resultBuffer, state.resultMimetype, { title: 'Storyboard vidéo IA — CYRUS SUPER ASSISTANT' });
+  storyboardEngine.clearStoryboard(req.params.id);
+  res.json({ status: 'done', url: `${PUBLIC_BASE_URL}/v/${id}`, expiresInHours: 6 });
+});
+
 app.get('/api/media/status', requireAccess, requireModule('studio_video'), (req, res) => {
   res.status(200).json({
     youtube: { configured: mediaPublisher.isYoutubeConfigured(), connectAvailable: mediaPublisher.isYoutubeConnectAvailable() },
@@ -3802,6 +3891,36 @@ app.post('/api/media/creative-direction', requireAccess, async (req, res) => {
   } catch (err) {
     console.warn('Creative Director IA — cascade LLM indisponible :', err.message);
     res.status(503).json({ error: 'Direction créative IA indisponible pour le moment — renseignez les champs manuellement.' });
+  }
+});
+
+// Rédaction assistée d'UN chapitre via la cascade LLM (lib/ai/
+// llmFallbackEngine.js), en mode "longform" (voir generateAIResponse) :
+// contrairement au Copywriter Studio IA (chat, volontairement concis), un
+// chapitre de livre doit être riche et détaillé — jamais quelques phrases.
+// Ne modifie rien côté serveur (ebookGenerator.js reste un pur moteur de
+// mise en page) : le texte généré est renvoyé au client, qui l'insère dans
+// le champ "Contenu" du chapitre concerné, modifiable ensuite normalement.
+app.post('/api/ebooks/draft-chapter', requireAccess, async (req, res) => {
+  const bookTitle = String((req.body || {}).bookTitle || '').trim();
+  const chapterTitle = String((req.body || {}).chapterTitle || '').trim();
+  const brief = String((req.body || {}).brief || '').trim().slice(0, 800);
+  if (!chapterTitle) {
+    return res.status(400).json({ error: 'Renseignez le titre du chapitre avant de générer son contenu.' });
+  }
+
+  const prompt = [
+    bookTitle ? `Livre : "${bookTitle}".` : null,
+    `Rédige intégralement le chapitre suivant : "${chapterTitle}".`,
+    brief ? `Éléments à couvrir / angle souhaité : ${brief}` : null,
+  ].filter(Boolean).join('\n');
+
+  try {
+    const { text } = await llmFallbackEngine.generateAIResponse(prompt, [], null, 'longform');
+    res.json({ content: text });
+  } catch (err) {
+    console.warn('Rédaction IA de chapitre — cascade LLM indisponible :', err.message);
+    res.status(503).json({ error: 'Rédaction IA indisponible pour le moment — rédigez ce chapitre manuellement.' });
   }
 });
 

@@ -1666,12 +1666,20 @@
           <div id="media-canvas-frame">
             <canvas id="media-canvas"></canvas>
           </div>
+          <!-- Export double mode (feuille de route) : téléchargement direct du
+               fichier brut (montage externe) OU conversion en lien léger
+               1-clic (aperçu Open Graph WhatsApp/Telegram, voir GET /v/:id)
+               — les deux options restent disponibles côte à côte, jamais
+               l'une au détriment de l'autre. -->
           <div class="studio-msg-actions">
             <button type="button" id="media-download-png-btn" class="studio-handoff-btn">📥 Télécharger HD (PNG)</button>
+            <button type="button" id="media-png-to-link-btn" class="studio-handoff-btn">🔗 Convertir en lien 1-clic</button>
             <button type="button" id="media-export-video-btn" class="studio-handoff-btn" hidden>🎬 Exporter en vidéo</button>
             <button type="button" id="media-export-ai-video-btn" class="studio-handoff-btn" hidden>🤖 Générer vidéo IA (LTX-Video)</button>
+            <button type="button" id="media-storyboard-toggle-btn" class="studio-handoff-btn" hidden>🎞️ Storyboard multi-scènes</button>
             <button type="button" id="media-back-to-variants-btn" class="studio-handoff-btn">🔁 Nouvelles propositions</button>
           </div>
+          <p class="image-link-uploader-status" id="media-png-to-link-status" hidden></p>
 
           <!-- Aperçu de relecture IN-APP de la vidéo tout juste exportée (voir
                mediaGenerateVideo) : lit directement le Blob produit par
@@ -1687,7 +1695,9 @@
             <video id="media-video-preview" controls autoplay muted loop playsinline></video>
             <p class="studio-msg-actions">
               <button type="button" id="media-video-download-btn" class="studio-handoff-btn">📥 Télécharger la vidéo</button>
+              <button type="button" id="media-video-to-link-btn" class="studio-handoff-btn">🔗 Convertir en lien 1-clic</button>
             </p>
+            <p class="image-link-uploader-status" id="media-video-to-link-status" hidden></p>
           </div>
 
           <!-- Vidéo animée par IA (LTX-Video, image-to-video — voir
@@ -1700,8 +1710,39 @@
             <p class="empty">🤖 Vidéo IA générée :</p>
             <video id="media-ai-video-preview" controls autoplay muted loop playsinline></video>
             <p class="studio-msg-actions">
+              <a id="media-ai-video-download" class="studio-handoff-btn" href="#" download="cyrus-video-ia.mp4">📥 Télécharger le fichier MP4</a>
               <a id="media-ai-video-link" class="studio-handoff-btn" href="#" target="_blank" rel="noopener">🔗 Ouvrir le lien de partage</a>
             </p>
+          </div>
+
+          <!-- Storyboard multi-scènes (feuille de route "Continuité
+               multi-scènes") : enchaîne plusieurs générations image-to-video
+               en réutilisant la dernière frame de chaque scène comme point
+               de départ de la suivante (voir lib/media/storyboardEngine.js)
+               — une scène par ligne, la 1ère part de l'affiche sélectionnée
+               ci-dessus. Repli identique à la vidéo IA simple si aucun
+               fournisseur n'est configuré. -->
+          <div id="media-storyboard-panel" hidden>
+            <h3>🎞️ Storyboard vidéo IA multi-scènes</h3>
+            <p class="empty">Une scène par ligne (2 à 8 scènes) — chaque scène anime la dernière image de la précédente pour une continuité visuelle réelle.</p>
+            <div class="field">
+              <label for="media-storyboard-scenes">Scènes (une par ligne)</label>
+              <textarea id="media-storyboard-scenes" placeholder="Ex :&#10;Le produit posé sur une table, lumière douce&#10;La caméra s'approche lentement du produit&#10;Le produit tourne légèrement, reflets brillants"></textarea>
+            </div>
+            <div class="field">
+              <label for="media-storyboard-style">Style partagé entre les scènes (optionnel)</label>
+              <input type="text" id="media-storyboard-style" placeholder="ex : cinematic lighting, photorealistic, warm tones" />
+            </div>
+            <button type="button" id="media-storyboard-generate-btn" class="send-button">🎬 Générer le storyboard</button>
+            <p id="media-storyboard-feedback" hidden></p>
+            <div id="media-storyboard-result-wrap" hidden>
+              <p class="empty">🎞️ Storyboard généré :</p>
+              <video id="media-storyboard-preview" controls autoplay muted loop playsinline></video>
+              <p class="studio-msg-actions">
+                <a id="media-storyboard-download" class="studio-handoff-btn" href="#" download="cyrus-storyboard.mp4">📥 Télécharger le fichier MP4</a>
+                <a id="media-storyboard-link" class="studio-handoff-btn" href="#" target="_blank" rel="noopener">🔗 Ouvrir le lien de partage</a>
+              </p>
+            </div>
           </div>
 
           <!-- Boucle d'itération/modification illimitée : le texte reste
@@ -6985,6 +7026,49 @@
         contentTextarea.value = chapter.content;
         contentTextarea.addEventListener('input', () => { chapter.content = contentTextarea.value; });
         contentField.appendChild(contentTextarea);
+
+        // Rédaction assistée (voir POST /api/ebooks/draft-chapter) : génère
+        // un contenu riche/détaillé en mode "longform" (cascade LLM), à
+        // partir du titre du chapitre déjà saisi — remplace le contenu
+        // existant après confirmation implicite du clic (pas de double
+        // confirmation superflue, l'action est réversible : le texte
+        // précédent reste modifiable/récupérable via Ctrl+Z du navigateur).
+        const draftBtn = document.createElement('button');
+        draftBtn.type = 'button';
+        draftBtn.className = 'studio-handoff-btn';
+        draftBtn.style.marginTop = '0.4rem';
+        draftBtn.textContent = '✨ Rédiger ce chapitre avec l\'IA';
+        draftBtn.addEventListener('click', async () => {
+          if (!chapter.title.trim()) {
+            ebookFeedback('Renseignez le titre du chapitre avant de le faire rédiger par l\'IA.', true);
+            return;
+          }
+          draftBtn.disabled = true;
+          const originalLabel = draftBtn.textContent;
+          draftBtn.textContent = '⏳ Rédaction en cours...';
+          try {
+            const res = await apiFetch('/api/ebooks/draft-chapter', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                bookTitle: document.getElementById('ebook-title').value.trim(),
+                chapterTitle: chapter.title,
+                brief: chapter.content,
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok) { ebookFeedback(data.error || 'Échec de la rédaction IA.', true); return; }
+            chapter.content = data.content;
+            contentTextarea.value = data.content;
+            ebookFeedback('✅ Chapitre rédigé par l\'IA — relisez et ajustez si besoin.', false);
+          } catch (err) {
+            if (err.message !== 'unauthorized') ebookFeedback('Échec de la rédaction IA (réseau).', true);
+          } finally {
+            draftBtn.disabled = false;
+            draftBtn.textContent = originalLabel;
+          }
+        });
+        contentField.appendChild(draftBtn);
         card.appendChild(contentField);
 
         const imageField = document.createElement('div');
@@ -7263,6 +7347,7 @@
       document.getElementById('media-video-fields').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
       document.getElementById('media-export-video-btn').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
       document.getElementById('media-export-ai-video-btn').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
+      document.getElementById('media-storyboard-toggle-btn').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
     });
 
     // Pré-sélection automatique (sans écraser un choix déjà fait par
@@ -8021,6 +8106,50 @@
       mediaDownloadCanvasPng(document.getElementById('media-canvas'), `cyrus-visuel-${Date.now()}.png`);
     });
 
+    // Export double mode (feuille de route) : à côté du téléchargement direct
+    // du fichier brut ci-dessus, convertit ce même fichier en lien léger
+    // 1-clic (POST /api/media/image-link, générique image ET vidéo — voir
+    // son commentaire dans index.js) — les deux options restent indépendantes,
+    // l'utilisateur choisit celle qui correspond à son usage (montage externe
+    // vs partage direct WhatsApp/Telegram avec aperçu Open Graph).
+    async function mediaUploadBlobToLink(blob, filename, statusEl, button) {
+      statusEl.hidden = false;
+      statusEl.textContent = '⏳ Conversion en lien...';
+      button.disabled = true;
+      try {
+        const form = new FormData();
+        form.append('image', blob, filename);
+        const res = await apiFetch('/api/media/image-link', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) { statusEl.textContent = data.error || 'Échec de la conversion en lien.'; return; }
+        statusEl.innerHTML = `✅ Lien prêt (valide 6h) : <a href="${data.url}" target="_blank" rel="noopener">${data.url}</a>`;
+      } catch (err) {
+        if (err.message !== 'unauthorized') statusEl.textContent = 'Échec de la conversion en lien (réseau).';
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    document.getElementById('media-png-to-link-btn').addEventListener('click', async () => {
+      const canvas = document.getElementById('media-canvas');
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) return;
+      await mediaUploadBlobToLink(
+        blob, 'cyrus-visuel.png',
+        document.getElementById('media-png-to-link-status'),
+        document.getElementById('media-png-to-link-btn'),
+      );
+    });
+
+    document.getElementById('media-video-to-link-btn').addEventListener('click', async () => {
+      if (!mediaLastVideoBlob) return;
+      await mediaUploadBlobToLink(
+        mediaLastVideoBlob, mediaLastVideoFilename || 'cyrus-video.webm',
+        document.getElementById('media-video-to-link-status'),
+        document.getElementById('media-video-to-link-btn'),
+      );
+    });
+
     // ---------- Studio Vidéo : Ken Burns + sous-titres mot-à-mot + export ----------
     function mediaSplitScript(text) {
       return String(text || '').trim().split(/\s+/).filter(Boolean);
@@ -8185,6 +8314,7 @@
       if (mediaLastVideoUrl) URL.revokeObjectURL(mediaLastVideoUrl);
       const url = URL.createObjectURL(blob);
       mediaLastVideoUrl = url;
+      mediaLastVideoBlob = blob;
       mediaLastVideoFilename = `cyrus-video-${Date.now()}.${picked.ext}`;
 
       // Aperçu de relecture IN-APP (voir #media-video-preview-wrap) : lit le
@@ -8207,6 +8337,7 @@
     // vidéo" (voir mediaGenerateVideo ci-dessus) plutôt que forcé
     // automatiquement, pour laisser l'utilisateur vérifier l'aperçu d'abord.
     let mediaLastVideoUrl = null;
+    let mediaLastVideoBlob = null;
     let mediaLastVideoFilename = '';
 
     document.getElementById('media-video-download-btn').addEventListener('click', () => {
@@ -8274,6 +8405,7 @@
         if (!result) throw new Error('La génération vidéo IA prend trop de temps — réessayez plus tard.');
 
         document.getElementById('media-ai-video-preview').src = `${result.url}/raw`;
+        document.getElementById('media-ai-video-download').href = `${result.url}/raw`;
         const link = document.getElementById('media-ai-video-link');
         link.href = result.url;
         document.getElementById('media-ai-video-preview-wrap').hidden = false;
@@ -8286,6 +8418,92 @@
     }
 
     document.getElementById('media-export-ai-video-btn').addEventListener('click', mediaGenerateAiVideo);
+
+    // ---------- Storyboard vidéo IA multi-scènes (voir lib/media/storyboardEngine.js) ----------
+    document.getElementById('media-storyboard-toggle-btn').addEventListener('click', () => {
+      const panel = document.getElementById('media-storyboard-panel');
+      panel.hidden = !panel.hidden;
+    });
+
+    function mediaStoryboardFeedback(message, isError) {
+      const el = document.getElementById('media-storyboard-feedback');
+      el.textContent = message;
+      el.hidden = false;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    // Pipeline serveur potentiellement long (plusieurs minutes, une
+    // génération par scène) : polling identique dans son principe à
+    // mediaGenerateAiVideo ci-dessus, avec un budget plus large (jusqu'à
+    // 8 scènes) et un message de progression scène par scène.
+    const MEDIA_STORYBOARD_POLL_MS = 5000;
+    const MEDIA_STORYBOARD_MAX_POLLS = 240; // ~20 minutes max (8 scènes x ~2-3 min)
+
+    async function mediaGenerateStoryboard() {
+      if (!mediaCurrentCreation) { mediaStoryboardFeedback("Sélectionnez d'abord une création avant de générer un storyboard.", true); return; }
+      if (mediaCurrentCreation.usedFallback) {
+        mediaStoryboardFeedback('⚠️ Cette création utilise le fond de secours local — régénérez le fond ci-dessus avant de générer un storyboard.', true);
+        return;
+      }
+
+      const scenes = document.getElementById('media-storyboard-scenes').value
+        .split('\n').map((s) => s.trim()).filter(Boolean);
+      if (scenes.length < 2) {
+        mediaStoryboardFeedback('Renseignez au moins 2 scènes (une par ligne) pour générer un storyboard.', true);
+        return;
+      }
+
+      const btn = document.getElementById('media-storyboard-generate-btn');
+      btn.disabled = true;
+      mediaStoryboardFeedback(`🎬 Démarrage du storyboard (${scenes.length} scènes)...`, false);
+
+      try {
+        const { img: backgroundImg, width, height } = mediaCurrentCreation;
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = width;
+        tmpCanvas.height = height;
+        mediaDrawCoverImage(tmpCanvas.getContext('2d'), backgroundImg, width, height);
+        const imageBlob = await new Promise((resolve) => tmpCanvas.toBlob(resolve, 'image/png'));
+        if (!imageBlob) throw new Error("Échec de préparation de l'image de départ (export canvas).");
+
+        const form = new FormData();
+        form.append('image', imageBlob, 'source.png');
+        form.append('scenes', JSON.stringify(scenes));
+        const baseStyle = document.getElementById('media-storyboard-style').value.trim();
+        if (baseStyle) form.append('baseStyle', baseStyle);
+
+        const startRes = await apiFetch('/api/studio/storyboard/start', { method: 'POST', body: form });
+        const startData = await startRes.json();
+        if (!startRes.ok) throw new Error(startData.error || 'Échec du démarrage du storyboard.');
+
+        let result = null;
+        for (let attempt = 0; attempt < MEDIA_STORYBOARD_MAX_POLLS; attempt += 1) {
+          await mediaSleep(MEDIA_STORYBOARD_POLL_MS);
+          const statusRes = await apiFetch(`/api/studio/storyboard/status/${encodeURIComponent(startData.storyboardId)}`);
+          const statusData = await statusRes.json();
+          if (statusData.status === 'done') { result = statusData; break; }
+          if (statusData.status === 'error') throw new Error(statusData.message || 'Échec du storyboard vidéo IA.');
+          if (statusData.status === 'assembling') {
+            mediaStoryboardFeedback('🧩 Toutes les scènes sont générées — assemblage de la vidéo finale...', false);
+          } else {
+            mediaStoryboardFeedback(`🎬 Scène ${statusData.currentScene || 0}/${statusData.totalScenes || scenes.length} en cours de génération...`, false);
+          }
+        }
+        if (!result) throw new Error('Le storyboard prend trop de temps — réessayez plus tard.');
+
+        document.getElementById('media-storyboard-preview').src = `${result.url}/raw`;
+        document.getElementById('media-storyboard-download').href = `${result.url}/raw`;
+        document.getElementById('media-storyboard-link').href = result.url;
+        document.getElementById('media-storyboard-result-wrap').hidden = false;
+        mediaStoryboardFeedback('✅ Storyboard généré — lien de partage prêt (expire dans 6h).', false);
+      } catch (err) {
+        if (err.message !== 'unauthorized') mediaStoryboardFeedback(`❌ ${err.message}`, true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('media-storyboard-generate-btn').addEventListener('click', mediaGenerateStoryboard);
 
     // PWA : installation optionnelle sous le nom "CYRUS SUPER ASSISTANT"
     // (voir public/manifest.json et public/sw.js) — échec silencieux sur un
