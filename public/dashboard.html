@@ -204,6 +204,14 @@
     .studio-input-row { display: flex; gap: 0.6rem; }
     .studio-input-row textarea { flex: 1; min-height: 56px; max-height: 140px; }
     .studio-input-row button { flex: 0 0 auto; min-height: 56px; padding: 0 1.3rem; background: #6c4fd6; color: #fff; border: none; border-radius: 8px; font-weight: bold; }
+
+    /* Studio Média Prédictif (voir #studio-media-view) : le cadre a une
+       largeur maximale fixe et laisse le ratio réel (défini en JS via
+       canvas.width/height, voir mediaApplyRatio) piloter la hauteur —
+       fonctionne aussi bien pour un format portrait (9:16) que paysage
+       (16:9) sans jamais déformer l'aperçu. */
+    #media-canvas-frame { max-width: 380px; margin: 1rem 0; border-radius: 10px; overflow: hidden; border: 1px solid #e0e0e0; background: #111; }
+    #media-canvas { width: 100%; height: auto; display: block; }
     @media (max-width: 720px) {
       .studio-layout { flex-direction: column; }
       .studio-sidebar { flex: none; }
@@ -1274,6 +1282,7 @@
       <div class="mode-toggle" id="studio-subtab-toggle">
         <button type="button" class="mode-btn active" data-view="assistant">💬 Assistant IA</button>
         <button type="button" class="mode-btn" data-view="ebook">📖 Générateur de Livres</button>
+        <button type="button" class="mode-btn" data-view="media">🎨 Studio Média</button>
       </div>
 
       <div id="studio-assistant-view">
@@ -1346,6 +1355,105 @@
 
         <button type="button" id="ebook-generate-btn" class="send-button">🚀 Générer le PDF</button>
         <p id="ebook-feedback" hidden></p>
+      </div>
+
+      <!-- CYRUS Predictive Media Engine : fond photoréaliste (API publique
+           Pollinations, gratuite/sans clé) + calques Canvas 2D natifs
+           (texte/badges/gradient) pour images et affiches, et vidéos courtes
+           (Ken Burns + sous-titres mot-à-mot + narration en aperçu, voir
+           mediaGenerateVideo). 100% client — aucun appel serveur. -->
+      <div id="studio-media-view" hidden>
+        <p class="empty">
+          Décrivez le visuel souhaité, choisissez le format, et générez une image (fond photoréaliste IA + texte/
+          badges) ou une vidéo courte (zoom + sous-titres mot-à-mot + narration à l'aperçu). Fond généré via l'API
+          publique et gratuite Pollinations — aucune clé, aucun coût.
+        </p>
+
+        <div class="field">
+          <label for="media-concept">Décrivez le visuel</label>
+          <textarea id="media-concept" placeholder='Ex : "Affiche promo -30% sur nos pâtisseries, livraison gratuite, contact WhatsApp 07 XX XX XX XX"'></textarea>
+        </div>
+
+        <div class="field">
+          <label>Format</label>
+          <div class="mode-toggle" id="media-ratio-toggle">
+            <button type="button" class="mode-btn" data-ratio="9:16">📱 Story 9:16</button>
+            <button type="button" class="mode-btn" data-ratio="1:1">🔲 Post 1:1</button>
+            <button type="button" class="mode-btn" data-ratio="16:9">🖥️ Paysage 16:9</button>
+            <button type="button" class="mode-btn" data-ratio="4:5">📸 Portrait 4:5</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Type de livrable</label>
+          <div class="mode-toggle" id="media-deliverable-toggle">
+            <button type="button" class="mode-btn" data-deliverable="IMAGE_PHOTO">🖼️ Photo pure</button>
+            <button type="button" class="mode-btn" data-deliverable="FLYER_AFFICHE">🏷️ Affiche / Flyer</button>
+            <button type="button" class="mode-btn" data-deliverable="VIDEO_SHORT">🎬 Vidéo courte</button>
+          </div>
+        </div>
+
+        <div id="media-flyer-fields" hidden>
+          <div class="row">
+            <div class="field">
+              <label for="media-title">Titre</label>
+              <input type="text" id="media-title" placeholder="ex : PROMO -30%" />
+            </div>
+            <div class="field">
+              <label for="media-subtitle">Sous-titre</label>
+              <input type="text" id="media-subtitle" placeholder="ex : Sur toute la collection" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="media-price">Prix (optionnel)</label>
+              <input type="text" id="media-price" placeholder="ex : 9 900 FCFA" />
+            </div>
+            <div class="field">
+              <label for="media-badge">Badge (optionnel)</label>
+              <input type="text" id="media-badge" placeholder="ex : LIVRAISON GRATUITE" />
+            </div>
+          </div>
+          <div class="field">
+            <label for="media-cta">Appel à l'action / Contact</label>
+            <input type="text" id="media-cta" placeholder="ex : Commandez sur WhatsApp 07 XX XX XX XX" />
+          </div>
+        </div>
+
+        <div id="media-video-fields" hidden>
+          <div class="field">
+            <label for="media-script">Script de vente (sous-titres mot-à-mot + narration à l'aperçu)</label>
+            <textarea id="media-script" placeholder="Laissez vide pour réutiliser automatiquement la description ci-dessus comme script."></textarea>
+          </div>
+          <div class="field">
+            <label for="media-video-duration">Durée approximative</label>
+            <select id="media-video-duration">
+              <option value="8">Courte (~8s)</option>
+              <option value="15" selected>Standard (~15s)</option>
+              <option value="25">Longue (~25s)</option>
+            </select>
+          </div>
+          <div class="warning-box">
+            ⚠️ La narration (voix off) est audible en direct pendant la génération (synthèse vocale du navigateur),
+            mais le fichier vidéo exporté est silencieux (limitation technique des navigateurs — impossible de
+            capturer l'audio de la synthèse vocale dans le fichier) : les sous-titres restent incrustés dans
+            l'image pour rester compréhensible sans le son.
+          </div>
+        </div>
+
+        <button type="button" id="media-generate-btn" class="send-button">✨ Générer</button>
+        <p id="media-feedback" hidden></p>
+
+        <div id="media-preview-wrap" hidden>
+          <div id="media-canvas-frame">
+            <canvas id="media-canvas"></canvas>
+          </div>
+          <div class="studio-msg-actions">
+            <button type="button" id="media-download-png-btn" class="studio-handoff-btn">📥 Télécharger HD (PNG)</button>
+            <button type="button" id="media-export-video-btn" class="studio-handoff-btn" hidden>🎬 Exporter en vidéo</button>
+            <button type="button" id="media-regenerate-btn" class="studio-handoff-btn">🔄 Ajuster le texte / Régénérer</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -5507,6 +5615,7 @@
       btn.classList.add('active');
       document.getElementById('studio-assistant-view').hidden = btn.dataset.view !== 'assistant';
       document.getElementById('studio-ebook-view').hidden = btn.dataset.view !== 'ebook';
+      document.getElementById('studio-media-view').hidden = btn.dataset.view !== 'media';
     });
 
     function studioFeedback(message, isError) {
@@ -5954,6 +6063,414 @@
         btn.disabled = false;
       }
     });
+
+    // ---------- CYRUS Predictive Media Engine (voir #studio-media-view) ----------
+    // Moteur hybride 100% client : fond photoréaliste via l'API publique et
+    // gratuite Pollinations (aucune clé, voir mediaFetchBackgroundImage) +
+    // calques Canvas 2D natifs (texte/badges/gradient/sous-titres). Aucun
+    // appel serveur, aucune dépendance payante. L'export vidéo est
+    // volontairement SILENCIEUX (voir l'avertissement affiché dans
+    // #media-video-fields) : window.speechSynthesis ne peut techniquement
+    // pas être capturé dans un MediaStream par les navigateurs actuels, et
+    // aucune API de synthèse vocale gratuite/sans-clé fiable n'est
+    // disponible en remplacement (vérifié : l'endpoint TTS anonyme de
+    // Pollinations est actuellement retiré) — décision validée avec
+    // l'utilisateur plutôt que de prétendre à tort qu'un fichier exporté
+    // contient une narration.
+    const MEDIA_FORMATS = {
+      '9:16': { width: 1080, height: 1920 },
+      '1:1': { width: 1080, height: 1080 },
+      '16:9': { width: 1920, height: 1080 },
+      '4:5': { width: 1080, height: 1350 },
+    };
+
+    // Parser d'intention : détection par mots-clés (aucune IA générative,
+    // 100% local) qui PRÉ-sélectionne un bouton de format/livrable —
+    // l'utilisateur garde toujours la main et peut changer la sélection
+    // avant de générer (voir la feuille de route : "l'IA propose les
+    // boutons de choix rapide").
+    const MEDIA_FORMAT_KEYWORDS = [
+      { ratio: '9:16', keywords: ['story', 'stories', 'tiktok', 'reel', 'reels', 'statut whatsapp', 'whatsapp status', 'format vertical'] },
+      { ratio: '1:1', keywords: ['post instagram', 'post facebook', 'carousel', 'carrousel', 'publication facebook', 'publication instagram', 'format carré', 'format carre'] },
+      { ratio: '16:9', keywords: ['bannière', 'banniere', 'youtube', 'écran paysage', 'ecran paysage', 'format paysage', 'miniature'] },
+      { ratio: '4:5', keywords: ['portrait feed', 'feed instagram', 'feed facebook', 'format portrait'] },
+    ];
+    const MEDIA_DELIVERABLE_KEYWORDS = [
+      { deliverable: 'VIDEO_SHORT', keywords: ['vidéo', 'video', 'short', 'reel', 'clip', 'voix off', 'narration', 'sous-titre'] },
+      { deliverable: 'FLYER_AFFICHE', keywords: ['affiche', 'flyer', 'promo', 'promotion', 'prix', 'badge', "call to action", "appel à l'action", 'publicité'] },
+      { deliverable: 'IMAGE_PHOTO', keywords: ['photo pure', 'image pure', 'visuel réaliste', 'illustration'] },
+    ];
+
+    function mediaIntentParse(text) {
+      const t = String(text || '').toLowerCase();
+      const formatMatch = MEDIA_FORMAT_KEYWORDS.find((entry) => entry.keywords.some((kw) => t.includes(kw)));
+      const deliverableMatch = MEDIA_DELIVERABLE_KEYWORDS.find((entry) => entry.keywords.some((kw) => t.includes(kw)));
+      return {
+        ratio: formatMatch ? formatMatch.ratio : null,
+        // Par défaut : une description marketing (le cas d'usage dominant de
+        // cet outil) est traitée comme une affiche plutôt qu'une simple
+        // photo, sauf détection explicite contraire.
+        deliverable: deliverableMatch ? deliverableMatch.deliverable : 'FLYER_AFFICHE',
+      };
+    }
+
+    const mediaState = { ratio: null, deliverable: null };
+    let mediaLastBackgroundImg = null;
+
+    function mediaFeedback(message, isError) {
+      const el = document.getElementById('media-feedback');
+      el.textContent = message;
+      el.hidden = false;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    document.getElementById('media-ratio-toggle').addEventListener('click', (e) => {
+      const btn = e.target.closest('.mode-btn[data-ratio]');
+      if (!btn) return;
+      document.querySelectorAll('#media-ratio-toggle .mode-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      mediaState.ratio = btn.dataset.ratio;
+    });
+
+    document.getElementById('media-deliverable-toggle').addEventListener('click', (e) => {
+      const btn = e.target.closest('.mode-btn[data-deliverable]');
+      if (!btn) return;
+      document.querySelectorAll('#media-deliverable-toggle .mode-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      mediaState.deliverable = btn.dataset.deliverable;
+      document.getElementById('media-flyer-fields').hidden = btn.dataset.deliverable !== 'FLYER_AFFICHE';
+      document.getElementById('media-video-fields').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
+      document.getElementById('media-export-video-btn').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
+    });
+
+    // Pré-sélection automatique (sans écraser un choix déjà fait par
+    // l'utilisateur) dès que la description perd le focus.
+    document.getElementById('media-concept').addEventListener('change', () => {
+      const { ratio, deliverable } = mediaIntentParse(document.getElementById('media-concept').value);
+      if (ratio && !mediaState.ratio) {
+        document.querySelector(`#media-ratio-toggle .mode-btn[data-ratio="${ratio}"]`)?.click();
+      }
+      if (deliverable && !mediaState.deliverable) {
+        document.querySelector(`#media-deliverable-toggle .mode-btn[data-deliverable="${deliverable}"]`)?.click();
+      }
+    });
+
+    // Enrichissement du prompt (styles photoréalistes en anglais, seul
+    // vocabulaire fiable pour le modèle image sans dépendance de traduction
+    // payante) — le concept lui-même reste tel que saisi par l'utilisateur,
+    // les modèles de génération d'image tolèrent raisonnablement le
+    // français mélangé à des descripteurs de style anglais.
+    function mediaBuildEnrichedPrompt(conceptRaw, deliverable) {
+      const base = conceptRaw.trim() || 'modern professional product background';
+      const stylesByDeliverable = {
+        IMAGE_PHOTO: 'photorealistic, natural lighting, high detail, 8k, professional photography',
+        FLYER_AFFICHE: 'photorealistic marketing background, cinematic lighting, shallow depth of field, high detail, professional advertising photography, clean negative space for text overlay',
+        VIDEO_SHORT: 'photorealistic, dynamic cinematic lighting, high detail, professional advertising photography, clean negative space for text overlay',
+      };
+      return `${base}, ${stylesByDeliverable[deliverable] || stylesByDeliverable.FLYER_AFFICHE}`;
+    }
+
+    function mediaFetchBackgroundImage(promptEnriched, w, h) {
+      return new Promise((resolve, reject) => {
+        const seed = Math.floor(Math.random() * 1000000);
+        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(promptEnriched)}?width=${w}&height=${h}&nologo=true&seed=${seed}`;
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Échec de génération du fond IA (service indisponible ou requête trop rapide — réessayez dans quelques secondes).'));
+        img.src = url;
+      });
+    }
+
+    function mediaDrawCoverImage(ctx, img, w, h) {
+      const imgRatio = img.width / img.height;
+      const canvasRatio = w / h;
+      let sx, sy, sw, sh;
+      if (imgRatio > canvasRatio) {
+        sh = img.height; sw = sh * canvasRatio; sx = (img.width - sw) / 2; sy = 0;
+      } else {
+        sw = img.width; sh = sw / canvasRatio; sx = 0; sy = (img.height - sh) / 2;
+      }
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+    }
+
+    function mediaDrawGradientOverlay(ctx, w, h) {
+      const grad = ctx.createLinearGradient(0, h * 0.35, 0, h);
+      grad.addColorStop(0, 'rgba(0,0,0,0)');
+      grad.addColorStop(1, 'rgba(0,0,0,0.72)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, h * 0.35, w, h * 0.65);
+    }
+
+    // Retourne la position Y suivante après avoir dessiné le texte enroulé
+    // (multi-lignes si nécessaire) — permet d'empiler titre/sous-titre/prix
+    // sans les faire se chevaucher quel que soit leur longueur.
+    function mediaWrapText(ctx, text, x, maxWidth, lineHeight, startY, align) {
+      const words = String(text || '').split(/\s+/).filter(Boolean);
+      const lines = [];
+      let line = '';
+      words.forEach((word) => {
+        const test = line ? `${line} ${word}` : word;
+        if (line && ctx.measureText(test).width > maxWidth) { lines.push(line); line = word; } else { line = test; }
+      });
+      if (line) lines.push(line);
+      let y = startY;
+      ctx.textAlign = align || 'center';
+      lines.forEach((l) => { ctx.fillText(l, x, y); y += lineHeight; });
+      return y;
+    }
+
+    function mediaDrawBadge(ctx, text, w, h) {
+      if (!text) return;
+      ctx.save();
+      ctx.font = `bold ${Math.round(w * 0.032)}px Arial, sans-serif`;
+      const paddingX = w * 0.025;
+      const label = text.toUpperCase();
+      const boxW = ctx.measureText(label).width + paddingX * 2;
+      const boxH = w * 0.06;
+      const x = w - boxW - w * 0.04;
+      const y = h * 0.04;
+      ctx.fillStyle = '#e63946';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, boxW, boxH, boxH / 2); else ctx.rect(x, y, boxW, boxH);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x + boxW / 2, y + boxH / 2 + 1);
+      ctx.restore();
+    }
+
+    function mediaGetFlyerFields() {
+      return {
+        title: document.getElementById('media-title').value.trim(),
+        subtitle: document.getElementById('media-subtitle').value.trim(),
+        price: document.getElementById('media-price').value.trim(),
+        badge: document.getElementById('media-badge').value.trim(),
+        cta: document.getElementById('media-cta').value.trim(),
+      };
+    }
+
+    function mediaDrawFlyerLayers(ctx, w, h, fields) {
+      mediaDrawGradientOverlay(ctx, w, h);
+      mediaDrawBadge(ctx, fields.badge, w, h);
+
+      ctx.save();
+      ctx.fillStyle = '#fff';
+      ctx.shadowColor = 'rgba(0,0,0,0.55)';
+      ctx.shadowBlur = w * 0.01;
+      ctx.textBaseline = 'alphabetic';
+
+      let cursorY = h * 0.72;
+      if (fields.title) {
+        ctx.font = `900 ${Math.round(w * 0.075)}px Arial, sans-serif`;
+        cursorY = mediaWrapText(ctx, fields.title, w / 2, w * 0.88, w * 0.082, cursorY, 'center');
+      }
+      if (fields.subtitle) {
+        ctx.font = `600 ${Math.round(w * 0.036)}px Arial, sans-serif`;
+        cursorY = mediaWrapText(ctx, fields.subtitle, w / 2, w * 0.86, w * 0.05, cursorY + h * 0.015, 'center');
+      }
+      if (fields.price) {
+        ctx.font = `900 ${Math.round(w * 0.05)}px Arial, sans-serif`;
+        ctx.fillStyle = '#ffd166';
+        mediaWrapText(ctx, fields.price, w / 2, w * 0.86, w * 0.06, cursorY + h * 0.02, 'center');
+        ctx.fillStyle = '#fff';
+      }
+      if (fields.cta) {
+        ctx.font = `bold ${Math.round(w * 0.03)}px Arial, sans-serif`;
+        mediaWrapText(ctx, fields.cta, w / 2, w * 0.82, w * 0.042, h * 0.955, 'center');
+      }
+      ctx.restore();
+    }
+
+    async function mediaGenerateImage() {
+      const concept = document.getElementById('media-concept').value.trim();
+      if (!concept) { mediaFeedback('Décrivez le visuel souhaité avant de générer.', true); return; }
+      if (!mediaState.ratio) { mediaFeedback('Choisissez un format (📱 🔲 🖥️ 📸) avant de générer.', true); return; }
+
+      const deliverable = mediaState.deliverable || 'FLYER_AFFICHE';
+      const { width, height } = MEDIA_FORMATS[mediaState.ratio];
+      const canvas = document.getElementById('media-canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+
+      const btn = document.getElementById('media-generate-btn');
+      btn.disabled = true;
+      document.getElementById('media-preview-wrap').hidden = true;
+      mediaFeedback('🎨 Génération du fond photoréaliste en cours (10-20s)...', false);
+
+      try {
+        const promptEnriched = mediaBuildEnrichedPrompt(concept, deliverable);
+        const img = await mediaFetchBackgroundImage(promptEnriched, width, height);
+        mediaLastBackgroundImg = img;
+        mediaDrawCoverImage(ctx, img, width, height);
+        if (deliverable === 'FLYER_AFFICHE') {
+          mediaDrawFlyerLayers(ctx, width, height, mediaGetFlyerFields());
+        }
+        document.getElementById('media-preview-wrap').hidden = false;
+        mediaFeedback(deliverable === 'VIDEO_SHORT'
+          ? '✅ Fond généré — cliquez sur "🎬 Exporter en vidéo" pour lancer l\'animation.'
+          : '✅ Visuel généré.', false);
+      } catch (err) {
+        mediaFeedback(err.message || 'Erreur lors de la génération.', true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('media-generate-btn').addEventListener('click', mediaGenerateImage);
+    document.getElementById('media-regenerate-btn').addEventListener('click', mediaGenerateImage);
+
+    document.getElementById('media-download-png-btn').addEventListener('click', () => {
+      const canvas = document.getElementById('media-canvas');
+      canvas.toBlob((blob) => {
+        if (!blob) { mediaFeedback("Échec de l'export PNG.", true); return; }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cyrus-visuel-${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }, 'image/png');
+    });
+
+    // ---------- Studio Vidéo : Ken Burns + sous-titres mot-à-mot + export ----------
+    function mediaSplitScript(text) {
+      return String(text || '').trim().split(/\s+/).filter(Boolean);
+    }
+
+    // Zoom lent + léger balayage horizontal sur toute la durée — dessine une
+    // portion progressivement plus petite (donc agrandie à l'affichage) de
+    // l'image de fond déjà générée, jamais un nouvel appel réseau par frame.
+    function mediaDrawKenBurnsFrame(ctx, img, w, h, progress) {
+      const zoom = 1 + 0.18 * progress;
+      const imgRatio = img.width / img.height;
+      const canvasRatio = w / h;
+      let baseSw, baseSh;
+      if (imgRatio > canvasRatio) { baseSh = img.height; baseSw = baseSh * canvasRatio; } else { baseSw = img.width; baseSh = baseSw / canvasRatio; }
+      const sw = baseSw / zoom;
+      const sh = baseSh / zoom;
+      const centerX = img.width / 2 + Math.sin(progress * Math.PI) * img.width * 0.03;
+      const centerY = img.height / 2;
+      const sx = Math.min(Math.max(centerX - sw / 2, 0), img.width - sw);
+      const sy = Math.min(Math.max(centerY - sh / 2, 0), img.height - sh);
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+    }
+
+    // Sous-titrage mot-à-mot façon CapCut/Alex Hormozi : un mot en gros à la
+    // fois, centré, contour marqué pour rester lisible sur n'importe quel
+    // fond — reste incrusté dans l'image même si le fichier exporté est
+    // silencieux (voir l'avertissement de l'onglet Studio Média).
+    function mediaDrawSubtitleWord(ctx, word, w, h) {
+      if (!word) return;
+      ctx.save();
+      ctx.font = `900 ${Math.round(w * 0.09)}px Arial, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = w * 0.012;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.fillStyle = '#ffd166';
+      ctx.strokeText(word.toUpperCase(), w / 2, h * 0.82);
+      ctx.fillText(word.toUpperCase(), w / 2, h * 0.82);
+      ctx.restore();
+    }
+
+    function mediaPickRecorderFormat() {
+      const candidates = [
+        { mime: 'video/webm;codecs=vp9', ext: 'webm' },
+        { mime: 'video/webm;codecs=vp8', ext: 'webm' },
+        { mime: 'video/webm', ext: 'webm' },
+        { mime: 'video/mp4', ext: 'mp4' },
+      ];
+      return candidates.find((c) => window.MediaRecorder && MediaRecorder.isTypeSupported(c.mime)) || null;
+    }
+
+    async function mediaGenerateVideo() {
+      if (!mediaLastBackgroundImg) { mediaFeedback("Générez d'abord le visuel (fond) avant d'exporter la vidéo.", true); return; }
+      if (!window.MediaRecorder) { mediaFeedback("Votre navigateur ne supporte pas l'enregistrement vidéo (MediaRecorder).", true); return; }
+      const picked = mediaPickRecorderFormat();
+      if (!picked) { mediaFeedback('Aucun format vidéo supporté par ce navigateur.', true); return; }
+
+      const scriptText = document.getElementById('media-script').value.trim() || document.getElementById('media-concept').value.trim();
+      const words = mediaSplitScript(scriptText);
+      if (!words.length) { mediaFeedback('Renseignez un script (ou une description) à sous-titrer.', true); return; }
+
+      const durationSec = parseInt(document.getElementById('media-video-duration').value, 10) || 15;
+      const { width, height } = MEDIA_FORMATS[mediaState.ratio];
+      const canvas = document.getElementById('media-canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+
+      const exportBtn = document.getElementById('media-export-video-btn');
+      exportBtn.disabled = true;
+      mediaFeedback('🎬 Enregistrement en cours — la narration est audible en direct (aperçu), le fichier exporté sera silencieux.', false);
+
+      // Narration en direct (aperçu uniquement — voir l'avertissement
+      // affiché dans l'onglet) synchronisée aux sous-titres via l'événement
+      // 'boundary' de la Web Speech API quand le navigateur le supporte
+      // (Chrome/Edge), avec un repli en timing fixe sinon.
+      let currentWordIndex = -1;
+      let boundarySupported = false;
+      if (window.speechSynthesis && window.SpeechSynthesisUtterance) {
+        try {
+          const utterance = new SpeechSynthesisUtterance(scriptText);
+          utterance.lang = 'fr-FR';
+          utterance.onboundary = (ev) => {
+            boundarySupported = true;
+            const spoken = scriptText.slice(0, ev.charIndex).trim();
+            currentWordIndex = spoken ? spoken.split(/\s+/).length : 0;
+          };
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.speak(utterance);
+        } catch (err) { /* synthèse vocale indisponible : l'export continue sans narration live */ }
+      }
+
+      const stream = canvas.captureStream(60);
+      const recorder = new MediaRecorder(stream, { mimeType: picked.mime });
+      const chunks = [];
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      const recordedPromise = new Promise((resolve) => { recorder.onstop = () => resolve(new Blob(chunks, { type: picked.mime })); });
+      recorder.start();
+
+      const durationMs = durationSec * 1000;
+      const msPerWordFallback = durationMs / words.length;
+      const startTime = performance.now();
+
+      await new Promise((resolve) => {
+        function frame(now) {
+          const elapsed = now - startTime;
+          const progress = Math.min(elapsed / durationMs, 1);
+          mediaDrawKenBurnsFrame(ctx, mediaLastBackgroundImg, width, height, progress);
+          mediaDrawGradientOverlay(ctx, width, height);
+          const idx = boundarySupported ? currentWordIndex : Math.floor(elapsed / msPerWordFallback);
+          mediaDrawSubtitleWord(ctx, words[Math.min(Math.max(idx, 0), words.length - 1)], width, height);
+          if (elapsed < durationMs) requestAnimationFrame(frame); else resolve();
+        }
+        requestAnimationFrame(frame);
+      });
+
+      recorder.stop();
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      const blob = await recordedPromise;
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cyrus-video-${Date.now()}.${picked.ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 8000);
+
+      exportBtn.disabled = false;
+      mediaFeedback(`✅ Vidéo exportée (.${picked.ext}, silencieuse — sous-titres incrustés, voir l'avertissement).`, false);
+    }
+
+    document.getElementById('media-export-video-btn').addEventListener('click', mediaGenerateVideo);
 
     // PWA : installation optionnelle sous le nom "CYRUS SUPER ASSISTANT"
     // (voir public/manifest.json et public/sw.js) — échec silencieux sur un
