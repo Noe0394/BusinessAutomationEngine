@@ -30,6 +30,7 @@ const aiStudioStore = require('./lib/aiStudioStore');
 const copywriterEngine = require('./lib/ai/localCopywriterEngine');
 const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const imageLinkStore = require('./lib/media/imageLinkStore');
+const videoAiEngine = require('./lib/media/videoAiEngine');
 const messageHistory = require('./lib/messageHistory');
 const { personalizeMessage, buildPersonalizationVars } = require('./lib/personalization');
 const ebookGenerator = require('./lib/pdf/ebookGenerator');
@@ -3083,18 +3084,30 @@ app.post('/api/media/image-link', requireAccess, upload.single('image'), (req, r
 app.get('/v/:id', (req, res) => {
   const entry = imageLinkStore.get(req.params.id);
   if (!entry) {
-    return res.status(404).send('<!doctype html><html><body>Image expirée ou introuvable.</body></html>');
+    return res.status(404).send('<!doctype html><html><body>Fichier expiré ou introuvable.</body></html>');
   }
 
-  const imageUrl = `${PUBLIC_BASE_URL}/v/${req.params.id}/raw`;
+  // Ce même store héberge désormais aussi bien des images (Image-to-Link)
+  // que des vidéos (voir POST /api/studio/video-ai/status, résultat LTX-Video)
+  // — même principe d'hébergement éphémère avec lien /v/:id, seules les
+  // balises Open Graph et la balise média affichée diffèrent selon le type.
+  const isVideo = (entry.mimetype || '').startsWith('video/');
+  const mediaUrl = `${PUBLIC_BASE_URL}/v/${req.params.id}/raw`;
   const title = escapeHtml(entry.meta.title);
-  const dimensionTags = (entry.meta.width && entry.meta.height)
+  const dimensionTags = (!isVideo && entry.meta.width && entry.meta.height)
     ? `<meta property="og:image:width" content="${entry.meta.width}">\n<meta property="og:image:height" content="${entry.meta.height}">`
     : '';
   const contactPhone = entry.meta.contactPhone ? entry.meta.contactPhone.replace(/^\+/, '') : null;
   const whatsappBtn = contactPhone
     ? `<a class="btn btn-whatsapp" href="https://wa.me/${escapeHtml(contactPhone)}" target="_blank" rel="noopener">💬 Nous contacter sur WhatsApp</a>`
     : '';
+  const ogMediaTags = isVideo
+    ? `<meta property="og:video" content="${mediaUrl}">\n<meta property="og:video:type" content="${escapeHtml(entry.mimetype)}">`
+    : `<meta property="og:image" content="${mediaUrl}">\n${dimensionTags}`;
+  const mediaTag = isVideo
+    ? `<video src="${mediaUrl}" controls autoplay muted loop playsinline></video>`
+    : `<img src="${mediaUrl}" alt="${title}">`;
+  const downloadLabel = isVideo ? "📥 Télécharger la vidéo" : "📥 Télécharger l'image";
 
   // Micro-landing page (feuille de route "Micro-Landing Page d'aperçu &
   // téléchargement direct HD") : centrée, réactive mobile, avec un
@@ -3112,12 +3125,11 @@ app.get('/v/:id', (req, res) => {
 <meta property="og:type" content="website">
 <meta property="og:title" content="${title}">
 <meta property="og:description" content="Partagé via CYRUS SUPER ASSISTANT">
-<meta property="og:image" content="${imageUrl}">
-${dimensionTags}
+${ogMediaTags}
 <meta name="twitter:card" content="summary_large_image">
 <style>
   body { margin:0; background:#111; color:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; display:flex; flex-direction:column; align-items:center; min-height:100vh; padding:1.25rem; box-sizing:border-box; }
-  img { max-width:100%; max-height:70vh; border-radius:10px; box-shadow:0 4px 24px rgba(0,0,0,0.4); }
+  img, video { max-width:100%; max-height:70vh; border-radius:10px; box-shadow:0 4px 24px rgba(0,0,0,0.4); }
   .actions { display:flex; flex-direction:column; gap:0.75rem; width:100%; max-width:360px; margin-top:1.25rem; }
   .btn { display:block; text-align:center; padding:0.9rem 1rem; border-radius:10px; font-weight:bold; text-decoration:none; font-size:1rem; }
   .btn-download { background:#fff; color:#111; }
@@ -3125,9 +3137,9 @@ ${dimensionTags}
 </style>
 </head>
 <body>
-<img src="${imageUrl}" alt="${title}">
+${mediaTag}
 <div class="actions">
-<a class="btn btn-download" href="${imageUrl}" download>📥 Télécharger l'image</a>
+<a class="btn btn-download" href="${mediaUrl}" download>${downloadLabel}</a>
 ${whatsappBtn}
 </div>
 </body>
@@ -3137,11 +3149,88 @@ ${whatsappBtn}
 app.get('/v/:id/raw', (req, res) => {
   const entry = imageLinkStore.get(req.params.id);
   if (!entry) {
-    return res.status(404).send('Image expirée ou introuvable.');
+    return res.status(404).send('Fichier expiré ou introuvable.');
   }
   res.set('Content-Type', entry.mimetype || 'image/png');
   res.set('Cache-Control', 'public, max-age=21600');
   res.send(entry.buffer);
+});
+
+// ---------- Studio Vidéo IA (image-to-video LTX-Video, voir lib/media/videoAiEngine.js) ----------
+// Job asynchrone : la génération LTX-Video prend de 30s à quelques minutes,
+// incompatible avec une requête HTTP bloquante. Le "jobToken" renvoyé au
+// client encode l'état du job (fournisseur + URLs de suivi) en base64 —
+// aucun état côté serveur à faire survivre entre les requêtes de polling,
+// cohérent avec le reste de l'architecture (disque éphémère, voir
+// CLAUDE.md) et résilient à un redéploiement en plein milieu d'une
+// génération (le pire cas est un jobToken qui échoue au prochain poll,
+// jamais un crash serveur).
+function encodeVideoAiJobToken(job) {
+  return Buffer.from(JSON.stringify(job), 'utf8').toString('base64url');
+}
+
+function decodeVideoAiJobToken(token) {
+  return JSON.parse(Buffer.from(String(token || ''), 'base64url').toString('utf8'));
+}
+
+app.post('/api/studio/video-ai/start', requireAccess, requireModule('studio_video'), upload.single('image'), async (req, res) => {
+  try {
+    let buffer;
+    let mimetype;
+    if (req.file) {
+      buffer = req.file.buffer;
+      mimetype = req.file.mimetype;
+    } else {
+      const dataUrl = String((req.body || {}).imageDataUrl || '');
+      const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+      if (!match) {
+        return res.status(400).json({ error: 'Aucune image reçue (fichier importé ou affiche Studio IA attendus).' });
+      }
+      mimetype = match[1];
+      buffer = Buffer.from(match[2], 'base64');
+    }
+
+    const prompt = String((req.body || {}).prompt || '').trim().slice(0, 500);
+    // fal.ai/Replicate ont besoin d'une URL http(s) publique pour l'image de
+    // départ (pas de data URL/multipart direct) — on réutilise le store
+    // Image-to-Link déjà en place (voir POST /api/media/image-link) plutôt
+    // que de dupliquer un hébergement temporaire distinct.
+    const sourceImageId = imageLinkStore.register(buffer, mimetype, { title: 'Image source — génération vidéo IA' });
+    const sourceImageUrl = `${PUBLIC_BASE_URL}/v/${sourceImageId}/raw`;
+
+    const job = await videoAiEngine.startVideoAiJob(sourceImageUrl, prompt);
+    res.json({ jobToken: encodeVideoAiJobToken(job), provider: job.provider });
+  } catch (err) {
+    if (err.kind === 'not_configured') {
+      return res.status(503).json({ error: err.message });
+    }
+    console.error('Erreur lors du démarrage du job vidéo IA:', err.message);
+    res.status(500).json({ error: "Échec du démarrage de la génération vidéo IA — vérifiez la clé API configurée côté serveur." });
+  }
+});
+
+app.get('/api/studio/video-ai/status', requireAccess, requireModule('studio_video'), async (req, res) => {
+  let job;
+  try {
+    job = decodeVideoAiJobToken(req.query.jobToken);
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: 'jobToken invalide.' });
+  }
+
+  try {
+    const result = await videoAiEngine.pollVideoAiJob(job);
+    if (!result.done) {
+      return res.json({ status: 'pending' });
+    }
+
+    const videoRes = await axios.get(result.videoUrl, { responseType: 'arraybuffer', timeout: 60_000 });
+    const mimetype = videoRes.headers['content-type'] || 'video/mp4';
+    const id = imageLinkStore.register(Buffer.from(videoRes.data), mimetype, { title: 'Vidéo IA — CYRUS SUPER ASSISTANT' });
+    res.json({ status: 'done', url: `${PUBLIC_BASE_URL}/v/${id}`, expiresInHours: 6 });
+  } catch (err) {
+    console.error('Erreur pendant le suivi du job vidéo IA:', err.message);
+    res.json({ status: 'error', message: err.message || 'Échec de la génération vidéo IA.' });
+  }
 });
 
 app.get('/api/media/status', requireAccess, requireModule('studio_video'), (req, res) => {
@@ -3149,6 +3238,7 @@ app.get('/api/media/status', requireAccess, requireModule('studio_video'), (req,
     youtube: { configured: mediaPublisher.isYoutubeConfigured(), connectAvailable: mediaPublisher.isYoutubeConnectAvailable() },
     instagram: { configured: mediaPublisher.isInstagramConfigured() },
     tiktok: { configured: mediaPublisher.isTikTokConfigured(), connectAvailable: mediaPublisher.isTikTokConnectAvailable() },
+    videoAi: videoAiEngine.isConfigured(),
   });
 });
 

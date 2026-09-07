@@ -1669,6 +1669,7 @@
           <div class="studio-msg-actions">
             <button type="button" id="media-download-png-btn" class="studio-handoff-btn">📥 Télécharger HD (PNG)</button>
             <button type="button" id="media-export-video-btn" class="studio-handoff-btn" hidden>🎬 Exporter en vidéo</button>
+            <button type="button" id="media-export-ai-video-btn" class="studio-handoff-btn" hidden>🤖 Générer vidéo IA (LTX-Video)</button>
             <button type="button" id="media-back-to-variants-btn" class="studio-handoff-btn">🔁 Nouvelles propositions</button>
           </div>
 
@@ -1686,6 +1687,20 @@
             <video id="media-video-preview" controls autoplay muted loop playsinline></video>
             <p class="studio-msg-actions">
               <button type="button" id="media-video-download-btn" class="studio-handoff-btn">📥 Télécharger la vidéo</button>
+            </p>
+          </div>
+
+          <!-- Vidéo animée par IA (LTX-Video, image-to-video — voir
+               mediaGenerateAiVideo / lib/media/videoAiEngine.js) : contrairement
+               à l'export Ken Burns ci-dessus (100% client, animation de zoom
+               figée), le fichier ici est réellement généré/animé par un
+               modèle IA côté serveur puis hébergé sous un lien /v/:id partageable
+               (aperçu Open Graph WhatsApp/Telegram inclus, voir GET /v/:id). -->
+          <div id="media-ai-video-preview-wrap" hidden>
+            <p class="empty">🤖 Vidéo IA générée :</p>
+            <video id="media-ai-video-preview" controls autoplay muted loop playsinline></video>
+            <p class="studio-msg-actions">
+              <a id="media-ai-video-link" class="studio-handoff-btn" href="#" target="_blank" rel="noopener">🔗 Ouvrir le lien de partage</a>
             </p>
           </div>
 
@@ -7247,6 +7262,7 @@
       document.getElementById('media-flyer-fields').hidden = btn.dataset.deliverable !== 'FLYER_AFFICHE';
       document.getElementById('media-video-fields').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
       document.getElementById('media-export-video-btn').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
+      document.getElementById('media-export-ai-video-btn').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
     });
 
     // Pré-sélection automatique (sans écraser un choix déjà fait par
@@ -7385,14 +7401,49 @@
     // sans jamais afficher la grille ni permettre de réessayer.
     const MEDIA_FETCH_TIMEOUT_MS = 25000;
 
-    // NOTE (vérifié en direct, voir historique) : le format d'URL
-    // `https://image.pollinations.ai/prompt/...` ci-dessous est le bon —
-    // renvoie un Content-Type image/* avec Access-Control-Allow-Origin: *,
-    // requis par img.crossOrigin='anonymous' (nécessaire pour l'export PNG
-    // du canvas, voir mediaDownloadCanvasPng). La variante
-    // `https://pollinations.ai/p/...` renvoie du text/html (la page de
-    // partage du site Pollinations, pas une image) — jamais utilisable
-    // comme source d'un <img>, à ne surtout pas y basculer.
+    // NOTE (vérifié en direct, voir historique) : `https://pollinations.ai/p/...`
+    // renvoie du text/html (la page de partage du site Pollinations, pas une
+    // image) — jamais directement utilisable comme source d'un <img>. Sur
+    // demande explicite (feuille de route), cette URL reste la PREMIÈRE
+    // tentative ci-dessous, mais avec un repli automatique et immédiat (même
+    // onerror) vers `https://image.pollinations.ai/prompt/...` — le format
+    // confirmé fonctionnel (Content-Type image/* + Access-Control-Allow-Origin: *,
+    // requis par img.crossOrigin='anonymous' pour l'export PNG du canvas,
+    // voir mediaDownloadCanvasPng) — pour ne jamais faire dépendre le rendu
+    // du fond de la première URL.
+    function mediaLoadImageUrl(url, onSettle) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        img.onload = null;
+        img.onerror = null;
+        img.src = '';
+        const err = new Error('Le service de génération met trop de temps à répondre (limite de débit anonyme probable) — réessayez dans quelques secondes.');
+        err.kind = 'timeout';
+        onSettle(err, null);
+      }, MEDIA_FETCH_TIMEOUT_MS);
+      img.onload = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        console.log('[ImageEngine] Image chargée avec succès:', url);
+        onSettle(null, img);
+      };
+      img.onerror = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const err = new Error('Échec de génération du fond IA (service indisponible ou requête trop rapide — réessayez dans quelques secondes).');
+        err.kind = 'error';
+        console.warn('[ImageEngine] Échec de chargement pour:', url);
+        onSettle(err, null);
+      };
+      img.src = url;
+    }
+
     function mediaFetchBackgroundImageOnce(promptEnriched, w, h) {
       return new Promise((resolve, reject) => {
         const seed = Math.floor(Math.random() * 1000000);
@@ -7410,38 +7461,21 @@
         // model=flux : modèle photoréaliste demandé explicitement plutôt que
         // de laisser l'API choisir son modèle par défaut pour une requête
         // anonyme (observé en test : "sana" sans ce paramètre).
-        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?width=${w}&height=${h}&nologo=true&seed=${seed}&enhance=true&safe=true&model=flux`;
-        console.log('[ImageEngine] URL générée:', url);
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        let settled = false;
-        const timer = setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          img.onload = null;
-          img.onerror = null;
-          img.src = '';
-          const err = new Error('Le service de génération met trop de temps à répondre (limite de débit anonyme probable) — réessayez dans quelques secondes.');
-          err.kind = 'timeout';
-          reject(err);
-        }, MEDIA_FETCH_TIMEOUT_MS);
-        img.onload = () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          console.log('[ImageEngine] Image chargée avec succès:', url);
-          resolve(img);
-        };
-        img.onerror = () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          const err = new Error('Échec de génération du fond IA (service indisponible ou requête trop rapide — réessayez dans quelques secondes).');
-          err.kind = 'error';
-          console.warn('[ImageEngine] Échec de chargement pour:', url);
-          reject(err);
-        };
-        img.src = url;
+        const primaryUrl = `https://pollinations.ai/p/${encodeURIComponent(cleanPrompt)}?width=${w}&height=${h}&seed=${seed}&model=flux`;
+        const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?width=${w}&height=${h}&nologo=true&seed=${seed}&enhance=true&safe=true&model=flux`;
+
+        console.log('[ImageEngine] URL générée (primaire):', primaryUrl);
+        mediaLoadImageUrl(primaryUrl, (primaryErr, img) => {
+          if (!primaryErr) return resolve(img);
+          if (primaryErr.kind === 'timeout') return reject(primaryErr);
+
+          console.warn('[ImageEngine] Échec de l\'URL primaire (pollinations.ai/p, connue pour renvoyer du HTML) — repli sur image.pollinations.ai/prompt:', primaryErr.message);
+          console.log('[ImageEngine] URL générée (repli):', fallbackUrl);
+          mediaLoadImageUrl(fallbackUrl, (fallbackErr, fallbackImg) => {
+            if (fallbackErr) return reject(fallbackErr);
+            resolve(fallbackImg);
+          });
+        });
       });
     }
 
@@ -8186,6 +8220,71 @@
     });
 
     document.getElementById('media-export-video-btn').addEventListener('click', mediaGenerateVideo);
+
+    // ---------- Studio Vidéo IA (LTX-Video, voir lib/media/videoAiEngine.js) ----------
+    // Contrairement à mediaGenerateVideo ci-dessus (100% client, instantané),
+    // la génération se fait ici sur un serveur tiers (fal.ai/Replicate) :
+    // asynchrone (30s à quelques minutes), d'où le polling ci-dessous plutôt
+    // qu'une réponse HTTP unique. Le fond DOIT être une vraie image générée
+    // (pas le dégradé de secours local) pour un résultat exploitable — même
+    // garde que mediaGenerateVideo.
+    const MEDIA_AI_VIDEO_POLL_MS = 4000;
+    const MEDIA_AI_VIDEO_MAX_POLLS = 60; // ~4 minutes max
+
+    async function mediaGenerateAiVideo() {
+      if (!mediaCurrentCreation) { mediaFeedback("Sélectionnez d'abord une création (voir les propositions) avant de générer une vidéo IA.", true); return; }
+      if (mediaCurrentCreation.usedFallback) {
+        mediaFeedback('⚠️ Cette création utilise le fond de secours local (pas une image générée) — régénérez le fond ci-dessus avant de générer une vidéo IA.', true);
+        return;
+      }
+
+      const btn = document.getElementById('media-export-ai-video-btn');
+      btn.disabled = true;
+      mediaFeedback('🤖 Démarrage de la génération vidéo IA (LTX-Video)...', false);
+
+      try {
+        const { img: backgroundImg, width, height } = mediaCurrentCreation;
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = width;
+        tmpCanvas.height = height;
+        mediaDrawCoverImage(tmpCanvas.getContext('2d'), backgroundImg, width, height);
+        const imageBlob = await new Promise((resolve) => tmpCanvas.toBlob(resolve, 'image/png'));
+        if (!imageBlob) throw new Error("Échec de préparation de l'image source (export canvas).");
+
+        const scriptText = document.getElementById('media-script').value.trim() || document.getElementById('media-concept').value.trim();
+        const form = new FormData();
+        form.append('image', imageBlob, 'source.png');
+        if (scriptText) form.append('prompt', scriptText);
+
+        const startRes = await apiFetch('/api/studio/video-ai/start', { method: 'POST', body: form });
+        const startData = await startRes.json();
+        if (!startRes.ok) throw new Error(startData.error || 'Échec du démarrage de la génération vidéo IA.');
+
+        mediaFeedback(`🤖 Génération en cours via ${startData.provider === 'fal' ? 'fal.ai' : 'Replicate'} (LTX-Video) — cela peut prendre 1 à 3 minutes...`, false);
+
+        let result = null;
+        for (let attempt = 0; attempt < MEDIA_AI_VIDEO_MAX_POLLS; attempt += 1) {
+          await mediaSleep(MEDIA_AI_VIDEO_POLL_MS);
+          const statusRes = await apiFetch(`/api/studio/video-ai/status?jobToken=${encodeURIComponent(startData.jobToken)}`);
+          const statusData = await statusRes.json();
+          if (statusData.status === 'done') { result = statusData; break; }
+          if (statusData.status === 'error') throw new Error(statusData.message || 'Échec de la génération vidéo IA.');
+        }
+        if (!result) throw new Error('La génération vidéo IA prend trop de temps — réessayez plus tard.');
+
+        document.getElementById('media-ai-video-preview').src = `${result.url}/raw`;
+        const link = document.getElementById('media-ai-video-link');
+        link.href = result.url;
+        document.getElementById('media-ai-video-preview-wrap').hidden = false;
+        mediaFeedback('✅ Vidéo IA générée — lien de partage prêt (aperçu WhatsApp/Telegram inclus, expire dans 6h).', false);
+      } catch (err) {
+        if (err.message !== 'unauthorized') mediaFeedback(`❌ ${err.message}`, true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('media-export-ai-video-btn').addEventListener('click', mediaGenerateAiVideo);
 
     // PWA : installation optionnelle sous le nom "CYRUS SUPER ASSISTANT"
     // (voir public/manifest.json et public/sw.js) — échec silencieux sur un
