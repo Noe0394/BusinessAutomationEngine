@@ -234,6 +234,15 @@
     .smart-textgen-vary { flex: 0 0 auto; min-height: 44px; padding: 0.7rem 1.1rem; background: #6c4fd6; color: #fff; border: none; border-radius: 8px; font-weight: bold; white-space: nowrap; }
     .smart-textgen-hint { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: #c0392b; }
 
+    /* Composant universel "ImageToLinkUploader" (voir mountImageToLinkUploader)
+       — monté sous n'importe quel <textarea> de rédaction, même principe que
+       SmartTextGenerator ci-dessus. */
+    .image-link-uploader { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin: 0.4rem 0 1rem; padding: 0.5rem 0.75rem; background: #f2fbf5; border: 1px dashed #075E54; border-radius: 8px; font-size: 0.85rem; }
+    .image-link-uploader.dragover { background: #dff5e6; border-color: #043b34; }
+    .image-link-uploader-label { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.7rem; background: #075E54; color: #fff; border-radius: 6px; font-weight: bold; cursor: pointer; white-space: nowrap; }
+    .image-link-uploader-label input[type="file"] { display: none; }
+    .image-link-uploader-status { color: #444; word-break: break-all; }
+
     /* Onglet Copywriter Studio IA (assistant + générateur de livres). */
     .studio-layout { display: flex; gap: 1.25rem; margin-top: 1rem; min-height: 0; }
     .studio-sidebar { flex: 0 0 220px; display: flex; flex-direction: column; gap: 0.75rem; min-height: 0; }
@@ -5818,6 +5827,77 @@
       createSmartTextGenerator(el, options);
     }
 
+    // Composant universel réutilisable "ImageToLinkUploader" — même principe
+    // que createSmartTextGenerator/mountSmartTextGenerator ci-dessus : un
+    // petit contrôle (bouton d'import + Drag & Drop) monté SOUS n'importe
+    // quel <textarea> de rédaction. Envoie l'image à POST /api/media/image-link
+    // (voir index.js — même endpoint que la Relance Manuelle Express) puis
+    // injecte le lien obtenu dans le texte, TOUJOURS en toute fin (voir
+    // applyImageLinkToText, même règle que relanceApplyImageLink/Force
+    // Visual Preview Guard) — jamais bloquant en cas d'échec réseau, la
+    // rédaction du message reste utilisable normalement.
+    function applyImageLinkToText(text, imageUrl) {
+      const withoutToken = text.split('{IMAGE_LINK}').join('').replace(/\s+$/, '');
+      if (!imageUrl) return withoutToken;
+      return withoutToken ? `${withoutToken}\n\n${imageUrl}` : imageUrl;
+    }
+
+    function mountImageToLinkUploader(textareaId) {
+      const textarea = document.getElementById(textareaId);
+      if (!textarea) return;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'image-link-uploader';
+
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = 'image/*';
+
+      const label = document.createElement('label');
+      label.className = 'image-link-uploader-label';
+      label.textContent = '🖼️ Joindre une image (lien d\'aperçu auto)';
+      label.appendChild(fileInput);
+
+      const status = document.createElement('span');
+      status.className = 'image-link-uploader-status';
+
+      wrap.appendChild(label);
+      wrap.appendChild(status);
+      textarea.insertAdjacentElement('afterend', wrap);
+
+      async function upload(file) {
+        status.textContent = '⏳ Envoi en cours...';
+        try {
+          const { width, height } = await relanceMeasureImageFile(file);
+          const form = new FormData();
+          form.append('image', file);
+          if (width) form.append('width', width);
+          if (height) form.append('height', height);
+          const res = await apiFetch('/api/media/image-link', { method: 'POST', body: form });
+          const data = await res.json();
+          if (!res.ok) { status.textContent = data.error || 'Échec de l\'envoi.'; return; }
+          textarea.value = applyImageLinkToText(textarea.value, data.url);
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          status.textContent = `✅ Lien ajouté (${data.url})`;
+        } catch (err) {
+          if (err.message !== 'unauthorized') status.textContent = 'Échec de l\'envoi (réseau).';
+        }
+      }
+
+      fileInput.addEventListener('change', () => {
+        if (fileInput.files[0]) upload(fileInput.files[0]);
+        fileInput.value = '';
+      });
+      ['dragover', 'dragenter'].forEach((evt) => wrap.addEventListener(evt, (e) => { e.preventDefault(); wrap.classList.add('dragover'); }));
+      ['dragleave', 'dragend'].forEach((evt) => wrap.addEventListener(evt, () => wrap.classList.remove('dragover')));
+      wrap.addEventListener('drop', (e) => {
+        e.preventDefault();
+        wrap.classList.remove('dragover');
+        const file = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (file && file.type.startsWith('image/')) upload(file);
+      });
+    }
+
     function relanceGetIntention() {
       return document.getElementById('relance-intention').value.trim();
     }
@@ -6415,6 +6495,15 @@
     mountSmartTextGenerator('sched-message', { mode: schedTextGenMode });
     mountSmartTextGenerator('rule-message-input', { namePlaceholder: '' });
     mountSmartTextGenerator('share-message-text', { mode: 'group' });
+
+    // Intégration universelle du composant "ImageToLinkUploader" (feuille de
+    // route) : sur TOUS les champs de rédaction de message de l'application,
+    // même liste que les points de montage SmartTextGenerator ci-dessus —
+    // Mode Manuel (Relance Manuelle Express) a déjà sa propre intégration
+    // dédiée avec rotation A/B/C (voir plus haut), non dupliquée ici.
+    ['tg-message', 'tg-dm-message', 'fb-import-message', 'fb-publish-message', 'fb-sched-message',
+      'fb-groups-message', 'sched-message', 'rule-message-input', 'share-message-text']
+      .forEach((id) => mountImageToLinkUploader(id));
 
     // ---------- Onglet "Copywriter Studio IA" : assistant (historique de
     // discussions persistant + composition 100% locale, voir
