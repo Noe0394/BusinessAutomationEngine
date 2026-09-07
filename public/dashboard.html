@@ -286,6 +286,7 @@
     .media-variant-card .media-variant-canvas-frame { background: #111; }
     .media-variant-card canvas { width: 100%; height: auto; display: block; }
     .media-variant-card-label { padding: 0.5rem 0.7rem 0; font-size: 0.82rem; font-weight: bold; color: #6c4fd6; }
+    .media-fallback-badge { margin: 0.4rem 0.7rem 0; padding: 0.5rem 0.7rem; background: #fff3cd; border: 1px solid #ffcc00; color: #7a5c00; border-radius: 6px; font-size: 0.8rem; font-weight: bold; }
     .media-variant-card-actions { display: flex; gap: 0.4rem; padding: 0.6rem 0.7rem; flex-wrap: wrap; }
     .media-variant-card-actions button { flex: 1; min-width: 100px; font-size: 0.82rem; padding: 0.5rem; }
     .media-variant-select-btn { background: #22c55e; color: #fff; border: none; border-radius: 6px; font-weight: bold; }
@@ -7262,30 +7263,80 @@
     // sans jamais afficher la grille ni permettre de réessayer.
     const MEDIA_FETCH_TIMEOUT_MS = 25000;
 
-    function mediaFetchBackgroundImage(promptEnriched, w, h) {
+    // NOTE (vérifié en direct, voir historique) : le format d'URL
+    // `https://image.pollinations.ai/prompt/...` ci-dessous est le bon —
+    // renvoie un Content-Type image/* avec Access-Control-Allow-Origin: *,
+    // requis par img.crossOrigin='anonymous' (nécessaire pour l'export PNG
+    // du canvas, voir mediaDownloadCanvasPng). La variante
+    // `https://pollinations.ai/p/...` renvoie du text/html (la page de
+    // partage du site Pollinations, pas une image) — jamais utilisable
+    // comme source d'un <img>, à ne surtout pas y basculer.
+    function mediaFetchBackgroundImageOnce(promptEnriched, w, h) {
       return new Promise((resolve, reject) => {
         const seed = Math.floor(Math.random() * 1000000);
+        // cleanPrompt ne doit JAMAIS être vide/undefined en pratique (voir
+        // mediaBuildEnrichedPrompt, qui garantit déjà un prompt par défaut) —
+        // filet de sécurité supplémentaire ici au cas où un appelant futur
+        // passerait directement une chaîne vide.
+        const cleanPrompt = (promptEnriched && promptEnriched.trim())
+          || 'professional product banner HD, photorealistic, studio lighting';
         // enhance=true et safe=true : paramètres officiels de l'API Pollinations
         // (voir APIDOCS.md) — enhance laisse le modèle lui-même améliorer/
         // compléter le prompt côté serveur (traduction/enrichissement
         // supplémentaire au-delà du glossaire local ci-dessus), safe rejette
-        // les résultats inappropriés plutôt que de les renvoyer tels quels —
-        // ensemble, ils renforcent la garantie de visuels présentables et
-        // professionnels demandée, sans dépendance à un paramètre "negative"
-        // NON documenté par l'API (jamais inventé un comportement non vérifié).
-        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(promptEnriched)}?width=${w}&height=${h}&nologo=true&seed=${seed}&enhance=true&safe=true`;
+        // les résultats inappropriés plutôt que de les renvoyer tels quels.
+        // model=flux : modèle photoréaliste demandé explicitement plutôt que
+        // de laisser l'API choisir son modèle par défaut pour une requête
+        // anonyme (observé en test : "sana" sans ce paramètre).
+        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?width=${w}&height=${h}&nologo=true&seed=${seed}&enhance=true&safe=true&model=flux`;
+        console.log('[ImageEngine] URL générée:', url);
         const img = new Image();
         img.crossOrigin = 'anonymous';
+        let settled = false;
         const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
           img.onload = null;
           img.onerror = null;
           img.src = '';
-          reject(new Error('Le service de génération met trop de temps à répondre (limite de débit anonyme probable) — réessayez dans quelques secondes.'));
+          const err = new Error('Le service de génération met trop de temps à répondre (limite de débit anonyme probable) — réessayez dans quelques secondes.');
+          err.kind = 'timeout';
+          reject(err);
         }, MEDIA_FETCH_TIMEOUT_MS);
-        img.onload = () => { clearTimeout(timer); resolve(img); };
-        img.onerror = () => { clearTimeout(timer); reject(new Error('Échec de génération du fond IA (service indisponible ou requête trop rapide — réessayez dans quelques secondes).')); };
+        img.onload = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          console.log('[ImageEngine] Image chargée avec succès:', url);
+          resolve(img);
+        };
+        img.onerror = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          const err = new Error('Échec de génération du fond IA (service indisponible ou requête trop rapide — réessayez dans quelques secondes).');
+          err.kind = 'error';
+          console.warn('[ImageEngine] Échec de chargement pour:', url);
+          reject(err);
+        };
         img.src = url;
       });
+    }
+
+    // Une seule nouvelle tentative, UNIQUEMENT sur un échec immédiat
+    // (onerror — typiquement un 429 de la limite de débit anonyme), jamais
+    // sur un timeout (une lenteur réseau générale ne serait pas résolue plus
+    // vite par une 2e attente de MEDIA_FETCH_TIMEOUT_MS, ça doublerait
+    // l'attente pour rien) — nouveau seed à chaque tentative.
+    async function mediaFetchBackgroundImage(promptEnriched, w, h) {
+      try {
+        return await mediaFetchBackgroundImageOnce(promptEnriched, w, h);
+      } catch (err) {
+        if (err.kind !== 'error') throw err;
+        console.warn('[ImageEngine] Premier essai échoué, nouvelle tentative...');
+        await mediaSleep(1500);
+        return mediaFetchBackgroundImageOnce(promptEnriched, w, h);
+      }
     }
 
     // Fond de secours 100% local (aucun réseau, ne peut jamais échouer) :
@@ -7483,6 +7534,17 @@
       label.className = 'media-variant-card-label';
       label.textContent = `Proposition ${index + 1} — ${result.label}${result.usedFallback ? ' (fond local de secours)' : ''}`;
       card.appendChild(label);
+
+      // Badge visible (pas seulement un suffixe de texte discret dans le
+      // label) : le service de génération IA a échoué pour CETTE
+      // proposition — le dégradé affiché n'est PAS un visuel généré, pour
+      // que ça ne soit jamais confondu avec un résultat normal.
+      if (result.usedFallback) {
+        const badge = document.createElement('div');
+        badge.className = 'media-fallback-badge';
+        badge.textContent = '⚠️ Génération IA indisponible pour cette proposition — visuel de secours local affiché. Réessayez dans quelques secondes.';
+        card.appendChild(badge);
+      }
 
       const frame = document.createElement('div');
       frame.className = 'media-variant-canvas-frame';
