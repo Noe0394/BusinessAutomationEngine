@@ -3322,16 +3322,28 @@ licenses
 // initAdminSession() : migre puis connecte le tenant admin (comportement
 // historique préservé — seul tenant démarré automatiquement, sans attendre
 // une première requête ; voir adapters/whatsappManager.js). Une fois cela
-// lancé, bootResumePendingCampaigns() reprend, pour chaque clé de licence
-// dont l'état persisté indique une campagne encore en cours au moment de
-// l'arrêt précédent du process (redéploiement, crash), l'envoi en
-// arrière-plan exactement là où il s'était arrêté.
+// lancé :
+// - bootReconnectAllPairedTenants() reconnecte TOUTE clé de licence ayant
+//   déjà une session WhatsApp appairée (avec ou sans campagne en cours) —
+//   sans ça, une clé sans campagne active mais bien connectée avant le
+//   redéploiement restait affichée "Déconnectée" jusqu'à ce que son
+//   propriétaire recharge le dashboard, alors qu'admin et les campagnes en
+//   cours redémarraient déjà à chaud (confusion observée en production le
+//   2026-09-07, corrigée à la demande explicite de l'utilisateur).
+// - bootResumePendingCampaigns() reprend, pour chaque clé de licence dont
+//   l'état persisté indique une campagne encore en cours au moment de
+//   l'arrêt précédent du process, l'envoi en arrière-plan exactement là où
+//   il s'était arrêté (ensureConnected y est de toute façon idempotente :
+//   pas de double connexion pour un tenant déjà couvert ci-dessus).
 whatsappManager
   .initAdminSession()
   .catch((err) => {
     console.error('Erreur lors de l\'initialisation de la session WhatsApp admin:', err);
   })
   .finally(() => {
+    whatsappManager.bootReconnectAllPairedTenants().catch((err) => {
+      console.error('Erreur lors de la reconnexion automatique des sessions WhatsApp appairées :', err);
+    });
     whatsappManager.bootResumePendingCampaigns().catch((err) => {
       console.error('Erreur lors de la reprise des campagnes WhatsApp interrompues :', err);
     });

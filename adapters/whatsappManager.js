@@ -186,6 +186,90 @@ async function bootResumePendingCampaigns() {
   }
 }
 
+const GITHUB_WHATSAPP_AUTH_DIR = process.env.GITHUB_WHATSAPP_AUTH_DIR || 'whatsapp_auth';
+
+// Liste tous les tenants ayant déjà une session WhatsApp appairée (creds.json
+// non vide, en local et/ou sur GitHub) — contrairement à
+// listTenantsWithPendingCampaigns() ci-dessus, aucune condition sur une
+// campagne en cours : sert à reconnecter au démarrage TOUTE clé de licence
+// déjà appairée, pas seulement celles avec un envoi actif (voir
+// bootReconnectAllPairedTenants juste en dessous).
+async function listTenantsWithSavedSession() {
+  const tenantsFromLocal = [];
+  let localEntries = [];
+  try {
+    localEntries = fs.readdirSync(whatsapp.AUTH_DIR_BASE, { withFileTypes: true });
+  } catch (err) {
+    // Dossier absent : rien en local, on continue quand même vers GitHub.
+  }
+
+  for (const entry of localEntries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      if (fs.statSync(path.join(whatsapp.AUTH_DIR_BASE, entry.name, 'creds.json')).size > 0) {
+        tenantsFromLocal.push(entry.name);
+      }
+    } catch (err) {
+      // Pas de creds.json dans ce dossier : tenant jamais appairé avec succès.
+    }
+  }
+
+  if (!githubStore.enabled) {
+    return tenantsFromLocal;
+  }
+
+  const knownLocally = new Set(tenantsFromLocal);
+  const remoteFiles = await githubStore.listDirectory(GITHUB_WHATSAPP_AUTH_DIR);
+  const tenantsFromRemote = [];
+
+  for (const filename of remoteFiles) {
+    if (!filename.endsWith('.json')) continue;
+    const tenantId = filename.replace(/\.json$/, '');
+    if (knownLocally.has(tenantId)) continue; // déjà couvert par le disque local
+
+    try {
+      const store = githubStore.createStore(`${GITHUB_WHATSAPP_AUTH_DIR}/${filename}`);
+      const remote = await store.fetchRemote();
+      if (remote && remote.content) {
+        tenantsFromRemote.push(tenantId);
+      }
+    } catch (err) {
+      console.error(`Session WhatsApp distante illisible pour le tenant "${tenantId}" :`, err.message);
+    }
+  }
+
+  return [...tenantsFromLocal, ...tenantsFromRemote];
+}
+
+// Reconnecte au démarrage TOUTE clé de licence ayant déjà une session
+// WhatsApp appairée (pas seulement admin ou celles avec une campagne en
+// cours — voir bootResumePendingCampaigns ci-dessus) : sans ça, une clé sans
+// campagne active mais bien connectée avant un redéploiement Render restait
+// affichée "Déconnectée" jusqu'à ce que son propriétaire recharge le
+// dashboard (reconnexion paresseuse, voir ensureConnected) — demandé
+// explicitement par l'utilisateur suite à cette confusion en production le
+// 2026-09-07. Contrepartie assumée : un socket Baileys est rouvert pour
+// CHAQUE clé déjà appairée dès le démarrage, même inactive depuis longtemps
+// — plus de charge mémoire/CPU si de nombreuses clés sont en circulation
+// (voir le commentaire original sur ensureConnected qui documentait ce
+// compromis dans l'autre sens). Le tenant admin (déjà connecté par
+// initAdminSession) et les tenants avec campagne en cours (déjà connectés
+// par bootResumePendingCampaigns) sont simplement reconnectés une seconde
+// fois sans effet grâce à l'idempotence de ensureConnected
+// (entry.initStarted).
+async function bootReconnectAllPairedTenants() {
+  const tenantIds = await listTenantsWithSavedSession();
+  let reconnected = 0;
+  for (const tenantId of tenantIds) {
+    if (tenantId === ADMIN_TENANT_ID) continue;
+    ensureConnected(getOrCreate(tenantId));
+    reconnected += 1;
+  }
+  if (reconnected > 0) {
+    console.log(`Reconnexion automatique de ${reconnected} session(s) WhatsApp déjà appairée(s) après redémarrage.`);
+  }
+}
+
 // Panneau admin (/api/admin/storage-status) : conserve la forme plate
 // historique (enabled/repo/branch/lastPushAt/lastPushOk/lastPushError) que
 // public/admin.html sait déjà afficher — repo/branch sont communs à tous les
@@ -226,6 +310,7 @@ module.exports = {
   getSessionForRequest,
   initAdminSession,
   bootResumePendingCampaigns,
+  bootReconnectAllPairedTenants,
   listActiveEntries,
   getStorageStatus,
 };
