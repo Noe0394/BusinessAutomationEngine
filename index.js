@@ -28,6 +28,7 @@ const groupScraper = require('./lib/groupScraper');
 const { replaceVariables, normalizeJid, jidToE164 } = require('./lib/whatsappRecipients');
 const aiStudioStore = require('./lib/aiStudioStore');
 const copywriterEngine = require('./lib/ai/localCopywriterEngine');
+const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const ebookGenerator = require('./lib/pdf/ebookGenerator');
 
 const app = express();
@@ -3314,8 +3315,26 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, async (req, res)
   }
 
   const isFirstMessage = !Array.isArray(existing.messages) || existing.messages.length === 0;
-  const { text: replyText } = copywriterEngine.composeReply(text, existing.messages);
+  const { text: localReplyText, category } = copywriterEngine.composeReply(text, existing.messages);
   const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
+
+  // LLM Multi-Provider Fallback (lib/ai/llmFallbackEngine.js) : uniquement
+  // pour le cas 'UNKNOWN' du moteur local (aucun sujet CYRUS/marketing
+  // précis identifié — la réponse locale se limite alors à "précisez votre
+  // besoin"). Les catégories SUPPORT/QUESTION/OBJECTION/CLOSING restent
+  // TOUJOURS servies par le moteur local déterministe, jamais par un modèle
+  // externe susceptible d'halluciner une information sur la plateforme
+  // elle-même. Si la cascade échoue entièrement (panne réseau totale), on
+  // retombe silencieusement sur la réponse locale déjà calculée.
+  let replyText = localReplyText;
+  if (category === 'UNKNOWN') {
+    try {
+      const { text: llmText } = await llmFallbackEngine.generateAIResponse(text, existing.messages);
+      replyText = llmText;
+    } catch (err) {
+      console.warn('LLM Fallback — cascade entièrement indisponible, réponse locale conservée :', err.message);
+    }
+  }
 
   await sleep(1500 + Math.floor(Math.random() * 1500));
 
