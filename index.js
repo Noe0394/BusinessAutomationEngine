@@ -2880,7 +2880,17 @@ app.post('/api/media/image-link', requireAccess, upload.single('image'), (req, r
   }
 
   const title = String((req.body || {}).title || '').trim().slice(0, 120) || 'Aperçu image — CYRUS SUPER ASSISTANT';
-  const id = imageLinkStore.register(buffer, mimetype, { title });
+  // width/height (mesurées côté client, voir public/dashboard.html) : alimentent
+  // og:image:width/height, qui accélèrent le rendu de la carte d'aperçu par
+  // WhatsApp/Telegram (dimensions connues sans devoir télécharger l'image
+  // d'abord). contactPhone (optionnel) : numéro affiché par le bouton "Nous
+  // contacter sur WhatsApp" de la landing page (voir GET /v/:id) — jamais
+  // deviné depuis la session WhatsApp connectée, car le contact public
+  // affiché au prospect peut légitimement différer du compte d'automatisation.
+  const width = parseInt((req.body || {}).width, 10) || null;
+  const height = parseInt((req.body || {}).height, 10) || null;
+  const contactPhone = String((req.body || {}).contactPhone || '').replace(/[^\d+]/g, '').slice(0, 20) || null;
+  const id = imageLinkStore.register(buffer, mimetype, { title, width, height, contactPhone });
   res.json({ url: `${PUBLIC_BASE_URL}/v/${id}`, expiresInHours: 6 });
 });
 
@@ -2899,20 +2909,48 @@ app.get('/v/:id', (req, res) => {
 
   const imageUrl = `${PUBLIC_BASE_URL}/v/${req.params.id}/raw`;
   const title = escapeHtml(entry.meta.title);
+  const dimensionTags = (entry.meta.width && entry.meta.height)
+    ? `<meta property="og:image:width" content="${entry.meta.width}">\n<meta property="og:image:height" content="${entry.meta.height}">`
+    : '';
+  const contactPhone = entry.meta.contactPhone ? entry.meta.contactPhone.replace(/^\+/, '') : null;
+  const whatsappBtn = contactPhone
+    ? `<a class="btn btn-whatsapp" href="https://wa.me/${escapeHtml(contactPhone)}" target="_blank" rel="noopener">💬 Nous contacter sur WhatsApp</a>`
+    : '';
+
+  // Micro-landing page (feuille de route "Micro-Landing Page d'aperçu &
+  // téléchargement direct HD") : centrée, réactive mobile, avec un
+  // téléchargement direct (lien <a download> même origine, aucune API
+  // blob nécessaire côté client) et un CTA WhatsApp optionnel — ET les
+  // balises Open Graph nécessaires au rendu de la carte d'aperçu par
+  // WhatsApp/Telegram AVANT même que le prospect n'ouvre le lien.
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
 <meta property="og:type" content="website">
 <meta property="og:title" content="${title}">
 <meta property="og:description" content="Partagé via CYRUS SUPER ASSISTANT">
 <meta property="og:image" content="${imageUrl}">
+${dimensionTags}
 <meta name="twitter:card" content="summary_large_image">
+<style>
+  body { margin:0; background:#111; color:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; display:flex; flex-direction:column; align-items:center; min-height:100vh; padding:1.25rem; box-sizing:border-box; }
+  img { max-width:100%; max-height:70vh; border-radius:10px; box-shadow:0 4px 24px rgba(0,0,0,0.4); }
+  .actions { display:flex; flex-direction:column; gap:0.75rem; width:100%; max-width:360px; margin-top:1.25rem; }
+  .btn { display:block; text-align:center; padding:0.9rem 1rem; border-radius:10px; font-weight:bold; text-decoration:none; font-size:1rem; }
+  .btn-download { background:#fff; color:#111; }
+  .btn-whatsapp { background:#25D366; color:#fff; }
+</style>
 </head>
-<body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh;">
-<img src="${imageUrl}" alt="${title}" style="max-width:100%;max-height:100vh;">
+<body>
+<img src="${imageUrl}" alt="${title}">
+<div class="actions">
+<a class="btn btn-download" href="${imageUrl}" download>📥 Télécharger l'image</a>
+${whatsappBtn}
+</div>
 </body>
 </html>`);
 });

@@ -211,6 +211,8 @@
     .relance-abtest-panel { border: 1px solid #ded6fb; border-radius: 8px; padding: 0.75rem 1rem; margin-top: 0.75rem; background: #f9f8ff; }
     .relance-abtest-panel summary { font-weight: bold; cursor: pointer; color: #6c4fd6; }
     .relance-abtest-panel textarea { min-height: 50px; }
+    .relance-dropzone { margin-top: 0.75rem; padding: 1.25rem; border: 2px dashed #6c4fd6; border-radius: 8px; text-align: center; color: #6c4fd6; font-size: 0.9rem; font-weight: bold; }
+    .relance-dropzone.dragover { background: #f0ecff; border-color: #4b2fb0; }
     .relance-image-slots { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
     .relance-image-slot { flex: 1 1 220px; display: flex; flex-direction: column; gap: 0.35rem; padding: 0.6rem; border: 1px dashed #ccc; border-radius: 6px; }
     .relance-image-slot button { padding: 0.4rem 0.6rem; font-size: 0.85rem; }
@@ -1336,14 +1338,15 @@
       <details class="relance-abtest-panel" id="relance-abtest-panel">
         <summary>🧪 Test A/B/C &amp; Visuels (optionnel — jusqu'à 3 variantes de texte et 2 visuels, rotation automatique)</summary>
         <p class="relance-hint">
-          Renseignez 2 ou 3 variantes pour les faire alterner automatiquement sur la file (A → B → C → A...). Utilisez
-          <code>{IMAGE_LINK}</code> dans une variante pour placer précisément le lien d'aperçu visuel — sinon, si un
-          visuel est configuré, son lien est ajouté automatiquement en fin de message. Laissez tout vide pour garder
-          le comportement par défaut (message de la campagne ou intention ci-dessus).
+          Renseignez 2 ou 3 variantes pour les faire alterner automatiquement sur la file (A → B → C → A...). Le jeton
+          <code>{IMAGE_LINK}</code> est optionnel dans le texte — que vous l'utilisiez ou non, dès qu'un visuel est
+          configuré son lien est systématiquement placé en TOUTE FIN de message (jamais ailleurs), pour une détection
+          fiable de l'aperçu par WhatsApp/Telegram. Laissez tout vide pour garder le comportement par défaut (message
+          de la campagne ou intention ci-dessus).
         </p>
         <div class="field">
           <label for="relance-variant-a">Variante A</label>
-          <textarea id="relance-variant-a" placeholder="Ex: Salut {IMAGE_LINK} nouvelle collection dispo !" style="min-height: 50px;"></textarea>
+          <textarea id="relance-variant-a" placeholder="Ex: Salut, nouvelle collection dispo !" style="min-height: 50px;"></textarea>
         </div>
         <div class="field">
           <label for="relance-variant-b">Variante B</label>
@@ -1353,6 +1356,15 @@
           <label for="relance-variant-c">Variante C</label>
           <textarea id="relance-variant-c" style="min-height: 50px;"></textarea>
         </div>
+
+        <div class="field">
+          <label for="relance-contact-phone">Numéro WhatsApp à afficher sur la page d'aperçu (optionnel)</label>
+          <input type="text" id="relance-contact-phone" placeholder="Ex: +225 07 XX XX XX XX">
+          <p class="relance-hint">Affiche un bouton "Nous contacter sur WhatsApp" sur la page ouverte par le prospect (voir le lien d'image).</p>
+        </div>
+
+        <div class="relance-dropzone" id="relance-dropzone">📥 Glissez-déposez une image ici (Visuel 1 ou 2, premier emplacement libre)</div>
+
         <div class="relance-image-slots">
           <div class="relance-image-slot">
             <label for="relance-image-1">Visuel 1</label>
@@ -5820,15 +5832,16 @@
         .filter(Boolean);
     }
 
-    // Insère le lien d'aperçu visuel (voir relanceUploadImage) à l'endroit
-    // exact du jeton {IMAGE_LINK} s'il est présent dans le texte, sinon
-    // l'ajoute en fin de message — garantit que le lien est TOUJOURS présent
-    // dès qu'un visuel est configuré, même si l'utilisateur oublie le jeton
-    // (conserve le geste à 1 clic unique demandé par la feuille de route).
+    // Force Visual Preview Guard (feuille de route) : le lien d'aperçu
+    // visuel est TOUJOURS placé en TOUTE FIN de message, jamais ailleurs —
+    // un jeton {IMAGE_LINK} éventuellement tapé par l'utilisateur au milieu
+    // du texte est retiré plutôt que substitué sur place, pour une
+    // détection fiable et systématique par les parseurs WhatsApp/Telegram
+    // (qui repèrent le mieux un lien isolé en fin de message).
     function relanceApplyImageLink(text, imageUrl) {
-      if (!imageUrl) return text;
-      if (text.includes('{IMAGE_LINK}')) return text.split('{IMAGE_LINK}').join(imageUrl);
-      return text ? `${text}\n\n${imageUrl}` : imageUrl;
+      const withoutToken = text.split('{IMAGE_LINK}').join('').replace(/\s+$/, '');
+      if (!imageUrl) return withoutToken;
+      return withoutToken ? `${withoutToken}\n\n${imageUrl}` : imageUrl;
     }
 
     // Calcul PUR et synchrone du message d'un contact donné (aucun appel
@@ -5911,23 +5924,46 @@
       relanceRhythmTimerId = setInterval(relanceUpdateRhythmDisplay, 1000);
     }
 
-    // ---------- Image-to-Link (aperçu visuel WhatsApp/Telegram, voir POST /api/media/creative-direction... /api/media/image-link) ----------
+    // ---------- Image-to-Link (aperçu visuel WhatsApp/Telegram, voir POST /api/media/image-link) ----------
+    // Mesure les dimensions réelles d'un fichier image côté client (jamais
+    // sur le serveur — évite d'ajouter une dépendance de traitement d'image
+    // au backend) : alimentent og:image:width/height (voir GET /v/:id), qui
+    // accélèrent le rendu de la carte d'aperçu par WhatsApp/Telegram.
+    function relanceMeasureImageFile(file) {
+      return new Promise((resolve) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => { URL.revokeObjectURL(url); resolve({ width: img.naturalWidth, height: img.naturalHeight }); };
+        img.onerror = () => { URL.revokeObjectURL(url); resolve({ width: null, height: null }); };
+        img.src = url;
+      });
+    }
+
+    function relanceApplyUploadResult(slot, statusEl, data) {
+      relanceState.imageUrls[slot] = data.url;
+      statusEl.textContent = `✅ ${data.url}`;
+      relancePrerenderAll();
+      relanceRenderCard();
+    }
+
     async function relanceUploadImage(slot, file) {
       const statusEl = document.getElementById(`relance-image-${slot + 1}-status`);
       statusEl.textContent = '⏳ Envoi en cours...';
       try {
+        const { width, height } = await relanceMeasureImageFile(file);
         const form = new FormData();
         form.append('image', file);
+        if (width) form.append('width', width);
+        if (height) form.append('height', height);
+        const contactPhone = document.getElementById('relance-contact-phone').value.trim();
+        if (contactPhone) form.append('contactPhone', contactPhone);
         const res = await apiFetch('/api/media/image-link', { method: 'POST', body: form });
         const data = await res.json();
         if (!res.ok) {
           statusEl.textContent = data.error || 'Échec de l\'envoi.';
           return;
         }
-        relanceState.imageUrls[slot] = data.url;
-        statusEl.textContent = `✅ ${data.url}`;
-        relancePrerenderAll();
-        relanceRenderCard();
+        relanceApplyUploadResult(slot, statusEl, data);
       } catch (err) {
         if (err.message !== 'unauthorized') statusEl.textContent = 'Échec de l\'envoi (réseau).';
       }
@@ -5937,7 +5973,8 @@
     // (mediaCurrentCreation, voir plus bas dans ce fichier) : exporte le
     // canvas actuel en PNG et l'envoie au même endpoint que l'upload de
     // fichier — couvre "utiliser une affiche du Studio IA" sans dupliquer le
-    // pipeline d'upload.
+    // pipeline d'upload. Les dimensions du canvas sont déjà connues, aucune
+    // mesure asynchrone nécessaire ici contrairement à relanceUploadImage.
     async function relanceUseStudioImage(slot) {
       const statusEl = document.getElementById(`relance-image-${slot + 1}-status`);
       if (typeof mediaCurrentCreation === 'undefined' || !mediaCurrentCreation) {
@@ -5948,20 +5985,24 @@
       try {
         const canvas = document.getElementById('media-canvas');
         const dataUrl = canvas.toDataURL('image/png');
+        const contactPhone = document.getElementById('relance-contact-phone').value.trim();
         const res = await apiFetch('/api/media/image-link', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageDataUrl: dataUrl, title: 'Affiche Studio IA — CYRUS' }),
+          body: JSON.stringify({
+            imageDataUrl: dataUrl,
+            title: 'Affiche Studio IA — CYRUS',
+            width: canvas.width,
+            height: canvas.height,
+            contactPhone: contactPhone || undefined,
+          }),
         });
         const data = await res.json();
         if (!res.ok) {
           statusEl.textContent = data.error || 'Échec de l\'envoi.';
           return;
         }
-        relanceState.imageUrls[slot] = data.url;
-        statusEl.textContent = `✅ ${data.url}`;
-        relancePrerenderAll();
-        relanceRenderCard();
+        relanceApplyUploadResult(slot, statusEl, data);
       } catch (err) {
         if (err.message !== 'unauthorized') statusEl.textContent = 'Échec de l\'envoi (réseau).';
       }
@@ -5975,6 +6016,25 @@
     });
     document.getElementById('relance-image-1-studio-btn').addEventListener('click', () => relanceUseStudioImage(0));
     document.getElementById('relance-image-2-studio-btn').addEventListener('click', () => relanceUseStudioImage(1));
+
+    // Support des images personnalisées (module 3) : Drag & Drop — dépose
+    // dans le premier emplacement visuel libre (1 puis 2), même pipeline
+    // d'upload que la sélection de fichier classique.
+    const relanceDropzone = document.getElementById('relance-dropzone');
+    ['dragover', 'dragenter'].forEach((evt) => {
+      relanceDropzone.addEventListener(evt, (e) => { e.preventDefault(); relanceDropzone.classList.add('dragover'); });
+    });
+    ['dragleave', 'dragend'].forEach((evt) => {
+      relanceDropzone.addEventListener(evt, () => relanceDropzone.classList.remove('dragover'));
+    });
+    relanceDropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      relanceDropzone.classList.remove('dragover');
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!file || !file.type.startsWith('image/')) return;
+      const freeSlot = relanceState.imageUrls[0] ? (relanceState.imageUrls[1] ? 0 : 1) : 0;
+      relanceUploadImage(freeSlot, file);
+    });
 
     async function relanceLoadQueue() {
       const url = relanceState.channel === 'telegram'
@@ -6165,11 +6225,47 @@
     // l'utilisateur a déjà agi — seule la TRACE peut échouer.
     // `auto` = true quand l'appel vient du décompte du Mode Série Continu
     // (pas d'un clic direct) — voir seriesArmCountdown/seriesPauseForBlockedPopup.
+    const RELANCE_IMAGE_LINK_RECHECK_MS = 10 * 60 * 1000;
+    const relanceImageLinkVerifiedAt = {};
+
+    // Force Visual Preview Guard (feuille de route) : vérifie que le lien
+    // d'image inclus dans le message est toujours joignable (200 OK) avant
+    // d'autoriser le déclenchement du Deep Link — le stockage des liens
+    // (lib/media/imageLinkStore.js) est EN MÉMOIRE côté serveur, donc perdu
+    // si le process a redémarré pendant une longue session de relance. Ne
+    // revérifie au plus qu'une fois toutes les RELANCE_IMAGE_LINK_RECHECK_MS
+    // par lien (jamais à CHAQUE envoi, pour ne pas réintroduire de latence
+    // réseau sur le geste 1-clic) et se DÉGRADE toujours en envoi texte seul
+    // plutôt que de bloquer indéfiniment l'action si le lien est mort.
+    async function relanceVerifyImageLink(text) {
+      const activeUrl = relanceState.imageUrls.find((url) => url && text.includes(url));
+      if (!activeUrl) return text;
+      if (Date.now() - (relanceImageLinkVerifiedAt[activeUrl] || 0) < RELANCE_IMAGE_LINK_RECHECK_MS) return text;
+
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2000);
+        const res = await fetch(activeUrl, { method: 'HEAD', signal: controller.signal });
+        clearTimeout(timer);
+        if (res.ok) {
+          relanceImageLinkVerifiedAt[activeUrl] = Date.now();
+          return text;
+        }
+      } catch (err) {
+        // Délai dépassé ou réseau indisponible — traité comme un lien mort.
+      }
+
+      relanceFeedback('⚠️ Le lien d\'aperçu visuel semble indisponible — message envoyé sans visuel.', true);
+      return text.split(activeUrl).join('').replace(/\s+$/, '');
+    }
+
     async function relanceLaunchCurrent(auto) {
       const { items, cursor, channel } = relanceState;
       if (cursor >= items.length) return;
       const item = items[cursor];
-      const text = document.getElementById('relance-message-text').value;
+      const rawText = document.getElementById('relance-message-text').value;
+      const text = await relanceVerifyImageLink(rawText);
+      const hasImageLink = relanceState.imageUrls.some((url) => url && text.includes(url));
 
       try {
         await navigator.clipboard.writeText(text);
@@ -6183,6 +6279,13 @@
       if (auto && !opened) {
         seriesPauseForBlockedPopup();
         return;
+      }
+
+      // Guidage visuel ergonomique (feuille de route "Force Visual Preview
+      // Guard") : uniquement quand un lien d'image fait effectivement partie
+      // du message envoyé — inutile sinon.
+      if (hasImageLink) {
+        relanceFeedback('✅ Lien injecté ! Attendez 1 sec dans WhatsApp/Telegram que l\'aperçu visuel charge avant de cliquer sur Envoyer.', false);
       }
 
       // Fire-and-forget : ne jamais laisser la latence réseau (jusqu'à
