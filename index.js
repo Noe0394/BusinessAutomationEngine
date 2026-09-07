@@ -1403,28 +1403,27 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
   const seqDelayMinMs = Math.max(1, parseFloat(sequenceDelayMin) || 2) * 1000;
   const seqDelayMaxMs = Math.max(seqDelayMinMs, (parseFloat(sequenceDelayMax) || 5) * 1000);
 
-  let campaign;
-  try {
-    campaign = await req.campaignEngine.start(recipients, {
-      delaySeconds: fixedDelaySeconds,
-      batchSize: parsedBatchSize,
-      batchPauseSeconds: parsedBatchPauseSeconds,
-      sequence: resolvedSequence,
-      sequenceDelayMinMs: seqDelayMinMs,
-      sequenceDelayMaxMs: seqDelayMaxMs,
-      duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
-    });
-  } catch (err) {
-    if (err.message === 'CAMPAIGN_IN_PROGRESS') {
-      return res.status(409).json({
-        error: 'Une campagne est déjà en cours. Attendez sa fin ou interrompez-la (STOP) avant d\'en lancer une nouvelle.',
-      });
-    }
-    throw err;
-  }
+  // enqueueIfBusy: true — Gestionnaire Multi-Campagnes : si une autre
+  // campagne est déjà active sur cette session, celle-ci est stockée
+  // "EN ATTENTE" (voir CampaignEngine#start) plutôt que de faire échouer la
+  // requête ; l'utilisateur la démarre plus tard depuis la liste des
+  // campagnes (bascule instantanée via /api/messages/campaigns/:id/play).
+  const campaign = await req.campaignEngine.start(recipients, {
+    name: req.body.name,
+    delaySeconds: fixedDelaySeconds,
+    batchSize: parsedBatchSize,
+    batchPauseSeconds: parsedBatchPauseSeconds,
+    sequence: resolvedSequence,
+    sequenceDelayMinMs: seqDelayMinMs,
+    sequenceDelayMaxMs: seqDelayMaxMs,
+    duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
+    enqueueIfBusy: true,
+  });
 
   res.status(202).json({
-    status: 'campaign_started',
+    status: campaign.status === 'queued' ? 'campaign_queued' : 'campaign_started',
+    id: campaign.id,
+    name: campaign.name,
     total: campaign.total,
     delaySeconds: fixedDelaySeconds || 15,
     batchSize: parsedBatchSize || recipients.length,
@@ -1438,9 +1437,12 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
 // Pause manuelle (bouton "Mettre en Pause") : ne finalise rien, la
 // progression et la liste des destinataires restants sont conservées pour
 // une reprise via /api/messages/resume — voir CampaignEngine#pause.
+// campaignId (body ou query, optionnel) : cible une campagne précise du
+// Gestionnaire Multi-Campagnes — omis, agit sur la campagne "par défaut"
+// (compat avec l'ancien dashboard mono-campagne).
 app.post('/api/messages/pause', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
   try {
-    req.campaignEngine.pause();
+    req.campaignEngine.pause(req.body.campaignId || req.query.campaignId);
     res.status(200).json({ status: 'pause_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -1450,10 +1452,13 @@ app.post('/api/messages/pause', requireAccess, requireModule('whatsapp'), attach
   }
 });
 
-app.post('/api/messages/resume', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+// Reprend/lance une campagne (voir CampaignEngine#resume) — async car une
+// bascule depuis une AUTRE campagne actuellement active attend que sa boucle
+// d'envoi ait réellement quitté avant de démarrer celle-ci.
+app.post('/api/messages/resume', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
-    req.campaignEngine.resume();
-    res.status(200).json({ status: 'resume_requested' });
+    const campaign = await req.campaignEngine.resume(req.body.campaignId || req.query.campaignId);
+    res.status(200).json({ status: 'resume_requested', campaign });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
       return res.status(400).json({ error: 'Aucune campagne en cours à reprendre.' });
@@ -1464,12 +1469,11 @@ app.post('/api/messages/resume', requireAccess, requireModule('whatsapp'), attac
 
 // Arrêt DÉFINITIF (bouton "Stopper définitivement") : voir
 // CampaignEngine#stop, qui finalise la campagne de façon SYNCHRONE — le
-// verrou (une seule campagne à la fois par tenant) est donc déjà libéré au
-// moment où cette réponse part, permettant de lancer une nouvelle campagne
-// sans attendre.
+// verrou est donc déjà libéré au moment où cette réponse part, permettant de
+// lancer une nouvelle campagne sans attendre.
 app.post('/api/messages/stop', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
   try {
-    req.campaignEngine.stop();
+    req.campaignEngine.stop(req.body.campaignId || req.query.campaignId);
     res.status(200).json({ status: 'stop_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -1480,7 +1484,7 @@ app.post('/api/messages/stop', requireAccess, requireModule('whatsapp'), attachW
 });
 
 app.get('/api/messages/status', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
-  const status = req.campaignEngine.getStatus();
+  const status = req.campaignEngine.getStatus(req.query.campaignId);
   if (!status) {
     return res.status(200).json({ exists: false });
   }
@@ -1488,19 +1492,65 @@ app.get('/api/messages/status', requireAccess, requireModule('whatsapp'), attach
   res.status(200).json({ exists: true, ...status });
 });
 
+// Gestionnaire Multi-Campagnes (dashboard) : liste TOUTES les campagnes du
+// tenant (🔴 EN COURS / 🟡 EN PAUSE / 🟢 TERMINÉE / ⚪ EN ATTENTE), les plus
+// récentes d'abord — voir CampaignEngine#listCampaigns.
+app.get('/api/messages/campaigns', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+  res.status(200).json({ campaigns: req.campaignEngine.listCampaigns() });
+});
+
+// Bascule instantanée : lance/reprend la campagne :id, mettant d'abord en
+// pause celle actuellement active si elle est différente — voir
+// CampaignEngine#resume.
+app.post('/api/messages/campaigns/:id/play', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
+  try {
+    const campaign = await req.campaignEngine.resume(req.params.id);
+    res.status(200).json({ status: 'resume_requested', campaign });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(404).json({ error: 'Campagne introuvable ou déjà terminée.' });
+    }
+    throw err;
+  }
+});
+
+app.post('/api/messages/campaigns/:id/pause', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+  try {
+    req.campaignEngine.pause(req.params.id);
+    res.status(200).json({ status: 'pause_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(400).json({ error: 'Cette campagne n\'est pas en cours d\'envoi.' });
+    }
+    throw err;
+  }
+});
+
+app.post('/api/messages/campaigns/:id/stop', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+  try {
+    req.campaignEngine.stop(req.params.id);
+    res.status(200).json({ status: 'stop_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(404).json({ error: 'Campagne introuvable ou déjà arrêtée.' });
+    }
+    throw err;
+  }
+});
+
 // Onglet dashboard "Relance Manuelle Express" (WhatsApp) : file d'attente
-// des contacts encore 'pending'/'failed' de la dernière campagne connue,
-// avec le message personnalisé prêt pour un deep link wa.me — voir
-// CampaignEngine#getManualRelaunchQueue.
+// des contacts encore 'pending'/'failed' de la campagne visée (campaignId en
+// query, sinon la campagne "par défaut"), avec le message personnalisé prêt
+// pour un deep link wa.me — voir CampaignEngine#getManualRelaunchQueue.
 app.get('/api/messages/manual-queue', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
-  res.status(200).json({ items: req.campaignEngine.getManualRelaunchQueue() });
+  res.status(200).json({ items: req.campaignEngine.getManualRelaunchQueue(req.query.campaignId) });
 });
 
 // Trace l'ouverture manuelle d'un deep link WhatsApp pour un contact donné
 // (statut 'sent_manual') — voir CampaignEngine#markManualSent.
 app.post('/api/messages/manual-queue/:index/sent', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
   const index = parseInt(req.params.index, 10);
-  const result = req.campaignEngine.markManualSent(index);
+  const result = req.campaignEngine.markManualSent(index, req.body.campaignId || req.query.campaignId);
   if (!result) {
     return res.status(404).json({ error: 'Contact introuvable dans la campagne en cours.' });
   }
@@ -2554,27 +2604,23 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), attach
     ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
     : null;
 
-  let campaign;
-  try {
-    campaign = await req.telegramCampaignEngine.start(recipients, message, {
-      recipientType: 'groups',
-      delaySeconds: fixedDelaySeconds,
-      batchSize: parsedBatchSize,
-      batchPauseSeconds: parsedBatchPauseSeconds,
-      duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
-      media,
-    });
-  } catch (err) {
-    if (err.message === 'CAMPAIGN_IN_PROGRESS') {
-      return res.status(409).json({
-        error: 'Une campagne Telegram est déjà en cours (messages directs ou diffusion de groupes). Attendez sa fin ou interrompez-la (Pause/Arrêt) avant d\'en lancer une nouvelle.',
-      });
-    }
-    throw err;
-  }
+  // enqueueIfBusy: true — Gestionnaire Multi-Campagnes : voir
+  // /api/messages/queue (équivalent WhatsApp) pour la même logique.
+  const campaign = await req.telegramCampaignEngine.start(recipients, message, {
+    name: req.body.name,
+    recipientType: 'groups',
+    delaySeconds: fixedDelaySeconds,
+    batchSize: parsedBatchSize,
+    batchPauseSeconds: parsedBatchPauseSeconds,
+    duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
+    media,
+    enqueueIfBusy: true,
+  });
 
   res.status(202).json({
-    status: 'tg_queue_started',
+    status: campaign.status === 'queued' ? 'campaign_queued' : 'tg_queue_started',
+    id: campaign.id,
+    name: campaign.name,
     total: campaign.total,
     delaySeconds: fixedDelaySeconds || 12,
     batchSize: parsedBatchSize || recipients.length,
@@ -2650,40 +2696,38 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
     ? { buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }
     : null;
 
-  let campaign;
-  try {
-    campaign = await req.telegramCampaignEngine.start(recipients, message, {
-      // Délai fixe configurable, prioritaire sur la fenêtre min/max
-      // (voir queues/telegramCampaignEngine.js) : standard demandé, sans
-      // randomisation quand une valeur précise est fournie.
-      delaySeconds: delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined,
-      minDelayMs: minDelaySeconds !== undefined && minDelaySeconds !== '' ? parseFloat(minDelaySeconds) * 1000 : undefined,
-      maxDelayMs: maxDelaySeconds !== undefined && maxDelaySeconds !== '' ? parseFloat(maxDelaySeconds) * 1000 : undefined,
-      batchSize: batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined,
-      batchPauseSeconds: batchPauseSeconds !== undefined && batchPauseSeconds !== '' ? parseFloat(batchPauseSeconds) : undefined,
-      duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
-      media,
-    });
-  } catch (err) {
-    if (err.message === 'CAMPAIGN_IN_PROGRESS') {
-      return res.status(409).json({
-        error: 'Une campagne Telegram est déjà en cours. Attendez sa fin ou interrompez-la (Pause/Arrêt) avant d\'en lancer une nouvelle.',
-      });
-    }
-    throw err;
-  }
+  // enqueueIfBusy: true — Gestionnaire Multi-Campagnes : voir
+  // /api/messages/queue (équivalent WhatsApp) pour la même logique.
+  const campaign = await req.telegramCampaignEngine.start(recipients, message, {
+    name: req.body.name,
+    // Délai fixe configurable, prioritaire sur la fenêtre min/max
+    // (voir queues/telegramCampaignEngine.js) : standard demandé, sans
+    // randomisation quand une valeur précise est fournie.
+    delaySeconds: delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined,
+    minDelayMs: minDelaySeconds !== undefined && minDelaySeconds !== '' ? parseFloat(minDelaySeconds) * 1000 : undefined,
+    maxDelayMs: maxDelaySeconds !== undefined && maxDelaySeconds !== '' ? parseFloat(maxDelaySeconds) * 1000 : undefined,
+    batchSize: batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined,
+    batchPauseSeconds: batchPauseSeconds !== undefined && batchPauseSeconds !== '' ? parseFloat(batchPauseSeconds) : undefined,
+    duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
+    media,
+    enqueueIfBusy: true,
+  });
 
   res.status(202).json({
-    status: 'tg_campaign_started',
+    status: campaign.status === 'queued' ? 'campaign_queued' : 'tg_campaign_started',
+    id: campaign.id,
+    name: campaign.name,
     total: campaign.total,
     duplicateWindowHours: campaign.duplicateWindowHours,
     skippedDuplicates: campaign.skippedDuplicates,
   });
 });
 
+// campaignId (body ou query, optionnel) : cible une campagne précise du
+// Gestionnaire Multi-Campagnes — omis, agit sur la campagne "par défaut".
 app.post('/api/telegram/campaign/pause', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
   try {
-    req.telegramCampaignEngine.pause();
+    req.telegramCampaignEngine.pause(req.body.campaignId || req.query.campaignId);
     res.status(200).json({ status: 'pause_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -2693,10 +2737,12 @@ app.post('/api/telegram/campaign/pause', requireAccess, requireModule('telegram'
   }
 });
 
-app.post('/api/telegram/campaign/resume', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+// Async (voir /api/messages/resume, même principe) : une bascule depuis une
+// AUTRE campagne active attend que sa boucle d'envoi ait réellement quitté.
+app.post('/api/telegram/campaign/resume', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
   try {
-    req.telegramCampaignEngine.resume();
-    res.status(200).json({ status: 'resume_requested' });
+    const campaign = await req.telegramCampaignEngine.resume(req.body.campaignId || req.query.campaignId);
+    res.status(200).json({ status: 'resume_requested', campaign });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
       return res.status(400).json({ error: 'Aucune campagne Telegram en cours à reprendre.' });
@@ -2707,7 +2753,7 @@ app.post('/api/telegram/campaign/resume', requireAccess, requireModule('telegram
 
 app.post('/api/telegram/campaign/stop', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
   try {
-    req.telegramCampaignEngine.stop();
+    req.telegramCampaignEngine.stop(req.body.campaignId || req.query.campaignId);
     res.status(200).json({ status: 'stop_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -2718,7 +2764,7 @@ app.post('/api/telegram/campaign/stop', requireAccess, requireModule('telegram')
 });
 
 app.get('/api/telegram/campaign/status', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
-  const status = req.telegramCampaignEngine.getStatus();
+  const status = req.telegramCampaignEngine.getStatus(req.query.campaignId);
   if (!status) {
     return res.status(200).json({ exists: false });
   }
@@ -2726,18 +2772,60 @@ app.get('/api/telegram/campaign/status', requireAccess, requireModule('telegram'
   res.status(200).json({ exists: true, ...status });
 });
 
+// Gestionnaire Multi-Campagnes (dashboard) — voir /api/messages/campaigns
+// pour l'équivalent WhatsApp, même principe.
+app.get('/api/telegram/campaigns', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+  res.status(200).json({ campaigns: req.telegramCampaignEngine.listCampaigns() });
+});
+
+app.post('/api/telegram/campaigns/:id/play', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
+  try {
+    const campaign = await req.telegramCampaignEngine.resume(req.params.id);
+    res.status(200).json({ status: 'resume_requested', campaign });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(404).json({ error: 'Campagne introuvable ou déjà terminée.' });
+    }
+    throw err;
+  }
+});
+
+app.post('/api/telegram/campaigns/:id/pause', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+  try {
+    req.telegramCampaignEngine.pause(req.params.id);
+    res.status(200).json({ status: 'pause_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(400).json({ error: 'Cette campagne n\'est pas en cours d\'envoi.' });
+    }
+    throw err;
+  }
+});
+
+app.post('/api/telegram/campaigns/:id/stop', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+  try {
+    req.telegramCampaignEngine.stop(req.params.id);
+    res.status(200).json({ status: 'stop_requested' });
+  } catch (err) {
+    if (err.message === 'NO_CAMPAIGN_RUNNING') {
+      return res.status(404).json({ error: 'Campagne introuvable ou déjà arrêtée.' });
+    }
+    throw err;
+  }
+});
+
 // Onglet dashboard "Relance Manuelle Express" (Telegram) — voir
 // /api/messages/manual-queue pour l'équivalent WhatsApp, même principe :
 // TelegramCampaignEngine#getManualRelaunchQueue.
 app.get('/api/telegram/campaign/manual-queue', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
-  res.status(200).json({ items: req.telegramCampaignEngine.getManualRelaunchQueue() });
+  res.status(200).json({ items: req.telegramCampaignEngine.getManualRelaunchQueue(req.query.campaignId) });
 });
 
 // Trace l'ouverture manuelle d'un deep link Telegram pour un contact donné
 // (statut 'sent_manual') — voir TelegramCampaignEngine#markManualSent.
 app.post('/api/telegram/campaign/manual-queue/:index/sent', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
   const index = parseInt(req.params.index, 10);
-  const result = req.telegramCampaignEngine.markManualSent(index);
+  const result = req.telegramCampaignEngine.markManualSent(index, req.body.campaignId || req.query.campaignId);
   if (!result) {
     return res.status(404).json({ error: 'Contact introuvable dans la campagne en cours.' });
   }

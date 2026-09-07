@@ -157,6 +157,36 @@
     .count-failed { color: #c0392b; font-weight: bold; }
     .count-skipped { color: #a67c00; font-weight: bold; }
 
+    /* Gestionnaire Multi-Campagnes (Play/Pause/Reprise, file d'attente) */
+    .campaign-queue-section { margin-top: 1.5rem; border-top: 1px dashed #ccc; padding-top: 1rem; }
+    .campaign-queue-list { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.75rem; }
+    .campaign-queue-empty { color: #666; font-style: italic; }
+    .campaign-queue-row {
+      border: 1px solid #ddd; border-radius: 8px; padding: 0.75rem 1rem; background: #fafafa;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; justify-content: space-between;
+    }
+    .campaign-queue-row.is-active { border-color: #25D366; background: #f2fbf6; }
+    .campaign-queue-info { flex: 1; min-width: 220px; }
+    .campaign-queue-name { font-weight: bold; }
+    .campaign-queue-meta { color: #666; font-size: 0.85rem; margin-top: 0.15rem; }
+    .campaign-queue-badge {
+      display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: bold;
+      margin-right: 0.5rem; white-space: nowrap;
+    }
+    .campaign-queue-badge.status-running { background: #fde2e1; color: #c0392b; }
+    .campaign-queue-badge.status-paused { background: #fff3cd; color: #7a5c00; }
+    .campaign-queue-badge.status-completed { background: #d4f5dd; color: #1a7a3c; }
+    .campaign-queue-badge.status-queued { background: #e9ecef; color: #495057; }
+    .campaign-queue-badge.status-stopped, .campaign-queue-badge.status-cancelled { background: #eee; color: #888; }
+    .campaign-queue-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .campaign-queue-actions button {
+      border: none; border-radius: 6px; padding: 0.45rem 0.9rem; font-weight: bold; cursor: pointer; font-size: 0.9rem;
+    }
+    .campaign-queue-actions .cq-play-btn { background: #1a7a3c; color: #fff; }
+    .campaign-queue-actions .cq-pause-btn { background: #e6a100; color: #fff; }
+    .campaign-queue-actions .cq-stop-btn { background: #c0392b; color: #fff; }
+    .campaign-queue-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
     .relance-card { border: 2px solid #075E54; border-radius: 10px; padding: 1.25rem; margin-top: 1rem; background: #fafffa; }
     .relance-card-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.75rem; }
     .relance-card-counter { font-weight: bold; color: #075E54; }
@@ -528,6 +558,15 @@
           <p id="progress-network-status" class="warning-box" hidden></p>
         </div>
 
+        <div class="campaign-queue-section">
+          <h3>📋 Gestionnaire Multi-Campagnes (File d'attente)</h3>
+          <p class="empty">
+            Créez plusieurs campagnes sur ce même numéro WhatsApp : une seule envoie à la fois, basculez
+            instantanément de l'une à l'autre en cliquant "Lancer/Reprendre".
+          </p>
+          <div id="campaign-queue-list" class="campaign-queue-list"></div>
+        </div>
+
         <p style="margin-top: 1rem;">
           <button type="button" id="show-last-report-btn" hidden>📋 Voir le dernier rapport de campagne</button>
         </p>
@@ -614,6 +653,15 @@
             <span class="count-failed">❌ Échecs : 0</span>
           </p>
           <p id="tg-groups-progress-network-status" class="warning-box" hidden></p>
+        </div>
+
+        <div class="campaign-queue-section">
+          <h3>📋 Gestionnaire Multi-Campagnes (File d'attente)</h3>
+          <p class="empty">
+            Créez plusieurs campagnes (messages directs ou diffusion de groupes/canaux) sur ce même compte
+            Telegram : une seule envoie à la fois, basculez instantanément de l'une à l'autre.
+          </p>
+          <div id="tg-campaign-queue-list" class="campaign-queue-list"></div>
         </div>
 
         <div class="subsection" id="tg-dm-section">
@@ -2650,12 +2698,16 @@
           sendBtn.disabled = false;
         } else {
           showCampaignFeedback(
-            '🚀 Campagne lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
-            ', délai ' + data.delaySeconds + 's (pause de ' + data.batchPauseSeconds + 's après un lot), séquence de ' + data.steps + ' étape(s).',
+            (data.status === 'campaign_queued'
+              ? '⚪ Campagne "' + data.name + '" ajoutée EN ATTENTE (' + data.total + ' destinataire(s)) — une autre campagne est déjà en cours. Lancez-la depuis le Gestionnaire Multi-Campagnes ci-dessous quand vous le souhaitez.'
+              : '🚀 Campagne lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
+                ', délai ' + data.delaySeconds + 's (pause de ' + data.batchPauseSeconds + 's après un lot), séquence de ' + data.steps + ' étape(s).'),
             false,
           );
           document.getElementById('campaign-feedback').hidden = true;
           startCampaignPolling();
+          pollCampaignQueue();
+          sendBtn.disabled = false;
         }
       } catch (err) {
         showCampaignFeedback('Erreur réseau lors du lancement de la campagne.', true);
@@ -2876,6 +2928,128 @@
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }
+    }
+
+    // ---------- Gestionnaire Multi-Campagnes (Play/Pause/Reprise) ----------
+    // Un seul rendu partagé par WhatsApp et Telegram (voir tgRenderCampaignQueue
+    // plus bas) : chaque campagne affiche son statut ([🔴 EN COURS] /
+    // [🟡 EN PAUSE] / [🟢 TERMINÉE] / [⚪ EN ATTENTE]) et les actions possibles
+    // dans cet état — "Lancer/Reprendre" bascule instantanément (met en pause
+    // la campagne actuellement active côté serveur si elle est différente,
+    // voir CampaignEngine#resume) sans jamais faire tourner deux envois en
+    // parallèle sur le même numéro/compte.
+    function campaignQueueStatusLabel(status) {
+      switch (status) {
+        case 'running': return '🔴 EN COURS';
+        case 'paused': return '🟡 EN PAUSE';
+        case 'completed': return '🟢 TERMINÉE';
+        case 'queued': return '⚪ EN ATTENTE';
+        case 'stopped': return '⏹️ ARRÊTÉE';
+        case 'cancelled': return '🚫 ANNULÉE';
+        default: return status;
+      }
+    }
+
+    function renderCampaignQueueList(containerId, campaigns, urls) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+
+      if (!campaigns || campaigns.length === 0) {
+        container.innerHTML = '<p class="campaign-queue-empty">Aucune campagne pour l\'instant.</p>';
+        return;
+      }
+
+      container.innerHTML = '';
+      campaigns.forEach((c) => {
+        const row = document.createElement('div');
+        row.className = 'campaign-queue-row' + (c.isActive ? ' is-active' : '');
+
+        const info = document.createElement('div');
+        info.className = 'campaign-queue-info';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'campaign-queue-name';
+        const badge = document.createElement('span');
+        badge.className = 'campaign-queue-badge status-' + c.status;
+        badge.textContent = campaignQueueStatusLabel(c.status);
+        nameEl.appendChild(badge);
+        nameEl.appendChild(document.createTextNode(c.name || 'Campagne'));
+        const meta = document.createElement('div');
+        meta.className = 'campaign-queue-meta';
+        const typePart = c.recipientType === 'groups' ? ' • Groupes/Canaux' : (c.recipientType ? ' • Contacts' : '');
+        meta.textContent = (c.sent || 0) + '/' + (c.total || 0) + ' envoyé(s)' + typePart;
+        info.appendChild(nameEl);
+        info.appendChild(meta);
+
+        const actions = document.createElement('div');
+        actions.className = 'campaign-queue-actions';
+
+        if (c.status === 'queued' || c.status === 'paused') {
+          const playBtn = document.createElement('button');
+          playBtn.type = 'button';
+          playBtn.className = 'cq-play-btn';
+          playBtn.textContent = '▶️ Lancer/Reprendre';
+          playBtn.addEventListener('click', async () => {
+            playBtn.disabled = true;
+            try { await apiFetch(urls.play(c.id), { method: 'POST' }); } catch (err) { /* le prochain poll reflétera l'état réel */ }
+            urls.refresh();
+          });
+          actions.appendChild(playBtn);
+        }
+
+        if (c.status === 'running') {
+          const pauseBtn = document.createElement('button');
+          pauseBtn.type = 'button';
+          pauseBtn.className = 'cq-pause-btn';
+          pauseBtn.textContent = '⏸️ Pause';
+          pauseBtn.addEventListener('click', async () => {
+            pauseBtn.disabled = true;
+            try { await apiFetch(urls.pause(c.id), { method: 'POST' }); } catch (err) { /* le prochain poll reflétera l'état réel */ }
+            urls.refresh();
+          });
+          actions.appendChild(pauseBtn);
+        }
+
+        if (c.status === 'running' || c.status === 'paused' || c.status === 'queued') {
+          const stopBtn = document.createElement('button');
+          stopBtn.type = 'button';
+          stopBtn.className = 'cq-stop-btn';
+          stopBtn.textContent = '🛑 Stopper';
+          stopBtn.addEventListener('click', async () => {
+            if (!window.confirm('Arrêter définitivement la campagne "' + (c.name || '') + '" ? Les destinataires non contactés resteront "en attente" dans le rapport.')) return;
+            stopBtn.disabled = true;
+            try { await apiFetch(urls.stop(c.id), { method: 'POST' }); } catch (err) { /* le prochain poll reflétera l'état réel */ }
+            urls.refresh();
+          });
+          actions.appendChild(stopBtn);
+        }
+
+        row.appendChild(info);
+        row.appendChild(actions);
+        container.appendChild(row);
+      });
+    }
+
+    let campaignQueueInterval = null;
+
+    async function pollCampaignQueue() {
+      try {
+        const res = await apiFetch('/api/messages/campaigns');
+        const data = await res.json();
+        renderCampaignQueueList('campaign-queue-list', data.campaigns || [], {
+          play: (id) => '/api/messages/campaigns/' + id + '/play',
+          pause: (id) => '/api/messages/campaigns/' + id + '/pause',
+          stop: (id) => '/api/messages/campaigns/' + id + '/stop',
+          refresh: () => { pollCampaignQueue(); startCampaignPolling(); },
+        });
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    function startCampaignQueuePolling() {
+      if (campaignQueueInterval) clearInterval(campaignQueueInterval);
+      pollCampaignQueue();
+      campaignQueueInterval = setInterval(pollCampaignQueue, 3000);
     }
 
     // ---------- Telegram ----------
@@ -3125,13 +3299,17 @@
           sendBtn.disabled = false;
         } else {
           tgShowFeedback(
-            '🚀 Diffusion Telegram lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
-            ', délai ' + data.delaySeconds + 's (pause de ' + data.batchPauseSeconds + 's après un lot)' +
-            (data.media ? ', pièce jointe : ' + data.media : '') +
-            (data.skippedDuplicates ? ', ' + data.skippedDuplicates + ' doublon(s) déjà ignoré(s)' : '') + '.',
+            data.status === 'campaign_queued'
+              ? '⚪ Campagne "' + data.name + '" ajoutée EN ATTENTE (' + data.total + ' destinataire(s)) — une autre campagne Telegram est déjà en cours. Lancez-la depuis le Gestionnaire Multi-Campagnes ci-dessous quand vous le souhaitez.'
+              : '🚀 Diffusion Telegram lancée : ' + data.total + ' destinataire(s), lots de ' + data.batchSize +
+                ', délai ' + data.delaySeconds + 's (pause de ' + data.batchPauseSeconds + 's après un lot)' +
+                (data.media ? ', pièce jointe : ' + data.media : '') +
+                (data.skippedDuplicates ? ', ' + data.skippedDuplicates + ' doublon(s) déjà ignoré(s)' : '') + '.',
             false,
           );
           tgGroupsStartPolling();
+          pollTgCampaignQueue();
+          sendBtn.disabled = false;
         }
       } catch (err) {
         tgShowFeedback('Erreur réseau lors du lancement de la campagne.', true);
@@ -3318,6 +3496,35 @@
       }
     }
 
+    // Gestionnaire Multi-Campagnes Telegram : un seul moteur/verrou de
+    // campagne par tenant sert à la fois les messages directs (contacts) et
+    // la diffusion de groupes/canaux (voir queues/telegramCampaignEngine.js)
+    // — la liste affiche donc les deux types de campagnes ensemble, avec le
+    // badge "Contacts"/"Groupes/Canaux" pour les distinguer (voir
+    // renderCampaignQueueList, partagé avec le panneau WhatsApp ci-dessus).
+    let tgCampaignQueueInterval = null;
+
+    async function pollTgCampaignQueue() {
+      try {
+        const res = await apiFetch('/api/telegram/campaigns');
+        const data = await res.json();
+        renderCampaignQueueList('tg-campaign-queue-list', data.campaigns || [], {
+          play: (id) => '/api/telegram/campaigns/' + id + '/play',
+          pause: (id) => '/api/telegram/campaigns/' + id + '/pause',
+          stop: (id) => '/api/telegram/campaigns/' + id + '/stop',
+          refresh: () => { pollTgCampaignQueue(); tgDmStartPolling(); tgGroupsStartPolling(); },
+        });
+      } catch (err) {
+        // apiFetch gère déjà la redirection vers le login en cas de 401
+      }
+    }
+
+    function startTgCampaignQueuePolling() {
+      if (tgCampaignQueueInterval) clearInterval(tgCampaignQueueInterval);
+      pollTgCampaignQueue();
+      tgCampaignQueueInterval = setInterval(pollTgCampaignQueue, 3000);
+    }
+
     document.getElementById('tg-dm-send-btn').addEventListener('click', async () => {
       const message = document.getElementById('tg-dm-message').value.trim();
       const minDelaySeconds = document.getElementById('tg-dm-min-delay').value;
@@ -3353,8 +3560,15 @@
           tgDmShowFeedback(data.error || 'Échec du lancement de la campagne.', true);
           sendBtn.disabled = false;
         } else {
-          tgDmShowFeedback('🚀 Campagne lancée : ' + data.total + ' destinataire(s).', false);
+          tgDmShowFeedback(
+            data.status === 'campaign_queued'
+              ? '⚪ Campagne "' + data.name + '" ajoutée EN ATTENTE (' + data.total + ' destinataire(s)) — une autre campagne Telegram est déjà en cours. Lancez-la depuis le Gestionnaire Multi-Campagnes ci-dessous quand vous le souhaitez.'
+              : '🚀 Campagne lancée : ' + data.total + ' destinataire(s).',
+            false,
+          );
           tgDmStartPolling();
+          pollTgCampaignQueue();
+          sendBtn.disabled = false;
         }
       } catch (err) {
         tgDmShowFeedback('Erreur réseau lors du lancement de la campagne.', true);
@@ -5153,6 +5367,11 @@
         // l'envoi". pollCampaignStatus() arrête lui-même l'intervalle si
         // aucune campagne n'est active.
         startCampaignPolling();
+        // Gestionnaire Multi-Campagnes : rafraîchi en continu indépendamment
+        // du statut de la campagne active — la liste (EN ATTENTE/TERMINÉE
+        // incluses) doit rester visible même quand aucun envoi n'est en
+        // cours (voir pollCampaignQueue, qui ne s'arrête jamais lui-même).
+        startCampaignQueuePolling();
       }
       if (hasModule('telegram')) {
         tgRefreshStatus();
@@ -5166,6 +5385,7 @@
         // l'onglet de l'autre.
         tgDmStartPolling();
         tgGroupsStartPolling();
+        startTgCampaignQueuePolling();
       }
       if (hasModule('facebook')) fbRefreshStatus();
       if (hasModule('studio_video')) mediaRefreshStatus();
