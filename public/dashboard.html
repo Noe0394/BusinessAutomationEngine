@@ -95,6 +95,7 @@
       background: #f5f5f5; border-radius: 8px; padding: 1rem; margin: 1rem 0;
     }
     .open-whatsapp-btn { display: inline-block; background: #25D366; color: #fff; text-decoration: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: bold; min-height: 48px; text-align: center; }
+    .pairing-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
 
     #search-groups, #search-tg-groups { width: 100%; padding: 0.75rem; border: 1px solid #ccc; border-radius: 6px; margin: 1rem 0; min-height: 44px; }
     .group-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
@@ -285,6 +286,7 @@
             <img id="qr-image" alt="QR Code WhatsApp" />
             <p>Scannez ce QR code avec WhatsApp (Appareils liés) pour connecter l'appareil.</p>
           </div>
+          <button type="button" id="open-whatsapp-web-btn" class="send-button" style="width:auto;">🌐 Ouvrir WhatsApp Web</button>
         </div>
 
         <div id="mobile-mode-panel" hidden>
@@ -295,6 +297,8 @@
           <button type="button" id="generate-pairing-btn" class="send-button" style="width:auto;">Générer mon Code d'Association</button>
           <div id="pairing-result"></div>
         </div>
+
+        <p id="whatsapp-pairing-success" class="ok" hidden>✅ Connexion WhatsApp établie avec succès ! Redirection vers l'onglet WhatsApp...</p>
 
         <div id="whatsapp-connected-actions" style="margin-top: 1rem;">
           <p class="empty">Un seul appareil peut être connecté à la fois. Ce bouton est toujours disponible, même si le statut affiché semble incohérent — il ferme la session en cours, purge la session locale et distante, et prépare une connexion neuve (même numéro ou un autre).</p>
@@ -1845,6 +1849,18 @@
       });
     });
 
+    // Sur téléphone, le mode "Code d'association" est le seul praticable (pas
+    // de deuxième écran pour scanner un QR) : on présélectionne cet onglet au
+    // chargement pour épargner un clic inutile — reste modifiable à tout
+    // moment via le même toggle.
+    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      document.querySelector('#connect-mode-toggle .mode-btn[data-mode="mobile"]')?.click();
+    }
+
+    document.getElementById('open-whatsapp-web-btn')?.addEventListener('click', () => {
+      window.open('https://web.whatsapp.com', '_blank', 'noopener');
+    });
+
     document.getElementById('generate-pairing-btn').addEventListener('click', async () => {
       const phone = document.getElementById('pairing-phone').value.trim();
       const resultEl = document.getElementById('pairing-result');
@@ -1870,11 +1886,51 @@
         resultEl.innerHTML =
           '<div id="pairing-code-display">' + data.code + '</div>' +
           '<p>Sur votre téléphone : WhatsApp &gt; Appareils liés &gt; Lier un appareil &gt; Lier avec le numéro de téléphone, puis saisissez ce code.</p>' +
-          '<a class="open-whatsapp-btn" href="whatsapp://">📲 Ouvrir WhatsApp</a>';
+          '<div class="pairing-actions">' +
+          '<button type="button" id="copy-pairing-code-btn" class="send-button" style="width:auto;">📋 Copier le code</button>' +
+          '<a class="open-whatsapp-btn" href="whatsapp://">📲 Ouvrir WhatsApp</a>' +
+          '</div>';
+
+        // WhatsApp n'expose aucun deep link officiel qui pré-remplirait ce
+        // code dans l'app (contrairement à wa.me pour démarrer une
+        // discussion) : le code doit être tapé manuellement par l'utilisateur
+        // dans Appareils liés — copier automatiquement dans le presse-papier
+        // ici, puis proposer d'ouvrir l'app juste à côté (bouton ci-dessus),
+        // est le rapprochement le plus proche possible d'un "1-clic" réel.
+        document.getElementById('copy-pairing-code-btn').addEventListener('click', async (evt) => {
+          const btnEl = evt.currentTarget;
+          try {
+            await navigator.clipboard.writeText(data.code);
+            const original = btnEl.textContent;
+            btnEl.textContent = '✅ Copié';
+            setTimeout(() => { btnEl.textContent = original; }, 2000);
+          } catch (err) {
+            btnEl.textContent = '❌ Échec de la copie';
+          }
+        });
       } catch (err) {
         resultEl.innerHTML = '<p class="error">Erreur réseau lors de la génération du code.</p>';
       }
     });
+
+    // null tant qu'aucun statut n'a encore été observé cette page : évite un
+    // faux déclenchement de la notification de succès/redirection au tout
+    // premier appel de pollStatus() si l'utilisateur était déjà connecté
+    // avant même de charger cette page (rechargement, autre onglet...) — ne
+    // doit se déclencher que sur une VRAIE transition déconnecté -> connecté
+    // observée en direct.
+    let wasWhatsappConnected = null;
+
+    function handleWhatsappPairingSuccess() {
+      const successEl = document.getElementById('whatsapp-pairing-success');
+      successEl.hidden = false;
+      document.getElementById('pairing-result').innerHTML = '';
+      document.getElementById('qr-container').hidden = true;
+      setTimeout(() => {
+        successEl.hidden = true;
+        document.querySelector('.tab-btn[data-tab="whatsapp"]')?.click();
+      }, 1800);
+    }
 
     async function pollStatus() {
       try {
@@ -1888,6 +1944,9 @@
           badge.textContent = 'Connecté';
           badge.className = 'badge connected';
           qrContainer.hidden = true;
+          if (wasWhatsappConnected === false) {
+            handleWhatsappPairingSuccess();
+          }
         } else {
           badge.textContent = 'Déconnecté';
           badge.className = 'badge disconnected';
@@ -1898,6 +1957,7 @@
             qrContainer.hidden = true;
           }
         }
+        wasWhatsappConnected = data.connected;
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }
