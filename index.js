@@ -3371,9 +3371,14 @@ app.post('/api/studio/video-mixer', requireAccess, requireModule('studio_video')
       musicBuffer: (files.music && files.music[0]) ? files.music[0].buffer : null,
       musicVolume: parseFloat(body.musicVolume),
       fadeAudio: String(body.fadeAudio) === 'true',
-      titleText: String(body.titleText || '').trim().slice(0, 100),
-      priceText: String(body.priceText || '').trim().slice(0, 60),
-      contactText: String(body.contactText || '').trim().slice(0, 60),
+      // .replace([\r\n]+, ' ') en plus du .trim() : défense en profondeur
+      // avant même d'atteindre escapeDrawtext (voir videoMixerEngine.js) —
+      // ces champs viennent normalement d'<input type="text"> côté
+      // dashboard (jamais de saut de ligne possible), mais un appel direct
+      // à cette API pourrait en injecter un.
+      titleText: String(body.titleText || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 100),
+      priceText: String(body.priceText || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 60),
+      contactText: String(body.contactText || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 60),
       logoBuffer: (files.logo && files.logo[0]) ? files.logo[0].buffer : null,
     });
 
@@ -3897,14 +3902,8 @@ const MEDIA_CREATIVE_SECTORS = ['restauration', 'immobilier', 'ecommerce', 'high
 const MEDIA_CREATIVE_FORMATS = ['9:16', '1:1', '16:9', '4:5'];
 
 function parseCreativeDirective(rawText) {
-  const match = String(rawText || '').match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  let parsed;
-  try {
-    parsed = JSON.parse(match[0]);
-  } catch (err) {
-    return null;
-  }
+  const parsed = extractJsonBlock(rawText);
+  if (!parsed) return null;
   return {
     detectedSector: MEDIA_CREATIVE_SECTORS.includes(parsed.detectedSector) ? parsed.detectedSector : '',
     marketingHook: typeof parsed.marketingHook === 'string' ? parsed.marketingHook.trim().slice(0, 120) : '',
@@ -3922,19 +3921,21 @@ app.post('/api/media/creative-direction', requireAccess, async (req, res) => {
     return res.status(400).json({ error: 'Décrivez le visuel avant de demander une direction créative IA.' });
   }
 
-  // Instruction stricte "JSON seul" : les 4 niveaux de la cascade
+  // Instruction stricte "JSON seul" : les niveaux de la cascade
   // (lib/ai/llmFallbackEngine.js) sont des modèles de complétion généraux,
   // pas une API structurée — parseCreativeDirective() ci-dessus reste
   // tolérant (extrait le premier bloc {...}, ignore les champs invalides)
-  // plutôt que d'exiger un JSON parfait du premier coup.
+  // plutôt que d'exiger un JSON parfait du premier coup. Le rôle de
+  // directeur artistique est désormais fourni par designDirectorSkill (voir
+  // lib/ai/skills/), injecté dans le system prompt plutôt que répété ici.
   const instructionPrompt = [
-    'Tu es un directeur artistique marketing expert. Réponds UNIQUEMENT avec un objet JSON valide (aucun texte avant/après, aucun markdown), exactement dans ce format :',
+    'Réponds UNIQUEMENT avec un objet JSON valide (aucun texte avant/après, aucun markdown), exactement dans ce format :',
     `{"detectedSector":"une valeur parmi ${MEDIA_CREATIVE_SECTORS.join('|')}","marketingHook":"accroche courte et percutante en français pour une affiche","imagePromptEnglish":"prompt visuel photoréaliste ultra-détaillé en anglais avec éclairage et détails HD, pour un générateur d'image IA","videoScript":"script court en français pour une voix off vidéo (2 à 3 phrases)","suggestedFormats":["deux valeurs parmi ${MEDIA_CREATIVE_FORMATS.join(', ')}"]}`,
     `Demande du client : "${concept}"`,
   ].join('\n');
 
   try {
-    const { text: llmText, provider } = await llmFallbackEngine.generateAIResponse(instructionPrompt, []);
+    const { text: llmText, provider } = await llmFallbackEngine.generateAIResponse(instructionPrompt, [], null, undefined, 'designDirectorSkill');
     const directive = parseCreativeDirective(llmText);
     if (!directive) {
       throw new Error('Aucun JSON de directive créative exploitable dans la réponse du LLM.');
@@ -3943,6 +3944,136 @@ app.post('/api/media/creative-direction', requireAccess, async (req, res) => {
   } catch (err) {
     console.warn('Creative Director IA — cascade LLM indisponible :', err.message);
     res.status(503).json({ error: 'Direction créative IA indisponible pour le moment — renseignez les champs manuellement.' });
+  }
+});
+
+// Extrait un premier bloc JSON {...} tolérant d'une réponse de complétion
+// libre (même principe que parseCreativeDirective ci-dessus) — utilisé par
+// les routes JSON de skills ci-dessous plutôt que d'exiger un JSON parfait
+// du premier coup de la part d'un modèle de complétion généraliste.
+function extractJsonBlock(rawText) {
+  const match = String(rawText || '').match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[0]);
+  } catch (err) {
+    return null;
+  }
+}
+
+// ---------- Skills Expertes du Studio (voir lib/ai/skills/) ----------
+// Chacune des 4 routes ci-dessous SAIT déjà dans quel module du Studio elle
+// se trouve (voir la feuille de route "correspondance module -> skill") et
+// passe donc la ou les clés de skill EXPLICITEMENT à generateAIResponse —
+// jamais une détection heuristique comme pour le chat libre (voir
+// lib/ai/marketingSkills.js, toujours utilisé pour le Copywriter Studio IA).
+
+// Rendu Vidéo Séquentiel -> videoCinematographerSkill : transforme une idée
+// de scène en prompt de mouvement structuré (caméra, physique, éclairage)
+// avant transmission au moteur vidéo IA (voir lib/media/videoAiEngine.js /
+// storyboardEngine.js) — remplace un prompt saisi tel quel par l'utilisateur
+// quand celui-ci veut un résultat plus cinématographique.
+app.post('/api/studio/video-prompt', requireAccess, requireModule('studio_video'), async (req, res) => {
+  const concept = String((req.body || {}).concept || '').trim().slice(0, 500);
+  if (!concept) {
+    return res.status(400).json({ error: 'Décrivez la scène avant de générer un prompt de mouvement.' });
+  }
+  try {
+    const { text, provider } = await llmFallbackEngine.generateAIResponse(
+      `Scène à transformer en prompt de mouvement pour un moteur vidéo IA : "${concept}"`,
+      [], null, undefined, 'videoCinematographerSkill',
+    );
+    res.json({ prompt: text, provider });
+  } catch (err) {
+    console.warn('Réalisateur IA (video-prompt) — cascade LLM indisponible :', err.message);
+    res.status(503).json({ error: 'Amélioration de prompt indisponible pour le moment — utilisez votre texte tel quel.' });
+  }
+});
+
+// Module UGC Produit -> ugcCreatorSkill + conversionContactSkill combinées :
+// script UGC spontané qui se termine par un élément de contact direct
+// (WhatsApp/téléphone/prix) — voir lib/ai/skills/index.js#buildSkillPromptBlock
+// pour la combinaison de plusieurs skills en un seul appel.
+app.post('/api/studio/ugc-script', requireAccess, requireModule('studio_video'), async (req, res) => {
+  const product = String((req.body || {}).product || '').trim().slice(0, 500);
+  if (!product) {
+    return res.status(400).json({ error: 'Décrivez le produit avant de générer un script UGC.' });
+  }
+  const contact = String((req.body || {}).contact || '').trim().slice(0, 60);
+  const price = String((req.body || {}).price || '').trim().slice(0, 60);
+  const contactLine = [
+    contact ? `Contact à utiliser : ${contact}` : null,
+    price ? `Prix/offre à mentionner : ${price}` : null,
+  ].filter(Boolean).join('\n');
+
+  try {
+    const { text, provider } = await llmFallbackEngine.generateAIResponse(
+      [`Produit/service à mettre en avant : "${product}"`, contactLine].filter(Boolean).join('\n'),
+      [], null, undefined, ['ugcCreatorSkill', 'conversionContactSkill'],
+    );
+    res.json({ script: text, provider });
+  } catch (err) {
+    console.warn('UGC Creator IA (ugc-script) — cascade LLM indisponible :', err.message);
+    res.status(503).json({ error: 'Génération de script UGC indisponible pour le moment — rédigez-le manuellement.' });
+  }
+});
+
+// Montage & Assemblage Mobile -> mobileFormatExpertSkill : suggère les
+// bannières texte (titre/prix/contact) et les incrustations mot-à-mot pour
+// le Montage TikTok/Reels (voir lib/media/videoMixerEngine.js et le
+// formulaire "Import vidéo perso" du dashboard).
+app.post('/api/studio/mobile-captions', requireAccess, requireModule('studio_video'), async (req, res) => {
+  const product = String((req.body || {}).product || '').trim().slice(0, 500);
+  if (!product) {
+    return res.status(400).json({ error: "Décrivez le produit/contenu avant de générer des suggestions d'habillage." });
+  }
+  try {
+    const { text, provider } = await llmFallbackEngine.generateAIResponse(
+      `Contenu à habiller pour une vidéo verticale TikTok/Reels : "${product}"`,
+      [], null, undefined, 'mobileFormatExpertSkill',
+    );
+    const parsed = extractJsonBlock(text);
+    if (!parsed) throw new Error("Réponse inexploitable (JSON attendu pour l'habillage mobile).");
+    res.json({
+      titleText: typeof parsed.titleText === 'string' ? parsed.titleText.slice(0, 100) : '',
+      priceText: typeof parsed.priceText === 'string' ? parsed.priceText.slice(0, 60) : '',
+      contactText: typeof parsed.contactText === 'string' ? parsed.contactText.slice(0, 60) : '',
+      captionWords: Array.isArray(parsed.captionWords) ? parsed.captionWords.slice(0, 40).map((w) => String(w).slice(0, 40)) : [],
+      provider,
+    });
+  } catch (err) {
+    console.warn('Monteur Mobile IA (mobile-captions) — cascade LLM indisponible :', err.message);
+    res.status(503).json({ error: "Suggestions d'habillage indisponibles pour le moment — renseignez les champs manuellement." });
+  }
+});
+
+// Faceless Shorts Automatisés -> facelessAutomationSkill : découpe un sujet
+// en script segmenté + mot-clé de recherche B-Roll par segment. NE
+// télécharge ni n'assemble aucune vidéo (voir lib/ai/skills/
+// facelessAutomationSkill.js) — renvoie un plan textuel exploitable
+// manuellement (recherche sur Pexels/Pixabay) ou par une intégration future.
+app.post('/api/studio/faceless/plan', requireAccess, requireModule('studio_video'), async (req, res) => {
+  const topic = String((req.body || {}).topic || '').trim().slice(0, 500);
+  if (!topic) {
+    return res.status(400).json({ error: 'Décrivez le sujet avant de générer un plan de vidéo faceless.' });
+  }
+  try {
+    const { text, provider } = await llmFallbackEngine.generateAIResponse(
+      `Sujet à découper en script + mots-clés B-Roll : "${topic}"`,
+      [], null, undefined, 'facelessAutomationSkill',
+    );
+    const parsed = extractJsonBlock(text);
+    const segments = parsed && Array.isArray(parsed.segments)
+      ? parsed.segments
+        .map((s) => ({ text: String((s || {}).text || '').slice(0, 300), brollKeyword: String((s || {}).brollKeyword || '').slice(0, 80) }))
+        .filter((s) => s.text)
+        .slice(0, 12)
+      : [];
+    if (segments.length === 0) throw new Error('Réponse inexploitable (aucun segment JSON valide).');
+    res.json({ segments, provider });
+  } catch (err) {
+    console.warn('Faceless Automation IA (faceless/plan) — cascade LLM indisponible :', err.message);
+    res.status(503).json({ error: 'Génération du plan faceless indisponible pour le moment.' });
   }
 });
 
