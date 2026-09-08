@@ -1,0 +1,16 @@
+[
+  {
+    "key": "KEY-5B49C041-2026",
+    "createdAt": "2026-09-08T13:53:56.667Z",
+    "expiresAt": null,
+    "active": true,
+    "note": "test visuel UI",
+    "allowedModules": [
+      "whatsapp",
+      "telegram",
+      "studio_video"
+    ],
+    "boundDeviceId": null,
+    "boundAt": null
+  }
+]
