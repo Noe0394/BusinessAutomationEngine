@@ -12,5 +12,19 @@
     ],
     "boundDeviceId": null,
     "boundAt": null
+  },
+  {
+    "key": "KEY-53078123-2026",
+    "createdAt": "2026-09-08T13:54:59.929Z",
+    "expiresAt": null,
+    "active": true,
+    "note": "test visuel UI 2",
+    "allowedModules": [
+      "whatsapp",
+      "telegram",
+      "studio_video"
+    ],
+    "boundDeviceId": null,
+    "boundAt": null
   }
 ]
