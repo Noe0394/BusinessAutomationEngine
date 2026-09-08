@@ -23,22 +23,46 @@ SSLIP_DOMAIN="${4:-34-68-84-124.sslip.io}"
 
 echo "== 1/5 : Installation de Docker et Docker Compose (si absents) =="
 if ! command -v docker >/dev/null 2>&1; then
+  # BUG CORRIGÉ (constaté en test réel sur une VM Google Cloud) : la version
+  # précédente pointait TOUJOURS vers le dépôt Docker "ubuntu", en supposant
+  # à tort qu'il fonctionnait aussi pour Debian. Faux : Docker publie deux
+  # dépôts distincts (linux/ubuntu et linux/debian) et les CODENAMES ne se
+  # recoupent pas entre les deux distributions — "trixie" (Debian 13)
+  # n'existe pas dans le dépôt Ubuntu, d'où un 404 systématique et un script
+  # qui s'arrêtait net (set -e) avant même de cloner le dépôt. $ID (dans
+  # /etc/os-release) donne la VRAIE distribution ("debian" ou "ubuntu") :
+  # utiliser le dépôt Docker correspondant, jamais "ubuntu" par défaut.
+  . /etc/os-release
+  DOCKER_OFFICIAL_OK=false
+
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl gnupg
   sudo install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  sudo chmod a+r /etc/apt/keyrings/docker.gpg
-  # Fonctionne aussi sur Debian : le dépôt Ubuntu Docker sert de base, seule
-  # la variable $VERSION_CODENAME (Ubuntu) / $VERSION_CODENAME (Debian, via
-  # os-release) change — Docker publie des paquets dédiés pour les deux,
-  # mais ce script vise explicitement Ubuntu/Debian récents où le dépôt
-  # "ubuntu" fonctionne aussi pour Debian en pratique via lsb_release.
-  echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-  sudo apt-get update
-  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  if curl -fsSL "https://download.docker.com/linux/${ID}/gpg" -o /tmp/docker.gpg; then
+    sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg < /tmp/docker.gpg
+    sudo chmod a+r /etc/apt/keyrings/docker.gpg
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${ID} \
+      ${VERSION_CODENAME} stable" | \
+      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    # Le dépôt Docker peut malgré tout ne pas encore publier cette codename
+    # précise (distribution très récente) — on ne suppose jamais que l'ajout
+    # du dépôt a réussi, on vérifie explicitement avant d'installer dessus,
+    # avec un repli automatique sinon plutôt qu'un script qui plante.
+    if sudo apt-get update 2>/tmp/apt-docker-update.log && ! grep -q '^E:' /tmp/apt-docker-update.log; then
+      if sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin; then
+        DOCKER_OFFICIAL_OK=true
+      fi
+    fi
+  fi
+
+  if [ "$DOCKER_OFFICIAL_OK" = false ]; then
+    echo "Dépôt officiel Docker indisponible pour ${ID} ${VERSION_CODENAME} — repli sur les paquets Docker fournis directement par la distribution."
+    sudo rm -f /etc/apt/sources.list.d/docker.list
+    sudo apt-get update
+    sudo apt-get install -y docker.io docker-compose-v2
+  fi
+
   sudo usermod -aG docker "$USER" || true
   echo "Docker installé. Une reconnexion SSH peut être nécessaire pour utiliser docker sans sudo."
 else
@@ -72,12 +96,21 @@ fi
 
 echo "== 5/5 : Installation et configuration de Caddy (HTTPS gratuit via sslip.io) =="
 if ! command -v caddy >/dev/null 2>&1; then
+  # Caddy est déjà empaqueté nativement dans les dépôts Debian/Ubuntu depuis
+  # plusieurs versions — tenté EN PREMIER (même raisonnement que pour Docker
+  # ci-dessus : éviter un dépôt tiers dont la codename précise de cette
+  # distribution pourrait ne pas encore être publiée). Le dépôt officiel
+  # Cloudsmith (spécifique Debian, voir l'URL "debian.deb.txt" ci-dessous)
+  # ne sert que de repli si le paquet natif est absent.
   sudo apt-get update
-  sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
-  sudo apt-get update
-  sudo apt-get install -y caddy
+  if ! sudo apt-get install -y caddy; then
+    echo "Paquet caddy natif indisponible — repli sur le dépôt officiel Cloudsmith."
+    sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+    sudo apt-get update
+    sudo apt-get install -y caddy
+  fi
 else
   echo "Caddy déjà présent, étape d'installation ignorée."
 fi
