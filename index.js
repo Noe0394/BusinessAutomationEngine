@@ -3876,11 +3876,32 @@ app.delete('/api/ai-studio/sessions/:id', requireAccess, requireModule('studio_v
 // du logo/contact importé dans le tchat.
 const IMAGE_QUALITY_SUFFIX_EN = 'professional commercial product photography, 8k resolution, studio lighting, hyper-detailed, advertising poster style, crisp focus, clean composition, high-end graphic design, no blur, no distortion, no abstract, no deformed proportions, no noise, no draft look, no watermark, no text';
 
+// Listes de mots-clés élargies (feuille de route "Briefing Interactif
+// Universel") suite à un cas réel non couvert : une demande formulée comme
+// "publicité"/"promo" (sans les mots "affiche"/"flyer"/"poster" d'origine)
+// tombait dans le cas générique 'chat' ci-dessous, qui ne bénéficie d'AUCUN
+// garde-fou structuré — le modèle a alors librement produit un gabarit
+// HTML/CSS complet affiché tel quel à l'utilisateur (voir looksLikeRawMarkupDump
+// plus bas pour le filet de sécurité complémentaire, au niveau de la sortie
+// plutôt que de l'entrée, qui couvre aussi les formulations non anticipées
+// ici).
+// \b (limite de mot) en JavaScript se base sur [A-Za-z0-9_] uniquement : un
+// mot-clé terminé par un accent (ex. "publicité", "communiqué") NE MATCHE
+// JAMAIS avec un \b final, la lettre accentuée n'étant pas considérée comme
+// un caractère de mot par le moteur — bug constaté en test réel juste après
+// l'ajout de ces mots-clés (ci-dessous), silencieux (aucune erreur, juste
+// aucune détection). Plutôt que de traquer un par un les mots-clés
+// concernés, le texte entrant est translittéré en ASCII (accents retirés)
+// AVANT le test, et les mots-clés eux-mêmes sont écrits sans accent.
+function foldAccents(text) {
+  return String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
 function detectStudioIntent(text) {
-  const t = String(text || '');
-  if (/\b(livre|e-?book|ouvrage|guide)\b/i.test(t)) return 'book';
-  if (/\b(vid[ée]o|clip vid[ée]o|reels?|shorts?|tiktok)\b/i.test(t)) return 'video';
-  if (/\b(affiche|flyer|banni[èe]re publicitaire|poster|visuel publicitaire|design graphique)\b/i.test(t)) return 'image';
+  const t = foldAccents(text);
+  if (/\b(livre|e-?book|ouvrage|guide|manuel|formation pdf|rapport pdf|brochure numerique)\b/i.test(t)) return 'book';
+  if (/\b(video|clip video|reels?|shorts?|tiktok|capsule|spot video)\b/i.test(t)) return 'video';
+  if (/\b(affiche|flyer|banniere publicitaire|poster|visuel publicitaire|design graphique|publicite|\bpub\b|promo(tion)?|annonce|communique|prospectus|depliant|carte de visite)\b/i.test(t)) return 'image';
   return 'chat';
 }
 
@@ -3912,14 +3933,43 @@ function looksLikeRunawayTutorial(raw) {
   return false;
 }
 
-async function planOrAsk(skillKey, text, extraInstruction) {
+// Filet de sécurité complémentaire, cette fois côté RÉPONSE GÉNÉRIQUE (voir
+// la branche 'chat' de POST .../messages ci-dessous) plutôt que côté
+// planification structurée : detectStudioIntent() reste une liste de
+// mots-clés, forcément incomplète (constaté en démonstration réelle : une
+// demande de "publicité" produisait un gabarit HTML/CSS complet — balises
+// <div>/<span>/<a>, attributs style="...", règles ".prix{...}" — recopié
+// tel quel dans le tchat). Détecte cette signature STRUCTURELLE (balisage
+// HTML ou règle CSS) quel que soit le module d'origine, pour rattraper tout
+// message mal classé plutôt que d'étendre indéfiniment la liste de
+// mots-clés.
+function looksLikeRawMarkupDump(raw) {
+  const t = String(raw || '');
+  if (/<\/?(div|span|a|img|h[1-6]|p|br|button)\b[^>]*>/i.test(t)) return true;
+  if (/style\s*=\s*"/i.test(t)) return true;
+  if (/\.[a-zA-Z][\w-]*\s*\{[^}]{0,300}\}/.test(t)) return true;
+  return false;
+}
+
+// BUG CORRIGÉ (constaté en test réel, feuille de route "Briefing Interactif
+// Universel") : l'historique était auparavant toujours passé comme `[]` à
+// generateAIResponse — chaque tour de planification repartait donc de zéro,
+// sans aucun souvenir des réponses déjà données aux questions précédentes.
+// Résultat observé : le brief ne convergeait JAMAIS vers "ready", le modèle
+// reposant en boucle les mêmes questions (date, contact, logo...) même
+// après que le client y ait répondu. `history` (voir aiStudioStore.js,
+// même format {role, text} que toChatMessages() dans llmFallbackEngine.js)
+// doit être l'historique de la discussion AVANT le tour courant, pour que
+// chaque question posée s'appuie sur ce qui a déjà été fourni.
+async function planOrAsk(skillKey, text, extraInstruction, history) {
   const prompt = [
-    `Demande du client : "${text}"`,
+    `Nouveau message du client dans cette discussion : "${text}"`,
     extraInstruction,
-    'Si des informations importantes manquent pour bien répondre à cette demande précise, réponds UNIQUEMENT par 2 à 3 questions courtes (texte simple, jamais de JSON, jamais plus de 3 questions).',
-    'Si tu as assez d\'informations, réponds UNIQUEMENT avec l\'objet JSON demandé ci-dessus (aucun texte avant/après, aucun markdown).',
+    'Base-toi sur TOUT l\'historique de cette discussion (déjà fourni ci-dessus) pour savoir ce qui a déjà été répondu — ne repose jamais une question à laquelle le client a déjà répondu, même dans un message précédent.',
+    'Si des informations importantes manquent encore pour bien répondre à cette demande, réponds UNIQUEMENT par 2 à 3 questions courtes (texte simple, jamais de JSON, jamais plus de 3 questions, jamais une question déjà répondue).',
+    'Si tu as assez d\'informations (en combinant ce message et l\'historique), réponds UNIQUEMENT avec l\'objet JSON demandé ci-dessus (aucun texte avant/après, aucun markdown).',
   ].filter(Boolean).join('\n');
-  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, skillKey);
+  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history, null, undefined, skillKey);
   const trimmed = raw.trim();
   const parsed = extractJsonBlock(trimmed);
   // Filet de sécurité : un texte qui ressemble à un tutoriel (voir
@@ -3932,28 +3982,28 @@ async function planOrAsk(skillKey, text, extraInstruction) {
   return { raw: trimmed, parsed };
 }
 
-function planImage(text) {
+function planImage(text, history) {
   return planOrAsk('designDirectorSkill', text, [
     'Tu prépares une affiche marketing pour le Studio IA de CYRUS SUPER ASSISTANT.',
     'Informations importantes à obtenir si absentes de la demande : le prix ou l\'offre exacte, la date limite/durée, le contact (téléphone/WhatsApp) à afficher — invite aussi le client à importer son logo ou une photo du produit directement dans le tchat s\'il ne l\'a pas déjà fait.',
     'Format JSON si prêt : {"ready":true,"summary":"résumé en français de l\'affiche qui va être créée","imagePromptEnglish":"prompt image professionnel ultra détaillé en anglais","titleText":"titre court","priceText":"prix/offre ou chaîne vide","contactText":"contact ou chaîne vide","badgeText":"badge court ou chaîne vide"}',
-  ].join('\n'));
+  ].join('\n'), history);
 }
 
-function planVideo(text) {
+function planVideo(text, history) {
   return planOrAsk('videoCinematographerSkill', text, [
     'Tu prépares une courte vidéo générée par IA pour le Studio IA de CYRUS SUPER ASSISTANT.',
     'Informations importantes à obtenir si absentes : ce que la vidéo doit montrer précisément — invite le client à importer une photo du produit ou son logo dans le tchat s\'il ne l\'a pas déjà fait.',
     'Format JSON si prêt : {"ready":true,"summary":"résumé en français de la vidéo qui va être créée","motionPromptEnglish":"prompt de mouvement cinématographique en anglais"}',
-  ].join('\n'));
+  ].join('\n'), history);
 }
 
-function planBook(text) {
+function planBook(text, history) {
   return planOrAsk('bookPlannerSkill', text, [
     'Tu prépares un livre/guide PDF pour le Studio IA de CYRUS SUPER ASSISTANT.',
     'Informations importantes à obtenir si absentes : le sujet précis, l\'angle souhaité, le public visé.',
     'Format JSON si prêt : {"ready":true,"summary":"résumé en français du livre qui va être créé","title":"titre du livre","chapterTopics":["sujet du chapitre 1","sujet du chapitre 2","sujet du chapitre 3"]} (entre 3 et 5 sujets de chapitre).',
-  ].join('\n'));
+  ].join('\n'), history);
 }
 
 // Cherche la pièce jointe la plus récente d'un rôle donné ('logo'|'photo')
@@ -4089,7 +4139,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
   try {
     if (intent === 'image' || intent === 'video' || intent === 'book') {
       const planner = intent === 'image' ? planImage : (intent === 'video' ? planVideo : planBook);
-      const { raw, parsed } = await planner(text);
+      const { raw, parsed } = await planner(text, existing.messages);
 
       if (parsed && parsed.ready) {
         const actionByIntent = {
@@ -4118,8 +4168,36 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
       } catch (err) {
         console.warn('LLM Fallback — cascade entièrement indisponible, réponse locale conservée :', err.message);
       }
-      await sleep(1500 + Math.floor(Math.random() * 1500));
-      assistantMessage = { role: 'assistant', text: replyText, createdAt: new Date().toISOString() };
+
+      // Rattrapage (voir looksLikeRawMarkupDump ci-dessus) : la demande a été
+      // classée 'chat' par detectStudioIntent mais la réponse générique
+      // ressemble à un gabarit HTML/CSS brut — c'est le signe que
+      // l'utilisateur voulait en réalité un visuel. On rebascule sur le
+      // pipeline structuré (planification + bouton d'action) plutôt que
+      // d'exposer ce texte brut. Uniquement looksLikeRawMarkupDump ici, PAS
+      // looksLikeRunawayTutorial (bug constaté en test réel) : ce dernier se
+      // déclenche sur un texte long/multi-lignes/à puces — exactement le
+      // format ATTENDU d'un script de closing/objection dans cette branche
+      // générique (contrairement à la branche planification image/vidéo/
+      // livre ci-dessus, où SEULES 2-3 questions courtes ou un JSON strict
+      // sont valides) ; l'appliquer ici détournait à tort de vraies réponses
+      // de copywriting légitimes vers la planification d'affiche.
+      if (looksLikeRawMarkupDump(replyText)) {
+        const { raw, parsed } = await planImage(text, existing.messages);
+        if (parsed && parsed.ready) {
+          assistantMessage = {
+            role: 'assistant',
+            text: String(parsed.summary || raw).slice(0, 2000),
+            createdAt: new Date().toISOString(),
+            actions: [{ label: '🎨 Générer l\'affiche HD', action: 'generate_image', payload: parsed }],
+          };
+        } else {
+          assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString() };
+        }
+      } else {
+        await sleep(1500 + Math.floor(Math.random() * 1500));
+        assistantMessage = { role: 'assistant', text: replyText, createdAt: new Date().toISOString() };
+      }
     }
   } catch (err) {
     // Filet de sécurité : un échec de planification (image/vidéo/livre)

@@ -279,7 +279,7 @@
     .studio-handoff-btn { background: #f0ecff; border: 1px solid #ded6fb; color: #4a3a91; border-radius: 6px; padding: 0.4rem 0.7rem; font-size: 0.82rem; font-weight: bold; }
     .studio-input-row { display: flex; gap: 0.6rem; }
     .studio-input-row textarea { flex: 1; min-height: 56px; max-height: 140px; }
-    .studio-input-row button { flex: 0 0 auto; min-height: 56px; padding: 0 1.3rem; background: #6c4fd6; color: #fff; border: none; border-radius: 8px; font-weight: bold; }
+    .studio-input-row button { flex: 0 0 auto; width: 56px; min-height: 56px; padding: 0; background: #6c4fd6; color: #fff; border: none; border-radius: 50%; font-weight: bold; font-size: 1.3rem; line-height: 1; }
 
     /* Studio Média Prédictif (voir #studio-media-view) : le cadre a une
        largeur maximale fixe et laisse le ratio réel (défini en JS via
@@ -1529,7 +1529,7 @@
                 📎<input type="file" id="studio-attachment-input" accept="image/*" hidden>
               </label>
               <textarea id="studio-input" placeholder="Écrivez votre message... (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"></textarea>
-              <button type="button" id="studio-send-btn">Envoyer</button>
+              <button type="button" id="studio-send-btn" title="Envoyer" aria-label="Envoyer">➤</button>
             </div>
           </div>
         </div>
