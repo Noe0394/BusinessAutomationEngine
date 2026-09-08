@@ -83,7 +83,14 @@
     .badge.connected { background: #d4f5dd; color: #1a7a3c; }
     .badge.disconnected { background: #fbdada; color: #c0392b; }
 
-    .mode-toggle { display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap; }
+    /* Même raison que le commentaire :not([hidden]) sur #login-screen plus
+       haut : une règle d'AUTEUR (ce <style>) passe toujours devant la règle
+       [hidden] du navigateur (feuille de style UTILISATEUR-AGENT, priorité
+       la plus basse), quelle que soit la spécificité comparée — sans ce
+       :not([hidden]), #studio-subtab-toggle[hidden] restait visible malgré
+       l'attribut (constaté en production : le Chat-First ne masquait pas
+       réellement les anciens sous-onglets). */
+    .mode-toggle:not([hidden]) { display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap; }
     .mode-toggle button { flex: 1; padding: 0.75rem; border: 2px solid #075E54; background: #fff; color: #075E54; border-radius: 6px; font-weight: bold; min-height: 48px; }
     .mode-toggle button.active { background: #075E54; color: #fff; }
 
