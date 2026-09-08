@@ -4597,6 +4597,11 @@ licenses
     app.listen(PORT, () => {
       console.log(`Server listening on port ${PORT}`);
       printAndWriteAdminAccessInstructions();
+      // Balayage proactif d'inactivité (voir adapters/sessionRegulator.js) —
+      // utile surtout sur un hébergement longue durée (VPS dédié) où la
+      // pression de capacité seule (ensureCapacity) ne suffit pas à libérer
+      // une session jamais sollicitée mais restée connectée indéfiniment.
+      sessionRegulator.startIdleSweep();
     });
   });
 

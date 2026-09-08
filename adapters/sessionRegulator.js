@@ -21,6 +21,24 @@
 const MAX_ACTIVE_SESSIONS = Math.max(1, parseInt(process.env.MAX_ACTIVE_SESSIONS, 10) || 8);
 const IDLE_EVICTION_MS = Math.max(60_000, parseInt(process.env.SESSION_IDLE_EVICTION_MS, 10) || 15 * 60 * 1000);
 
+// Balayage PROACTIF (voir startIdleSweep plus bas) : jusqu'ici, une session
+// inactive n'était jamais libérée tant que la limite MAX_ACTIVE_SESSIONS
+// n'était pas atteinte par un AUTRE tenant (voir ensureCapacity) — adapté à
+// Render/Koyeb en RAM contrainte, où peu de tenants tournent en parallèle et
+// la pression mémoire ne vient quasiment que du nombre de sessions
+// simultanées. Sur un serveur dédié long-terme (VPS), le vrai risque est
+// plutôt l'accumulation lente de sessions JAMAIS revisitées (WhatsApp/
+// Telegram connectés en permanence sans jamais être sollicités) qui ne
+// libèrent donc jamais leur mémoire (sockets, timers) faute de pression de
+// capacité. PROACTIVE_IDLE_DISCONNECT_MS (1h par défaut) déclenche la même
+// libération douce (dispose(), PAS logout()) indépendamment de la capacité :
+// les identifiants restent valides, la reconnexion à la prochaine action est
+// transparente, sans réappairage QR — seul le connecteur réseau (socket
+// Baileys/MTProto) est coupé pour rendre la mémoire correspondante tant
+// qu'aucune activité ne le justifie.
+const PROACTIVE_IDLE_DISCONNECT_MS = Math.max(60_000, parseInt(process.env.PROACTIVE_IDLE_DISCONNECT_MS, 10) || 60 * 60 * 1000);
+const IDLE_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
 const SESSION_LIMIT_MESSAGE = 'Serveur actuellement sollicité : la limite de sessions simultanées est atteinte. Veuillez patienter quelques minutes qu\'une place se libère.';
 
 class SessionLimitError extends Error {
@@ -126,12 +144,52 @@ function ensureCapacity(kind, tenantId) {
   }
 }
 
+// Libère (dispose(), jamais logout()) toute session non protégée inactive
+// depuis plus de PROACTIVE_IDLE_DISCONNECT_MS, qu'il y ait ou non pression de
+// capacité — voir le commentaire sur PROACTIVE_IDLE_DISCONNECT_MS ci-dessus.
+// Une campagne en pause (FLOOD_WAIT de plusieurs heures, réseau...) reste
+// éligible ici comme dans pickEvictionCandidate : dispose() la met en pause
+// AVANT de couper la connexion, jamais abandonnée.
+function sweepIdleSessions() {
+  const now = Date.now();
+  Array.from(registry.values())
+    .filter((entry) => !entry.protected && now - entry.lastActivityAt > PROACTIVE_IDLE_DISCONNECT_MS)
+    .forEach((entry) => {
+      console.log(
+        `Régulateur de sessions : libération proactive de ${entry.kind}/${entry.tenantId} (inactif depuis plus de ${Math.round(PROACTIVE_IDLE_DISCONNECT_MS / 60000)} min).`,
+      );
+      unregister(entry.kind, entry.tenantId);
+      try {
+        entry.dispose();
+      } catch (err) {
+        console.error(`Régulateur de sessions : erreur pendant la libération proactive de ${entry.kind}/${entry.tenantId} :`, err.message);
+      }
+      try {
+        entry.onEvicted();
+      } catch (err) {
+        console.error(`Régulateur de sessions : erreur pendant le nettoyage post-libération de ${entry.kind}/${entry.tenantId} :`, err.message);
+      }
+    });
+}
+
+let sweepTimer = null;
+
+// À appeler une seule fois au démarrage du process (voir index.js). Idempotent
+// (un second appel n'ajoute pas un second timer).
+function startIdleSweep() {
+  if (sweepTimer) return;
+  sweepTimer = setInterval(sweepIdleSessions, IDLE_SWEEP_INTERVAL_MS);
+  if (sweepTimer.unref) sweepTimer.unref();
+}
+
 module.exports = {
   MAX_ACTIVE_SESSIONS,
   IDLE_EVICTION_MS,
+  PROACTIVE_IDLE_DISCONNECT_MS,
   SessionLimitError,
   register,
   unregister,
   touch,
   ensureCapacity,
+  startIdleSweep,
 };

@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cyrus-super-assistant-backend
+    container_name: cyrus-super-assistant-backend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      # PORT=3000 ici uniquement pour ce déploiement VPS (docker-compose) —
+      # le Dockerfile lui-même reste à EXPOSE 10000 (valeur par défaut pour
+      # Render/Koyeb, voir README.md), sans conflit puisque PORT est déjà lu
+      # dynamiquement par index.js (process.env.PORT || 10000).
+      - PORT=3000
+    env_file:
+      # Créer ce fichier sur le VPS à partir de .env.example (jamais commité,
+      # voir .gitignore) — toutes les clés API + PUBLIC_BASE_URL (l'IP/domaine
+      # public de ce VPS) + DASHBOARD_ORIGIN (l'origine Vercel autorisée).
+      - .env
+    volumes:
+      # Persistance locale entre redémarrages du conteneur (docker-compose
+      # restart, mise à jour d'image) — complète, ne remplace pas, la
+      # sauvegarde GitHub (githubStore.js) qui reste la seule protection en
+      # cas de perte du volume lui-même (VPS recréé, disque changé).
+      - whatsapp_auth:/app/auth_info_baileys
+      - telegram_sessions:/app/telegram_sessions
+
+volumes:
+  whatsapp_auth:
+  telegram_sessions:

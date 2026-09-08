@@ -6,10 +6,37 @@ et `lib/`. L'interface (`public/dashboard.html`) est déployée séparément
 (actuellement Vercel) et lui parle en cross-origin via `public/config.js`
 (`window.CYRUS_API_BASE`, voir `public/config.example.js`).
 
-**Hébergement actuel : Koyeb (free tier), en attendant un retour sur
-Render** une fois la facturation régularisée — voir la note en bas de page.
-Aucune différence de code entre les deux : même `Dockerfile`, mêmes
-variables d'environnement (`.env.example`).
+**Hébergement actuel : VPS Google Cloud dédié (34.68.84.124)**, en
+attendant un retour sur Render une fois la facturation régularisée — voir la
+note en bas de page. Aucune différence de code entre les trois options
+(VPS/Koyeb/Render) : même `Dockerfile`, mêmes variables d'environnement
+(`.env.example`) — seul `docker-compose.yml` (port 3000, volumes de
+session persistants) est spécifique au déploiement VPS.
+
+## Déploiement sur VPS (Google Cloud ou tout Ubuntu/Debian)
+
+Voir `setup-vps.sh` à la racine — installe Docker + Docker Compose, clone
+(ou met à jour) ce dépôt, puis lance `docker-compose.yml` en tâche de fond
+(`restart: always`, redémarre automatiquement le conteneur après un crash
+ou un redémarrage du VPS). Nécessite un fichier `.env` sur le VPS (copié
+depuis `.env.example`, jamais commité) rempli avec les vraies clés, plus
+obligatoirement `PUBLIC_BASE_URL` (l'adresse publique du VPS) et
+`DASHBOARD_ORIGIN` (l'origine Vercel).
+
+⚠️ **HTTPS non configuré sur ce VPS** : `public/config.js` pointe
+actuellement vers `http://34.68.84.124:3000` (HTTP brut) — un navigateur
+bloque silencieusement tout appel HTTPS→HTTP ("mixed content"), donc le
+dashboard Vercel (HTTPS) ne pourra PAS joindre ce backend tant qu'un reverse
+proxy TLS (Caddy ou Nginx + certbot, nécessite un nom de domaine — Let's
+Encrypt ne délivre pas de certificat pour une IP nue) n'est pas mis en place
+devant le port 3000.
+
+Le régulateur de sessions (`adapters/sessionRegulator.js`) libère désormais
+aussi PROACTIVEMENT (pas seulement sous pression de capacité) toute session
+WhatsApp/Telegram inactive depuis plus d'1h par défaut
+(`PROACTIVE_IDLE_DISCONNECT_MS`, voir `.env.example`) — libération douce
+(`dispose()`), jamais de déconnexion définitive : la reconnexion à la
+prochaine action reste transparente, sans réappairage QR.
 
 ## Déploiement sur Koyeb (intégration GitHub native)
 
