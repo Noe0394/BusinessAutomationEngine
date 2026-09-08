@@ -1935,7 +1935,26 @@
     </div>
   </div>
 
+  <!-- config.js définit window.CYRUS_API_BASE — absent/vide sur un
+       déploiement même-origine classique (Render), présent avec l'URL du
+       Space Hugging Face sur un déploiement Vercel séparé (voir
+       public/config.example.js, jamais l'inverse : ne pas committer la
+       vraie URL si elle est jugée sensible, sinon adapter ce commentaire).
+       Chargé AVANT le script principal ci-dessous qui lit cette variable. -->
+  <script src="config.js"></script>
   <script>
+    // Base URL du backend, uniquement nécessaire quand ce dashboard est
+    // servi séparément du serveur Express (ex. interface statique sur
+    // Vercel + backend Node/Express H24 sur Hugging Face Spaces) — dans ce
+    // cas les appels /api/... ne sont plus même-origine. Laisser '' pour un
+    // déploiement classique même-origine (Render) : tous les appels restent
+    // relatifs, comportement inchangé. À définir avant ce <script> (voir
+    // fichier séparé public/config.js, non versionné avec une vraie valeur
+    // — voir public/config.example.js) : window.CYRUS_API_BASE = 'https://<space>.hf.space';
+    const API_BASE = (window.CYRUS_API_BASE || '').replace(/\/$/, '');
+    function apiUrl(path) {
+      return /^https?:\/\//.test(path) ? path : API_BASE + path;
+    }
     const AUTH_TYPE_KEY = 'auth_type'; // 'admin' | 'license'
     const AUTH_VALUE_KEY = 'auth_value';
     const state = { groups: [], selectedGroupIds: new Set(), importedContacts: [] };
@@ -2036,12 +2055,12 @@
     function buildAuthedUrl(path) {
       const { value } = getStoredAuth();
       const params = new URLSearchParams({ licenseKey: value, deviceId: getDeviceId() });
-      return path + '?' + params.toString();
+      return apiUrl(path) + '?' + params.toString();
     }
     async function apiFetch(url, options) {
       options = options || {};
       const headers = Object.assign({}, options.headers || {}, authHeaders());
-      const res = await fetch(url, Object.assign({}, options, { headers }));
+      const res = await fetch(apiUrl(url), Object.assign({}, options, { headers }));
       if (res.status === 401) {
         showLogin('Session expirée, mot de passe ou clé de licence invalide.');
         throw new Error('unauthorized');
@@ -2126,7 +2145,7 @@
       e.preventDefault();
       const key = document.getElementById('login-license-key').value.trim().toUpperCase();
       try {
-        const res = await fetch('/api/auth/verify-key', {
+        const res = await fetch(apiUrl('/api/auth/verify-key'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key, deviceId: getDeviceId() }),
@@ -2161,7 +2180,7 @@
       feedback.hidden = true;
       if (!key) return;
       try {
-        const res = await fetch('/api/auth/verify-key', {
+        const res = await fetch(apiUrl('/api/auth/verify-key'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key, deviceId: getDeviceId() }),
@@ -2417,7 +2436,7 @@
       if (!value) { showLogin(); return false; }
 
       try {
-        const res = await fetch('/api/auth/verify-key', {
+        const res = await fetch(apiUrl('/api/auth/verify-key'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key: value, deviceId: getDeviceId() }),

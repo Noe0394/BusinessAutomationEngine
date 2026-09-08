@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "echo 'Interface statique : aucun build necessaire, voir public/dashboard.html'",
+  "installCommand": "echo 'Interface statique : aucune dependance backend a installer'",
+  "outputDirectory": "public",
+  "rewrites": [
+    { "source": "/", "destination": "/dashboard.html" },
+    { "source": "/dashboard", "destination": "/dashboard.html" }
+  ]
+}
