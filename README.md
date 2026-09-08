@@ -16,20 +16,31 @@ session persistants) est spécifique au déploiement VPS.
 ## Déploiement sur VPS (Google Cloud ou tout Ubuntu/Debian)
 
 Voir `setup-vps.sh` à la racine — installe Docker + Docker Compose, clone
-(ou met à jour) ce dépôt, puis lance `docker-compose.yml` en tâche de fond
+(ou met à jour) ce dépôt, lance `docker-compose.yml` en tâche de fond
 (`restart: always`, redémarre automatiquement le conteneur après un crash
-ou un redémarrage du VPS). Nécessite un fichier `.env` sur le VPS (copié
-depuis `.env.example`, jamais commité) rempli avec les vraies clés, plus
-obligatoirement `PUBLIC_BASE_URL` (l'adresse publique du VPS) et
-`DASHBOARD_ORIGIN` (l'origine Vercel).
+ou un redémarrage du VPS), puis installe et configure **Caddy** comme
+reverse proxy HTTPS gratuit devant le port 3000. Nécessite un fichier `.env`
+sur le VPS (copié depuis `.env.example`, jamais commité) rempli avec les
+vraies clés, plus obligatoirement `PUBLIC_BASE_URL=https://34-68-84-124.sslip.io`
+et `DASHBOARD_ORIGIN` (l'origine Vercel).
 
-⚠️ **HTTPS non configuré sur ce VPS** : `public/config.js` pointe
-actuellement vers `http://34.68.84.124:3000` (HTTP brut) — un navigateur
-bloque silencieusement tout appel HTTPS→HTTP ("mixed content"), donc le
-dashboard Vercel (HTTPS) ne pourra PAS joindre ce backend tant qu'un reverse
-proxy TLS (Caddy ou Nginx + certbot, nécessite un nom de domaine — Let's
-Encrypt ne délivre pas de certificat pour une IP nue) n'est pas mis en place
-devant le port 3000.
+### HTTPS gratuit sans nom de domaine (sslip.io + Caddy)
+
+[sslip.io](https://sslip.io) est un service DNS public gratuit qui résout
+`34-68-84-124.sslip.io` **directement** vers l'IP `34.68.84.124` — aucun
+achat de nom de domaine nécessaire. Caddy (voir `Caddyfile` à la racine)
+utilise ce nom pour obtenir automatiquement un vrai certificat Let's
+Encrypt (impossible sur une IP nue, qui n'a pas de nom à certifier) et fait
+reverse-proxy vers le backend en local (`localhost:3000`). `setup-vps.sh`
+installe et configure Caddy automatiquement (dernière étape du script) ;
+`public/config.js` pointe déjà vers `https://34-68-84-124.sslip.io`.
+
+⚠️ Si le certificat n'est pas délivré immédiatement après le premier
+lancement de `setup-vps.sh`, vérifier que les ports **80 et 443** sont
+ouverts dans le pare-feu VPC Google Cloud (Caddy en a besoin pour la
+validation Let's Encrypt) — un script bash ne peut pas modifier les règles
+de pare-feu GCP, cette vérification reste manuelle (Console GCP → VPC
+network → Firewall, ou `gcloud compute firewall-rules`).
 
 Le régulateur de sessions (`adapters/sessionRegulator.js`) libère désormais
 aussi PROACTIVEMENT (pas seulement sous pression de capacité) toute session

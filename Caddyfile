@@ -1,0 +1,10 @@
+# Reverse proxy HTTPS gratuit pour le backend VPS — voir setup-vps.sh et
+# README.md. sslip.io est un service DNS public qui résout
+# "34-68-84-124.sslip.io" directement vers 34.68.84.124 sans achat de nom de
+# domaine : Caddy peut donc obtenir un vrai certificat Let's Encrypt dessus
+# (impossible sur une IP nue, Let's Encrypt exige un nom de domaine),
+# entièrement automatiquement (demande + renouvellement, aucune action
+# manuelle après la première installation).
+34-68-84-124.sslip.io {
+	reverse_proxy localhost:3000
+}
