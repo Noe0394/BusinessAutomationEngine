@@ -35,6 +35,15 @@ if ! command -v docker >/dev/null 2>&1; then
   . /etc/os-release
   DOCKER_OFFICIAL_OK=false
 
+  # Nettoyage d'un éventuel fichier laissé par une exécution PRÉCÉDENTE de ce
+  # script qui aurait échoué après avoir déjà écrit ce fichier (cas constaté
+  # en test réel : le tout premier `apt-get update` ci-dessous continuait de
+  # buter sur l'ancienne ligne "linux/ubuntu" écrite lors d'un essai
+  # antérieur, alors même que la logique de détection ci-dessous avait déjà
+  # été corrigée — la correction ne servait à rien tant que ce résidu n'était
+  # pas supprimé en premier).
+  sudo rm -f /etc/apt/sources.list.d/docker.list
+
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl gnupg
   sudo install -m 0755 -d /etc/apt/keyrings
