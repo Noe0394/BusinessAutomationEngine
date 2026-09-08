@@ -1490,7 +1490,14 @@
         </form>
       </div>
 
-      <div class="mode-toggle" id="studio-subtab-toggle">
+      <!-- Chat-First (feuille de route) : les formulaires à champs multiples
+           (ex-Studio Média, ex-Générateur de Livres) sont désormais MASQUÉS
+           — le tchat "Assistant IA" ci-dessous devient l'unique point
+           d'entrée, capable de générer affiches/vidéos/livres via des
+           boutons d'action (voir studioBuildBubble/studioExecuteAction).
+           Le code des deux vues masquées reste intact (jamais supprimé) au
+           cas où elles seraient réactivées plus tard. -->
+      <div class="mode-toggle" id="studio-subtab-toggle" hidden>
         <button type="button" class="mode-btn active" data-view="assistant">💬 Assistant IA</button>
         <button type="button" class="mode-btn" data-view="ebook">📖 Générateur de Livres</button>
         <button type="button" class="mode-btn" data-view="media">🎨 Studio Média</button>
@@ -1509,7 +1516,11 @@
               <p class="empty">Posez une question pour démarrer — ads, closing, anti-ban, adaptation régionale...</p>
             </div>
             <p id="studio-feedback" hidden></p>
+            <p class="image-link-uploader-status" id="studio-attachment-status" hidden></p>
             <div class="studio-input-row">
+              <label class="image-link-uploader-label" for="studio-attachment-input" title="Joindre un logo (PNG) ou une photo produit">
+                📎<input type="file" id="studio-attachment-input" accept="image/*" hidden>
+              </label>
               <textarea id="studio-input" placeholder="Écrivez votre message... (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"></textarea>
               <button type="button" id="studio-send-btn">Envoyer</button>
             </div>
@@ -1951,21 +1962,13 @@
     function applyStudioLockState() {
       const locked = !hasModule('studio_video');
       document.getElementById('studio-lock-screen').hidden = !locked;
-      document.getElementById('studio-subtab-toggle').hidden = locked;
-      if (locked) {
-        document.getElementById('studio-assistant-view').hidden = true;
-        document.getElementById('studio-ebook-view').hidden = true;
-        document.getElementById('studio-media-view').hidden = true;
-      } else {
-        // Réaffiche la vue active du sous-onglet (assistant par défaut) —
-        // ne force jamais un onglet particulier si l'utilisateur en avait
-        // déjà choisi un autre avant un verrouillage transitoire.
-        const activeView = document.querySelector('#studio-subtab-toggle .mode-btn.active');
-        const view = activeView ? activeView.dataset.view : 'assistant';
-        document.getElementById('studio-assistant-view').hidden = view !== 'assistant';
-        document.getElementById('studio-ebook-view').hidden = view !== 'ebook';
-        document.getElementById('studio-media-view').hidden = view !== 'media';
-      }
+      // Chat-First (feuille de route) : le sous-onglet ebook/média reste
+      // TOUJOURS masqué désormais (jamais réaffiché même déverrouillé) — le
+      // tchat "Assistant IA" est l'unique vue, capable de générer
+      // affiches/vidéos/livres lui-même (voir studioExecuteAction).
+      document.getElementById('studio-assistant-view').hidden = locked;
+      document.getElementById('studio-ebook-view').hidden = true;
+      document.getElementById('studio-media-view').hidden = true;
     }
 
     // ---------- Identifiant d'appareil (verrouillage un-appareil-par-clé) ----------
@@ -6945,6 +6948,114 @@
     // historique déjà lu (studioRenderMessages, chargement d'une discussion
     // existante), uniquement pour la toute dernière réponse qui vient
     // d'arriver (voir studioSendMessage).
+// Rendu d'un média (image/vidéo/livre) intégré directement dans la bulle de
+    // discussion (Chat-First, voir index.js#executeGenerateImage/Video/Book)
+    // — téléchargement direct ET lien de partage, même principe que le reste
+    // de l'app (voir /v/:id, /v/:id/raw).
+    function studioBuildMedia(media) {
+      const wrap = document.createElement('div');
+      wrap.className = 'studio-media-wrap';
+      if (media.kind === 'image') {
+        const img = document.createElement('img');
+        img.src = media.downloadUrl;
+        img.style.maxWidth = '100%';
+        img.style.borderRadius = '10px';
+        wrap.appendChild(img);
+      } else if (media.kind === 'video') {
+        const video = document.createElement('video');
+        video.src = media.downloadUrl;
+        video.controls = true;
+        video.style.maxWidth = '100%';
+        video.style.borderRadius = '10px';
+        wrap.appendChild(video);
+      }
+      const actionsRow = document.createElement('p');
+      actionsRow.className = 'studio-msg-actions';
+      const dl = document.createElement('a');
+      dl.className = 'studio-handoff-btn';
+      dl.href = media.downloadUrl;
+      dl.download = media.kind === 'book' ? `${media.title || 'livre'}.pdf` : '';
+      dl.textContent = media.kind === 'book' ? '📥 Télécharger le PDF' : '📥 Télécharger';
+      actionsRow.appendChild(dl);
+      if (media.url && media.url !== media.downloadUrl) {
+        const share = document.createElement('a');
+        share.className = 'studio-handoff-btn';
+        share.href = media.url;
+        share.target = '_blank';
+        share.rel = 'noopener';
+        share.textContent = '🔗 Lien de partage';
+        actionsRow.appendChild(share);
+      }
+      wrap.appendChild(actionsRow);
+      return wrap;
+    }
+
+    // Poll d'une vidéo IA en cours (voir index.js#POST .../video-status) —
+    // rafraîchit tout le fil de discussion une fois le job terminé (le
+    // serveur ajoute le message final à la session).
+    async function studioPollPendingVideo(sessionId, jobToken, statusEl) {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await mediaSleep(4000);
+        try {
+          const res = await apiFetch(`/api/ai-studio/sessions/${sessionId}/video-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jobToken }),
+          });
+          const data = await res.json();
+          if (data.status === 'done') {
+            studioRenderMessages(data.session);
+            return;
+          }
+          if (data.status === 'error') {
+            if (statusEl) { statusEl.textContent = `❌ ${data.message || 'Échec de la génération vidéo.'}`; }
+            return;
+          }
+        } catch (err) {
+          if (err.message === 'unauthorized') return;
+          // Échec réseau ponctuel : on retente au prochain intervalle.
+        }
+      }
+      if (statusEl) statusEl.textContent = '❌ La génération vidéo prend trop de temps — réessayez plus tard.';
+    }
+
+    // Exécute une action proposée par l'assistant (clic sur un bouton — voir
+    // index.js#POST .../actions) : déclenche le rendu réel (coûteux pour
+    // l'image/vidéo), jamais fait automatiquement dès que le brief est prêt.
+    async function studioExecuteAction(btn, action, payload) {
+      btn.disabled = true;
+      const originalLabel = btn.textContent;
+      btn.textContent = '⏳ Génération en cours...';
+      try {
+        const sessionId = studioState.currentSessionId;
+        const res = await apiFetch(`/api/ai-studio/sessions/${sessionId}/actions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, payload }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          studioFeedback(data.error || "Échec de l'action.", true);
+          btn.disabled = false;
+          btn.textContent = originalLabel;
+          return;
+        }
+        studioRenderMessages(data.session);
+        const lastMessage = data.session.messages[data.session.messages.length - 1];
+        if (lastMessage.pendingJobToken) {
+          const bubbles = document.querySelectorAll('#studio-messages .studio-msg.assistant');
+          const lastBubble = bubbles[bubbles.length - 1];
+          const statusEl = lastBubble ? lastBubble.querySelector('div') : null;
+          studioPollPendingVideo(sessionId, lastMessage.pendingJobToken, statusEl);
+        }
+        await studioLoadSessionsList();
+      } catch (err) {
+        if (err.message !== 'unauthorized') studioFeedback('Erreur réseau — réessayez.', true);
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+      }
+    }
+
     function studioBuildBubble(msg, options) {
       const opts = options || {};
       const bubble = document.createElement('div');
@@ -6952,13 +7063,51 @@
       const textEl = document.createElement('div');
       bubble.appendChild(textEl);
 
-      // "📌 Utiliser pour la campagne" : transmet le texte de CYRUS vers la
-      // Relance Manuelle Express (alimente immédiatement le moteur de
-      // Spintax local via relance-intention) OU vers la campagne
-      // automatique WhatsApp (1er pas texte de la séquence) — voir
-      // studioHandoffToManual/studioHandoffToAuto ci-dessous.
+      if (msg.role === 'user' && msg.attachment) {
+        const attNote = document.createElement('p');
+        attNote.className = 'empty';
+        attNote.style.margin = '0.3rem 0 0';
+        attNote.textContent = msg.attachment.role === 'logo' ? '📎 Logo joint' : '📎 Photo jointe';
+        bubble.appendChild(attNote);
+      }
+
+      if (msg.role === 'assistant' && msg.media) {
+        bubble.appendChild(studioBuildMedia(msg.media));
+      }
+
+      if (msg.role === 'assistant' && msg.pendingJobToken) {
+        const pendingNote = document.createElement('p');
+        pendingNote.className = 'empty';
+        pendingNote.textContent = '⏳ Génération en cours...';
+        bubble.appendChild(pendingNote);
+      }
+
+      // Boutons d'action Chat-First (🎨/🎬/📄, voir index.js) — remplacent
+      // les boutons de relance habituels quand le brief est prêt : le texte
+      // de ce message est un RÉSUMÉ, pas un texte de vente à recopier tel
+      // quel dans une campagne.
       let actions = null;
-      if (msg.role === 'assistant') {
+      if (msg.role === 'assistant' && Array.isArray(msg.actions) && msg.actions.length > 0) {
+        actions = document.createElement('div');
+        actions.className = 'studio-msg-actions';
+        if (opts.animate) actions.hidden = true;
+        msg.actions.forEach((a) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'studio-handoff-btn';
+          btn.textContent = a.label;
+          btn.addEventListener('click', () => studioExecuteAction(btn, a.action, a.payload));
+          actions.appendChild(btn);
+        });
+        bubble.appendChild(actions);
+      } else if (msg.role === 'assistant' && !msg.media && !msg.pendingJobToken) {
+        // "📌 Utiliser pour la campagne" : transmet le texte de CYRUS vers la
+        // Relance Manuelle Express (alimente immédiatement le moteur de
+        // Spintax local via relance-intention) OU vers la campagne
+        // automatique WhatsApp (1er pas texte de la séquence) — voir
+        // studioHandoffToManual/studioHandoffToAuto ci-dessous. Uniquement
+        // pour une réponse de chat normale (pas un résumé de brief ni un
+        // média généré).
         actions = document.createElement('div');
         actions.className = 'studio-msg-actions';
         if (opts.animate) actions.hidden = true;
@@ -7051,10 +7200,14 @@
       const sessionId = studioState.currentSessionId || await studioCreateNewChat();
       if (!sessionId) return;
 
+      const attachmentInput = document.getElementById('studio-attachment-input');
+      const attachmentFile = attachmentInput.files[0] || null;
+
       input.value = '';
       input.disabled = true;
       document.getElementById('studio-send-btn').disabled = true;
       document.getElementById('studio-feedback').hidden = true;
+      document.getElementById('studio-attachment-status').hidden = true;
 
       // Affichage optimiste : bulle utilisateur + indicateur de réflexion
       // affichés immédiatement, avant même la réponse serveur — voir la
@@ -7063,16 +7216,17 @@
       const container = document.getElementById('studio-messages');
       const emptyHint = container.querySelector('.empty');
       if (emptyHint) emptyHint.remove();
-      container.appendChild(studioBuildBubble({ role: 'user', text }));
+      container.appendChild(studioBuildBubble({ role: 'user', text, attachment: attachmentFile ? { role: /\blogo\b/i.test(text) ? 'logo' : 'photo' } : null }));
       studioAddThinkingBubble();
       container.scrollTop = container.scrollHeight;
 
       try {
-        const res = await apiFetch(`/api/ai-studio/sessions/${sessionId}/messages`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
-        });
+        const form = new FormData();
+        form.append('text', text);
+        if (attachmentFile) form.append('attachment', attachmentFile);
+        attachmentInput.value = '';
+
+        const res = await apiFetch(`/api/ai-studio/sessions/${sessionId}/messages`, { method: 'POST', body: form });
         const data = await res.json();
         studioRemoveThinkingBubble();
         if (!res.ok) {
@@ -7102,6 +7256,16 @@
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         studioSendMessage();
+      }
+    });
+    document.getElementById('studio-attachment-input').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      const statusEl = document.getElementById('studio-attachment-status');
+      if (file) {
+        statusEl.textContent = `📎 ${file.name} — sera joint à votre prochain message`;
+        statusEl.hidden = false;
+      } else {
+        statusEl.hidden = true;
       }
     });
 

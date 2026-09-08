@@ -46,6 +46,7 @@ const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const imageLinkStore = require('./lib/media/imageLinkStore');
 const videoAiEngine = require('./lib/media/videoAiEngine');
 const imageAiEngine = require('./lib/media/imageAiEngine');
+const imageCompositorEngine = require('./lib/media/imageCompositorEngine');
 const storyboardEngine = require('./lib/media/storyboardEngine');
 const videoMixerEngine = require('./lib/media/videoMixerEngine');
 const messageHistory = require('./lib/messageHistory');
@@ -3055,7 +3056,7 @@ app.get('/api/media/temp/:token', (req, res) => {
 // Image-to-Link ci-dessous) plutôt que l'URL fal.ai brute, pour garantir des
 // en-têtes CORS cohérents avec le reste de l'app (nécessaire à
 // img.crossOrigin='anonymous' pour l'export PNG du canvas côté client).
-app.post('/api/media/generate-image', requireAccess, async (req, res) => {
+app.post('/api/media/generate-image', requireAccess, requireModule('studio_video'), async (req, res) => {
   const prompt = String((req.body || {}).prompt || '').trim().slice(0, 2000);
   if (!prompt) {
     return res.status(400).json({ error: 'Prompt manquant.' });
@@ -3838,17 +3839,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-app.get('/api/ai-studio/sessions', requireAccess, async (req, res) => {
+app.get('/api/ai-studio/sessions', requireAccess, requireModule('studio_video'), async (req, res) => {
   const sessions = await aiStudioStore.listSessions(resolveTenantId(req));
   res.json({ sessions });
 });
 
-app.post('/api/ai-studio/sessions', requireAccess, async (req, res) => {
+app.post('/api/ai-studio/sessions', requireAccess, requireModule('studio_video'), async (req, res) => {
   const session = await aiStudioStore.createSession(resolveTenantId(req));
   res.status(201).json({ session });
 });
 
-app.get('/api/ai-studio/sessions/:id', requireAccess, async (req, res) => {
+app.get('/api/ai-studio/sessions/:id', requireAccess, requireModule('studio_video'), async (req, res) => {
   const session = await aiStudioStore.getSession(resolveTenantId(req), req.params.id);
   if (!session) {
     return res.status(404).json({ error: 'Discussion introuvable.' });
@@ -3856,7 +3857,7 @@ app.get('/api/ai-studio/sessions/:id', requireAccess, async (req, res) => {
   res.json({ session });
 });
 
-app.delete('/api/ai-studio/sessions/:id', requireAccess, async (req, res) => {
+app.delete('/api/ai-studio/sessions/:id', requireAccess, requireModule('studio_video'), async (req, res) => {
   const deleted = await aiStudioStore.deleteSession(resolveTenantId(req), req.params.id);
   if (!deleted) {
     return res.status(404).json({ error: 'Discussion introuvable.' });
@@ -3864,15 +3865,196 @@ app.delete('/api/ai-studio/sessions/:id', requireAccess, async (req, res) => {
   res.status(204).end();
 });
 
-// Compose la réponse de l'assistant (voir lib/ai/localCopywriterEngine.js —
-// 100% local, aucun appel externe) puis persiste le tour complet (message
-// utilisateur + réponse) en un seul appel. Un délai artificiel de 1.5 à 3
+// ---------- Chat-First : détection d'intention & orchestration (Studio IA unifié) ----------
+// Remplace les formulaires à champs multiples (ex-Studio Média, ex-
+// Générateur de Livres) par un unique fil de discussion : l'utilisateur
+// décrit ce qu'il veut (+ pièces jointes optionnelles), l'IA complète le
+// brief par 2-3 questions ciblées si nécessaire puis propose des BOUTONS
+// D'ACTION (jamais de génération automatique non désirée, qui gâcherait un
+// appel fal.ai payant sur un brief encore incomplet) — le clic déclenche le
+// rendu réel (image FLUX / vidéo IA / PDF), avec incrustation automatique
+// du logo/contact importé dans le tchat.
+const IMAGE_QUALITY_SUFFIX_EN = 'professional commercial product photography, 8k resolution, studio lighting, hyper-detailed, advertising poster style, crisp focus, clean composition, high-end graphic design, no blur, no distortion, no abstract, no deformed proportions, no noise, no draft look, no watermark, no text';
+
+function detectStudioIntent(text) {
+  const t = String(text || '');
+  if (/\b(livre|e-?book|ouvrage|guide)\b/i.test(t)) return 'book';
+  if (/\b(vid[ée]o|clip vid[ée]o|reels?|shorts?|tiktok)\b/i.test(t)) return 'video';
+  if (/\b(affiche|flyer|banni[èe]re publicitaire|poster|visuel publicitaire|design graphique)\b/i.test(t)) return 'image';
+  return 'chat';
+}
+
+// Un seul appel LLM par tour : soit 2-3 questions ciblées (texte simple, le
+// brief est incomplet), soit un JSON "ready" prêt à l'exécution — jamais les
+// deux mélangés. Évite une étape de classification séparée : c'est le LLM
+// lui-même, guidé par `extraInstruction`, qui juge si le brief est
+// suffisant.
+// Garde-fou PROGRAMMATIQUE (voir en-tête de fichier) contre un mode
+// "tutoriel" que certains modèles gratuits (constaté en test réel sur
+// Groq) produisent malgré une instruction explicite de ne jamais le faire —
+// plus fiable qu'un simple renforcement du prompt, qui a montré ses limites
+// (testé : renforcer l'instruction n'a pas empêché le tutoriel, et a même
+// dégradé la détection "prêt" sur un brief pourtant complet). Détecte les
+// signatures STRUCTURELLES d'une réponse "hors format" — un tutoriel
+// (titres Markdown, tableau, mention d'un logiciel tiers) mais aussi,
+// constaté également en test réel, un contenu complet rédigé directement
+// (ex: chapitres entiers) au lieu du JSON de planification demandé —
+// plutôt qu'une liste de mots-clés qui ne peut pas couvrir tous les cas,
+// la longueur et le nombre de lignes seuls suffisent déjà à distinguer
+// "2-3 questions courtes" d'un texte long, quelle qu'en soit la nature.
+function looksLikeRunawayTutorial(raw) {
+  const t = String(raw || '').trim();
+  if (t.length > 500) return true;
+  if ((t.match(/\n/g) || []).length > 8) return true;
+  if (/^#{1,3}\s/m.test(t)) return true;
+  if (/\|.+\|.+\|/.test(t)) return true;
+  if (/\b(blender|after effects|photoshop|premiere|davinci|canva|sketchfab)\b/i.test(t)) return true;
+  return false;
+}
+
+async function planOrAsk(skillKey, text, extraInstruction) {
+  const prompt = [
+    `Demande du client : "${text}"`,
+    extraInstruction,
+    'Si des informations importantes manquent pour bien répondre à cette demande précise, réponds UNIQUEMENT par 2 à 3 questions courtes (texte simple, jamais de JSON, jamais plus de 3 questions).',
+    'Si tu as assez d\'informations, réponds UNIQUEMENT avec l\'objet JSON demandé ci-dessus (aucun texte avant/après, aucun markdown).',
+  ].filter(Boolean).join('\n');
+  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, skillKey);
+  const trimmed = raw.trim();
+  const parsed = extractJsonBlock(trimmed);
+  // Filet de sécurité : un texte qui ressemble à un tutoriel (voir
+  // looksLikeRunawayTutorial) est remplacé par une invite générique plutôt
+  // que montré tel quel — jamais de mode d'emploi affiché à la place d'une
+  // génération réelle.
+  if (!parsed && looksLikeRunawayTutorial(trimmed)) {
+    return { raw: 'Je m\'en charge directement avec nos outils — décrivez-moi précisément ce que vous voulez (et le contact/prix si besoin), sans vous soucier de la méthode.', parsed: null };
+  }
+  return { raw: trimmed, parsed };
+}
+
+function planImage(text) {
+  return planOrAsk('designDirectorSkill', text, [
+    'Tu prépares une affiche marketing pour le Studio IA de CYRUS SUPER ASSISTANT.',
+    'Informations importantes à obtenir si absentes de la demande : le prix ou l\'offre exacte, la date limite/durée, le contact (téléphone/WhatsApp) à afficher — invite aussi le client à importer son logo ou une photo du produit directement dans le tchat s\'il ne l\'a pas déjà fait.',
+    'Format JSON si prêt : {"ready":true,"summary":"résumé en français de l\'affiche qui va être créée","imagePromptEnglish":"prompt image professionnel ultra détaillé en anglais","titleText":"titre court","priceText":"prix/offre ou chaîne vide","contactText":"contact ou chaîne vide","badgeText":"badge court ou chaîne vide"}',
+  ].join('\n'));
+}
+
+function planVideo(text) {
+  return planOrAsk('videoCinematographerSkill', text, [
+    'Tu prépares une courte vidéo générée par IA pour le Studio IA de CYRUS SUPER ASSISTANT.',
+    'Informations importantes à obtenir si absentes : ce que la vidéo doit montrer précisément — invite le client à importer une photo du produit ou son logo dans le tchat s\'il ne l\'a pas déjà fait.',
+    'Format JSON si prêt : {"ready":true,"summary":"résumé en français de la vidéo qui va être créée","motionPromptEnglish":"prompt de mouvement cinématographique en anglais"}',
+  ].join('\n'));
+}
+
+function planBook(text) {
+  return planOrAsk('bookPlannerSkill', text, [
+    'Tu prépares un livre/guide PDF pour le Studio IA de CYRUS SUPER ASSISTANT.',
+    'Informations importantes à obtenir si absentes : le sujet précis, l\'angle souhaité, le public visé.',
+    'Format JSON si prêt : {"ready":true,"summary":"résumé en français du livre qui va être créé","title":"titre du livre","chapterTopics":["sujet du chapitre 1","sujet du chapitre 2","sujet du chapitre 3"]} (entre 3 et 5 sujets de chapitre).',
+  ].join('\n'));
+}
+
+// Cherche la pièce jointe la plus récente d'un rôle donné ('logo'|'photo')
+// dans l'historique — voir la route POST .../messages ci-dessous, qui
+// devine ce rôle depuis le texte accompagnant l'envoi ("mon logo" -> logo,
+// sinon -> photo). `attachment.id` référence une entrée déjà hébergée via
+// imageLinkStore (voir lib/media/imageLinkStore.js).
+function findRecentAttachment(messages, role) {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const att = list[i] && list[i].attachment;
+    if (att && att.role === role) return att;
+  }
+  return null;
+}
+
+function loadAttachmentBuffer(attachment) {
+  if (!attachment) return null;
+  const entry = imageLinkStore.get(attachment.id);
+  return entry ? { buffer: entry.buffer, mimetype: entry.mimetype } : null;
+}
+
+// ---------- Exécution des actions (clic sur un bouton du tchat) ----------
+async function executeGenerateImage(payload, messages) {
+  const prompt = `${String(payload.imagePromptEnglish || '').slice(0, 2000)}, ${IMAGE_QUALITY_SUFFIX_EN}`;
+  const { buffer, mimetype } = await imageAiEngine.generateImage({ prompt, width: 1024, height: 1024 });
+
+  const logo = loadAttachmentBuffer(findRecentAttachment(messages, 'logo'));
+  const hasOverlayContent = payload.titleText || payload.priceText || payload.contactText || payload.badgeText || logo;
+  let finalBuffer = buffer;
+  let finalMimetype = mimetype;
+  if (hasOverlayContent) {
+    finalBuffer = await imageCompositorEngine.compositeImage({
+      imageBuffer: buffer,
+      titleText: payload.titleText,
+      priceText: payload.priceText,
+      contactText: payload.contactText,
+      badgeText: payload.badgeText,
+      logoBuffer: logo ? logo.buffer : null,
+    });
+    finalMimetype = 'image/jpeg';
+  }
+
+  const id = imageLinkStore.register(finalBuffer, finalMimetype, { title: 'Affiche IA — CYRUS SUPER ASSISTANT' });
+  return { text: '✅ Affiche générée.', media: { kind: 'image', url: `${PUBLIC_BASE_URL}/v/${id}`, downloadUrl: `${PUBLIC_BASE_URL}/v/${id}/raw` } };
+}
+
+async function executeGenerateVideo(payload, messages) {
+  const photo = loadAttachmentBuffer(findRecentAttachment(messages, 'photo'));
+  let sourceImageUrl;
+  if (photo) {
+    const id = imageLinkStore.register(photo.buffer, photo.mimetype, { title: 'Photo produit (pièce jointe tchat)' });
+    sourceImageUrl = `${PUBLIC_BASE_URL}/v/${id}/raw`;
+  } else {
+    const { buffer, mimetype } = await imageAiEngine.generateImage({
+      prompt: `${String(payload.motionPromptEnglish || '').slice(0, 2000)}, ${IMAGE_QUALITY_SUFFIX_EN}`,
+      width: 1024,
+      height: 1024,
+    });
+    const id = imageLinkStore.register(buffer, mimetype, { title: 'Image source (auto) — CYRUS SUPER ASSISTANT' });
+    sourceImageUrl = `${PUBLIC_BASE_URL}/v/${id}/raw`;
+  }
+
+  const job = await videoAiEngine.startVideoAiJob(sourceImageUrl, String(payload.motionPromptEnglish || '').slice(0, 500));
+  const logo = findRecentAttachment(messages, 'logo');
+  return {
+    text: '🎬 Génération de la vidéo en cours (1 à 3 minutes)...',
+    pendingJobToken: encodeVideoAiJobToken({ ...job, _logoAttachmentId: logo ? logo.id : null }),
+  };
+}
+
+async function executeGenerateBook(payload) {
+  const topics = (Array.isArray(payload.chapterTopics) ? payload.chapterTopics : []).slice(0, 5);
+  if (topics.length === 0) throw new Error('Aucun sujet de chapitre à rédiger.');
+
+  const chapters = [];
+  for (const topic of topics) {
+    const chapterPrompt = `Chapitre à rédiger intégralement pour le livre "${payload.title}" : "${topic}"`;
+    // eslint-disable-next-line no-await-in-loop -- rédaction séquentielle
+    // volontaire (voir en-tête de fichier ebooks/draft-chapter) : un seul
+    // gros appel JSON multi-chapitres risquerait une troncature sur les
+    // modèles gratuits à quota de sortie limité.
+    const { text: content } = await llmFallbackEngine.generateAIResponse(chapterPrompt, [], null, 'longform');
+    chapters.push({ title: String(topic).slice(0, 150), content: content.slice(0, 6000) });
+  }
+
+  const pdfBuffer = await ebookGenerator.generateEbookPdf({ title: String(payload.title || 'Livre généré par IA').slice(0, 150), chapters });
+  const id = imageLinkStore.register(pdfBuffer, 'application/pdf', { title: payload.title || 'Livre IA' });
+  return { text: '✅ Livre généré.', media: { kind: 'book', url: `${PUBLIC_BASE_URL}/v/${id}`, downloadUrl: `${PUBLIC_BASE_URL}/v/${id}/raw`, title: payload.title } };
+}
+
+// Compose la réponse de l'assistant. Un délai artificiel de 1.5 à 3
 // secondes (voir sleep ci-dessus) simule le temps de réflexion "naturel"
 // demandé par la feuille de route CYRUS SUPER ASSISTANT — le moteur répond
 // instantanément, un temps de réponse à 0ms romprait l'illusion
 // conversationnelle recherchée (voir aussi l'effet de dactylographie côté
-// client, public/dashboard.html#studioStartTypewriter).
-app.post('/api/ai-studio/sessions/:id/messages', requireAccess, async (req, res) => {
+// client, public/dashboard.html#studioStartTypewriter). N'ajoute ce délai
+// QUE pour la conversation générale : les flux image/vidéo/livre ont déjà
+// un temps de réponse réel (appels réseau), un délai artificiel de plus
+// serait pénalisant sans aucun bénéfice.
+app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('studio_video'), upload.single('attachment'), async (req, res) => {
   const tenantId = resolveTenantId(req);
   const text = String((req.body || {}).text || '').trim();
   if (!text) {
@@ -3884,39 +4066,160 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, async (req, res)
     return res.status(404).json({ error: 'Discussion introuvable.' });
   }
 
-  const isFirstMessage = !Array.isArray(existing.messages) || existing.messages.length === 0;
-  const { text: localReplyText, category } = copywriterEngine.composeReply(text, existing.messages);
-  const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
-
-  // LLM Multi-Provider Fallback (lib/ai/llmFallbackEngine.js) : réponse
-  // PRINCIPALE pour CHAQUE message, plus seulement pour le cas 'UNKNOWN' —
-  // demande explicite de la feuille de route : l'assistant ne doit plus se
-  // limiter aux sujets CYRUS/marketing connus du moteur local, il doit
-  // pouvoir répondre à n'importe quelle question, dans n'importe quel
-  // domaine, comme un assistant IA généraliste (voir SYSTEM_PROMPT). Quand
-  // le moteur local a identifié un sujet CYRUS précis (category !==
-  // 'UNKNOWN' — SUPPORT en particulier), sa réponse déjà composée est
-  // transmise en CONTEXTE au LLM pour qu'il reste factuellement exact sur
-  // le fonctionnement de la plateforme elle-même plutôt que d'halluciner,
-  // sans pour autant l'empêcher de répondre normalement à toute autre
-  // question. Si la cascade échoue entièrement (panne réseau totale), on
-  // retombe silencieusement sur la réponse locale déjà calculée — jamais
-  // d'échec visible pour l'utilisateur.
-  const guideContext = category !== 'UNKNOWN' ? localReplyText : null;
-  let replyText = localReplyText;
-  try {
-    const { text: llmText } = await llmFallbackEngine.generateAIResponse(text, existing.messages, guideContext);
-    replyText = llmText;
-  } catch (err) {
-    console.warn('LLM Fallback — cascade entièrement indisponible, réponse locale conservée :', err.message);
+  // Pièce jointe optionnelle (logo/photo produit/clip vidéo) : hébergée
+  // immédiatement via imageLinkStore (même store que Image-to-Link) pour
+  // être réutilisable plus tard par une action (voir findRecentAttachment
+  // ci-dessus) sans garder de fichier en mémoire entre deux requêtes HTTP.
+  // Rôle deviné depuis le texte du message ("logo" -> logo, sinon -> photo)
+  // — heuristique simple, assumée comme telle.
+  let attachment = null;
+  if (req.file) {
+    const role = /\blogo\b/i.test(text) ? 'logo' : 'photo';
+    const id = imageLinkStore.register(req.file.buffer, req.file.mimetype, { title: `Pièce jointe tchat (${role})` });
+    attachment = { id, mimetype: req.file.mimetype, role };
   }
 
-  await sleep(1500 + Math.floor(Math.random() * 1500));
+  const isFirstMessage = !Array.isArray(existing.messages) || existing.messages.length === 0;
+  const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
+  const userMessage = { role: 'user', text, createdAt: new Date().toISOString(), attachment };
 
-  const userMessage = { role: 'user', text, createdAt: new Date().toISOString() };
-  const assistantMessage = { role: 'assistant', text: replyText, createdAt: new Date().toISOString() };
+  const intent = detectStudioIntent(text);
+  let assistantMessage;
+
+  try {
+    if (intent === 'image' || intent === 'video' || intent === 'book') {
+      const planner = intent === 'image' ? planImage : (intent === 'video' ? planVideo : planBook);
+      const { raw, parsed } = await planner(text);
+
+      if (parsed && parsed.ready) {
+        const actionByIntent = {
+          image: { label: '🎨 Générer l\'affiche HD', action: 'generate_image' },
+          video: { label: '🎬 Lancer la vidéo avec ce script', action: 'generate_video' },
+          book: { label: '📄 Exporter le guide PDF', action: 'generate_book' },
+        };
+        assistantMessage = {
+          role: 'assistant',
+          text: String(parsed.summary || raw).slice(0, 2000),
+          createdAt: new Date().toISOString(),
+          actions: [{ ...actionByIntent[intent], payload: parsed }],
+        };
+      } else {
+        // Le LLM a posé des questions (brief incomplet) — réponse texte
+        // simple, aucun bouton d'action.
+        assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString() };
+      }
+    } else {
+      const { text: localReplyText, category } = copywriterEngine.composeReply(text, existing.messages);
+      const guideContext = category !== 'UNKNOWN' ? localReplyText : null;
+      let replyText = localReplyText;
+      try {
+        const { text: llmText } = await llmFallbackEngine.generateAIResponse(text, existing.messages, guideContext);
+        replyText = llmText;
+      } catch (err) {
+        console.warn('LLM Fallback — cascade entièrement indisponible, réponse locale conservée :', err.message);
+      }
+      await sleep(1500 + Math.floor(Math.random() * 1500));
+      assistantMessage = { role: 'assistant', text: replyText, createdAt: new Date().toISOString() };
+    }
+  } catch (err) {
+    // Filet de sécurité : un échec de planification (image/vidéo/livre)
+    // retombe sur une réponse texte simple plutôt que de casser la
+    // conversation — jamais d'erreur HTTP visible pour un simple message.
+    console.warn(`Chat-First — échec du traitement d'intention "${intent}" :`, err.message);
+    assistantMessage = { role: 'assistant', text: `Désolé, je n'ai pas pu traiter cette demande (${err.message}). Reformulez ou réessayez.`, createdAt: new Date().toISOString() };
+  }
+
   const updated = await aiStudioStore.appendMessages(tenantId, req.params.id, [userMessage, assistantMessage], title);
   res.json({ session: updated });
+});
+
+// Exécute une action proposée par l'assistant (clic sur un bouton — voir
+// ci-dessus) : déclenche le rendu réel (coûteux/payant pour l'image/vidéo),
+// jamais fait automatiquement dès que le brief est prêt.
+app.post('/api/ai-studio/sessions/:id/actions', requireAccess, requireModule('studio_video'), async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  const { action, payload } = req.body || {};
+  if (!action || !payload) {
+    return res.status(400).json({ error: 'Action ou paramètres manquants.' });
+  }
+
+  const existing = await aiStudioStore.getSession(tenantId, req.params.id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Discussion introuvable.' });
+  }
+
+  try {
+    let result;
+    if (action === 'generate_image') result = await executeGenerateImage(payload, existing.messages);
+    else if (action === 'generate_video') result = await executeGenerateVideo(payload, existing.messages);
+    else if (action === 'generate_book') result = await executeGenerateBook(payload);
+    else return res.status(400).json({ error: `Action inconnue : ${action}` });
+
+    const assistantMessage = { role: 'assistant', createdAt: new Date().toISOString(), ...result };
+    const updated = await aiStudioStore.appendMessages(tenantId, req.params.id, [assistantMessage], null);
+    res.json({ session: updated });
+  } catch (err) {
+    console.error(`Chat-First — échec de l'action "${action}" :`, err.message);
+    res.status(502).json({ error: err.message || "Échec de l'exécution de l'action." });
+  }
+});
+
+// Poll d'un job vidéo démarré par executeGenerateVideo ci-dessus (même
+// principe que GET /api/studio/video-ai/status, mais ajoute le résultat
+// comme nouveau message de la discussion une fois prêt, avec incrustation
+// du logo en attente si un a été importé — voir _logoAttachmentId encodé
+// dans le jobToken).
+app.post('/api/ai-studio/sessions/:id/video-status', requireAccess, requireModule('studio_video'), async (req, res) => {
+  const tenantId = resolveTenantId(req);
+  let job;
+  try {
+    job = decodeVideoAiJobToken((req.body || {}).jobToken);
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: 'jobToken invalide.' });
+  }
+
+  try {
+    const result = await videoAiEngine.pollVideoAiJob(job);
+    if (!result.done) {
+      return res.json({ status: 'pending' });
+    }
+
+    let buffer;
+    let mimetype;
+    if (result.videoUrl) {
+      const videoRes = await axios.get(result.videoUrl, { responseType: 'arraybuffer', timeout: 60_000 });
+      buffer = Buffer.from(videoRes.data);
+      mimetype = videoRes.headers['content-type'] || 'video/mp4';
+    } else {
+      buffer = result.videoBuffer;
+      mimetype = result.videoMimetype || 'video/mp4';
+    }
+
+    if (job._logoAttachmentId) {
+      const logoEntry = imageLinkStore.get(job._logoAttachmentId);
+      if (logoEntry) {
+        try {
+          buffer = await videoMixerEngine.overlayLogoOnVideo(buffer, logoEntry.buffer);
+          mimetype = 'video/mp4';
+        } catch (err) {
+          console.warn('Incrustation du logo sur la vidéo IA échouée, vidéo renvoyée sans logo :', err.message);
+        }
+      }
+    }
+
+    const id = imageLinkStore.register(buffer, mimetype, { title: 'Vidéo IA — CYRUS SUPER ASSISTANT' });
+    const assistantMessage = {
+      role: 'assistant',
+      text: '✅ Vidéo générée.',
+      createdAt: new Date().toISOString(),
+      media: { kind: 'video', url: `${PUBLIC_BASE_URL}/v/${id}`, downloadUrl: `${PUBLIC_BASE_URL}/v/${id}/raw` },
+    };
+    const updated = await aiStudioStore.appendMessages(tenantId, req.params.id, [assistantMessage], null);
+    res.json({ status: 'done', session: updated });
+  } catch (err) {
+    console.error('Chat-First — échec du suivi vidéo :', err.message);
+    res.json({ status: 'error', message: err.message || 'Échec de la génération vidéo.' });
+  }
 });
 
 // ---------- Creative Director IA (Studio Média) ----------
@@ -3944,7 +4247,7 @@ function parseCreativeDirective(rawText) {
   };
 }
 
-app.post('/api/media/creative-direction', requireAccess, async (req, res) => {
+app.post('/api/media/creative-direction', requireAccess, requireModule('studio_video'), async (req, res) => {
   const concept = String((req.body || {}).concept || '').trim();
   if (!concept) {
     return res.status(400).json({ error: 'Décrivez le visuel avant de demander une direction créative IA.' });
@@ -4113,7 +4416,7 @@ app.post('/api/studio/faceless/plan', requireAccess, requireModule('studio_video
 // Ne modifie rien côté serveur (ebookGenerator.js reste un pur moteur de
 // mise en page) : le texte généré est renvoyé au client, qui l'insère dans
 // le champ "Contenu" du chapitre concerné, modifiable ensuite normalement.
-app.post('/api/ebooks/draft-chapter', requireAccess, async (req, res) => {
+app.post('/api/ebooks/draft-chapter', requireAccess, requireModule('studio_video'), async (req, res) => {
   const bookTitle = String((req.body || {}).bookTitle || '').trim();
   const chapterTitle = String((req.body || {}).chapterTitle || '').trim();
   const brief = String((req.body || {}).brief || '').trim().slice(0, 800);
@@ -4140,7 +4443,7 @@ app.post('/api/ebooks/draft-chapter', requireAccess, async (req, res) => {
 // upload.any() plutôt que upload.fields([...]) : le nombre de chapitres (et
 // donc de champs fichier "chapterImage_<index>") est dynamique, décidé côté
 // client — voir public/dashboard.html, section Générateur de Livres.
-app.post('/api/ebooks/generate', requireAccess, upload.any(), async (req, res) => {
+app.post('/api/ebooks/generate', requireAccess, requireModule('studio_video'), upload.any(), async (req, res) => {
   let parsedSpec;
   try {
     parsedSpec = JSON.parse((req.body || {}).spec || '{}');
