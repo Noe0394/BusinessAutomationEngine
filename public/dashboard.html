@@ -1703,7 +1703,11 @@
             <button type="button" id="media-download-png-btn" class="studio-handoff-btn">📥 Télécharger HD (PNG)</button>
             <button type="button" id="media-png-to-link-btn" class="studio-handoff-btn">🔗 Convertir en lien 1-clic</button>
             <button type="button" id="media-export-video-btn" class="studio-handoff-btn" hidden>🎬 Exporter en vidéo</button>
-            <button type="button" id="media-export-ai-video-btn" class="studio-handoff-btn" hidden>🤖 Générer vidéo IA (LTX-Video)</button>
+            <select id="media-ai-video-provider" hidden title="Moteur de génération vidéo IA">
+              <option value="auto" selected>Auto (Fal.ai/Replicate/HF)</option>
+              <option value="ltx2">LTX-2 (vidéo + son synchronisé, expérimental)</option>
+            </select>
+            <button type="button" id="media-export-ai-video-btn" class="studio-handoff-btn" hidden>🤖 Générer vidéo IA</button>
             <button type="button" id="media-storyboard-toggle-btn" class="studio-handoff-btn" hidden>🎞️ Storyboard multi-scènes</button>
             <button type="button" id="media-back-to-variants-btn" class="studio-handoff-btn">🔁 Nouvelles propositions</button>
           </div>
@@ -7519,6 +7523,7 @@
       document.getElementById('media-video-fields').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
       document.getElementById('media-export-video-btn').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
       document.getElementById('media-export-ai-video-btn').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
+      document.getElementById('media-ai-video-provider').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
       document.getElementById('media-storyboard-toggle-btn').hidden = btn.dataset.deliverable !== 'VIDEO_SHORT';
     });
 
@@ -8558,13 +8563,18 @@
         const form = new FormData();
         form.append('image', imageBlob, 'source.png');
         if (scriptText) form.append('prompt', scriptText);
+        form.append('provider', document.getElementById('media-ai-video-provider').value);
 
         const startRes = await apiFetch('/api/studio/video-ai/start', { method: 'POST', body: form });
         const startData = await startRes.json();
         if (!startRes.ok) throw new Error(startData.error || 'Échec du démarrage de la génération vidéo IA.');
 
-        const providerLabels = { fal: 'fal.ai', replicate: 'Replicate', huggingface: 'Hugging Face (essai gratuit, non garanti)' };
-        mediaFeedback(`🤖 Génération en cours via ${providerLabels[startData.provider] || startData.provider} (LTX-Video) — cela peut prendre 1 à 3 minutes...`, false);
+        const providerLabels = {
+          fal: 'fal.ai', replicate: 'Replicate',
+          huggingface: 'Hugging Face (essai gratuit, non garanti)',
+          ltx2: 'LTX-2 (vidéo + son synchronisé, expérimental)',
+        };
+        mediaFeedback(`🤖 Génération en cours via ${providerLabels[startData.provider] || startData.provider} — cela peut prendre 1 à 3 minutes...`, false);
 
         let result = null;
         for (let attempt = 0; attempt < MEDIA_AI_VIDEO_MAX_POLLS; attempt += 1) {

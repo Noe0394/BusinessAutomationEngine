@@ -3207,6 +3207,13 @@ app.post('/api/studio/video-ai/start', requireAccess, requireModule('studio_vide
     }
 
     const prompt = String((req.body || {}).prompt || '').trim().slice(0, 500);
+    // Choix explicite de moteur (voir dashboard.html, sélecteur "Moteur" du
+    // Studio Vidéo IA) — 'auto' (ou absent) garde la cascade automatique
+    // habituelle (fal -> replicate -> huggingface), 'ltx2'/'wan21' forcent
+    // un générateur précis (voir videoAiEngine.js#startVideoAiJob).
+    const rawProvider = String((req.body || {}).provider || '').trim();
+    const preferredProvider = rawProvider === 'ltx2' ? rawProvider : undefined;
+
     // fal.ai/Replicate ont besoin d'une URL http(s) publique pour l'image de
     // départ (pas de data URL/multipart direct) — on réutilise le store
     // Image-to-Link déjà en place (voir POST /api/media/image-link) plutôt
@@ -3214,8 +3221,8 @@ app.post('/api/studio/video-ai/start', requireAccess, requireModule('studio_vide
     const sourceImageId = imageLinkStore.register(buffer, mimetype, { title: 'Image source — génération vidéo IA' });
     const sourceImageUrl = `${PUBLIC_BASE_URL}/v/${sourceImageId}/raw`;
 
-    const job = await videoAiEngine.startVideoAiJob(sourceImageUrl, prompt);
-    res.json({ jobToken: encodeVideoAiJobToken(job), provider: job.provider });
+    const job = await videoAiEngine.startVideoAiJob(sourceImageUrl, prompt, undefined, preferredProvider);
+    res.json({ jobToken: encodeVideoAiJobToken(job), provider: job.hfMode || job.provider });
   } catch (err) {
     if (err.kind === 'not_configured') {
       return res.status(503).json({ error: err.message });
