@@ -21,3 +21,5 @@ campaigns_state/
 message_history/
 ai_studio_sessions/
 public/dist/
+.vercel
+.env*

@@ -1,0 +1,15 @@
+{
+  "name": "cyrus-baileys-connector",
+  "version": "1.0.0",
+  "description": "Micro-service Baileys autonome (WhatsApp) — mono-tenant, pense pour un hebergeur H24 a ressources limitees (Koyeb free tier). Voir README.md.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.24",
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4"
+  }
+}
