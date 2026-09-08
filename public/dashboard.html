@@ -7594,7 +7594,7 @@
     // explicites (résolution, éclairage, absence de flou/distorsion) pour
     // garantir des visuels présentables et professionnels dans tous les cas,
     // conformément à la demande explicite de filtres de qualité stricts.
-    const MEDIA_QUALITY_SUFFIX = 'ultra-detailed, sharp focus, 8k resolution, professional color grading, no blur, no distortion, no low quality, no watermark, no text errors';
+    const MEDIA_QUALITY_SUFFIX = 'professional commercial product photography, 8k resolution, studio lighting, hyper-detailed, advertising poster style, crisp focus, clean composition, high-end graphic design, professional color grading, no blur, no distortion, no low quality, no abstract, no minimal detail, no deformed proportions, no noise, no draft look, no watermark, no text errors';
 
     const MEDIA_SECTOR_STYLES = {
       restauration: 'professional studio food photography, appetizing crispy details, mouth-watering close-up, warm ambient restaurant lighting, rich textures, food magazine quality',
@@ -7663,16 +7663,6 @@
     // sans jamais afficher la grille ni permettre de réessayer.
     const MEDIA_FETCH_TIMEOUT_MS = 25000;
 
-    // NOTE (vérifié en direct, voir historique) : `https://pollinations.ai/p/...`
-    // renvoie du text/html (la page de partage du site Pollinations, pas une
-    // image) — jamais directement utilisable comme source d'un <img>. Sur
-    // demande explicite (feuille de route), cette URL reste la PREMIÈRE
-    // tentative ci-dessous, mais avec un repli automatique et immédiat (même
-    // onerror) vers `https://image.pollinations.ai/prompt/...` — le format
-    // confirmé fonctionnel (Content-Type image/* + Access-Control-Allow-Origin: *,
-    // requis par img.crossOrigin='anonymous' pour l'export PNG du canvas,
-    // voir mediaDownloadCanvasPng) — pour ne jamais faire dépendre le rendu
-    // du fond de la première URL.
     function mediaLoadImageUrl(url, onSettle) {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -7706,38 +7696,64 @@
       img.src = url;
     }
 
-    function mediaFetchBackgroundImageOnce(promptEnriched, w, h) {
+    // Repli gratuit UNIQUEMENT (voir mediaFetchBackgroundImageOnce ci-dessous
+    // pour la source principale, fal.ai/FLUX côté serveur) — NOTE (vérifié en
+    // direct, sept. 2026) : Pollinations a retiré Flux de son catalogue
+    // gratuit (https://image.pollinations.ai/models ne liste plus que
+    // "sana" ; toute requête, avec ou sans `model=flux`, est servie par
+    // "sana" — confirmé via le corps des réponses d'erreur, qui échouent
+    // aussi fréquemment sur ce palier anonyme : "Queue full", 1 requête
+    // max en vol par IP). Conserver `model=flux` dans l'URL serait donc
+    // trompeur (jamais honoré) — retiré. `https://pollinations.ai/p/...`
+    // (ancienne tentative primaire) a également été retirée : elle renvoie
+    // du text/html (page de partage), jamais une image exploitable.
+    function mediaFetchViaPollinations(cleanPrompt, w, h) {
       return new Promise((resolve, reject) => {
         const seed = Math.floor(Math.random() * 1000000);
+        const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?width=${w}&height=${h}&nologo=true&seed=${seed}&enhance=true&safe=true`;
+        console.log('[ImageEngine] URL générée (repli Pollinations, modèle "sana" imposé par leur API) :', url);
+        mediaLoadImageUrl(url, (err, img) => { if (err) reject(err); else resolve(img); });
+      });
+    }
+
+    // Source PRINCIPALE : FLUX réel via fal.ai, appelé côté serveur (voir
+    // POST /api/media/generate-image, lib/media/imageAiEngine.js) — la clé
+    // fal.ai reste côté serveur, jamais exposée ici. Repli automatique et
+    // immédiat sur Pollinations (mediaFetchViaPollinations, qualité
+    // inférieure mais gratuit/sans clé) si fal.ai n'est pas configuré côté
+    // serveur, échoue, ou si l'image renvoyée est illisible côté navigateur.
+    function mediaFetchBackgroundImageOnce(promptEnriched, w, h) {
+      return new Promise((resolve, reject) => {
         // cleanPrompt ne doit JAMAIS être vide/undefined en pratique (voir
         // mediaBuildEnrichedPrompt, qui garantit déjà un prompt par défaut) —
         // filet de sécurité supplémentaire ici au cas où un appelant futur
         // passerait directement une chaîne vide.
         const cleanPrompt = (promptEnriched && promptEnriched.trim())
           || 'professional product banner HD, photorealistic, studio lighting';
-        // enhance=true et safe=true : paramètres officiels de l'API Pollinations
-        // (voir APIDOCS.md) — enhance laisse le modèle lui-même améliorer/
-        // compléter le prompt côté serveur (traduction/enrichissement
-        // supplémentaire au-delà du glossaire local ci-dessus), safe rejette
-        // les résultats inappropriés plutôt que de les renvoyer tels quels.
-        // model=flux : modèle photoréaliste demandé explicitement plutôt que
-        // de laisser l'API choisir son modèle par défaut pour une requête
-        // anonyme (observé en test : "sana" sans ce paramètre).
-        const primaryUrl = `https://pollinations.ai/p/${encodeURIComponent(cleanPrompt)}?width=${w}&height=${h}&seed=${seed}&model=flux`;
-        const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?width=${w}&height=${h}&nologo=true&seed=${seed}&enhance=true&safe=true&model=flux`;
 
-        console.log('[ImageEngine] URL générée (primaire):', primaryUrl);
-        mediaLoadImageUrl(primaryUrl, (primaryErr, img) => {
-          if (!primaryErr) return resolve(img);
-          if (primaryErr.kind === 'timeout') return reject(primaryErr);
-
-          console.warn('[ImageEngine] Échec de l\'URL primaire (pollinations.ai/p, connue pour renvoyer du HTML) — repli sur image.pollinations.ai/prompt:', primaryErr.message);
-          console.log('[ImageEngine] URL générée (repli):', fallbackUrl);
-          mediaLoadImageUrl(fallbackUrl, (fallbackErr, fallbackImg) => {
-            if (fallbackErr) return reject(fallbackErr);
-            resolve(fallbackImg);
+        apiFetch('/api/media/generate-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: cleanPrompt, width: w, height: h }),
+        })
+          .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+          .then(({ ok, data }) => {
+            if (!ok || !data.url) {
+              console.warn('[ImageEngine] fal.ai/FLUX indisponible côté serveur, repli Pollinations :', data && data.error);
+              return mediaFetchViaPollinations(cleanPrompt, w, h).then(resolve, reject);
+            }
+            console.log('[ImageEngine] Image FLUX (fal.ai) générée :', data.url);
+            mediaLoadImageUrl(data.url, (err, img) => {
+              if (!err) return resolve(img);
+              console.warn('[ImageEngine] Image fal.ai illisible côté navigateur, repli Pollinations :', err.message);
+              mediaFetchViaPollinations(cleanPrompt, w, h).then(resolve, reject);
+            });
+          })
+          .catch((err) => {
+            if (err.message === 'unauthorized') return reject(err);
+            console.warn('[ImageEngine] Appel serveur generate-image indisponible, repli Pollinations :', err.message);
+            mediaFetchViaPollinations(cleanPrompt, w, h).then(resolve, reject);
           });
-        });
       });
     }
 

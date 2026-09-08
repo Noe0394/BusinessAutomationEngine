@@ -45,6 +45,7 @@ const copywriterEngine = require('./lib/ai/localCopywriterEngine');
 const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const imageLinkStore = require('./lib/media/imageLinkStore');
 const videoAiEngine = require('./lib/media/videoAiEngine');
+const imageAiEngine = require('./lib/media/imageAiEngine');
 const storyboardEngine = require('./lib/media/storyboardEngine');
 const videoMixerEngine = require('./lib/media/videoMixerEngine');
 const messageHistory = require('./lib/messageHistory');
@@ -3045,6 +3046,34 @@ app.get('/api/media/temp/:token', (req, res) => {
 
   res.set('Content-Type', entry.mimetype || 'video/mp4');
   res.send(entry.buffer);
+});
+
+// ---------- Génération d'images IA (FLUX réel via fal.ai, voir lib/media/imageAiEngine.js) ----------
+// Appelée depuis le Studio Média (voir public/dashboard.html#mediaFetchBackgroundImageOnce)
+// AVANT toute tentative Pollinations — la clé fal.ai reste côté serveur,
+// jamais exposée au navigateur. Retourne un lien /v/:id/raw (même store que
+// Image-to-Link ci-dessous) plutôt que l'URL fal.ai brute, pour garantir des
+// en-têtes CORS cohérents avec le reste de l'app (nécessaire à
+// img.crossOrigin='anonymous' pour l'export PNG du canvas côté client).
+app.post('/api/media/generate-image', requireAccess, async (req, res) => {
+  const prompt = String((req.body || {}).prompt || '').trim().slice(0, 2000);
+  if (!prompt) {
+    return res.status(400).json({ error: 'Prompt manquant.' });
+  }
+  const width = Math.min(Math.max(parseInt((req.body || {}).width, 10) || 1024, 256), 1536);
+  const height = Math.min(Math.max(parseInt((req.body || {}).height, 10) || 1024, 256), 1536);
+
+  try {
+    const { buffer, mimetype, provider } = await imageAiEngine.generateImage({ prompt, width, height });
+    const id = imageLinkStore.register(buffer, mimetype, { title: 'Image IA — CYRUS SUPER ASSISTANT', width, height });
+    res.json({ url: `${PUBLIC_BASE_URL}/v/${id}/raw`, provider });
+  } catch (err) {
+    if (err.kind === 'not_configured') {
+      return res.status(503).json({ error: err.message });
+    }
+    console.error('Erreur génération image IA (fal.ai):', err.message);
+    res.status(502).json({ error: 'Échec de la génération image IA côté serveur — repli automatique sur Pollinations.' });
+  }
 });
 
 // ---------- Image-to-Link (aperçu visuel WhatsApp/Telegram, voir lib/media/imageLinkStore.js) ----------
