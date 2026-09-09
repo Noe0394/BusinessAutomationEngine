@@ -4165,15 +4165,15 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
         assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString() };
       }
     } else {
-      const { text: localReplyText, category } = copywriterEngine.composeReply(text, existing.messages);
-      const guideContext = category !== 'UNKNOWN' ? localReplyText : null;
-      let replyText = localReplyText;
-      try {
-        const { text: llmText } = await llmFallbackEngine.generateAIResponse(text, existing.messages, guideContext);
-        replyText = llmText;
-      } catch (err) {
-        console.warn('LLM Fallback — cascade entièrement indisponible, réponse locale conservée :', err.message);
-      }
+      // Réponse exclusivement via la cascade d'API IA (Groq -> Gemini ->
+      // OpenRouter -> Hugging Face -> Pollinations, voir llmFallbackEngine.js)
+      // — plus de réponse locale toute faite (composeReply) servie en repli
+      // silencieux si la cascade échoue : un échec total remonte désormais à
+      // l'appelant (voir le catch englobant plus bas, qui affiche déjà un
+      // message d'erreur clair) plutôt que de faire croire à une vraie
+      // réponse IA. generateSessionTitle (ci-dessus) reste local — c'est un
+      // simple intitulé de discussion, pas une réponse fournie à l'utilisateur.
+      const { text: replyText } = await llmFallbackEngine.generateAIResponse(text, existing.messages);
 
       // Rattrapage (voir looksLikeRawMarkupDump ci-dessus) : la demande a été
       // classée 'chat' par detectStudioIntent mais la réponse générique
