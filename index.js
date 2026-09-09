@@ -184,8 +184,14 @@ function printAndWriteAdminAccessInstructions() {
 // clé de licence) : CORS ne s'applique pas, la requête suit son cours
 // normalement (l'authentification applicative reste gérée par requireAccess/
 // requireAdmin plus loin, indépendamment de cette origine).
-const ALLOWED_DASHBOARD_ORIGINS = (process.env.DASHBOARD_ORIGIN || PUBLIC_BASE_URL)
-  .split(',')
+// BUG CORRIGÉ (constaté en production : le portail admin, servi depuis
+// PUBLIC_BASE_URL, recevait "Origine non autorisée" dès que DASHBOARD_ORIGIN
+// était configuré) : `DASHBOARD_ORIGIN || PUBLIC_BASE_URL` REMPLAÇAIT
+// PUBLIC_BASE_URL au lieu de l'AJOUTER dès que DASHBOARD_ORIGIN était
+// défini, malgré le commentaire ci-dessus qui documentait bien l'intention
+// inverse ("permet d'AJOUTER d'autres origines"). Les deux sont désormais
+// toujours combinées.
+const ALLOWED_DASHBOARD_ORIGINS = [PUBLIC_BASE_URL, ...(process.env.DASHBOARD_ORIGIN || '').split(',')]
   .map((o) => o.trim().replace(/\/$/, ''))
   .filter(Boolean);
 
