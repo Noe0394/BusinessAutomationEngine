@@ -10,6 +10,11 @@ const AUTH_DIR_BASE = process.env.AUTH_DIR || 'auth_info_baileys';
 const WWEBJS_DIR_BASE = path.join(AUTH_DIR_BASE, 'wwebjs');
 fs.mkdirSync(WWEBJS_DIR_BASE, { recursive: true });
 
+// --max-old-space-size=256 : plafonne le tas V8 de CHAQUE instance Chromium
+// à 256 Mo — nécessaire pour tenir un grand nombre de tenants simultanés
+// (haute densité, 50 utilisateurs visés) sur une RAM serveur partagée. Un
+// dépassement fait planter le processus de rendu (pas tout Chromium) ; le
+// moteur reconnecte automatiquement (voir scheduleReconnect) le cas échéant.
 const PUPPETEER_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
@@ -18,7 +23,21 @@ const PUPPETEER_ARGS = [
   '--no-first-run',
   '--no-zygote',
   '--disable-gpu',
+  '--js-flags=--max-old-space-size=256',
 ];
+
+// Types de ressources bloquées en continu après le chargement initial (voir
+// leur mise en place dans doConnect ci-dessous) : aucune valeur pour un
+// client 100% headless jamais affiché à un humain, mais un coût RAM/réseau
+// réel et récurrent (avatars de contacts, miniatures de médias reçus, police
+// et emoji SVG rechargés). "stylesheet" est DÉLIBÉRÉMENT absent de cette
+// liste : WhatsApp Web s'appuie en interne sur des calculs de style (visibilité
+// via offsetParent/display) pour détecter certains états (QR prêt, écran de
+// chargement) — le bloquer a déjà cassé cette détection en usage réel
+// communautaire de whatsapp-web.js. Le gain RAM de bloquer le CSS est de
+// toute façon marginal (quelques dizaines de Ko) comparé au risque de
+// perdre la connexion WhatsApp elle-même.
+const BLOCKED_RESOURCE_TYPES = new Set(['image', 'font', 'media']);
 
 // whatsapp-web.js adresse les contacts individuels en "<numero>@c.us" là où
 // Baileys (et donc tout le reste de ce serveur : campagnes, contacts
@@ -205,6 +224,28 @@ function createSession(tenantId) {
     });
 
     await client.initialize();
+
+    // Mise en place APRÈS initialize() : whatsapp-web.js ne fournit aucun
+    // point d'accroche public à sa page Puppeteer avant sa propre navigation
+    // interne (Client#initialize crée la page et appelle page.goto() sans
+    // hook exposé pour intervenir plus tôt) — le tout premier chargement du
+    // bundle WhatsApp Web n'est donc pas couvert, seules les requêtes
+    // ultérieures (durée de vie de la session) le sont, ce qui reste la part
+    // la plus significative sur une session longue.
+    if (client.pupPage) {
+      try {
+        await client.pupPage.setRequestInterception(true);
+        client.pupPage.on('request', (req) => {
+          if (BLOCKED_RESOURCE_TYPES.has(req.resourceType())) {
+            req.abort().catch(() => {});
+          } else {
+            req.continue().catch(() => {});
+          }
+        });
+      } catch (err) {
+        console.warn(`Interception de requêtes Puppeteer non appliquée (tenant "${tenantId}", moteur wwebjs) :`, err.message);
+      }
+    }
   }
 
   function connect() {
