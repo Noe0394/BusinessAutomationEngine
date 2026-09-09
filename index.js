@@ -4162,7 +4162,25 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
   const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
   const userMessage = { role: 'user', text, createdAt: new Date().toISOString(), attachment };
 
-  const intent = detectStudioIntent(text);
+  // BUG CORRIGÉ (constaté en test réel : une conversation de planification
+  // affiche/vidéo/livre "perdait le fil" dès la réponse aux questions de
+  // clarification) : detectStudioIntent(text) n'analyse QUE le message
+  // courant, jamais l'historique — une réponse du type "mon slogan est...,
+  // mes atouts sont..." ne contient plus aucun mot-clé ("affiche", "vidéo"...)
+  // et retombait donc à tort sur l'intention générique 'chat', abandonnant
+  // en cours de route toute la planification déjà entamée (l'utilisateur
+  // recevait alors un texte générique du LLM au lieu de la suite du brief).
+  // Si le DERNIER message assistant était une question de planification
+  // (isPlanningQuestion, voir plus bas), on reste sur CETTE intention tant
+  // qu'un nouveau message ne relance pas explicitement une intention
+  // différente detectée par mots-clés.
+  const lastAssistantMessage = Array.isArray(existing.messages)
+    ? [...existing.messages].reverse().find((m) => m.role === 'assistant')
+    : null;
+  const keywordIntent = detectStudioIntent(text);
+  const intent = (keywordIntent === 'chat' && lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && lastAssistantMessage.intent)
+    ? lastAssistantMessage.intent
+    : keywordIntent;
   let assistantMessage;
 
   try {
@@ -4192,7 +4210,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
         // texte de vente fini, pas pour "Quel est le nom de votre
         // restaurant ?") — ce qui donnait l'impression que le Studio IA ne
         // générait jamais de vrai visuel.
-        assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString(), isPlanningQuestion: true };
+        assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString(), isPlanningQuestion: true, intent };
       }
     } else {
       // Réponse exclusivement via la cascade d'API IA (Groq -> Gemini ->
@@ -4228,7 +4246,11 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
             actions: [{ label: '🎨 Générer l\'affiche HD', action: 'generate_image', payload: parsed }],
           };
         } else {
-          assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString(), isPlanningQuestion: true };
+          // intent forcé à 'image' (pas la variable `intent` englobante, qui
+          // vaut 'chat' ici) : c'est bien planImage() qui a été appelé
+          // juste au-dessus, la reprise de conversation (voir plus haut)
+          // doit donc continuer sur cette planification, pas sur 'chat'.
+          assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString(), isPlanningQuestion: true, intent: 'image' };
         }
       } else {
         await sleep(1500 + Math.floor(Math.random() * 1500));
