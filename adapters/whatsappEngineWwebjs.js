@@ -1,3 +1,11 @@
+// DÉSACTIVÉ en production (voir Dockerfile) : whatsapp-web.js/puppeteer ont
+// été retirés de package.json le 2026-09-09, le disque du VPS actuel (9,7 Go)
+// étant trop petit pour le téléchargement du binaire Chromium par npm
+// (ENOSPC constaté en build). Ce fichier n'est donc chargé par
+// adapters/whatsapp.js que si WHATSAPP_ENGINE=wwebjs ET que ces deux paquets
+// ont été réinstallés — sinon ce require() échoue au démarrage avec un
+// message clair ("Cannot find module 'whatsapp-web.js'"), plutôt qu'un
+// comportement silencieusement dégradé.
 const fs = require('fs');
 const path = require('path');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
