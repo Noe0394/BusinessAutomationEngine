@@ -3,9 +3,9 @@
   "activeCampaignId": "ebb9822c-7f24-4839-982d-6760e76ff481",
   "networkHealth": {
     "consecutiveSlowSends": 0,
-    "consecutiveOverloadFailures": 0,
-    "holdUntil": 0,
-    "networkStatus": "normal"
+    "consecutiveOverloadFailures": 1,
+    "holdUntil": 1788968623371,
+    "networkStatus": "circuit_open"
   },
   "campaigns": [
     {
@@ -4054,14 +4054,14 @@
       "messageHash": "3b84d3dde097af521e536494",
       "duplicateWindowHours": 72,
       "status": "running",
-      "paused": false,
+      "paused": true,
       "userPaused": false,
       "stopRequested": false,
       "superseded": false,
       "createdAt": "2026-09-09T13:28:36.387Z",
       "startedAt": "2026-09-09T13:28:36.387Z",
       "finishedAt": null,
-      "lastProgressAt": "2026-09-09T15:28:16.467Z",
+      "lastProgressAt": "2026-09-09T15:28:43.385Z",
       "nextIndex": 226,
       "lastProcessedIndex": 225,
       "recipients": [
