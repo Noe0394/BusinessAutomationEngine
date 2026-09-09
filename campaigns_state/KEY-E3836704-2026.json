@@ -4042,6 +4042,4048 @@
           }
         ]
       }
+    },
+    {
+      "id": "ebb9822c-7f24-4839-982d-6760e76ff481",
+      "name": "Campagne du 09/09/2026 13:28:33",
+      "total": 399,
+      "sent": 0,
+      "success": 0,
+      "failed": 0,
+      "skippedDuplicates": 0,
+      "messageHash": "3b84d3dde097af521e536494",
+      "duplicateWindowHours": 72,
+      "status": "running",
+      "paused": false,
+      "userPaused": false,
+      "stopRequested": false,
+      "superseded": false,
+      "createdAt": "2026-09-09T13:28:36.387Z",
+      "startedAt": "2026-09-09T13:28:36.387Z",
+      "finishedAt": null,
+      "lastProgressAt": "2026-09-09T13:28:36.387Z",
+      "nextIndex": 0,
+      "lastProcessedIndex": -1,
+      "recipients": [
+        {
+          "telephone": "+22676858214",
+          "nom": "EP Mne Nikiema"
+        },
+        {
+          "telephone": "+22676066842",
+          "nom": "EP Safiatou TRAORE"
+        },
+        {
+          "telephone": "+22675681818",
+          "nom": "EP Sana Issouf"
+        },
+        {
+          "telephone": "+22674916199",
+          "nom": "EP patricedelanaza2014"
+        },
+        {
+          "telephone": "+22670016786",
+          "nom": "EP Salmaa"
+        },
+        {
+          "telephone": "+22664977093",
+          "nom": "+226 64 97 70 93"
+        },
+        {
+          "telephone": "+22660832768",
+          "nom": "FL14 Thamar🥰"
+        },
+        {
+          "telephone": "+22655856064",
+          "nom": "EP Sana 2"
+        },
+        {
+          "telephone": "+22568422966",
+          "nom": "EP Univers D’enfants"
+        },
+        {
+          "telephone": "+22558942216",
+          "nom": "EP Roly Yéboué"
+        },
+        {
+          "telephone": "+22557808134",
+          "nom": "EP akaffousandrine"
+        },
+        {
+          "telephone": "+22548918123",
+          "nom": "EP Mo Ismael"
+        },
+        {
+          "telephone": "+22548389966",
+          "nom": "EP Kiyamini Touré"
+        },
+        {
+          "telephone": "+22548236170",
+          "nom": "EP PRINCIA KASSI"
+        },
+        {
+          "telephone": "+22547609016",
+          "nom": "EP Sandra EDJEOU"
+        },
+        {
+          "telephone": "+22547293408",
+          "nom": "CH gbetibouojeanhugueskouko"
+        },
+        {
+          "telephone": "+22508280957",
+          "nom": "CH Force Et Courage 💪🏽💪🏽💪🏽"
+        },
+        {
+          "telephone": "+22508241345",
+          "nom": "EP nathalienkouasse"
+        },
+        {
+          "telephone": "+22507752487",
+          "nom": "EP kouadioaristelle7"
+        },
+        {
+          "telephone": "+22507148802",
+          "nom": "CH CLÉMENCE APHING-KOUASSI PCEE"
+        },
+        {
+          "telephone": "+22507108626",
+          "nom": "EP Annecy Titus🥰🫶💋"
+        },
+        {
+          "telephone": "+22505961885",
+          "nom": "EP Meliane"
+        },
+        {
+          "telephone": "+22501833376",
+          "nom": "EP Serge BAGOU"
+        },
+        {
+          "telephone": "+22678876689",
+          "nom": "EPbBerakha"
+        },
+        {
+          "telephone": "+22676432616",
+          "nom": "EP nadinesoubeiga1"
+        },
+        {
+          "telephone": "+22675295723",
+          "nom": "EP Maman"
+        },
+        {
+          "telephone": "+22671007844",
+          "nom": "EP Tiendrebeo Beatrice"
+        },
+        {
+          "telephone": "+22670727652",
+          "nom": "GB Laure Myriam Koussoubé"
+        },
+        {
+          "telephone": "+22670437521",
+          "nom": "EP fatiouedraogo112"
+        },
+        {
+          "telephone": "+22670278630",
+          "nom": "EP Cécile Nikiema🙏🏼"
+        },
+        {
+          "telephone": "+22667201302",
+          "nom": "EP THIOMBIANO ADAMOU"
+        },
+        {
+          "telephone": "+22666409968",
+          "nom": "EP naomienadinga84"
+        },
+        {
+          "telephone": "+22584793474",
+          "nom": "EP ABISSA GISÈLE TAH PCEE"
+        },
+        {
+          "telephone": "+22578731938",
+          "nom": "EP Léonie Youdé"
+        },
+        {
+          "telephone": "+22577028709",
+          "nom": "EP Catherine Kaboré"
+        },
+        {
+          "telephone": "+22551444146",
+          "nom": "EP Kouao Yvette"
+        },
+        {
+          "telephone": "+22547439500",
+          "nom": "EP Danie PCEE"
+        },
+        {
+          "telephone": "+22541391805",
+          "nom": "EP priscayapi25"
+        },
+        {
+          "telephone": "+22509848785",
+          "nom": "EP LE PETIT MARCHÉ"
+        },
+        {
+          "telephone": "+22508703844",
+          "nom": "EP grebonadia PCEE"
+        },
+        {
+          "telephone": "+22508499195",
+          "nom": "EP Aicha Diomande"
+        },
+        {
+          "telephone": "+22508104816",
+          "nom": "EP Nevisse N'Guessan"
+        },
+        {
+          "telephone": "+22503219414",
+          "nom": "EP Mélouss ❤️♥️❤️"
+        },
+        {
+          "telephone": "+22678720057",
+          "nom": "EP Ouédraogo Epio Juliette"
+        },
+        {
+          "telephone": "+22674988898",
+          "nom": "EP checkna diallo"
+        },
+        {
+          "telephone": "+22674369530",
+          "nom": "EP Raïssa"
+        },
+        {
+          "telephone": "+22670358893",
+          "nom": "EP rmoyenga2"
+        },
+        {
+          "telephone": "+22670129992",
+          "nom": "EP Goumbané Nadège"
+        },
+        {
+          "telephone": "+22665659315",
+          "nom": "EP Dieu Est Miséricorde"
+        },
+        {
+          "telephone": "+22657789303",
+          "nom": "EP Ouedraogo Arianne Vanessa"
+        },
+        {
+          "telephone": "+22607075353",
+          "nom": "EP Olou Shop"
+        },
+        {
+          "telephone": "+22585763997",
+          "nom": "EP affouasekre"
+        },
+        {
+          "telephone": "+22559620914",
+          "nom": "EP faithzaouli"
+        },
+        {
+          "telephone": "+22558081669",
+          "nom": "EP Dominique Koné"
+        },
+        {
+          "telephone": "+22557313013",
+          "nom": "EP Mr TOURE"
+        },
+        {
+          "telephone": "+22509959239",
+          "nom": "EP Eleonore Angaman"
+        },
+        {
+          "telephone": "+22509408054",
+          "nom": "EP lsokouri16"
+        },
+        {
+          "telephone": "+22507883108",
+          "nom": "EP Masséni Traoré"
+        },
+        {
+          "telephone": "+22507135330",
+          "nom": "AI Blandine"
+        },
+        {
+          "telephone": "+2250710074252",
+          "nom": "EP m+groupe"
+        },
+        {
+          "telephone": "+14706852445",
+          "nom": "CH  Blandine 2"
+        },
+        {
+          "telephone": "+22678124848",
+          "nom": "EP Stéphanie D Rogené"
+        },
+        {
+          "telephone": "+22676846531",
+          "nom": "EP Mr Sawadogo PCEE"
+        },
+        {
+          "telephone": "+22675107690",
+          "nom": "FL Ernestine"
+        },
+        {
+          "telephone": "+22671226685",
+          "nom": "Np Elsie"
+        },
+        {
+          "telephone": "+22671113990",
+          "nom": "Np Liliane Reine"
+        },
+        {
+          "telephone": "+22670720996",
+          "nom": "FL Ouedraogo❤️"
+        },
+        {
+          "telephone": "+22670256320",
+          "nom": "CH ZONGO/YIRA HALIMATA"
+        },
+        {
+          "telephone": "+22666156698",
+          "nom": "EP Marché Du Soir De Tengandogo"
+        },
+        {
+          "telephone": "+22605536881",
+          "nom": "Np zoungranalala7"
+        },
+        {
+          "telephone": "+22589046801",
+          "nom": "GB Mass Sanogo Epse Berté"
+        },
+        {
+          "telephone": "+22551559437",
+          "nom": "FL Affi Suzanne"
+        },
+        {
+          "telephone": "+22540187799",
+          "nom": "CH Fatou KONE😍😍 PCEE"
+        },
+        {
+          "telephone": "+22509776117",
+          "nom": "EP Clemence KONAN"
+        },
+        {
+          "telephone": "+22509032591",
+          "nom": "EP Wosso 🥰"
+        },
+        {
+          "telephone": "+22508838996",
+          "nom": "FL Marie Laurence"
+        },
+        {
+          "telephone": "+22507455136",
+          "nom": "Np Marie Chantal BROU"
+        },
+        {
+          "telephone": "+221779562015",
+          "nom": "EP Ndeye Banna"
+        },
+        {
+          "telephone": "+22677093789",
+          "nom": "AS Sitazouri"
+        },
+        {
+          "telephone": "+22676640352",
+          "nom": "AS YAMÉOGO ESTHER"
+        },
+        {
+          "telephone": "+22670746375",
+          "nom": "AS Diane Eliora 🌹🌺🌸"
+        },
+        {
+          "telephone": "+22670025070",
+          "nom": "AS Sirikatou Bello Honga"
+        },
+        {
+          "telephone": "+22559121772",
+          "nom": "AI Bkas Boutique"
+        },
+        {
+          "telephone": "+22549290705",
+          "nom": "AS alliancevies"
+        },
+        {
+          "telephone": "+22548480352",
+          "nom": "AS La Maison Rafet"
+        },
+        {
+          "telephone": "+22545207372",
+          "nom": "AS traoremariamagbe73"
+        },
+        {
+          "telephone": "+22508436005",
+          "nom": "AS akissi clementineyao"
+        },
+        {
+          "telephone": "+2250717729644",
+          "nom": "AS Zahra"
+        },
+        {
+          "telephone": "+22506650471",
+          "nom": "Moi Cote D'Ivoire"
+        },
+        {
+          "telephone": "+22505042422",
+          "nom": "AS Aminata Dramey"
+        },
+        {
+          "telephone": "+22377091704",
+          "nom": "AS effanfaneag"
+        },
+        {
+          "telephone": "+221773558063",
+          "nom": "AS Souleymane Sow"
+        },
+        {
+          "telephone": "+221771355640",
+          "nom": "AS Yousouf"
+        },
+        {
+          "telephone": "+22677439202",
+          "nom": "EP Épicerie Chef"
+        },
+        {
+          "telephone": "+22677420777",
+          "nom": "EP pouongo"
+        },
+        {
+          "telephone": "+22676675287",
+          "nom": "EP Zanga Adamou"
+        },
+        {
+          "telephone": "+22667701454",
+          "nom": "EP Ange"
+        },
+        {
+          "telephone": "+22666124040",
+          "nom": "EP Leonne Kini"
+        },
+        {
+          "telephone": "+22587066898",
+          "nom": "EP Christiane Guibero"
+        },
+        {
+          "telephone": "+22579676866",
+          "nom": "EP Carole Titus-Ouattara"
+        },
+        {
+          "telephone": "+22578041028",
+          "nom": "AI Aman"
+        },
+        {
+          "telephone": "+22557638769",
+          "nom": "EP TIEMONGO MAMINA SORO"
+        },
+        {
+          "telephone": "+22553705721",
+          "nom": "EP Corinne Gloire👑✨"
+        },
+        {
+          "telephone": "+22549892592",
+          "nom": "EP Ehoman Éméline D'AVILA"
+        },
+        {
+          "telephone": "+22509578611",
+          "nom": "EP Minan Mhérite"
+        },
+        {
+          "telephone": "+22502889044",
+          "nom": "EP adara"
+        },
+        {
+          "telephone": "+22501193424",
+          "nom": "EP Karen Irsula"
+        },
+        {
+          "telephone": "+22678108383",
+          "nom": "EP Shachoriane PCEE"
+        },
+        {
+          "telephone": "+22676571300",
+          "nom": "EP Siambo Albertine"
+        },
+        {
+          "telephone": "+22675552906",
+          "nom": "EP awadembele362"
+        },
+        {
+          "telephone": "+22672404056",
+          "nom": "EP Clothilde Ouedraogo"
+        },
+        {
+          "telephone": "+22670860084",
+          "nom": "EP Fatima Ouilma"
+        },
+        {
+          "telephone": "+22670747676",
+          "nom": "EP Mathilde PCEE"
+        },
+        {
+          "telephone": "+22670484904",
+          "nom": "EP Marcelina B.Hien"
+        },
+        {
+          "telephone": "+22670234845",
+          "nom": "EP Jeanne Kanyala"
+        },
+        {
+          "telephone": "+22670231685",
+          "nom": "EP Suzanne Telmob PCEE"
+        },
+        {
+          "telephone": "+22665414154",
+          "nom": "EP Réfectoir Des Délices"
+        },
+        {
+          "telephone": "+22665214030",
+          "nom": "EP florencebamogo15"
+        },
+        {
+          "telephone": "+22656610366",
+          "nom": "EP Jeanine"
+        },
+        {
+          "telephone": "+22559438078",
+          "nom": "EP djamilatbintkhadidjat"
+        },
+        {
+          "telephone": "+22509992381",
+          "nom": "EP Diabagate"
+        },
+        {
+          "telephone": "+22677771111",
+          "nom": "GB aspdistribution74@gmail.c"
+        },
+        {
+          "telephone": "+22672330962",
+          "nom": "EP Awa"
+        },
+        {
+          "telephone": "+22670717693",
+          "nom": "GB Roukiatou Talata Ouedraog"
+        },
+        {
+          "telephone": "+22670581268",
+          "nom": "CH sonia compaore"
+        },
+        {
+          "telephone": "+22670369930",
+          "nom": "GB vebambaodette"
+        },
+        {
+          "telephone": "+22670240941",
+          "nom": "GB Marie Chantal Nikiema"
+        },
+        {
+          "telephone": "+22670049957",
+          "nom": "GB MIHIN COLETTE"
+        },
+        {
+          "telephone": "+22668094348",
+          "nom": "GB A@Lingani🥳❤"
+        },
+        {
+          "telephone": "+22578414153",
+          "nom": "GB Marie Evlyne"
+        },
+        {
+          "telephone": "+22577072134",
+          "nom": "GB LYDIA HILLAH"
+        },
+        {
+          "telephone": "+22557710959",
+          "nom": "GB Miss Yao"
+        },
+        {
+          "telephone": "+22549694883",
+          "nom": "GB diomandeaffissiata"
+        },
+        {
+          "telephone": "+22548478087",
+          "nom": "GB ongboregina PCEE"
+        },
+        {
+          "telephone": "+22548467219",
+          "nom": "GBMarie Ange ❤️"
+        },
+        {
+          "telephone": "+22547649645",
+          "nom": "GB L'Amour surpasse Tou PCEE"
+        },
+        {
+          "telephone": "+22509168021",
+          "nom": "GB Solange N'DRI"
+        },
+        {
+          "telephone": "+22508924593",
+          "nom": "GB KAMBOU"
+        },
+        {
+          "telephone": "+22508873198",
+          "nom": "GB Gigi"
+        },
+        {
+          "telephone": "+22508759115",
+          "nom": "GB Sonia Tahi"
+        },
+        {
+          "telephone": "+22508474751",
+          "nom": "GB Cheffe Bekir"
+        },
+        {
+          "telephone": "+22508307652",
+          "nom": "GB Vanie Bi Benie"
+        },
+        {
+          "telephone": "+22507866765",
+          "nom": "GB Benjamin Gnogbo"
+        },
+        {
+          "telephone": "+22507693534",
+          "nom": "GB Marie Laure Epse Naounou"
+        },
+        {
+          "telephone": "+2250711093785",
+          "nom": ""
+        },
+        {
+          "telephone": "+2250500958520",
+          "nom": "GB Gislaine (PCEE×20)"
+        },
+        {
+          "telephone": "+22675173718",
+          "nom": "GB Orokia"
+        },
+        {
+          "telephone": "+22670201380",
+          "nom": "GB Oumar SERE"
+        },
+        {
+          "telephone": "+22670029406",
+          "nom": "GB AddhisMychaëlouTASSEMBEDO"
+        },
+        {
+          "telephone": "+22579045041",
+          "nom": "GB Mireille"
+        },
+        {
+          "telephone": "+22578233567",
+          "nom": "GB koaovaley13@gmail.com"
+        },
+        {
+          "telephone": "+22569282828",
+          "nom": "GB ROSY"
+        },
+        {
+          "telephone": "+22548235971",
+          "nom": "GB M💫J💍"
+        },
+        {
+          "telephone": "+22547712688",
+          "nom": "GB Arikey"
+        },
+        {
+          "telephone": "+22547230880",
+          "nom": "GB Natacha Sie Kone"
+        },
+        {
+          "telephone": "+22508904400",
+          "nom": "GB konatezg@gmail.com"
+        },
+        {
+          "telephone": "+22508848129",
+          "nom": "GB Floraroselyne"
+        },
+        {
+          "telephone": "+22508677092",
+          "nom": "GB Aigle ROYALE"
+        },
+        {
+          "telephone": "+22507615165",
+          "nom": "GB Adjovi"
+        },
+        {
+          "telephone": "+33759441138",
+          "nom": "EP Koubra GBANE"
+        },
+        {
+          "telephone": "+33617178773",
+          "nom": "EP Ami Carla KONE"
+        },
+        {
+          "telephone": "+22677138284",
+          "nom": "EP trust God"
+        },
+        {
+          "telephone": "+22674474661",
+          "nom": "EP ingridstellaguissou PCEE"
+        },
+        {
+          "telephone": "+22674355703",
+          "nom": "EP sawadogo zalissa"
+        },
+        {
+          "telephone": "+22671604708",
+          "nom": "EP Dame K"
+        },
+        {
+          "telephone": "+22670262367",
+          "nom": "EP PDG OUMOU OUEDRAOGO"
+        },
+        {
+          "telephone": "+22670259745",
+          "nom": "GB Koussoube Eric"
+        },
+        {
+          "telephone": "+22574526767",
+          "nom": "EP \"La Belle Épicerie\" Chez Titia"
+        },
+        {
+          "telephone": "+22558489981",
+          "nom": "EP Anzouan"
+        },
+        {
+          "telephone": "+22508134841",
+          "nom": "EP Amah"
+        },
+        {
+          "telephone": "+22501173787",
+          "nom": "EP Anon Jean-Jacques"
+        },
+        {
+          "telephone": "+22679000142",
+          "nom": "EP Kenza"
+        },
+        {
+          "telephone": "+22670339904",
+          "nom": "EP Danielle"
+        },
+        {
+          "telephone": "+22607933174",
+          "nom": "EP Rosaline"
+        },
+        {
+          "telephone": "+22567534331",
+          "nom": "EP Kisiwaa Dollie"
+        },
+        {
+          "telephone": "+22547087905",
+          "nom": "EP Yolande Dah"
+        },
+        {
+          "telephone": "+22509807331",
+          "nom": "GB rosineade01 PCEE"
+        },
+        {
+          "telephone": "+22509670573",
+          "nom": "EP Sms Poissonnerie"
+        },
+        {
+          "telephone": "+2250719157137",
+          "nom": "CH ohouoadeline"
+        },
+        {
+          "telephone": "+2250718461642",
+          "nom": ""
+        },
+        {
+          "telephone": "+22503403417",
+          "nom": "EP Rosine"
+        },
+        {
+          "telephone": "+22502035080",
+          "nom": "EP Vinceur Avec Dieu"
+        },
+        {
+          "telephone": "+22501487342",
+          "nom": "EP Yatou!"
+        },
+        {
+          "telephone": "+22678859481",
+          "nom": "EP Odile B PCEE"
+        },
+        {
+          "telephone": "+22676478840",
+          "nom": "EP SAM"
+        },
+        {
+          "telephone": "+22676276575",
+          "nom": "EP samtoumajonathan"
+        },
+        {
+          "telephone": "+22676046363",
+          "nom": "EP Elise"
+        },
+        {
+          "telephone": "+22675232325",
+          "nom": "EP KG"
+        },
+        {
+          "telephone": "+22672136101",
+          "nom": "EP blandineeugenieyameogo"
+        },
+        {
+          "telephone": "+22671964847",
+          "nom": "EP Neema 🤍Gracias🌹"
+        },
+        {
+          "telephone": "+22670986762",
+          "nom": "EP Émilie Bonkoungou"
+        },
+        {
+          "telephone": "+22670756900",
+          "nom": "EP belemtougrid"
+        },
+        {
+          "telephone": "+22670725539",
+          "nom": "EP Meredynn"
+        },
+        {
+          "telephone": "+22670382919",
+          "nom": "EP giselerayongo"
+        },
+        {
+          "telephone": "+22670307729",
+          "nom": "EP Mme Tapsoba"
+        },
+        {
+          "telephone": "+22670268716",
+          "nom": "EP Noélie Ki"
+        },
+        {
+          "telephone": "+22666898737",
+          "nom": "EP Kaboré PCEE"
+        },
+        {
+          "telephone": "+22664045145",
+          "nom": "EP NUTRIFLUX BURKINA SARL"
+        },
+        {
+          "telephone": "+22660525579",
+          "nom": "EP SAWADOGO Mariam"
+        },
+        {
+          "telephone": "+22602139496",
+          "nom": "EP Blesco Création"
+        },
+        {
+          "telephone": "+22595051565",
+          "nom": "EP Trésor"
+        },
+        {
+          "telephone": "+22558270186",
+          "nom": "EP Debi"
+        },
+        {
+          "telephone": "+22549987740",
+          "nom": "EP Patricia Aba"
+        },
+        {
+          "telephone": "+22549562350",
+          "nom": "EP louisekonan53@gmail com"
+        },
+        {
+          "telephone": "+22549156916",
+          "nom": "EP Mamou"
+        },
+        {
+          "telephone": "+22549063098",
+          "nom": "EP Sandra Michèle 🙏🏾❤️"
+        },
+        {
+          "telephone": "+22548007418",
+          "nom": "EP Debi 2"
+        },
+        {
+          "telephone": "+22541672770",
+          "nom": "EP chimene lacrisa"
+        },
+        {
+          "telephone": "+22509303909",
+          "nom": "EP Marie Koffi😍😍😍😍😍"
+        },
+        {
+          "telephone": "+22508281621",
+          "nom": "EP Dc"
+        },
+        {
+          "telephone": "+2250799482066",
+          "nom": "EP Miss AKA"
+        },
+        {
+          "telephone": "+22507854486",
+          "nom": "EP Esther prospérité"
+        },
+        {
+          "telephone": "+22507568428",
+          "nom": "EP Kien Victorine Dimanche"
+        },
+        {
+          "telephone": "+22502341433",
+          "nom": "EP Rencia 🥰 PCEE"
+        },
+        {
+          "telephone": "+22676462412",
+          "nom": "AS abelwzongo@gmail.com"
+        },
+        {
+          "telephone": "+22661652603",
+          "nom": "AS Marie Madeleine"
+        },
+        {
+          "telephone": "+22577549636",
+          "nom": "AS Winner"
+        },
+        {
+          "telephone": "+22577453840",
+          "nom": "AI Kone Mariam"
+        },
+        {
+          "telephone": "+22577416741",
+          "nom": "AS Diomande.."
+        },
+        {
+          "telephone": "+22575900679",
+          "nom": "AS Asso"
+        },
+        {
+          "telephone": "+22575490494",
+          "nom": "AS Hermann coaching"
+        },
+        {
+          "telephone": "+22571895786",
+          "nom": "AS gemibomoa15"
+        },
+        {
+          "telephone": "+22558908598",
+          "nom": "AS Koulibaly Donapo"
+        },
+        {
+          "telephone": "+22557628761",
+          "nom": "AS Dina Gnaba"
+        },
+        {
+          "telephone": "+22555621092",
+          "nom": "AS Angie Bohoua"
+        },
+        {
+          "telephone": "+22549083750",
+          "nom": "AS Coach yac levis sirima ♥️"
+        },
+        {
+          "telephone": "+22548832109",
+          "nom": "AS Moîise M@R@ 🏋🏾‍♀️"
+        },
+        {
+          "telephone": "+22548687378",
+          "nom": "ASVincent De Tehoua"
+        },
+        {
+          "telephone": "+22547227572",
+          "nom": "AS Miny Rita K"
+        },
+        {
+          "telephone": "+22542764117",
+          "nom": "AI Delima"
+        },
+        {
+          "telephone": "+22542541972",
+          "nom": "AS yahjustinekoffi955"
+        },
+        {
+          "telephone": "+22509925053",
+          "nom": "AS Ruth"
+        },
+        {
+          "telephone": "+22509805609",
+          "nom": "AS Dongo"
+        },
+        {
+          "telephone": "+22508800970",
+          "nom": "FL Anne Marie Sian"
+        },
+        {
+          "telephone": "+22507329418",
+          "nom": "AS Liliane Koffi"
+        },
+        {
+          "telephone": "+2250702100281",
+          "nom": "AS dadiegale77"
+        },
+        {
+          "telephone": "+22506184444",
+          "nom": "AI mayeulhermann"
+        },
+        {
+          "telephone": "+22502371492",
+          "nom": "AS abroannemarie34@gmail.com"
+        },
+        {
+          "telephone": "+22376448913",
+          "nom": "AS marifsimpara"
+        },
+        {
+          "telephone": "+22370070845",
+          "nom": "AS Nouhoum B Maiga"
+        },
+        {
+          "telephone": "+221776306244",
+          "nom": "AS DIOUF Niokhor"
+        },
+        {
+          "telephone": "+221774557779",
+          "nom": "AS Source D'O"
+        },
+        {
+          "telephone": "+221707290752",
+          "nom": "AS Apollinaire Diatta"
+        },
+        {
+          "telephone": "+22679464642",
+          "nom": "GB Orokbsoro5"
+        },
+        {
+          "telephone": "+22678210186",
+          "nom": "GB Isabelle Yaméogo"
+        },
+        {
+          "telephone": "+22676130101",
+          "nom": "GB Mounas"
+        },
+        {
+          "telephone": "+22670668406",
+          "nom": "EP Zongo Achille Eric"
+        },
+        {
+          "telephone": "+22664037929",
+          "nom": "GBbNoufou"
+        },
+        {
+          "telephone": "+22655464107",
+          "nom": "GB Le Coeur De Naaba🥰😍"
+        },
+        {
+          "telephone": "+22586671055",
+          "nom": ""
+        },
+        {
+          "telephone": "+22578050520",
+          "nom": "GB Sylvestre"
+        },
+        {
+          "telephone": "+22577292893",
+          "nom": "GB Euriphyle Koffi"
+        },
+        {
+          "telephone": "+22554691891",
+          "nom": "GB Tity..."
+        },
+        {
+          "telephone": "+22548960824",
+          "nom": "GB Eloe"
+        },
+        {
+          "telephone": "+22547037294",
+          "nom": "GB Dr Grah👩🏽‍⚕️🥰"
+        },
+        {
+          "telephone": "+22544341412",
+          "nom": "GB olivemarcellebodji1"
+        },
+        {
+          "telephone": "+22540512602",
+          "nom": "GB Mme TEHE Edith"
+        },
+        {
+          "telephone": "+22509775309",
+          "nom": "GB Josée"
+        },
+        {
+          "telephone": "+22508411110",
+          "nom": "GB Francine Mella"
+        },
+        {
+          "telephone": "+22508090010",
+          "nom": "GB Konan Joséphine"
+        },
+        {
+          "telephone": "+22507775017",
+          "nom": "GB Diaha Albertine"
+        },
+        {
+          "telephone": "+22507735260",
+          "nom": "GB Jeanne KOUADIO"
+        },
+        {
+          "telephone": "+22507165456",
+          "nom": "GB vachou2705"
+        },
+        {
+          "telephone": "+22507158076",
+          "nom": "Gb Zvika"
+        },
+        {
+          "telephone": "+22505769076",
+          "nom": "GB Zikeedwige PCEE"
+        },
+        {
+          "telephone": "+22503668165",
+          "nom": "GB particulier PCEE"
+        },
+        {
+          "telephone": "+22503289347",
+          "nom": "GB Koukouyai Dibro"
+        },
+        {
+          "telephone": "+22374325135",
+          "nom": "GB Badiara Monteiro KANE"
+        },
+        {
+          "telephone": "+22371550725",
+          "nom": "GB Ouambo"
+        },
+        {
+          "telephone": "+22677092636",
+          "nom": "EP Himalaya Services"
+        },
+        {
+          "telephone": "+22672914549",
+          "nom": "EP Souleyman"
+        },
+        {
+          "telephone": "+22670987995",
+          "nom": "EP Sandra"
+        },
+        {
+          "telephone": "+22670399650",
+          "nom": "EP adja"
+        },
+        {
+          "telephone": "+22670260779",
+          "nom": "EP Fatou SIRPE"
+        },
+        {
+          "telephone": "+22670180949",
+          "nom": "EP Julie SOME"
+        },
+        {
+          "telephone": "+22577015451",
+          "nom": ""
+        },
+        {
+          "telephone": "+22565255901",
+          "nom": "EP 1corinthien2:6-7"
+        },
+        {
+          "telephone": "+22552020000",
+          "nom": ""
+        },
+        {
+          "telephone": "+22547664648",
+          "nom": "EP konekafadja"
+        },
+        {
+          "telephone": "+22544232118",
+          "nom": "EP Rukiya"
+        },
+        {
+          "telephone": "+22509596914",
+          "nom": "EP 🌹Ruth 🥰Epouse ☺️Yao🥰"
+        },
+        {
+          "telephone": "+22509205102",
+          "nom": "EP Christiane N’GUESSAN"
+        },
+        {
+          "telephone": "+22508946720",
+          "nom": "EP AHI Laeticia"
+        },
+        {
+          "telephone": "+22508371078",
+          "nom": "EP OSNOU/ DJIRÉ AWA JACQUELI"
+        },
+        {
+          "telephone": "+22508104490",
+          "nom": "EP Laetitia Kouassi"
+        },
+        {
+          "telephone": "+22507959078",
+          "nom": "EP KMFY"
+        },
+        {
+          "telephone": "+22507699817",
+          "nom": "Ri154"
+        },
+        {
+          "telephone": "+22507388052",
+          "nom": "EP Fatim Sylla"
+        },
+        {
+          "telephone": "+22507316909",
+          "nom": "EP J'ai un Grand DIEU"
+        },
+        {
+          "telephone": "+2250700000154",
+          "nom": "CH Mamie's delices PCEE"
+        },
+        {
+          "telephone": "+22505014444",
+          "nom": "EP ABBA M Adama"
+        },
+        {
+          "telephone": "+22504194990",
+          "nom": "EP Hire"
+        },
+        {
+          "telephone": "+22503876955",
+          "nom": "EP Yemmy Collections"
+        },
+        {
+          "telephone": "+22676743040",
+          "nom": "EP rosekaf80"
+        },
+        {
+          "telephone": "+22676707500",
+          "nom": "EP djamouel91"
+        },
+        {
+          "telephone": "+22672833155",
+          "nom": "EP Carolle Diallo"
+        },
+        {
+          "telephone": "+22671520533",
+          "nom": "EP SANDWIDI PCEE"
+        },
+        {
+          "telephone": "+22670460954",
+          "nom": "EP D!D!"
+        },
+        {
+          "telephone": "+22670263269",
+          "nom": "EP Germaine YAMEOGO"
+        },
+        {
+          "telephone": "+22670050083",
+          "nom": "EP angeleouangrawa"
+        },
+        {
+          "telephone": "+22656930521",
+          "nom": "EP Halima"
+        },
+        {
+          "telephone": "+22596169189",
+          "nom": "EP ade wale"
+        },
+        {
+          "telephone": "+22588644222",
+          "nom": "EP MA ‘BI SHOP"
+        },
+        {
+          "telephone": "+22559249343",
+          "nom": "EP hilaria Pany"
+        },
+        {
+          "telephone": "+22557277569",
+          "nom": "EP soro fatou"
+        },
+        {
+          "telephone": "+22549823207",
+          "nom": "EP DES PERLES ERICA"
+        },
+        {
+          "telephone": "+22548279378",
+          "nom": "EP Mariette BINI PCEE"
+        },
+        {
+          "telephone": "+22544448099",
+          "nom": "EP Gnahore Fallone"
+        },
+        {
+          "telephone": "+22509418838",
+          "nom": "EP Ndeye Yass PCEE"
+        },
+        {
+          "telephone": "+22509045806",
+          "nom": "EP faveur ghadoux❣️☘️"
+        },
+        {
+          "telephone": "+22508775977",
+          "nom": "EP Ange GUELA"
+        },
+        {
+          "telephone": "+22508588007",
+          "nom": "EP Fatim Sala"
+        },
+        {
+          "telephone": "+22508585785",
+          "nom": "EP Ivoire (PCEE ×2)"
+        },
+        {
+          "telephone": "+22508060465",
+          "nom": "EP Isabelle"
+        },
+        {
+          "telephone": "+22507994238",
+          "nom": "EP MC GUIEBY epse N'GUESSAN"
+        },
+        {
+          "telephone": "+22507827551",
+          "nom": "EP Alimanta Zouré"
+        },
+        {
+          "telephone": "+22506421530",
+          "nom": "EP Mah Alida"
+        },
+        {
+          "telephone": "+22897704516",
+          "nom": "EP Bruce 228"
+        },
+        {
+          "telephone": "+22897028790",
+          "nom": "EP Esther Mireille"
+        },
+        {
+          "telephone": "+22890848755",
+          "nom": "EP EFANAM _LO"
+        },
+        {
+          "telephone": "+22890031379",
+          "nom": "EP Matagbamonlè"
+        },
+        {
+          "telephone": "+22879854178",
+          "nom": "EP Nopelia Trading Company"
+        },
+        {
+          "telephone": "+22678212911",
+          "nom": "EP Diana"
+        },
+        {
+          "telephone": "+22677222330",
+          "nom": "EP Ève YALDIA"
+        },
+        {
+          "telephone": "+22672384218",
+          "nom": "EP axelle"
+        },
+        {
+          "telephone": "+22670999245",
+          "nom": "EP ouedraogokindofatemehmaso"
+        },
+        {
+          "telephone": "+22670932749",
+          "nom": "EP Disponible"
+        },
+        {
+          "telephone": "+22670574686",
+          "nom": "EP Kaboré Adama"
+        },
+        {
+          "telephone": "+22664233938",
+          "nom": "EP Agnès KABORE"
+        },
+        {
+          "telephone": "+22567486807",
+          "nom": "EP Tioté Sékou"
+        },
+        {
+          "telephone": "+22557883443",
+          "nom": "EP kidohflorencegina"
+        },
+        {
+          "telephone": "+22549080344",
+          "nom": "EP Fidélité KOUACOU"
+        },
+        {
+          "telephone": "+22509985115",
+          "nom": "EP Lumière"
+        },
+        {
+          "telephone": "+22508920238",
+          "nom": "EP Edvyj-Cynthia OKPO"
+        },
+        {
+          "telephone": "+22508474457",
+          "nom": "EP florasabinezougbo"
+        },
+        {
+          "telephone": "+22508287116",
+          "nom": "EP CLEMSO le béni de Dieu"
+        },
+        {
+          "telephone": "+22505870830",
+          "nom": "EP Epices"
+        },
+        {
+          "telephone": "+22503131930",
+          "nom": "EP Bénédicte"
+        },
+        {
+          "telephone": "+22673856596",
+          "nom": "EP Farida OUEDRAOGO"
+        },
+        {
+          "telephone": "+22671529886",
+          "nom": "EP Lyne Eve"
+        },
+        {
+          "telephone": "+22671527335",
+          "nom": "EP COULIBALY Edith"
+        },
+        {
+          "telephone": "+22671353420",
+          "nom": "EP 🌹🌹 GALBANI 🌹🌹"
+        },
+        {
+          "telephone": "+22670203795",
+          "nom": "EP huboue"
+        },
+        {
+          "telephone": "+22670112111",
+          "nom": "EP Natouba Nathalie Hélène C"
+        },
+        {
+          "telephone": "+22667787105",
+          "nom": ""
+        },
+        {
+          "telephone": "+22666705262",
+          "nom": "EP adissagansonre"
+        },
+        {
+          "telephone": "+22661252949",
+          "nom": "EP Elue de Dieu"
+        },
+        {
+          "telephone": "+22657755705",
+          "nom": "EP dekpohefoe90"
+        },
+        {
+          "telephone": "+22558427061",
+          "nom": "EP Tebily Oprie"
+        },
+        {
+          "telephone": "+22557829599",
+          "nom": "EP Brou Angèle"
+        },
+        {
+          "telephone": "+22548664292",
+          "nom": "EP Sweet Hope Bazar"
+        },
+        {
+          "telephone": "+22509843639",
+          "nom": "EP Francette"
+        },
+        {
+          "telephone": "+22509263377",
+          "nom": "EP kofilys"
+        },
+        {
+          "telephone": "+22509253406",
+          "nom": "EP achoukpc"
+        },
+        {
+          "telephone": "+22509181093",
+          "nom": "EP edoukoukouaomarie"
+        },
+        {
+          "telephone": "+22507570487",
+          "nom": ""
+        },
+        {
+          "telephone": "+22390245600",
+          "nom": "EP 🐜 Drabo"
+        },
+        {
+          "telephone": "+22678410830",
+          "nom": "EP marielleoued77"
+        },
+        {
+          "telephone": "+22676139393",
+          "nom": "EP Alimata Sore"
+        },
+        {
+          "telephone": "+22675103323",
+          "nom": "EP kaboresylvie2017"
+        },
+        {
+          "telephone": "+22674694914",
+          "nom": "EP Belemviré Wendyam Angela"
+        },
+        {
+          "telephone": "+22672134429",
+          "nom": "EP claudinebelemnaba"
+        },
+        {
+          "telephone": "+22670995573",
+          "nom": "EP tierowesomda"
+        },
+        {
+          "telephone": "+22670284971",
+          "nom": "EP Jacky Traoré/ FOFANA"
+        },
+        {
+          "telephone": "+22670115944",
+          "nom": "EP Ellina"
+        },
+        {
+          "telephone": "+22670076289",
+          "nom": "EP Rahamata"
+        },
+        {
+          "telephone": "+22668655322",
+          "nom": "EP Saoudata Savadogo"
+        },
+        {
+          "telephone": "+22667323239",
+          "nom": "EP Carole"
+        },
+        {
+          "telephone": "+22667000033",
+          "nom": "EP L'épicerie des Trois"
+        },
+        {
+          "telephone": "+22665699599",
+          "nom": "EP L Éternel"
+        },
+        {
+          "telephone": "+22664620168",
+          "nom": "EP Fatou Baki PCEE"
+        },
+        {
+          "telephone": "+22660312899",
+          "nom": "EP Damiba Nadège🌹"
+        },
+        {
+          "telephone": "+22676590333",
+          "nom": "EP BeoNeeré Centre De Format"
+        },
+        {
+          "telephone": "+22676324741",
+          "nom": "EP willfried98"
+        },
+        {
+          "telephone": "+22676105565",
+          "nom": "EP Lam"
+        },
+        {
+          "telephone": "+22670267268",
+          "nom": "EP AICHA SANA TANKOANO"
+        },
+        {
+          "telephone": "+22606803450",
+          "nom": "EP kadidiatoukaba582"
+        },
+        {
+          "telephone": "+22589760739",
+          "nom": "EP Chez Mc Claver’s"
+        },
+        {
+          "telephone": "+22578691668",
+          "nom": "EP sahoaannick1"
+        },
+        {
+          "telephone": "+22559475740",
+          "nom": "EP Awa Kone Yasmine"
+        },
+        {
+          "telephone": "+22559423048",
+          "nom": "EP nguettaapia"
+        },
+        {
+          "telephone": "+22558298193",
+          "nom": "GB MARIE PRUDENCE WADJA KOF"
+        },
+        {
+          "telephone": "+22547905370",
+          "nom": "EP Tytyfa"
+        },
+        {
+          "telephone": "+22543806071",
+          "nom": "EP Arnaud Saho"
+        },
+        {
+          "telephone": "+22509082401",
+          "nom": "EP angelaestherkouakou"
+        },
+        {
+          "telephone": "+2250701985618",
+          "nom": "EP Josiane Tiehi"
+        },
+        {
+          "telephone": "+22677067105",
+          "nom": "AI tindanoisabelle6"
+        },
+        {
+          "telephone": "+22672644524",
+          "nom": "AI Ariane Dr"
+        },
+        {
+          "telephone": "+22672106391",
+          "nom": "AI kantionoyvettemarie3"
+        },
+        {
+          "telephone": "+22671599586",
+          "nom": "AI Natacha Dr"
+        },
+        {
+          "telephone": "+22671032215",
+          "nom": "AI Me Ouedraogo"
+        },
+        {
+          "telephone": "+22670288122",
+          "nom": ""
+        },
+        {
+          "telephone": "+22667353808",
+          "nom": "AI alimatak280gmail.Com"
+        },
+        {
+          "telephone": "+22658217574",
+          "nom": "AI Rabdo Fatoumata"
+        },
+        {
+          "telephone": "+22657969972",
+          "nom": "AI Agnès Dr"
+        },
+        {
+          "telephone": "+22656663329",
+          "nom": "AI Yago Josiane"
+        },
+        {
+          "telephone": "+22652919933",
+          "nom": "AI rasmatabamos"
+        },
+        {
+          "telephone": "+22598491076",
+          "nom": "EP AI Yves.."
+        },
+        {
+          "telephone": "+22565255487",
+          "nom": "AI Désirée Danon"
+        }
+      ],
+      "results": [
+        {
+          "to": "22676858214@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676066842@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22675681818@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22674916199@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670016786@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22664977093@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22660832768@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22655856064@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22568422966@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22558942216@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22557808134@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548918123@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548389966@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548236170@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547609016@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547293408@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508280957@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508241345@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507752487@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507148802@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507108626@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22505961885@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22501833376@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22678876689@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676432616@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22675295723@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671007844@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670727652@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670437521@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670278630@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22667201302@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22666409968@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22584793474@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22578731938@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22577028709@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22551444146@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547439500@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22541391805@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509848785@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508703844@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508499195@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508104816@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22503219414@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22678720057@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22674988898@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22674369530@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670358893@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670129992@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22665659315@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22657789303@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22607075353@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22585763997@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22559620914@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22558081669@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22557313013@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509959239@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509408054@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507883108@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507135330@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250710074252@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "14706852445@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22678124848@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676846531@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22675107690@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671226685@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671113990@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670720996@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670256320@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22666156698@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22605536881@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22589046801@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22551559437@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22540187799@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509776117@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509032591@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508838996@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507455136@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "221779562015@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22677093789@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676640352@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670746375@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670025070@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22559121772@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549290705@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548480352@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22545207372@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508436005@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250717729644@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22506650471@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22505042422@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22377091704@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "221773558063@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "221771355640@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22677439202@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22677420777@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676675287@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22667701454@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22666124040@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22587066898@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22579676866@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22578041028@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22557638769@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22553705721@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549892592@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509578611@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22502889044@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22501193424@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22678108383@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676571300@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22675552906@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22672404056@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670860084@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670747676@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670484904@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670234845@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670231685@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22665414154@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22665214030@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22656610366@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22559438078@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509992381@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22677771111@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22672330962@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670717693@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670581268@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670369930@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670240941@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670049957@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22668094348@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22578414153@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22577072134@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22557710959@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549694883@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548478087@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548467219@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547649645@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509168021@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508924593@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508873198@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508759115@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508474751@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508307652@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507866765@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507693534@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250711093785@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250500958520@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22675173718@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670201380@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670029406@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22579045041@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22578233567@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22569282828@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548235971@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547712688@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547230880@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508904400@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508848129@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508677092@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507615165@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "33759441138@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "33617178773@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22677138284@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22674474661@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22674355703@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671604708@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670262367@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670259745@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22574526767@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22558489981@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508134841@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22501173787@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22679000142@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670339904@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22607933174@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22567534331@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547087905@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509807331@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509670573@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250719157137@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250718461642@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22503403417@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22502035080@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22501487342@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22678859481@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676478840@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676276575@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676046363@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22675232325@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22672136101@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671964847@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670986762@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670756900@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670725539@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670382919@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670307729@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670268716@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22666898737@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22664045145@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22660525579@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22602139496@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22595051565@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22558270186@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549987740@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549562350@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549156916@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549063098@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548007418@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22541672770@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509303909@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508281621@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250799482066@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507854486@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507568428@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22502341433@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676462412@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22661652603@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22577549636@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22577453840@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22577416741@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22575900679@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22575490494@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22571895786@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22558908598@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22557628761@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22555621092@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549083750@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548832109@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548687378@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547227572@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22542764117@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22542541972@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509925053@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509805609@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508800970@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507329418@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250702100281@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22506184444@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22502371492@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22376448913@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22370070845@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "221776306244@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "221774557779@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "221707290752@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22679464642@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22678210186@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676130101@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670668406@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22664037929@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22655464107@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22586671055@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22578050520@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22577292893@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22554691891@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548960824@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547037294@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22544341412@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22540512602@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509775309@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508411110@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508090010@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507775017@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507735260@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507165456@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507158076@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22505769076@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22503668165@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22503289347@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22374325135@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22371550725@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22677092636@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22672914549@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670987995@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670399650@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670260779@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670180949@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22577015451@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22565255901@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22552020000@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547664648@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22544232118@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509596914@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509205102@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508946720@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508371078@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508104490@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507959078@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507699817@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507388052@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507316909@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250700000154@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22505014444@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22504194990@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22503876955@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676743040@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676707500@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22672833155@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671520533@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670460954@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670263269@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670050083@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22656930521@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22596169189@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22588644222@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22559249343@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22557277569@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549823207@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548279378@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22544448099@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509418838@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509045806@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508775977@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508588007@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508585785@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508060465@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507994238@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507827551@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22506421530@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22897704516@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22897028790@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22890848755@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22890031379@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22879854178@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22678212911@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22677222330@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22672384218@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670999245@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670932749@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670574686@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22664233938@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22567486807@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22557883443@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22549080344@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509985115@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508920238@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508474457@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22508287116@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22505870830@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22503131930@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22673856596@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671529886@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671527335@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671353420@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670203795@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670112111@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22667787105@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22666705262@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22661252949@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22657755705@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22558427061@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22557829599@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22548664292@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509843639@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509263377@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509253406@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509181093@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22507570487@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22390245600@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22678410830@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676139393@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22675103323@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22674694914@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22672134429@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670995573@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670284971@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670115944@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670076289@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22668655322@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22667323239@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22667000033@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22665699599@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22664620168@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22660312899@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676590333@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676324741@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22676105565@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670267268@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22606803450@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22589760739@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22578691668@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22559475740@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22559423048@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22558298193@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22547905370@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22543806071@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22509082401@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "2250701985618@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22677067105@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22672644524@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22672106391@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671599586@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22671032215@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22670288122@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22667353808@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22658217574@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22657969972@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22656663329@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22652919933@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22598491076@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        },
+        {
+          "to": "22565255487@s.whatsapp.net",
+          "status": "pending",
+          "timestamp": null
+        }
+      ],
+      "sentContactIds": [],
+      "pendingContactIds": [
+        "22676858214",
+        "22676066842",
+        "22675681818",
+        "22674916199",
+        "22670016786",
+        "22664977093",
+        "22660832768",
+        "22655856064",
+        "22568422966",
+        "22558942216",
+        "22557808134",
+        "22548918123",
+        "22548389966",
+        "22548236170",
+        "22547609016",
+        "22547293408",
+        "22508280957",
+        "22508241345",
+        "22507752487",
+        "22507148802",
+        "22507108626",
+        "22505961885",
+        "22501833376",
+        "22678876689",
+        "22676432616",
+        "22675295723",
+        "22671007844",
+        "22670727652",
+        "22670437521",
+        "22670278630",
+        "22667201302",
+        "22666409968",
+        "22584793474",
+        "22578731938",
+        "22577028709",
+        "22551444146",
+        "22547439500",
+        "22541391805",
+        "22509848785",
+        "22508703844",
+        "22508499195",
+        "22508104816",
+        "22503219414",
+        "22678720057",
+        "22674988898",
+        "22674369530",
+        "22670358893",
+        "22670129992",
+        "22665659315",
+        "22657789303",
+        "22607075353",
+        "22585763997",
+        "22559620914",
+        "22558081669",
+        "22557313013",
+        "22509959239",
+        "22509408054",
+        "22507883108",
+        "22507135330",
+        "2250710074252",
+        "14706852445",
+        "22678124848",
+        "22676846531",
+        "22675107690",
+        "22671226685",
+        "22671113990",
+        "22670720996",
+        "22670256320",
+        "22666156698",
+        "22605536881",
+        "22589046801",
+        "22551559437",
+        "22540187799",
+        "22509776117",
+        "22509032591",
+        "22508838996",
+        "22507455136",
+        "221779562015",
+        "22677093789",
+        "22676640352",
+        "22670746375",
+        "22670025070",
+        "22559121772",
+        "22549290705",
+        "22548480352",
+        "22545207372",
+        "22508436005",
+        "2250717729644",
+        "22506650471",
+        "22505042422",
+        "22377091704",
+        "221773558063",
+        "221771355640",
+        "22677439202",
+        "22677420777",
+        "22676675287",
+        "22667701454",
+        "22666124040",
+        "22587066898",
+        "22579676866",
+        "22578041028",
+        "22557638769",
+        "22553705721",
+        "22549892592",
+        "22509578611",
+        "22502889044",
+        "22501193424",
+        "22678108383",
+        "22676571300",
+        "22675552906",
+        "22672404056",
+        "22670860084",
+        "22670747676",
+        "22670484904",
+        "22670234845",
+        "22670231685",
+        "22665414154",
+        "22665214030",
+        "22656610366",
+        "22559438078",
+        "22509992381",
+        "22677771111",
+        "22672330962",
+        "22670717693",
+        "22670581268",
+        "22670369930",
+        "22670240941",
+        "22670049957",
+        "22668094348",
+        "22578414153",
+        "22577072134",
+        "22557710959",
+        "22549694883",
+        "22548478087",
+        "22548467219",
+        "22547649645",
+        "22509168021",
+        "22508924593",
+        "22508873198",
+        "22508759115",
+        "22508474751",
+        "22508307652",
+        "22507866765",
+        "22507693534",
+        "2250711093785",
+        "2250500958520",
+        "22675173718",
+        "22670201380",
+        "22670029406",
+        "22579045041",
+        "22578233567",
+        "22569282828",
+        "22548235971",
+        "22547712688",
+        "22547230880",
+        "22508904400",
+        "22508848129",
+        "22508677092",
+        "22507615165",
+        "33759441138",
+        "33617178773",
+        "22677138284",
+        "22674474661",
+        "22674355703",
+        "22671604708",
+        "22670262367",
+        "22670259745",
+        "22574526767",
+        "22558489981",
+        "22508134841",
+        "22501173787",
+        "22679000142",
+        "22670339904",
+        "22607933174",
+        "22567534331",
+        "22547087905",
+        "22509807331",
+        "22509670573",
+        "2250719157137",
+        "2250718461642",
+        "22503403417",
+        "22502035080",
+        "22501487342",
+        "22678859481",
+        "22676478840",
+        "22676276575",
+        "22676046363",
+        "22675232325",
+        "22672136101",
+        "22671964847",
+        "22670986762",
+        "22670756900",
+        "22670725539",
+        "22670382919",
+        "22670307729",
+        "22670268716",
+        "22666898737",
+        "22664045145",
+        "22660525579",
+        "22602139496",
+        "22595051565",
+        "22558270186",
+        "22549987740",
+        "22549562350",
+        "22549156916",
+        "22549063098",
+        "22548007418",
+        "22541672770",
+        "22509303909",
+        "22508281621",
+        "2250799482066",
+        "22507854486",
+        "22507568428",
+        "22502341433",
+        "22676462412",
+        "22661652603",
+        "22577549636",
+        "22577453840",
+        "22577416741",
+        "22575900679",
+        "22575490494",
+        "22571895786",
+        "22558908598",
+        "22557628761",
+        "22555621092",
+        "22549083750",
+        "22548832109",
+        "22548687378",
+        "22547227572",
+        "22542764117",
+        "22542541972",
+        "22509925053",
+        "22509805609",
+        "22508800970",
+        "22507329418",
+        "2250702100281",
+        "22506184444",
+        "22502371492",
+        "22376448913",
+        "22370070845",
+        "221776306244",
+        "221774557779",
+        "221707290752",
+        "22679464642",
+        "22678210186",
+        "22676130101",
+        "22670668406",
+        "22664037929",
+        "22655464107",
+        "22586671055",
+        "22578050520",
+        "22577292893",
+        "22554691891",
+        "22548960824",
+        "22547037294",
+        "22544341412",
+        "22540512602",
+        "22509775309",
+        "22508411110",
+        "22508090010",
+        "22507775017",
+        "22507735260",
+        "22507165456",
+        "22507158076",
+        "22505769076",
+        "22503668165",
+        "22503289347",
+        "22374325135",
+        "22371550725",
+        "22677092636",
+        "22672914549",
+        "22670987995",
+        "22670399650",
+        "22670260779",
+        "22670180949",
+        "22577015451",
+        "22565255901",
+        "22552020000",
+        "22547664648",
+        "22544232118",
+        "22509596914",
+        "22509205102",
+        "22508946720",
+        "22508371078",
+        "22508104490",
+        "22507959078",
+        "22507699817",
+        "22507388052",
+        "22507316909",
+        "2250700000154",
+        "22505014444",
+        "22504194990",
+        "22503876955",
+        "22676743040",
+        "22676707500",
+        "22672833155",
+        "22671520533",
+        "22670460954",
+        "22670263269",
+        "22670050083",
+        "22656930521",
+        "22596169189",
+        "22588644222",
+        "22559249343",
+        "22557277569",
+        "22549823207",
+        "22548279378",
+        "22544448099",
+        "22509418838",
+        "22509045806",
+        "22508775977",
+        "22508588007",
+        "22508585785",
+        "22508060465",
+        "22507994238",
+        "22507827551",
+        "22506421530",
+        "22897704516",
+        "22897028790",
+        "22890848755",
+        "22890031379",
+        "22879854178",
+        "22678212911",
+        "22677222330",
+        "22672384218",
+        "22670999245",
+        "22670932749",
+        "22670574686",
+        "22664233938",
+        "22567486807",
+        "22557883443",
+        "22549080344",
+        "22509985115",
+        "22508920238",
+        "22508474457",
+        "22508287116",
+        "22505870830",
+        "22503131930",
+        "22673856596",
+        "22671529886",
+        "22671527335",
+        "22671353420",
+        "22670203795",
+        "22670112111",
+        "22667787105",
+        "22666705262",
+        "22661252949",
+        "22657755705",
+        "22558427061",
+        "22557829599",
+        "22548664292",
+        "22509843639",
+        "22509263377",
+        "22509253406",
+        "22509181093",
+        "22507570487",
+        "22390245600",
+        "22678410830",
+        "22676139393",
+        "22675103323",
+        "22674694914",
+        "22672134429",
+        "22670995573",
+        "22670284971",
+        "22670115944",
+        "22670076289",
+        "22668655322",
+        "22667323239",
+        "22667000033",
+        "22665699599",
+        "22664620168",
+        "22660312899",
+        "22676590333",
+        "22676324741",
+        "22676105565",
+        "22670267268",
+        "22606803450",
+        "22589760739",
+        "22578691668",
+        "22559475740",
+        "22559423048",
+        "22558298193",
+        "22547905370",
+        "22543806071",
+        "22509082401",
+        "2250701985618",
+        "22677067105",
+        "22672644524",
+        "22672106391",
+        "22671599586",
+        "22671032215",
+        "22670288122",
+        "22667353808",
+        "22658217574",
+        "22657969972",
+        "22656663329",
+        "22652919933",
+        "22598491076",
+        "22565255487"
+      ],
+      "options": {
+        "delaySeconds": 15,
+        "minDelayMs": 45000,
+        "maxDelayMs": 120000,
+        "batchSize": 20,
+        "batchPauseSeconds": 20,
+        "sequenceDelayMinMs": 10000,
+        "sequenceDelayMaxMs": 15000,
+        "sequence": [
+          {
+            "type": "text",
+            "text": "{Bonjour|Bonsoir} {cher|chère} {nom} ! 🙏✨\n{Je vous prie d'agréer mes sincères excuses pour cette intrusion inopinée dans votre boîte de réception.|Veuillez m'excuser pour cette intrusion inopinée dans vos messages.|Pardonnez-moi cette intrusion inopinée dans votre inbox.}\n{J'espère que vous vous portez à merveille ainsi que vos proches !|J'espère que vous allez très bien et que votre journée se passe dans les meilleures conditions.|J'espère que tout va pour le mieux de votre côté !} 🌟\n\n{Je me permets de vous contacter rapidement|Je vous adresse cette petite note avec tout mon respect|Je viens très respectueusement vers vous} parce que nous lançons une *VENTE FLASH EXCEPTIONNELLE* {aujourd'hui seulement|uniquement aujourd'hui} ! ⚡🔥\n\nPour *5 000 FCFA SEULEMENT* ({au lieu du tarif normal|au lieu du prix habituel|au lieu du tarif officiel}), vous bénéficiez d’un accès {direct et illimité|immédiat et complet} à TOUTES NOS FORMATIONS sur {notre plateforme officielle|notre espace de formation} :\n\n🍳 {Cuisine & Pâtisserie|Gastronomie & Pâtisserie moderne} (plus de 40 recettes détaillées !)\n🥩 {Grillades|Techniques de grillades}\n🧂 {Épicerie|Secrets d'épicerie}\n🍲 Fabrication de bouillon bio\n🌭 {Charcuterie artisanale|Charcuterie fait maison}\n🐔 Élevage de volaille\n🥗 {Alimentation saine et diététique|Nutrition saine & diététique}\n👶 Alimentation infantile\n🍊 {JUS DE FRUIT THÉRAPEUTIQUES|Jus de fruits thérapeutiques & naturels}\n\n🎁 CE QUE VOUS REÇOVEZ IMMÉDIATEMENT : 📥\n• {Téléchargement direct des cours|Accès instantané aux cours}\n📄 {Fichiers PDF complets téléchargeables|Documents PDF détaillés et téléchargeables}\n📜 Attestations disponibles automatiquement sur la plateforme\n🤝 Mon accompagnement personnel pour vous guider étape par étape\n\n⚠️ ATTENTION : {Ce prix cadeau|Cette offre exceptionnelle|Ce tarif promo} de 5 000 FCFA est valable {aujourd'hui jusqu'à minuit (00h00) seulement|jusqu'à ce soir minuit uniquement} ! ⏳\n\n🌐 {Cliquez ici pour accéder directement à la plateforme|Rejoignez la plateforme directement ici|Accédez directement à l'espace de formation ici} : https://riea-afrique-web.web.app/\n\n{N'hésitez pas à m'écrire|Laissez-moi un message|Contactez-moi} dès que vous avez cliqué ou si vous souhaitez que je vous aide à valider votre accès ! 🤝\n📥 Contacts directs : (+226) 64977093 / (+225) 0506650471 🔥"
+          },
+          {
+            "type": "media",
+            "mediaFile": "KEY-E3836704-2026_ebb9822c-7f24-4839-982d-6760e76ff481_1.bin",
+            "mediaBlobSha": "ba0b77aed8653609855b081e0ece52c7ab200a98",
+            "mimetype": "image/png",
+            "filename": "1788958141956.png",
+            "forceDocument": false
+          }
+        ]
+      }
     }
   ]
 }
