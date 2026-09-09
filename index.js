@@ -4161,8 +4161,15 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
         };
       } else {
         // Le LLM a posé des questions (brief incomplet) — réponse texte
-        // simple, aucun bouton d'action.
-        assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString() };
+        // simple, aucun bouton d'action. isPlanningQuestion (voir
+        // studioBuildBubble côté frontend) : BUG CORRIGÉ — sans ce marqueur,
+        // cette question de brief avait exactement la même forme qu'une
+        // vraie réponse de chat, et le frontend lui collait à tort les
+        // boutons "📌 Relance Manuelle"/"🚀 Campagne Auto" (prévus pour du
+        // texte de vente fini, pas pour "Quel est le nom de votre
+        // restaurant ?") — ce qui donnait l'impression que le Studio IA ne
+        // générait jamais de vrai visuel.
+        assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString(), isPlanningQuestion: true };
       }
     } else {
       // Réponse exclusivement via la cascade d'API IA (Groq -> Gemini ->
@@ -4198,7 +4205,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
             actions: [{ label: '🎨 Générer l\'affiche HD', action: 'generate_image', payload: parsed }],
           };
         } else {
-          assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString() };
+          assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString(), isPlanningQuestion: true };
         }
       } else {
         await sleep(1500 + Math.floor(Math.random() * 1500));

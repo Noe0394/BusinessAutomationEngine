@@ -7146,7 +7146,14 @@
           actions.appendChild(btn);
         });
         bubble.appendChild(actions);
-      } else if (msg.role === 'assistant' && !msg.media && !msg.pendingJobToken) {
+      } else if (msg.role === 'assistant' && !msg.media && !msg.pendingJobToken && !msg.isPlanningQuestion) {
+        // isPlanningQuestion (voir index.js) : une question de clarification
+        // du brief affiche/vidéo/livre (ex: "Quel est le nom de votre
+        // restaurant ?") n'est PAS un texte de vente fini — jamais de bouton
+        // "Relance Manuelle"/"Campagne Auto" dessus (BUG CORRIGÉ : ces
+        // boutons apparaissaient à tort sur les questions elles-mêmes,
+        // laissant croire que le Studio IA ne produisait jamais de vrai
+        // visuel).
         // "📌 Utiliser pour la campagne" : transmet le texte de CYRUS vers la
         // Relance Manuelle Express (alimente immédiatement le moteur de
         // Spintax local via relance-intention) OU vers la campagne
