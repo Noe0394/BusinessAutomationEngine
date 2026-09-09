@@ -1,6 +1,6 @@
 {
   "tenantId": "KEY-E3836704-2026",
-  "activeCampaignId": "ebb9822c-7f24-4839-982d-6760e76ff481",
+  "activeCampaignId": null,
   "networkHealth": {
     "consecutiveSlowSends": 0,
     "consecutiveOverloadFailures": 0,
@@ -4053,9 +4053,9 @@
       "skippedDuplicates": 0,
       "messageHash": "3b84d3dde097af521e536494",
       "duplicateWindowHours": 72,
-      "status": "running",
-      "paused": false,
-      "userPaused": false,
+      "status": "paused",
+      "paused": true,
+      "userPaused": true,
       "stopRequested": false,
       "superseded": false,
       "createdAt": "2026-09-09T13:28:36.387Z",
