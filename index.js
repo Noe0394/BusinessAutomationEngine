@@ -46,7 +46,7 @@ const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const imageLinkStore = require('./lib/media/imageLinkStore');
 const videoAiEngine = require('./lib/media/videoAiEngine');
 const imageAiEngine = require('./lib/media/imageAiEngine');
-const imageCompositorEngine = require('./lib/media/imageCompositorEngine');
+const posterTemplateEngine = require('./lib/media/posterTemplateEngine');
 const storyboardEngine = require('./lib/media/storyboardEngine');
 const videoMixerEngine = require('./lib/media/videoMixerEngine');
 const messageHistory = require('./lib/messageHistory');
@@ -3988,11 +3988,22 @@ async function planOrAsk(skillKey, text, extraInstruction, history) {
   return { raw: trimmed, parsed };
 }
 
+// BUG CORRIGÉ (retour utilisateur, exemples de vraies affiches pro
+// fournis) : l'ancien schéma (titleText/priceText/contactText/badgeText
+// seuls) produisait un simple visuel photo + 2-3 lignes de texte plaqué
+// dessus (voir imageCompositorEngine.js, ffmpeg drawtext) — jamais la mise
+// en page structurée (en-tête logo/marque, liste de bénéfices à puces,
+// bandeau de prix) des exemples réels. Le rendu passe désormais par un
+// vrai moteur de templates (voir lib/media/posterTemplateEngine.js, satori
+// + resvg) que ce schéma alimente en contenu structuré plutôt qu'en texte
+// brut à positions fixes.
 function planImage(text, history) {
   return planOrAsk('designDirectorSkill', text, [
-    'Tu prépares une affiche marketing pour le Studio IA de CYRUS SUPER ASSISTANT.',
-    'Informations importantes à obtenir si absentes de la demande : le prix ou l\'offre exacte, la date limite/durée, le contact (téléphone/WhatsApp) à afficher — invite aussi le client à importer son logo ou une photo du produit directement dans le tchat s\'il ne l\'a pas déjà fait.',
-    'Format JSON si prêt : {"ready":true,"summary":"résumé en français de l\'affiche qui va être créée","imagePromptEnglish":"prompt image professionnel ultra détaillé en anglais","titleText":"titre court","priceText":"prix/offre ou chaîne vide","contactText":"contact ou chaîne vide","badgeText":"badge court ou chaîne vide"}',
+    'Tu prépares une affiche marketing PROFESSIONNELLE (mise en page structurée façon flyer de graphiste — en-tête marque, liste de bénéfices, bandeau de prix, pied de page contact) pour le Studio IA de CYRUS SUPER ASSISTANT.',
+    'Informations importantes à obtenir si absentes de la demande : le nom de l\'entreprise/marque, 3 à 5 bénéfices ou points clés à mettre en avant (courts, percutants), le prix ou l\'offre exacte, le contact (téléphone/WhatsApp) à afficher — invite aussi le client à importer son logo ou une photo du produit directement dans le tchat s\'il ne l\'a pas déjà fait.',
+    'Choisis "template":"product_photo" si une vraie photo du produit/lieu apporte de la valeur (restauration, produit physique, immobilier...), sinon "template":"icons_list" (service, formation, logiciel, offre abstraite) — dans ce second cas N\'INCLUS PAS imagePromptEnglish (aucune photo ne sera générée).',
+    'Choisis "colorTheme" parmi exactement : green, blue, red, purple, brown — celui qui correspond le mieux au secteur/à la marque.',
+    'Format JSON si prêt : {"ready":true,"summary":"résumé en français de l\'affiche qui va être créée","template":"icons_list ou product_photo","businessName":"nom de l\'entreprise","tagline":"accroche courte et percutante (1 phrase)","bulletPoints":[{"text":"bénéfice 1 court"},{"text":"bénéfice 2 court"},{"text":"bénéfice 3 court"}],"priceText":"prix/offre ou chaîne vide","badgeText":"badge court ou chaîne vide (ex: PROMO, NOUVEAU)","contactText":"contact ou chaîne vide","colorTheme":"green|blue|red|purple|brown","imagePromptEnglish":"UNIQUEMENT si template=product_photo : prompt photo professionnel ultra détaillé en anglais"}',
   ].join('\n'), history);
 }
 
@@ -4033,27 +4044,39 @@ function loadAttachmentBuffer(attachment) {
 }
 
 // ---------- Exécution des actions (clic sur un bouton du tchat) ----------
+// Template "product_photo" (voir planImage/posterTemplateEngine.js) : une
+// vraie photo est générée via FLUX/Pollinations (imageAiEngine.js) et
+// intégrée au template comme hero visuel. Template "icons_list" : aucun
+// appel de génération d'image — la mise en page structurée (texte + icônes)
+// suffit et évite un coût/délai FLUX inutile pour une offre abstraite.
 async function executeGenerateImage(payload, messages) {
-  const prompt = `${String(payload.imagePromptEnglish || '').slice(0, 2000)}, ${IMAGE_QUALITY_SUFFIX_EN}`;
-  const { buffer, mimetype } = await imageAiEngine.generateImage({ prompt, width: 1024, height: 1024 });
+  const template = payload.template === 'product_photo' ? 'product_photo' : 'icons_list';
 
-  const logo = loadAttachmentBuffer(findRecentAttachment(messages, 'logo'));
-  const hasOverlayContent = payload.titleText || payload.priceText || payload.contactText || payload.badgeText || logo;
-  let finalBuffer = buffer;
-  let finalMimetype = mimetype;
-  if (hasOverlayContent) {
-    finalBuffer = await imageCompositorEngine.compositeImage({
-      imageBuffer: buffer,
-      titleText: payload.titleText,
-      priceText: payload.priceText,
-      contactText: payload.contactText,
-      badgeText: payload.badgeText,
-      logoBuffer: logo ? logo.buffer : null,
-    });
-    finalMimetype = 'image/jpeg';
+  let photoDataUri = null;
+  if (template === 'product_photo' && payload.imagePromptEnglish) {
+    const prompt = `${String(payload.imagePromptEnglish).slice(0, 2000)}, ${IMAGE_QUALITY_SUFFIX_EN}`;
+    const { buffer, mimetype } = await imageAiEngine.generateImage({ prompt, width: 1024, height: 1024 });
+    photoDataUri = posterTemplateEngine.bufferToDataUri(buffer, mimetype);
   }
 
-  const id = imageLinkStore.register(finalBuffer, finalMimetype, { title: 'Affiche IA — CYRUS SUPER ASSISTANT' });
+  const logo = loadAttachmentBuffer(findRecentAttachment(messages, 'logo'));
+  const logoDataUri = logo ? posterTemplateEngine.bufferToDataUri(logo.buffer, logo.mimetype) : null;
+
+  const finalBuffer = await posterTemplateEngine.renderPoster({
+    template,
+    businessName: payload.businessName,
+    tagline: payload.tagline,
+    summary: payload.summary,
+    bulletPoints: payload.bulletPoints,
+    priceText: payload.priceText,
+    badgeText: payload.badgeText,
+    contactText: payload.contactText,
+    colorTheme: payload.colorTheme,
+    logoDataUri,
+    photoDataUri,
+  });
+
+  const id = imageLinkStore.register(finalBuffer, 'image/png', { title: 'Affiche IA — CYRUS SUPER ASSISTANT' });
   return { text: '✅ Affiche générée.', media: { kind: 'image', url: `${PUBLIC_BASE_URL}/v/${id}`, downloadUrl: `${PUBLIC_BASE_URL}/v/${id}/raw` } };
 }
 
