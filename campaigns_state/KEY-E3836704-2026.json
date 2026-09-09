@@ -1,6 +1,6 @@
 {
   "tenantId": "KEY-E3836704-2026",
-  "activeCampaignId": "05598fcd-f3f7-4f67-89ca-89a0066736ef",
+  "activeCampaignId": null,
   "networkHealth": {
     "consecutiveSlowSends": 0,
     "consecutiveOverloadFailures": 0,
@@ -18,17 +18,17 @@
       "skippedDuplicates": 0,
       "messageHash": "054ae501c959a628f462e4a2",
       "duplicateWindowHours": 48,
-      "status": "running",
+      "status": "stopped",
       "paused": false,
       "userPaused": false,
-      "stopRequested": false,
-      "superseded": false,
+      "stopRequested": true,
+      "superseded": true,
       "createdAt": "2026-09-09T12:55:41.845Z",
       "startedAt": "2026-09-09T12:55:41.845Z",
-      "finishedAt": null,
-      "lastProgressAt": "2026-09-09T12:56:16.335Z",
-      "nextIndex": 2,
-      "lastProcessedIndex": 1,
+      "finishedAt": "2026-09-09T12:56:22.787Z",
+      "lastProgressAt": "2026-09-09T12:56:22.787Z",
+      "nextIndex": 399,
+      "lastProcessedIndex": 398,
       "recipients": [
         {
           "telephone": "+22676858214",
