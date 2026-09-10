@@ -5,7 +5,7 @@ const express = require('express');
 const open = require('open');
 
 const { verifyLicense } = require('./lib/license');
-const { checkForUpdate } = require('./lib/updateCheck');
+const { checkAndSelfUpdate } = require('./lib/selfUpdate');
 const whatsapp = require('./lib/whatsapp');
 const aiGateway = require('./lib/aiGateway');
 const db = require('./lib/db');
@@ -16,6 +16,13 @@ const { DATA_DIR } = require('./lib/paths');
 const PORT = process.env.LOCAL_PORT || 4100;
 
 async function main() {
+  // Tout en premier, avant même la licence : si une mise à jour est
+  // appliquée, cette fonction ne rend JAMAIS la main (process.exit — un
+  // script jetable relance une instance à jour, qui retraverse ce même
+  // point). Voir lib/selfUpdate.js pour le détail (un seul exécutable
+  // distribué, aucun second programme à installer).
+  await checkAndSelfUpdate();
+
   console.log(`Données locales : ${DATA_DIR}`);
   console.log('Vérification de la licence auprès du VPS central...');
 
@@ -27,14 +34,6 @@ async function main() {
   }
   console.log(`Licence valide (expire le ${license.expiresAt || 'jamais'}).`);
 
-  const update = await checkForUpdate();
-  if (update.updateAvailable) {
-    console.log(`\nMise à jour disponible : v${update.latestVersion} (version actuelle : v${update.currentVersion}).`);
-    if (update.downloadUrl) console.log(`Téléchargement : ${update.downloadUrl}`);
-    if (update.notes) console.log(update.notes);
-    console.log('');
-  }
-
   const app = express();
   app.use(express.json({ limit: '15mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
@@ -43,8 +42,13 @@ async function main() {
     res.json({ connected: whatsapp.isConnected(), qr: whatsapp.getQRCode() });
   });
 
-  app.get('/api/update-status', (req, res) => {
-    res.json(update);
+  // Purement informatif désormais (voir lib/selfUpdate.js, qui applique
+  // déjà la mise à jour AVANT que ce serveur ne démarre) — utile seulement
+  // si une mise à jour vient d'apparaître EN COURS de session (elle ne sera
+  // appliquée qu'au prochain redémarrage, jamais en cours de route).
+  app.get('/api/update-status', async (req, res) => {
+    const { checkForUpdate } = require('./lib/updateCheck');
+    res.json(await checkForUpdate());
   });
 
   app.post('/api/whatsapp/send', async (req, res) => {

@@ -1,7 +1,0 @@
-{
-  "pkg": {
-    "assets": [
-      "dist/cyrus-local-client.exe"
-    ]
-  }
-}

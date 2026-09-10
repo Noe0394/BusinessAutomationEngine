@@ -67,41 +67,46 @@ défaut s'ouvre automatiquement sur `http://localhost:4100` (onglets Statut
   par la cascade IA) via `POST /api/ebook/generate`.
 - Dashboard avec import de contacts (CSV simple) et gestion de campagnes
   (`public/index.html`, `public/app.js`).
-- **Packaging `.exe` en DEUX binaires** (voir "Mise à jour silencieuse"
-  ci-dessous) : `npm run build:all` — testé, build réussi (~160 Mo pour
-  l'app, ~320 Mo pour le lanceur — voir la note sur la taille plus bas).
+- **Packaging `.exe` en UN SEUL binaire** (voir "Mise à jour silencieuse"
+  ci-dessous) : `npm run build:exe` — testé, build réussi (~160 Mo).
 
-## Mise à jour silencieuse (launcher.js)
+## Mise à jour silencieuse (lib/selfUpdate.js)
 
 Un exécutable Windows ne peut **jamais** être remplacé pendant qu'il tourne
-(fichier verrouillé) — la solution retenue est un **lanceur séparé**
-(`CyrusLauncher.exe`) que l'utilisateur installe/épingle/lance au quotidien,
-et qui gère l'app réelle (`cyrus-local-client.exe`) comme un fichier qu'il
-peut librement remplacer AVANT de la démarrer :
+(fichier verrouillé). **Un seul exécutable est distribué** (pas de second
+programme à installer, sur retour explicite de l'utilisateur) : l'app se
+met à jour ELLE-MÊME en s'appuyant sur un script système jetable — généré
+à la volée dans un dossier temporaire, exécuté une fois, jamais distribué —
+plutôt qu'un second binaire compilé et installé séparément :
 
-1. Au lancement, `CyrusLauncher.exe` interroge `checkUpdateOffline`
-   (Firestore `config/local-client`) et compare à la version actuellement
-   installée dans `%APPDATA%\CyrusLocalClient\app\version.txt`.
-2. Si une version plus récente existe : téléchargement dans un fichier
-   temporaire, vérification SHA-256 (si fournie), puis remplacement
-   atomique (`fs.renameSync`, même volume) — jamais d'exe à moitié écrit en
-   cas de coupure réseau.
-3. Le lanceur démarre ensuite l'app (à jour ou non selon le résultat), avec
-   sa console héritée (`stdio: 'inherit'`) — invisible dans le flux pour
-   l'utilisateur, pas une étape perceptible en plus.
-4. Toute panne à n'importe quelle étape (réseau coupé, Firebase ET VPS
+1. Tout en tout début de démarrage (`index.js#main`, avant même la
+   vérification de licence), `checkAndSelfUpdate()` interroge
+   `checkUpdateOffline` (Firestore `config/local-client`) et compare à sa
+   propre version (`package.json`).
+2. Si une version plus récente existe : téléchargement dans
+   `<chemin-de-l'exe>.new`, vérification SHA-256 (si fournie).
+3. Un script `.bat` jetable est généré dans le dossier temporaire système,
+   puis lancé en arrière-plan (détaché) : il attend que CE process libère
+   le verrou sur son propre fichier exe (`move` réessayé jusqu'à 20 fois,
+   ~1s d'intervalle), le remplace, relance l'app à jour, puis se supprime
+   lui-même.
+4. Le process courant appelle `process.exit(0)` juste après avoir lancé ce
+   script — l'utilisateur voit l'app se refermer puis se rouvrir
+   immédiatement (quelques secondes), sans jamais avoir à retélécharger ou
+   réinstaller quoi que ce soit lui-même.
+5. Toute panne à n'importe quelle étape (réseau coupé, Firebase ET VPS
    injoignables, téléchargement interrompu, somme de contrôle invalide) ne
-   bloque JAMAIS le démarrage — l'app existante démarre telle quelle.
+   bloque JAMAIS le démarrage — l'app continue avec sa version actuelle.
+6. **Ne s'active qu'en exécutable packagé** (`process.pkg`, injecté par
+   `pkg`) — en développement (`node index.js`), remplacer
+   `process.execPath` remplacerait le binaire `node` lui-même : un simple
+   avertissement informatif s'affiche à la place, sans jamais rien
+   télécharger ni remplacer.
 
-**Limite acceptée** : la mise à jour n'est vérifiée qu'AU LANCEMENT, jamais
+**Limite acceptée** : la mise à jour n'est vérifiée qu'AU DÉMARRAGE, jamais
 en cours de session — une session laissée ouverte plusieurs jours n'est mise
 à jour qu'au prochain redémarrage (comportement standard, comparable à VS
 Code/Discord/etc.).
-
-**Le lanceur lui-même n'est jamais auto-mis-à-jour** (seule l'app qu'il gère
-l'est) — changer sa propre logique doit rester rare, et publier une nouvelle
-version du lanceur nécessite de redistribuer manuellement
-`CyrusLauncher.exe` aux clients existants.
 
 ### Publier une nouvelle version de l'app
 
@@ -128,23 +133,14 @@ curl -X POST https://us-central1-rien-afrique.cloudfunctions.net/publishUpdateOf
 
 Chaque client déjà installé récupère automatiquement cette version au
 prochain lancement — aucune recompilation ni redéploiement de leur côté,
-aucune action de leur part.
-
-**Note taille** : `CyrusLauncher.exe` (~320 Mo) embarque actuellement
-l'intégralité de `node_modules` (whatsapp-web.js/puppeteer compris) au lieu
-de se limiter à ses propres dépendances (axios/dotenv) — `pkg` ne fait pas
-de tree-shaking par point d'entrée à partir d'un `package.json` partagé.
-Sans impact fonctionnel (le lanceur marche correctement), mais un chantier
-futur légitime serait de l'isoler dans son propre `package.json` minimal
-(sous-dossier dédié) pour un lanceur réellement léger.
+aucune action de leur part, et rien à installer en plus de l'exe qu'ils ont
+déjà.
 
 ## Ce qu'il reste à faire
 
-1. **Distribuer `CyrusLauncher.exe`** aux premiers clients (canal à définir
-   — ce n'est pas encore fait, seul le mécanisme est construit et testé).
-2. **Alléger `CyrusLauncher.exe`** (voir note taille ci-dessus) — cosmétique,
-   pas bloquant.
-3. **Interface plus complète** — import CSV réel (fichier, pas juste
+1. **Distribuer `cyrus-local-client.exe`** aux premiers clients (canal à
+   définir — ce n'est pas encore fait, seul le mécanisme est construit).
+2. **Interface plus complète** — import CSV réel (fichier, pas juste
    copier-coller), historique des messages par contact dans le dashboard,
    bouton dédié pour la génération de livre PDF (actuellement accessible
    uniquement via `POST /api/ebook/generate`, pas encore dans l'UI).

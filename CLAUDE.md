@@ -287,21 +287,32 @@ pour reprendre sans tout relire.
    campagne de test) avant de le distribuer — la compilation qui réussit
    ne garantit pas que whatsapp-web.js/Puppeteer se comportent
    identiquement packagés vs. en `node index.js`.
-3. ~~Auto-update réel~~ — **fait le 2026-09-10** : architecture à deux
-   binaires (`local-client/launcher.js` → `CyrusLauncher.exe`, gère
-   `cyrus-local-client.exe` comme un fichier remplaçable puisqu'il ne
-   tourne jamais lui-même) — voir `local-client/README.md#mise-à-jour-silencieuse`
-   pour le détail et la procédure de publication (`publishUpdateOffline`,
-   métadonnées dans Firestore `config/local-client`). Testé de bout en bout
-   en production (téléchargement, vérification SHA-256, remplacement
-   atomique, relance) avec un faux fichier de test — jamais encore utilisé
-   pour une VRAIE nouvelle version. Bug latent corrigé au passage :
-   `pdfkit` (ajouté le 2026-09-10, voir section PDF) cassait le build pkg
-   (`es-get-iterator`/`deep-equal`, résolution via `exports` non suivie par
-   l'analyse statique de pkg) — corrigé en les ajoutant explicitement à
-   `pkg.assets`. **Reste à faire** : `CyrusLauncher.exe` fait ~320 Mo (embarque
-   tout `node_modules` au lieu de ses seules dépendances réelles) — cosmétique,
-   pas bloquant, voir la note dédiée dans `local-client/README.md`.
+3. ~~Auto-update réel~~ — **fait le 2026-09-10**. Deux itérations le même
+   jour : d'abord une architecture à deux binaires (lanceur séparé gérant
+   l'app comme un fichier remplaçable), ABANDONNÉE sur retour explicite de
+   l'utilisateur ("ne pas obliger les utilisateurs à installer [lanceur +
+   app] séparément") — remplacée par **un seul exécutable** distribué
+   (`local-client/lib/selfUpdate.js`) : l'app se met à jour elle-même via
+   un script `.bat` jetable (généré à la volée dans le dossier temp système,
+   jamais distribué) qui attend que le process libère son propre verrou de
+   fichier, remplace l'exe, le relance, puis se supprime. Voir
+   `local-client/README.md#mise-à-jour-silencieuse` pour le détail et la
+   procédure de publication (`publishUpdateOffline`, métadonnées dans
+   Firestore `config/local-client`). Testé (build réussi, démarrage propre
+   avec la vérification de mise à jour intégrée) — le téléchargement +
+   remplacement réel n'a été validé qu'une fois, sous l'ancienne
+   architecture à deux binaires (mécanisme de fond identique, juste
+   redéclenché différemment) ; jamais encore utilisé pour une VRAIE nouvelle
+   version. Bug latent corrigé au passage : `pdfkit` (ajouté le 2026-09-10,
+   voir section PDF) cassait le build pkg (`es-get-iterator`/`deep-equal`,
+   résolution via `exports` non suivie par l'analyse statique de pkg) —
+   corrigé en les ajoutant explicitement à `pkg.assets`.
+   **IMPORTANT (2026-09-10, en fin de session)** : l'utilisateur a signalé
+   être sur données mobiles limitées — éviter les cycles de test
+   réseau/upload-download coûteux (builds pkg, déploiements Firebase,
+   allers-retours Storage) sauf nécessité claire ; privilégier la relecture
+   de code à la validation par test réseau répété tant que ce n'est pas
+   précisé autrement.
 4. **Mobile (Android)** — Option B choisie et bien avancée (voir section 3
    ci-dessus) : projet créé, Baileys embarqué et configuré, pairing par
    code, foreground service. **Bloqué sur l'installation d'un JDK complet**

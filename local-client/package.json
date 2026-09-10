@@ -7,10 +7,7 @@
   "bin": "index.js",
   "scripts": {
     "start": "node index.js",
-    "start:launcher": "node launcher.js",
-    "build:exe": "pkg . --targets node22-win-x64 --output dist/cyrus-local-client.exe",
-    "build:launcher": "pkg launcher.js --targets node22-win-x64 --output dist/CyrusLauncher.exe --config pkg-launcher.config.json",
-    "build:all": "npm run build:exe && npm run build:launcher"
+    "build:exe": "pkg . --targets node22-win-x64 --output dist/cyrus-local-client.exe"
   },
   "engines": {
     "node": ">=22.5.0"
