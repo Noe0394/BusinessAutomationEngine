@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>CYRUS — Client local</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 30px auto; padding: 0 16px; color: #1a1a1a; }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-top: 0; }
+  nav { display: flex; gap: 8px; margin-bottom: 16px; }
+  nav button { padding: 8px 14px; border: 1px solid #ccc; background: #f4f4f4; border-radius: 6px; cursor: pointer; }
+  nav button.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  #status { display: inline-block; padding: 6px 12px; border-radius: 8px; font-weight: 600; }
+  #status.connected { background: #dcfce7; color: #166534; }
+  #status.disconnected { background: #fee2e2; color: #991b1b; }
+  input, textarea, button { font-size: 0.95rem; padding: 8px; margin: 4px 0; width: 100%; box-sizing: border-box; }
+  textarea { min-height: 80px; }
+  button { cursor: pointer; width: auto; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  ul { padding-left: 0; list-style: none; }
+  li { border: 1px solid #eee; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+  small { color: #666; }
+</style>
+</head>
+<body>
+  <h1>CYRUS — Client local (whatsapp-web.js)</h1>
+
+  <nav>
+    <button id="nav-statut" class="active" onclick="showTab('statut')">Statut</button>
+    <button id="nav-contacts" onclick="showTab('contacts')">Contacts</button>
+    <button id="nav-campagnes" onclick="showTab('campagnes')">Campagnes</button>
+  </nav>
+
+  <section id="tab-statut" class="tab active">
+    <h2>Connexion WhatsApp</h2>
+    <div id="status" class="disconnected">Vérification...</div>
+    <div id="qr"></div>
+
+    <h2>Message test</h2>
+    <input id="to" placeholder="Numéro (ex: 2250700000000)">
+    <textarea id="text" placeholder="Message"></textarea>
+    <button onclick="sendTestMessage()">Envoyer</button>
+    <div id="sendResult"></div>
+  </section>
+
+  <section id="tab-contacts" class="tab">
+    <h2>Importer des contacts</h2>
+    <small>Une ligne par contact : "numéro" ou "numéro,nom".</small>
+    <textarea id="contactsInput" placeholder="2250700000001,Awa&#10;2250700000002"></textarea>
+    <button onclick="importContacts()">Importer</button>
+    <div id="importResult"></div>
+
+    <h2>Contacts enregistrés</h2>
+    <ul id="contactsList"></ul>
+  </section>
+
+  <section id="tab-campagnes" class="tab">
+    <h2>Nouvelle campagne</h2>
+    <input id="campName" placeholder="Nom de la campagne">
+    <small>Destinataires — une ligne par contact : "numéro" ou "numéro,nom" (utilisable dans le message via {nom}).</small>
+    <textarea id="campRecipients" placeholder="2250700000001,Awa&#10;2250700000002"></textarea>
+    <textarea id="campText" placeholder="Message (ex: Bonjour {nom}, ...)"></textarea>
+    <div class="row">
+      <div>
+        <small>Délai min (secondes)</small>
+        <input id="campDelayMin" type="number" value="8">
+      </div>
+      <div>
+        <small>Délai max (secondes)</small>
+        <input id="campDelayMax" type="number" value="20">
+      </div>
+    </div>
+    <button onclick="createCampaign()">Créer la campagne</button>
+    <div id="campResult"></div>
+
+    <h2>Campagnes</h2>
+    <ul id="campaignsList"></ul>
+  </section>
+
+<script src="/app.js"></script>
+</body>
+</html>
