@@ -1,6 +1,7 @@
 node_modules/
 .env
 auth_info_baileys/
+auth_info_wwebjs_local/
 telegram_session.txt
 telegram_sessions/
 telegram_campaigns_state/
@@ -23,3 +24,4 @@ ai_studio_sessions/
 public/dist/
 .vercel
 .env*
+firebase-service-account.json

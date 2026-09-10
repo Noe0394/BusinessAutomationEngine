@@ -26,6 +26,17 @@ services:
       # cas de perte du volume lui-même (VPS recréé, disque changé).
       - whatsapp_auth:/app/auth_info_baileys
       - telegram_sessions:/app/telegram_sessions
+      # Compte de service Firebase (voir lib/firebaseSync.js) : bind mount
+      # en lecture seule d'un fichier déposé UNE FOIS sur ce serveur, HORS
+      # git (comme .env) — survit aux redéploiements (git pull + rebuild)
+      # tant que le serveur lui-même n'est pas recréé. FIREBASE_SERVICE_ACCOUNT_PATH
+      # dans .env doit alors pointer vers le chemin EN CONTENEUR à droite du ":"
+      # (ex: /app/firebase-service-account.json), pas vers le chemin sur l'hôte.
+      # Commenter ces 2 lignes (et laisser FIREBASE_SERVICE_ACCOUNT_PATH vide)
+      # tant que ce fichier n'a pas été déposé sur le serveur : sans le mount,
+      # le chemin serait introuvable dans le conteneur et firebaseSync resterait
+      # simplement désactivé (no-op), sans jamais faire planter le démarrage.
+      - ./firebase-service-account.json:/app/firebase-service-account.json:ro
 
 volumes:
   whatsapp_auth:

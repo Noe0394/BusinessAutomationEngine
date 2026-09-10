@@ -1,0 +1,17 @@
+{
+  "name": "cyrus-failover-functions",
+  "description": "Cloud Functions de secours (licence + IA) utilisées UNIQUEMENT quand le VPS central est inatteignable. Projet Firebase indépendant, déployé séparément (firebase deploy --only functions) — jamais construit ni exécuté sur le VPS ni dans local-client/.",
+  "private": true,
+  "engines": {
+    "node": "22"
+  },
+  "main": "index.js",
+  "scripts": {
+    "deploy": "firebase deploy --only functions"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^6.3.1",
+    "axios": "^1.7.7"
+  }
+}

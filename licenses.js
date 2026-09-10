@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const githubStore = require('./githubStore');
+const firebaseSync = require('./lib/firebaseSync');
 
 // Sans disque persistant Render monté sur ce chemin, ce fichier local est
 // effacé à chaque redéploiement. Si githubStore est activé (GITHUB_TOKEN +
@@ -16,6 +17,23 @@ if (!process.env.LICENSES_PATH && !githubStore.enabled) {
     `LICENSES_PATH non défini et githubStore désactivé : les clés de licence sont stockées dans "${LICENSES_PATH}" sur le disque local uniquement. ` +
     'Sur Render, ce fichier est effacé à chaque redéploiement sauf disque persistant ou GITHUB_TOKEN/GITHUB_DATA_REPO configurés.',
   );
+}
+
+// Écoute temps réel Firestore (voir lib/firebaseSync.js) : si une licence
+// est créée/liée directement côté Firebase (firebase-functions/
+// verifyLicenseOffline, createLicenseOffline — utilisées quand CE VPS est
+// injoignable), ce cache local se met à jour tout seul dès que ce process
+// redevient joignable vers Firestore, sans redémarrage. Ferme la boucle
+// dans le sens Firestore -> VPS (saveLicenses ci-dessous gère déjà le sens
+// VPS -> Firestore) : les deux côtés convergent vers la même donnée.
+if (firebaseSync.enabled) {
+  firebaseSync.watchLicenses((licenses) => {
+    try {
+      fs.writeFileSync(LICENSES_PATH, JSON.stringify(licenses, null, 2), 'utf8');
+    } catch (err) {
+      console.error('Échec de mise à jour du cache local de licences depuis Firestore :', err.message);
+    }
+  });
 }
 
 // Les clés sont toujours générées en majuscules (generateKeyString), mais un
@@ -56,6 +74,14 @@ async function saveLicenses(licenses) {
         console.error('Échec de la sauvegarde des licences sur GitHub :', err.message);
       });
     await pushQueue;
+  }
+
+  // Mirroir Firestore pour le failover client (voir lib/firebaseSync.js) —
+  // délibérément NON attendu : ce n'est qu'une copie de secours pour le mode
+  // dégradé, jamais l'opération de licence elle-même ne doit attendre ou
+  // échouer à cause de la latence/disponibilité de Firebase.
+  if (firebaseSync.enabled) {
+    firebaseSync.syncLicensesToFirestore(licenses);
   }
 }
 

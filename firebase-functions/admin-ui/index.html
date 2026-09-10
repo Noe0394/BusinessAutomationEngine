@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Licences CYRUS — Admin</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.3rem; }
+  #gate { max-width: 360px; margin: 80px auto; text-align: center; }
+  #gate input { width: 100%; padding: 10px; font-size: 1rem; margin: 8px 0; box-sizing: border-box; }
+  #gate button, .btn { padding: 8px 16px; border: none; border-radius: 6px; background: #1a1a1a; color: #fff; cursor: pointer; font-size: 0.9rem; }
+  .btn.danger { background: #b91c1c; }
+  .btn.secondary { background: #eee; color: #1a1a1a; }
+  [hidden] { display: none !important; }
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #fff; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 0.85rem; }
+  th { background: #f4f4f4; }
+  .pill { padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
+  .pill.active { background: #dcfce7; color: #166534; }
+  .pill.inactive { background: #fee2e2; color: #991b1b; }
+  form.create { background: #fff; padding: 16px; border-radius: 8px; margin-top: 16px; }
+  form.create input, form.create select { padding: 6px; margin: 4px 6px 4px 0; }
+  label.mod { font-size: 0.85rem; margin-right: 10px; }
+  #error { color: #b91c1c; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <h1>Licences CYRUS — Admin</h1>
+  <p>Secret admin (mode dégradé Firebase) :</p>
+  <input type="password" id="secretInput" placeholder="ADMIN_SECRET">
+  <button onclick="unlock()">Entrer</button>
+  <div id="gateError" style="color:#b91c1c"></div>
+</div>
+
+<div id="app" hidden>
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>Licences CYRUS — Admin (mode dégradé Firebase)</h1>
+    <a href="https://riea-afrique-web.web.app/admin" target="_blank" rel="noopener">
+      <button class="btn secondary">Back-office RIEA AFRIQUE ↗</button>
+    </a>
+  </div>
+  <p><small>Cette page appelle directement les Cloud Functions de secours — utile quand le VPS est injoignable, ou juste par confort.</small></p>
+
+  <form class="create" onsubmit="createLicense(event)">
+    <strong>Nouvelle licence</strong><br>
+    <input type="text" id="note" placeholder="Note (ex: nom du client)">
+    <input type="date" id="expiresAt" title="Date d'expiration (vide = jamais)">
+    <br>
+    <label class="mod"><input type="checkbox" value="whatsapp" checked> WhatsApp</label>
+    <label class="mod"><input type="checkbox" value="telegram" checked> Telegram</label>
+    <label class="mod"><input type="checkbox" value="studio_video" checked> Studio IA</label>
+    <br><br>
+    <button class="btn" type="submit">Créer la clé</button>
+  </form>
+  <div id="error"></div>
+
+  <table>
+    <thead>
+      <tr><th>Clé</th><th>Note</th><th>Statut</th><th>Expire</th><th>Appareil lié</th><th></th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<script>
+const FUNCTIONS_BASE = 'https://us-central1-rien-afrique.cloudfunctions.net';
+let secret = sessionStorage.getItem('cyrusAdminSecret') || '';
+
+function headers() {
+  return { 'Content-Type': 'application/json', 'x-admin-secret': secret };
+}
+
+function unlock() {
+  secret = document.getElementById('secretInput').value.trim();
+  if (!secret) return;
+  sessionStorage.setItem('cyrusAdminSecret', secret);
+  document.getElementById('gate').hidden = true;
+  document.getElementById('app').hidden = false;
+  refresh();
+}
+
+async function refresh() {
+  document.getElementById('error').textContent = '';
+  try {
+    const res = await fetch(`${FUNCTIONS_BASE}/listLicensesOffline`, { headers: headers() });
+    if (!res.ok) throw new Error((await res.json()).error || 'Erreur');
+    const licenses = await res.json();
+    document.getElementById('rows').innerHTML = licenses.map(rowHtml).join('');
+  } catch (err) {
+    if (String(err.message).includes('invalide')) {
+      // Secret refusé : retour à l'écran de saisie plutôt que de rester bloqué.
+      sessionStorage.removeItem('cyrusAdminSecret');
+      document.getElementById('gate').hidden = false;
+      document.getElementById('app').hidden = true;
+      document.getElementById('gateError').textContent = 'Secret invalide.';
+    } else {
+      document.getElementById('error').textContent = 'Erreur : ' + err.message;
+    }
+  }
+}
+
+function rowHtml(l) {
+  const expires = l.expiresAt ? new Date(l.expiresAt).toLocaleDateString('fr-FR') : 'jamais';
+  const device = l.boundDeviceId ? l.boundDeviceId.slice(0, 12) + '…' : '(non lié)';
+  return `<tr>
+    <td><code>${l.key}</code></td>
+    <td>${l.note || ''}</td>
+    <td><span class="pill ${l.active ? 'active' : 'inactive'}">${l.active ? 'active' : 'désactivée'}</span></td>
+    <td>${expires}</td>
+    <td>${device}</td>
+    <td>
+      <button class="btn secondary" onclick="toggleActive('${l.key}', ${!l.active})">${l.active ? 'Désactiver' : 'Activer'}</button>
+      <button class="btn danger" onclick="deleteLicense('${l.key}')">Supprimer</button>
+    </td>
+  </tr>`;
+}
+
+async function createLicense(evt) {
+  evt.preventDefault();
+  const note = document.getElementById('note').value;
+  const expiresAtRaw = document.getElementById('expiresAt').value;
+  const allowedModules = Array.from(document.querySelectorAll('.mod input:checked')).map((el) => el.value);
+  try {
+    const res = await fetch(`${FUNCTIONS_BASE}/createLicenseOffline`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        note,
+        expiresAt: expiresAtRaw ? new Date(expiresAtRaw).toISOString() : null,
+        allowedModules,
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || 'Erreur');
+    document.getElementById('note').value = '';
+    document.getElementById('expiresAt').value = '';
+    refresh();
+  } catch (err) {
+    document.getElementById('error').textContent = 'Erreur : ' + err.message;
+  }
+}
+
+async function toggleActive(key, active) {
+  await fetch(`${FUNCTIONS_BASE}/setLicenseActiveOffline`, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ key, active }),
+  });
+  refresh();
+}
+
+async function deleteLicense(key) {
+  if (!confirm(`Supprimer définitivement la clé ${key} ?`)) return;
+  await fetch(`${FUNCTIONS_BASE}/deleteLicenseOffline`, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ key }),
+  });
+  refresh();
+}
+
+if (secret) {
+  document.getElementById('gate').hidden = true;
+  document.getElementById('app').hidden = false;
+  refresh();
+}
+</script>
+</body>
+</html>

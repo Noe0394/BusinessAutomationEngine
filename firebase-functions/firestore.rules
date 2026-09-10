@@ -1,0 +1,34 @@
+// ⚠️ CE FICHIER N'EST PLUS RÉFÉRENCÉ PAR firebase.json — NE JAMAIS LE
+// RECONNECTER NI FAIRE "firebase deploy --only firestore:rules" DEPUIS CE
+// DOSSIER. ⚠️
+//
+// Incident du 2026-09-09 : ce fichier (qui ne contenait qu'une règle pour
+// "licenses/{key}") a été déployé et a REMPLACÉ pendant ~42 minutes
+// (17:05-17:47) le ruleset de production complet d'une application EXISTANTE
+// et SANS RAPPORT ("RIEA AFRIQUE" — comptes utilisateurs, marketplace,
+// communauté, certifications, parrainage...) qui partage ce même projet
+// Firebase ("rien-afrique"). Un déploiement de règles Firestore REMPLACE
+// tout le document, jamais un simple ajout — recréer les 900+ lignes de
+// règles de RIEA AFRIQUE ici pour "fusionner" serait fragile et hors de
+// portée : ce dossier ne doit gérer AUCUNE règle pour ce projet, point.
+//
+// Ce n'est de toute façon pas nécessaire : les Cloud Functions de
+// index.js (verifyLicenseOffline, createLicenseOffline,
+// generateTextFallback, generateImageFallback) utilisent l'Admin SDK, qui
+// CONTOURNE ENTIÈREMENT les règles Firestore — aucun client (PC, mobile)
+// ne parle jamais directement à Firestore avec un SDK client, donc aucune
+// règle "licenses/{key}" n'est requise pour que la collection reste privée.
+// Le contrôle d'accès pour "licenses" se fait dans le CODE de ces
+// fonctions (vérification de licence, secret ADMIN_SECRET), pas dans des
+// règles Firestore.
+//
+// Contenu ci-dessous conservé UNIQUEMENT pour mémoire de ce qui a été
+// déployé par erreur — ne sert plus à rien, ne pas réutiliser.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /licenses/{key} {
+      allow read, write: if false;
+    }
+  }
+}

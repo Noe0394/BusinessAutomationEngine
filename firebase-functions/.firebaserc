@@ -1,0 +1,13 @@
+{
+  "projects": {},
+  "targets": {
+    "rien-afrique": {
+      "hosting": {
+        "cyrus-admin": [
+          "cyrus-license-admin"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

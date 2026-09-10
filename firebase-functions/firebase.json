@@ -1,0 +1,11 @@
+{
+  "functions": {
+    "source": ".",
+    "runtime": "nodejs22"
+  },
+  "hosting": {
+    "target": "cyrus-admin",
+    "public": "admin-ui",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+  }
+}
