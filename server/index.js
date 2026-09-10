@@ -49,6 +49,17 @@ const authStore = whatsappAuthStore.createAuthStore('default');
 let sock = null;
 let latestQR = null;
 let connected = false;
+
+// File d'attente en memoire pour les clients qui ne peuvent pas recevoir de
+// webhook entrant (typiquement un mobile, derriere NAT/reseau cellulaire,
+// sans adresse publique stable) — voir GET /messages ci-dessous. Bornee a
+// MAX_BUFFERED_MESSAGES pour ne jamais grossir indefiniment si personne ne
+// vient jamais lire (client mobile hors ligne un moment) ; perdu au
+// redemarrage du service, comme le reste de l'etat en memoire ici (jamais
+// l'autorite pour les messages eux-memes, juste un tampon de lecture).
+const MAX_BUFFERED_MESSAGES = 200;
+let messageSeq = 0;
+const recentMessages = [];
 let reconnectTimer = null;
 let heartbeatTimer = null;
 let consecutiveFailures = 0;
@@ -201,6 +212,12 @@ async function doConnect() {
     (m.messages || []).forEach((msg) => {
       if (m.type === 'notify' && msg.key && !msg.key.fromMe && msg.key.remoteJid !== 'status@broadcast') {
         forwardToWebhook('message', msg);
+
+        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || null;
+        if (!text) return; // pieces jointes/autres types : hors perimetre du polling simplifie
+        messageSeq += 1;
+        recentMessages.push({ id: messageSeq, from: msg.key.remoteJid, text, timestamp: Date.now() });
+        if (recentMessages.length > MAX_BUFFERED_MESSAGES) recentMessages.shift();
       }
     });
   });
@@ -284,6 +301,15 @@ app.post('/pairing-code', requireSecret, async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// Polling pour les clients sans webhook entrant possible (voir
+// recentMessages plus haut) — passer le `id` du dernier message deja lu en
+// `afterId` pour ne recevoir que les nouveaux ; 0 ou absent = tout le
+// tampon actuel (utile au tout premier appel).
+app.get('/messages', requireSecret, (req, res) => {
+  const afterId = Number(req.query.afterId) || 0;
+  res.json({ messages: recentMessages.filter((m) => m.id > afterId) });
 });
 
 app.post('/send', requireSecret, async (req, res) => {
