@@ -4057,7 +4057,7 @@
       "paused": true,
       "userPaused": true,
       "stopRequested": false,
-      "superseded": true,
+      "superseded": false,
       "createdAt": "2026-09-09T13:28:36.387Z",
       "startedAt": "2026-09-09T13:28:36.387Z",
       "finishedAt": null,
