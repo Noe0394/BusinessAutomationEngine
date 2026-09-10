@@ -2,6 +2,8 @@
   {
     "boundAt": null,
     "expiresAt": null,
+    "note": "",
+    "key": "KEY-AFFFF2D9-2026",
     "allowedModules": [
       "whatsapp",
       "telegram",
@@ -9,22 +11,20 @@
     ],
     "active": true,
     "boundDeviceId": null,
-    "key": "KEY-AFFFF2D9-2026",
-    "note": "",
     "createdAt": "2026-09-10T08:34:50.992Z"
   },
   {
-    "boundAt": null,
+    "boundDeviceId": null,
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
     ],
-    "createdAt": "2026-09-10T07:21:56.094Z",
     "note": "Noe 1",
+    "createdAt": "2026-09-10T07:21:56.094Z",
+    "boundAt": null,
     "key": "KEY-E5164DF3-2026",
     "active": true,
-    "boundDeviceId": null,
     "expiresAt": "2026-09-30T00:00:00.000Z"
   }
 ]
