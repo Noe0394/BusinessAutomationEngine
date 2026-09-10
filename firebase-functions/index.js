@@ -32,11 +32,12 @@
 //   firebase functions:secrets:set GEMINI_API_KEY
 //   firebase functions:secrets:set OPENROUTER_API_KEY
 //   firebase functions:secrets:set HUGGINGFACE_API_KEY
+//   firebase functions:secrets:set REPLICATE_API_TOKEN
 //   firebase functions:secrets:set FAL_KEY
 //   firebase functions:secrets:set ADMIN_SECRET
 //   (chaque secret est FACULTATIF — un niveau de la cascade sans secret est
 //   simplement sauté, jamais d'échec du déploiement ni de l'appel)
-//   firebase deploy --only functions:verifyLicenseOffline,functions:createLicenseOffline,functions:listLicensesOffline,functions:setLicenseActiveOffline,functions:updateLicenseOffline,functions:deleteLicenseOffline,functions:generateTextFallback,functions:generateImageFallback
+//   firebase deploy --only functions:verifyLicenseOffline,functions:createLicenseOffline,functions:listLicensesOffline,functions:setLicenseActiveOffline,functions:updateLicenseOffline,functions:deleteLicenseOffline,functions:generateTextFallback,functions:generateImageFallback,functions:startVideoFallback,functions:pollVideoFallback
 // JAMAIS "firebase deploy --only functions" (sans noms précis) ni
 // ",firestore:rules" — voir README.md : ce projet Firebase est PARTAGÉ avec
 // une autre application (RIEA AFRIQUE), un déploiement non scopé a déjà
@@ -46,6 +47,7 @@ const { onRequest } = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const axios = require('axios');
+const videoAiEngine = require('./videoAiEngine');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -62,6 +64,7 @@ const GROQ_API_KEY = defineSecret('GROQ_API_KEY');
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 const OPENROUTER_API_KEY = defineSecret('OPENROUTER_API_KEY');
 const HUGGINGFACE_API_KEY = defineSecret('HUGGINGFACE_API_KEY');
+const REPLICATE_API_TOKEN = defineSecret('REPLICATE_API_TOKEN');
 const FAL_KEY = defineSecret('FAL_KEY');
 const ADMIN_SECRET = defineSecret('ADMIN_SECRET');
 
@@ -457,5 +460,79 @@ exports.generateImageFallback = onRequest({ secrets: [FAL_KEY] }, async (req, re
   } catch (err) {
     console.error('Échec upload Storage de l\'image générée (Firebase) :', err.message);
     res.status(502).json({ error: 'Échec de la sauvegarde de l\'image générée.' });
+  }
+});
+
+// ---------- Passerelle IA — vidéo (image-to-video), job asynchrone ----------
+// Portage de lib/media/videoAiEngine.js (VPS, voir ./videoAiEngine.js ici,
+// copie identique) : fal.ai -> Replicate -> Hugging Face (best effort). API
+// asynchrone en 2 temps (soumission + interrogation), le job lui-même est
+// persisté dans Firestore (collection "videoJobs") entre les deux appels —
+// deux invocations HTTP successives d'une Cloud Function peuvent tomber sur
+// des instances différentes, contrairement à failureStats/usageStats
+// ci-dessus qui restent volontairement en mémoire (diagnostic seulement, pas
+// une donnée dont la perte casserait un flux en cours).
+const VIDEO_JOB_COLLECTION = 'videoJobs';
+const VIDEO_JOB_SECRETS = [FAL_KEY, REPLICATE_API_TOKEN, HUGGINGFACE_API_KEY];
+
+exports.startVideoFallback = onRequest({ secrets: VIDEO_JOB_SECRETS }, async (req, res) => {
+  const auth = await checkLicenseForFallback(req);
+  if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+  const { imageUrl, prompt, seed, preferredProvider } = req.body || {};
+  if (!imageUrl) return res.status(400).json({ error: 'imageUrl manquant.' });
+
+  try {
+    const job = await videoAiEngine.startVideoAiJob(imageUrl, prompt, Number.isFinite(seed) ? seed : undefined, preferredProvider);
+    const jobId = crypto.randomUUID();
+    await db.collection(VIDEO_JOB_COLLECTION).doc(jobId).set({ job, createdAt: Date.now() });
+    res.json({ jobId, provider: `${job.provider} (Firebase)` });
+  } catch (err) {
+    console.error('Échec soumission job vidéo (Firebase) :', err.message);
+    res.status(err.kind === 'not_configured' ? 501 : 502).json({ error: err.message });
+  }
+});
+
+exports.pollVideoFallback = onRequest({ secrets: VIDEO_JOB_SECRETS }, async (req, res) => {
+  const auth = await checkLicenseForFallback(req);
+  if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+  const { jobId } = req.body || {};
+  if (!jobId) return res.status(400).json({ error: 'jobId manquant.' });
+
+  const ref = db.collection(VIDEO_JOB_COLLECTION).doc(jobId);
+  const doc = await ref.get();
+  if (!doc.exists) return res.status(404).json({ error: 'Job vidéo introuvable (expiré ou déjà terminé).' });
+
+  try {
+    const result = await videoAiEngine.pollVideoAiJob(doc.data().job);
+    if (!result.done) return res.json({ done: false });
+
+    // Rapatrie la vidéo dans Firebase Storage (même principe que l'image
+    // ci-dessus) — soit une URL à télécharger (fal.ai/Replicate), soit déjà
+    // un buffer en mémoire (Hugging Face, voir callHfClassicInferenceApi/
+    // callGradioSpace dans videoAiEngine.js).
+    let buffer;
+    let mimetype;
+    if (result.videoBuffer) {
+      buffer = result.videoBuffer;
+      mimetype = result.videoMimetype || 'video/mp4';
+    } else {
+      const videoRes = await axios.get(result.videoUrl, { responseType: 'arraybuffer', timeout: 120_000 });
+      buffer = Buffer.from(videoRes.data);
+      mimetype = videoRes.headers['content-type'] || 'video/mp4';
+    }
+
+    const filePath = `${STORAGE_PREFIX}/${crypto.randomUUID()}.mp4`;
+    const file = bucket.file(filePath);
+    await file.save(buffer, { contentType: mimetype });
+    const [url] = await file.getSignedUrl({ action: 'read', expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+
+    await ref.delete();
+    res.json({ done: true, url, provider: `${doc.data().job.provider} (Firebase)` });
+  } catch (err) {
+    console.error('Échec du job vidéo (Firebase) :', err.message);
+    await ref.delete();
+    res.status(502).json({ error: err.message });
   }
 });
