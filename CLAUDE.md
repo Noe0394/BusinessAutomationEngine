@@ -283,11 +283,61 @@ pour reprendre sans tout relire.
   un AUTRE build Gradle tournant en parallèle sur la même machine à 4 Go de
   RAM (`RIEA AFRIQUE APP`, projet sans rapport) ; éviter de lancer un gros
   build Android en même temps qu'un autre process lourd sur ce PC.
-- **Prochaine étape concrète** : connecter un téléphone Android (USB, mode
-  débogage activé) → `npx react-native run-android` (ou installer l'APK
-  directement) → saisir le code d'association pour valider le pairing de
-  bout en bout (texte seul, pas de médias/groupes à ce stade) — jamais
-  encore testé sur un vrai appareil.
+- **Testé sur un vrai appareil le 2026-09-10** (TECNO CL6k, USB) — app
+  lancée avec succès (React Native + thread Node embarqué opérationnels,
+  "Node : prêt"), UI entièrement refaite (thème sombre/cyan aligné sur le
+  logo CYRUS SUPER ASSISTANT fourni par l'utilisateur, pastilles de statut
+  animées, apparition du code en "récompense", boutons à retour tactile —
+  voir `App.tsx`) — mais **le pairing échoue systématiquement** :
+  1. Bug trouvé et corrigé : `ReferenceError: crypto is not defined` au
+     premier `requestPairingCode` — `globalThis.crypto` n'existe par défaut
+     qu'à partir de Node 19 (stable), absent du runtime Node 18.20.4
+     embarqué ; polyfilé via `require('node:crypto').webcrypto` en tête de
+     `main.js`.
+  2. Une fois ce bug corrigé, un VRAI code d'association est généré avec
+     succès (confirmé, ex: `BZ1Q3W83`) — mais WhatsApp refuse ensuite de
+     finaliser la liaison : `Error: Timed Out` (statusCode 408,
+     `validateConnection`) au premier essai, puis `Connection Closed` au
+     second (même symptôme réel, message différent).
+  3. **Cause probable identifiée** : `nodejs-mobile-react-native` n'a
+     **aucune version publiée au-delà de Node 18.20.4** (vérifié en direct
+     sur le registre npm — dernière publication oct. 2024, plus d'un an) ;
+     Baileys 6.7.17+ exige Node ≥20, donc le mobile reste figé sur le
+     paquet `baileys@6.7.16`, dont la version de protocole WA embarquée
+     (`[2,3000,1019707846]`) semble désormais trop datée pour que WhatsApp
+     accepte un NOUVEL appairage — le VPS, sur
+     `@whiskeysockets/baileys@^6.7.24` (`[2,3000,1043857760]`), n'a pas ce
+     problème.
+  4. **Tentative de contournement essayée et ABANDONNÉE** : forcer
+     `version: [2,3000,1043857760]` en dur dans `makeWASocket()` (valeur
+     statique copiée du VPS, PAS un `fetchLatestWaWebVersion()` dynamique —
+     différent de l'erreur déjà commise côté VPS le 2026-09-06/07) — n'a
+     pas résolu le problème (toujours "Connection Closed" ensuite) et a été
+     retiré : déclarer une version de protocole que le code sous-jacent
+     (6.7.16) n'implémente pas réellement peut paraître suspect aux
+     systèmes anti-abus WhatsApp.
+  5. **Option A envisagée puis REFUSÉE par l'utilisateur** (demande
+     explicite, absolue) : faire tourner Baileys à jour sur un petit
+     serveur séparé (`server/`, déjà écrit pour Koyeb, `GET /messages`
+     ajouté pour le polling mobile sans webhook entrant) — testé
+     fonctionnel sur la VM (conteneur Docker séparé, port 8001), mais
+     **démonté immédiatement** : l'utilisateur refuse tout serveur
+     externe pour le WhatsApp du téléphone, même temporaire/séparé du VPS
+     principal, par principe. Ne jamais réintroduire cette option sans
+     qu'il ne le redemande explicitement.
+  6. **Option "réutiliser whatsapp-web.js (PC) sur mobile" écartée** :
+     nécessite un vrai navigateur Chromium complet (Puppeteer), qu'il
+     n'existe aucun moyen standard de faire tourner dans ce runtime Node
+     embarqué sur Android — pas une simple substitution de bibliothèque,
+     une architecture entièrement différente et non faisable en l'état.
+  7. **Aucune bibliothèque alternative d'embarquement Node trouvée** sur
+     npm (recherche faite) qui supporterait Node ≥20 pour React Native.
+  8. **État actuel : BLOQUÉ, sans solution restante identifiée qui
+     respecte la contrainte "zéro serveur externe" de l'utilisateur.**
+     Reprendre uniquement si : (a) `nodejs-mobile-react-native` publie un
+     jour une version Node ≥20, (b) une autre lib d'embarquement Node
+     apparaît, ou (c) l'utilisateur accepte de reconsidérer la contrainte
+     zéro-serveur.
 
 ### Ce qui reste à faire
 1. **Recharger fal.ai** (bloquant pour la génération d'image, VPS ET

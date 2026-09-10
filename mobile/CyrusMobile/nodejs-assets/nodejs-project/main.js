@@ -8,6 +8,18 @@
 // Baileys tourne ICI, reellement sur le telephone. Aucune connexion a un
 // VPS ou a un serveur externe n'est necessaire pour WhatsApp lui-meme.
 
+// Polyfill WebCrypto : "globalThis.crypto" n'existe par defaut qu'a partir
+// de Node 19 (stable) — le runtime embarque ici est fige a Node 18.20.4
+// (derniere version publiee par nodejs-mobile-react-native, voir plus haut
+// pourquoi on ne peut pas monter plus haut). Baileys s'attend a trouver
+// "crypto" en global (HKDF/randomBytes internes), d'ou le
+// "ReferenceError: crypto is not defined" observe au premier appairage
+// (requestPairingCode) sans ce polyfill. node:crypto expose deja
+// "webcrypto" depuis Node 15+, donc aucune dependance externe requise.
+if (!globalThis.crypto) {
+  globalThis.crypto = require('node:crypto').webcrypto;
+}
+
 const path = require('path');
 const rn_bridge = require('rn-bridge');
 const {
@@ -30,6 +42,17 @@ async function connect() {
 
   sock = makeWASocket({
     auth: state,
+    // TENTATIVE ABANDONNEE (2026-09-10) : forcer version:[2,3000,1043857760]
+    // (copiee du Baileys 6.7.24 du VPS) n'a pas resolu le rejet de nouvel
+    // appairage (toujours "Connection Closed" ensuite) — retire plutot que
+    // laisse en place, une version PROTOCOLE declaree sans que le CODE
+    // sous-jacent (6.7.16) implemente reellement ce protocole peut paraitre
+    // suspecte aux systemes anti-abus WhatsApp, potentiellement pire que le
+    // comportement par defaut. Cause probable : le paquet "baileys" 6.7.16
+    // (impose par le plafond Node 18 du runtime embarque, voir plus haut)
+    // est structurellement trop ancien pour un NOUVEL appairage aujourd'hui
+    // — aucun correctif cote code trouve, voir mobile/README.md pour l'etat
+    // et les options envisagees.
     // Evite le plus gros pic CPU/RAM de Baileys au premier appairage.
     syncFullHistory: false,
     // Pas de store en memoire (chats/contacts/messages non borne) : on ne
