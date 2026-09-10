@@ -52,12 +52,243 @@ en continu (GitOps GitHub → Render) sur Render, service web Docker en plan
   coût.
 - **Telegram** (`adapters/telegram.js`, MTProto) : fonctionne indépendamment
   de WhatsApp, non affecté par l'incident ci-dessus.
+- **Moteur WhatsApp local (PC, jamais le VPS)** : `adapters/whatsapp-wwebjs.js`
+  (whatsapp-web.js/Puppeteer, ajouté 2026-09-09) est un moteur alternatif
+  strictement réservé à un usage LOCAL sur le PC de l'utilisateur, sélectionné
+  via `WHATSAPP_ENGINE=wwebjs` dans le `.env` LOCAL (jamais défini sur le
+  VPS). RÈGLE ABSOLUE demandée explicitement par l'utilisateur : le VPS ne
+  doit JAMAIS installer ni exécuter whatsapp-web.js/Puppeteer — uniquement
+  Baileys (`adapters/whatsapp.js`). Pour cette raison, whatsapp-web.js et
+  puppeteer ne doivent JAMAIS être ajoutés aux dépendances de `package.json`
+  (ce qui les ferait installer par `RUN npm install` dans `Dockerfile` au
+  prochain déploiement VPS) : ils sont installés localement avec
+  `npm install whatsapp-web.js puppeteer --no-save`, ce qui les place dans
+  `node_modules/` (gitignoré) sans jamais toucher `package.json`/
+  `package-lock.json`. Le `Dockerfile` contient en plus un garde-fou qui fait
+  échouer le build si ces paquets apparaissent malgré tout dans
+  `package.json`. `adapters/whatsappManager.js` isole aussi ce moteur du
+  stockage GitHub partagé (jamais de lecture/écriture de la sauvegarde de
+  session Baileys du VPS).
 - **Studio IA local** : moteur de copywriting local (`lib/ai/localCopywriterEngine.js`),
   base de connaissances marketing, générateur de livres PDF
   (`lib/pdf/ebookGenerator.js`), historique de discussions.
 - Persistance des sessions/licences : disque local éphémère sur Render, avec
   sauvegarde de secours sur un dépôt GitHub dédié (`githubStore.js`) si
   `GITHUB_TOKEN`/`GITHUB_DATA_REPO` sont configurés.
+
+## CHANTIER "PACKAGE PC INSTALLABLE + FAILOVER FIREBASE" (session du 2026-09-09)
+
+### Vue d'ensemble
+Deux volets construits ce jour-là, tous deux LOCAUX/hors-VPS par conception :
+1. **`local-client/`** — package PC autonome (WhatsApp local, SQLite, campagnes).
+2. **Failover Firebase** — Firestore comme base de licences PARTAGÉE avec le
+   VPS + Cloud Functions de secours, pour survivre à une panne VPS durable
+   (le VPS est considéré "éphémère" par l'utilisateur — risque d'impayé).
+
+### 1. `local-client/` — état détaillé
+Projet Node **indépendant** (son propre `package.json`), jamais construit ni
+déployé sur le VPS.
+- `lib/whatsapp.js` : whatsapp-web.js/Puppeteer, session unique, args RAM
+  bridés (`--no-sandbox` etc.), session dans `%APPDATA%\CyrusLocalClient\`.
+- `lib/db.js` : **`node:sqlite`** (PAS `better-sqlite3` — abandonné : pas de
+  binaire pré-compilé pour Node 24 sur ce PC, pas de Visual Studio Build
+  Tools pour compiler ; `node:sqlite` est natif à Node ≥22.5, zéro
+  dépendance). Tables : contacts, messages, campaigns.
+- `lib/campaigns.js` : moteur de campagnes séquentiel avec délai aléatoire,
+  pause/reprise, persistance SQLite — **100% local, aucune dépendance VPS ni
+  Firebase** (contrairement à license/IA ci-dessous).
+- `lib/license.js`, `lib/aiGateway.js` : **Firebase en priorité, VPS en
+  repli** (inversé le 2026-09-09 sur demande explicite — "Firebase doit être
+  le fournisseur principal, pas le VPS"). Bascule sur toute erreur (pas
+  seulement panne réseau, car Firebase est authoritaire, pas un simple
+  cache).
+- `lib/updateCheck.js` : vérifie `GET /api/check-update` (ajouté côté VPS,
+  stub minimal) — ne bloque jamais si absent/injoignable.
+- Packaging `.exe` (`npm run build:exe`, `@yao-pkg/pkg` — le `pkg` original
+  ne supporte plus les Node récents) : **build réussi le 2026-09-09**
+  (`local-client/dist/cyrus-local-client.exe`, ~157,7 Mo, PE valide,
+  aucun warning de dépendance non résolue). Les 5 échecs précédents
+  étaient dus à plusieurs sessions Claude Code tournant en parallèle sur
+  ce PC à 4 Go de RAM ; avec une seule session active, la RAM libre est
+  descendue jusqu'à ~200 Mo pendant la phase de bundling/bytecode sans
+  jamais crasher. **Piège Windows possible** (vu sur le tout premier
+  essai réussi, pas reproduit sur le second) : `@yao-pkg/pkg` peut finir
+  d'écrire l'exe (taille stable + horodatage figé dans `dist/`) puis
+  rester bloqué indéfiniment sans rendre la main (0% CPU, aucun exit
+  code) — si ça se reproduit, ce n'est pas un échec du build, il suffit
+  de tuer manuellement les process `node` restants une fois le fichier de
+  sortie stable en taille. Avertissements pkg bénins à ignorer :
+  `xdg-open` non inclus (package `open` inutilisé sur Windows),
+  `puppeteer\.local-chromium` non inclus (Chromium réel vit dans
+  `~/.cache/puppeteer`, hors du bundle, chargé au runtime). **Correction
+  apportée le 2026-09-09** : `lib/campaigns.js` faisait deux
+  `require(path.join('..','..','lib', ...))` vers `whatsappRecipients.js`
+  et `personalization.js` à la racine du dépôt — hors de `local-client/`,
+  donc non résolvables par pkg (et cassait la promesse d'autonomie du
+  dossier). Corrigé en copiant ces deux fichiers PURS (plus leur
+  dépendance `spintax.js`) dans `local-client/lib/` et en pointant
+  `campaigns.js` vers les copies locales (`require('./whatsappRecipients')`
+  etc.). **À resynchroniser manuellement** si ces fonctions évoluent côté
+  `lib/` racine — ce sont des copies, pas des liens.
+
+### 2. Failover Firebase (projet `rien-afrique`) — état détaillé
+- **`lib/firebaseSync.js`** (racine) : Firestore = base de licences
+  **partagée** (pas un simple miroir) — `syncLicensesToFirestore()` (appelé
+  par `licenses.js#saveLicenses`) ET `watchLicenses()` (écoute temps réel,
+  garde le cache local `licenses.json` à jour même si la licence a été
+  créée/modifiée côté Firebase). No-op tant que
+  `FIREBASE_SERVICE_ACCOUNT_PATH` n'est pas défini dans `.env`.
+- **`firebase-functions/`** : projet Firebase séparé, déployé (pas juste du
+  code local cette fois — voir règle absolue plus bas).
+  - `verifyLicenseOffline` : peut lier un **nouvel** appareil (pas
+    seulement continuer un appareil déjà lié) — compromis de sécurité
+    ASSUMÉ sur demande explicite.
+  - `createLicenseOffline`, `listLicensesOffline`, `setLicenseActiveOffline`,
+    `deleteLicenseOffline` : CRUD licences complet, protégé par le secret
+    `ADMIN_SECRET` (en-tête `x-admin-secret`) — **volontairement distinct**
+    de `ADMIN_PASSWORD` du VPS.
+  - `generateTextFallback` (Groq, modèle `openai/gpt-oss-120b` —
+    `llama-3.3-70b-versatile` renvoie 404 sur ce compte) et
+    `generateImageFallback` (fal.ai → rapatrié dans Firebase Storage,
+    chemin `cyrus-failover/`, URL signée 7 jours) : passerelle IA, un seul
+    fournisseur par type (pas la cascade complète du VPS).
+  - **`generateImageFallback` est bloqué** : compte fal.ai en 403
+    "TOP_UP" (crédit épuisé) — vérifié que ce n'est pas un bug de code
+    (même erreur en appelant fal.ai directement avec la même clé, hors
+    Firebase). Affecte AUSSI la génération d'image en production sur le
+    VPS (même `FAL_KEY`). **Action utilisateur requise : recharger
+    fal.ai.**
+  - **Admin UI** : https://cyrus-license-admin.web.app (site Hosting
+    dédié `cyrus-license-admin`, cible de déploiement `cyrus-admin` dans
+    `.firebaserc`) — page simple (créer/lister/activer/supprimer une
+    licence), secret admin actuel : voir `firebase functions:secrets:access ADMIN_SECRET`
+    (jamais écrit en clair ici — ce fichier est commité dans git).
+    Contient un bouton vers le back-office existant de RIEA AFRIQUE
+    (`https://riea-afrique-web.web.app/admin`).
+- **Secrets Firebase actuels** : `GROQ_API_KEY`, `FAL_KEY` (mêmes valeurs
+  que le `.env` VPS — dupliquées, à resynchroniser manuellement en cas de
+  rotation), `ADMIN_SECRET` (valeur : voir la console Firebase ou
+  `firebase functions:secrets:access ADMIN_SECRET`, jamais en clair dans ce
+  fichier commité).
+
+### ⚠️ RÈGLE ABSOLUE — projet Firebase `rien-afrique` PARTAGÉ (incident du 2026-09-09)
+Ce projet héberge aussi **RIEA AFRIQUE**, une vraie application en
+production SANS RAPPORT (comptes utilisateurs, marketplace, communauté,
+certifications, parrainage — Android + Web/PWA), avec ses propres :
+- Collections Firestore : `licenseKeys` (≠ notre `licenses`), `users`,
+  `admins`, `posts`, `marketplaceMerchants`, `videos`, `certifications`...
+- Cloud Functions : `sendBroadcastPush`, `publishDailyContent`,
+  `sendScheduledMessages`, `subscribeToDailyContent`.
+- Sites Hosting : `riea-afrique-web`, `rien-afrique` (défaut).
+- Un ruleset Firestore complet et complexe (900+ lignes), géré ailleurs
+  (pas dans ce dépôt).
+
+**Incident réel survenu** : un `firebase deploy --only functions,firestore:rules`
+sans cibler précisément a (1) tenté de supprimer les 4 fonctions
+préexistantes (bloqué automatiquement par le CLI, rien perdu) et (2) **a
+remplacé le ruleset Firestore complet de RIEA AFRIQUE par un fichier ne
+contenant que notre règle `licenses/`, pendant ~42 minutes**, bloquant tout
+accès client direct à cette app. Restauré par l'utilisateur.
+
+**Conséquences définitives (ne jamais revenir en arrière là-dessus)** :
+- `firebase-functions/firebase.json` **ne référence plus `firestore.rules`
+  du tout** — aucun déploiement depuis ce dossier ne peut plus toucher aux
+  règles Firestore, structurellement.
+- **Ne JAMAIS** faire `firebase deploy --only functions` sans lister les
+  noms précis (`functions:nomDeLaFonction,...`) — toujours cibler.
+- **Ne JAMAIS** déployer `firestore.rules` ni `storage.rules` depuis ce
+  dossier — pas nécessaire de toute façon (Admin SDK contourne les règles).
+- Toute nouvelle collection Firestore, fonction, secret ou site Hosting
+  doit avoir un nom qui ne collisionne PAS avec l'existant côté RIEA
+  AFRIQUE — vérifier avant de créer (demande explicite de l'utilisateur :
+  "si tu remarques qu'ils portent le même nom, ajoute un chiffre").
+- Avant tout déploiement touchant ce projet, lister l'existant en
+  lecture seule (`firebase functions:list`, `hosting:sites:list`) pour
+  confirmer l'absence de collision.
+- Cette règle est aussi enregistrée dans la mémoire globale Claude Code
+  (`preserve-existing-infrastructure.md`, épinglée) — s'applique à TOUT
+  projet partagé, pas seulement celui-ci.
+
+### 3. Client mobile — Option B retenue (Baileys embarqué sur le téléphone, session du soir 2026-09-09)
+
+Décision prise avec l'utilisateur : **Option B**, pas Option A. Baileys tourne
+réellement sur le téléphone (aucun serveur/VPS requis pour WhatsApp), au prix
+d'un chantier plus lourd que prévu (build natif Android). Détail complet,
+risques et code exact : **`mobile/README.md`** — ici, juste les faits clés
+pour reprendre sans tout relire.
+
+- **Projet créé** : `mobile/CyrusMobile/` (React Native **0.73.9**, Old
+  Architecture obligatoire — `nodejs-mobile-react-native` casse en New
+  Architecture, issues GitHub #78/#88 non résolues). Build restreint à
+  `arm64-v8a` seul (pas les 4 ABI) pour limiter la taille de l'APK.
+- **`nodejs-mobile-react-native`** installé et lié : le runtime Node
+  (**18.20.4**, dernière version publiée par ce paquet — jamais monté à
+  Node 20+) tourne dans un thread natif dédié sur l'appareil.
+- **Baileys épinglé à la version 6.7.16** (pas plus récent) : `baileys`
+  exige Node ≥20 depuis la 6.7.17, incompatible avec le runtime embarqué.
+  Conséquence acceptée avec l'utilisateur : 6.7.16 est vulnérable à
+  **CVE-2026-48063** (critique, usurpation de messages) sans correctif
+  possible tant que `nodejs-mobile-react-native` ne bundle pas Node ≥20.
+  Contournement officiel appliqué dans
+  `nodejs-assets/nodejs-project/main.js` (filtrage `requestId`/
+  `placeholderResendMessage` + `syncFullHistory:false`). **À surveiller** :
+  dès qu'une version Node≥20 de `nodejs-mobile-react-native` sort, remonter
+  Baileys à 6.7.22+ et retirer ce contournement.
+- **Pairing par code** (numéro de téléphone → code à saisir dans WhatsApp),
+  pas par QR visuel — évite d'ajouter `react-native-svg` + une lib de rendu
+  QR (choix "allégé" demandé par l'utilisateur). Implémenté dans `App.tsx`.
+- **Foreground service Android** (`KeepAliveService.kt`, type
+  `remoteMessaging` — pas `dataSync`, plafonné à 6h/24h depuis Android 14)
+  pour que le process (et donc le thread Node/Baileys) survive en
+  arrière-plan. Démarré automatiquement dans `MainApplication.kt#onCreate`.
+- **Vérification de sécurité faite avant de coder** : le composant Rust de
+  Baileys (`whatsapp-rust-bridge`) est en réalité du **WebAssembly portable**
+  inliné en JS — aucune compilation native/NDK requise pour Baileys
+  lui-même. `libsignal` est une réimplémentation pure JS. Seul le pont
+  `nodejs-mobile-react-native` a une partie native (déjà précompilée en
+  `.so` par le paquet).
+- **Bloqué sur un problème d'environnement, PAS de code** : le build Gradle
+  (`./gradlew assembleDebug` / `npx react-native run-android`) échoue à la
+  compilation Java du module `nodejs-mobile-react-native` — le JDK embarqué
+  par Android Studio (`.../Android Studio/jbr`, JetBrains Runtime) **n'a pas
+  de dossier `jmods`**, indispensable à `jlink` pour l'image JDK de
+  `compileSdk 34`. Solution : installer un vrai JDK complet (ex. Eclipse
+  Temurin 17, ~150-200 Mo) et relancer avec `JAVA_HOME` pointant dessus.
+  **Déjà en cache local, pas à retélécharger** : Gradle 8.3, NDK
+  25.1.8937393, Android SDK Platform 34.
+- **Prochaine étape concrète** : installer un JDK complet → `JAVA_HOME=...
+  ./gradlew assembleDebug` dans `mobile/CyrusMobile/android/` → connecter un
+  téléphone Android → `npx react-native run-android` → saisir le code
+  d'association pour valider le pairing de bout en bout (texte seul, pas de
+  médias/groupes à ce stade).
+
+### Ce qui reste à faire
+1. **Recharger fal.ai** (bloquant pour la génération d'image, VPS ET
+   Firebase) — action utilisateur.
+2. ~~Terminer le build `.exe`~~ — **fait le 2026-09-09**, y compris la
+   correction des deux `require('../../lib/...')` de `campaigns.js` qui
+   sortaient du dossier `local-client/` (voir section `local-client/`
+   ci-dessus). Exe final testé : PE valide, aucun warning de dépendance
+   non résolue. **Reste à faire manuellement** : lancer l'exe une fois
+   sur ce PC pour valider de bout en bout (QR WhatsApp, création d'une
+   campagne de test) avant de le distribuer — la compilation qui réussit
+   ne garantit pas que whatsapp-web.js/Puppeteer se comportent
+   identiquement packagés vs. en `node index.js`.
+3. **Auto-update réel** — `lib/updateCheck.js` ne fait que détecter/
+   journaliser ; télécharger + appliquer silencieusement un nouvel exe
+   reste à écrire.
+4. **Mobile (Android)** — Option B choisie et bien avancée (voir section 3
+   ci-dessus) : projet créé, Baileys embarqué et configuré, pairing par
+   code, foreground service. **Bloqué sur l'installation d'un JDK complet**
+   (jmods manquants côté JDK Android Studio) avant de pouvoir tester sur un
+   vrai appareil — pas un problème de code. iOS non commencé (hors scope du
+   premier spike).
+5. **Planification de campagnes SaaS/VPS** (`queues/campaignEngine.js`) —
+   PAS commencé, distinct de `local-client/lib/campaigns.js` (qui lui est
+   déjà 100% autonome). À clarifier si l'utilisateur veut vraiment ce
+   chantier séparé.
+6. **Firebase Storage / cascade IA complète** côté Firebase — actuellement
+   MVP un seul fournisseur (Groq/fal.ai), pas la cascade complète du VPS.
 
 # ARCHITECTURE SYSTEME & DIRECTIVES DE DEVELOPPEMENT PROFESSIONNEL
 

@@ -20,7 +20,7 @@
 //   firebase functions:secrets:set GROQ_API_KEY
 //   firebase functions:secrets:set FAL_KEY
 //   firebase functions:secrets:set ADMIN_SECRET
-//   firebase deploy --only functions:verifyLicenseOffline,functions:createLicenseOffline,functions:generateTextFallback,functions:generateImageFallback
+//   firebase deploy --only functions:verifyLicenseOffline,functions:createLicenseOffline,functions:listLicensesOffline,functions:setLicenseActiveOffline,functions:updateLicenseOffline,functions:deleteLicenseOffline,functions:generateTextFallback,functions:generateImageFallback
 // JAMAIS "firebase deploy --only functions" (sans noms précis) ni
 // ",firestore:rules" — voir README.md : ce projet Firebase est PARTAGÉ avec
 // une autre application (RIEA AFRIQUE), un déploiement non scopé a déjà
@@ -74,18 +74,33 @@ function generateKeyString() {
 // s'y opposer. Le verrou "un appareil par clé UNE FOIS lié" reste actif
 // (DEVICE_MISMATCH ci-dessous) — seule la PREMIÈRE liaison est désormais
 // permise hors-ligne.
+// Dernier refus de vérification par clé, en mémoire d'instance uniquement
+// (survit tant que cette instance Cloud Function reste "chaude" entre deux
+// requêtes, perdu sur cold start) — même rôle que licenses.js#failureStats
+// côté VPS : alimente uniquement la colonne "Cause" de l'admin-ui, jamais
+// l'autorité de la licence elle-même (qui reste Firestore).
+const failureStats = new Map(); // key -> { reason: string, at: number(ms) }
+function recordFailure(key, reason) {
+  failureStats.set(key, { reason, at: Date.now() });
+}
+
 exports.verifyLicenseOffline = onRequest(async (req, res) => {
   const { key, deviceId } = req.body || {};
   if (!key) return res.status(400).json({ valid: false, reason: 'MISSING_KEY' });
   if (!deviceId) return res.status(400).json({ valid: false, reason: 'MISSING_DEVICE_ID' });
 
-  const ref = db.collection('licenses').doc(String(key).trim().toUpperCase());
+  const normalizedKey = String(key).trim().toUpperCase();
+  const ref = db.collection('licenses').doc(normalizedKey);
   const doc = await ref.get();
   if (!doc.exists) return res.status(404).json({ valid: false, reason: 'NOT_FOUND' });
 
   const license = doc.data();
-  if (!license.active) return res.status(403).json({ valid: false, reason: 'INACTIVE' });
+  if (!license.active) {
+    recordFailure(normalizedKey, 'INACTIVE');
+    return res.status(403).json({ valid: false, reason: 'INACTIVE' });
+  }
   if (license.expiresAt && new Date(license.expiresAt).getTime() < Date.now()) {
+    recordFailure(normalizedKey, 'EXPIRED');
     return res.status(403).json({ valid: false, reason: 'EXPIRED' });
   }
 
@@ -97,6 +112,7 @@ exports.verifyLicenseOffline = onRequest(async (req, res) => {
     license.boundDeviceId = deviceId;
     license.boundAt = boundAt;
   } else if (license.boundDeviceId !== deviceId) {
+    recordFailure(normalizedKey, 'DEVICE_MISMATCH');
     return res.status(403).json({ valid: false, reason: 'DEVICE_MISMATCH' });
   }
 
@@ -147,12 +163,48 @@ exports.createLicenseOffline = onRequest({ secrets: [ADMIN_SECRET], cors: true }
 });
 
 // Pendant du GET /api/admin/licenses côté VPS — liste triée par date de
-// création (la plus récente d'abord), comme le portail admin du VPS.
+// création (la plus récente d'abord), comme le portail admin du VPS. Injecte
+// aussi la dernière cause de refus connue de CETTE instance (voir
+// failureStats ci-dessus) pour que l'admin-ui puisse afficher la même
+// colonne "Cause" que le portail VPS.
 exports.listLicensesOffline = onRequest({ secrets: [ADMIN_SECRET], cors: true }, async (req, res) => {
   if (!requireAdminSecret(req, res)) return;
 
   const snapshot = await db.collection('licenses').orderBy('createdAt', 'desc').get();
-  res.json(snapshot.docs.map((doc) => doc.data()));
+  res.json(snapshot.docs.map((doc) => {
+    const license = doc.data();
+    const failure = failureStats.get(doc.id);
+    return {
+      ...license,
+      lastFailureReason: failure ? failure.reason : null,
+      lastFailureAt: failure ? new Date(failure.at).toISOString() : null,
+    };
+  }));
+});
+
+// Pendant du POST /api/admin/licenses/:key/update côté VPS — modules
+// autorisés et/ou date d'expiration (renouvellement) en un seul appel, sans
+// toucher `active` (voir setLicenseActiveOffline pour ça).
+exports.updateLicenseOffline = onRequest({ secrets: [ADMIN_SECRET], cors: true }, async (req, res) => {
+  if (!requireAdminSecret(req, res)) return;
+
+  const { key, allowedModules, expiresAt } = req.body || {};
+  if (!key) return res.status(400).json({ error: 'Clé manquante.' });
+
+  const ref = db.collection('licenses').doc(String(key).trim().toUpperCase());
+  const doc = await ref.get();
+  if (!doc.exists) return res.status(404).json({ error: 'Licence introuvable.' });
+
+  const updates = {};
+  if (allowedModules !== undefined) updates.allowedModules = normalizeModules(allowedModules);
+  if (expiresAt !== undefined) updates.expiresAt = expiresAt || null;
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'Rien à mettre à jour (allowedModules et/ou expiresAt requis).' });
+  }
+
+  await ref.update(updates);
+  res.json({ ...doc.data(), ...updates });
 });
 
 // Pendant de POST /api/admin/licenses/:key/active côté VPS.

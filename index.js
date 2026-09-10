@@ -991,6 +991,23 @@ app.post('/api/auth/verify-key', async (req, res) => {
   });
 });
 
+// ---------- Auto-update du package PC installable (local-client/) ----------
+// Endpoint public (pas de licence nécessaire : le client doit pouvoir savoir
+// qu'une mise à jour existe même si sa propre clé est expirée). Stub minimal
+// pour l'instant : compare juste des numéros de version et renvoie une URL de
+// téléchargement — le TÉLÉCHARGEMENT/APPLICATION en arrière-plan côté client
+// (remplacement de l'exe, redémarrage) reste à implémenter dans
+// local-client/lib/updateCheck.js au moment de packager une vraie release.
+const LOCAL_CLIENT_LATEST_VERSION = process.env.LOCAL_CLIENT_LATEST_VERSION || '1.0.0';
+const LOCAL_CLIENT_DOWNLOAD_URL = process.env.LOCAL_CLIENT_DOWNLOAD_URL || '';
+app.get('/api/check-update', (req, res) => {
+  res.status(200).json({
+    latestVersion: LOCAL_CLIENT_LATEST_VERSION,
+    downloadUrl: LOCAL_CLIENT_DOWNLOAD_URL,
+    notes: process.env.LOCAL_CLIENT_UPDATE_NOTES || '',
+  });
+});
+
 app.get('/api/admin/licenses', requireAdmin, (req, res) => {
   res.status(200).json(licenses.listLicensesWithUsage());
 });
@@ -1059,6 +1076,39 @@ app.post('/api/admin/licenses/:key/toggle', requireAdmin, async (req, res) => {
 
   try {
     const license = await licenses.setLicenseActive(req.params.key, Boolean(active));
+    res.status(200).json(license);
+  } catch (err) {
+    if (err.message === 'LICENSE_NOT_FOUND') {
+      return res.status(404).json({ error: 'Clé de licence introuvable.' });
+    }
+    console.error('Erreur lors de la mise à jour de la licence :', err);
+    res.status(500).json({ error: 'Erreur interne du serveur.' });
+  }
+});
+
+// Modifie une clé déjà émise sans la recréer : modules autorisés et/ou date
+// d'expiration (renouvellement) en un seul appel — voir le panneau "Gérer"
+// du tableau de bord admin. Les deux champs sont optionnels et indépendants
+// (envoyer l'un sans l'autre ne touche pas le champ omis) ; `active` n'est
+// volontairement pas modifiable ici, voir /toggle ci-dessus pour ça.
+app.post('/api/admin/licenses/:key/update', requireAdmin, async (req, res) => {
+  const { allowedModules, expiresAt } = req.body || {};
+
+  if (expiresAt !== undefined && expiresAt !== null && Number.isNaN(new Date(expiresAt).getTime())) {
+    return res.status(400).json({ error: 'Date d\'expiration invalide.' });
+  }
+
+  try {
+    let license;
+    if (allowedModules !== undefined) {
+      license = await licenses.updateLicenseModules(req.params.key, allowedModules);
+    }
+    if (expiresAt !== undefined) {
+      license = await licenses.renewLicense(req.params.key, expiresAt);
+    }
+    if (!license) {
+      return res.status(400).json({ error: 'Rien à mettre à jour (allowedModules et/ou expiresAt requis).' });
+    }
     res.status(200).json(license);
   } catch (err) {
     if (err.message === 'LICENSE_NOT_FOUND') {
@@ -3074,6 +3124,34 @@ app.post('/api/media/generate-image', requireAccess, requireModule('studio_video
     }
     console.error('Erreur génération image IA (fal.ai):', err.message);
     res.status(502).json({ error: 'Échec de la génération image IA côté serveur — repli automatique sur Pollinations.' });
+  }
+});
+
+// ---------- Passerelle IA texte générique (voir local-client/, package PC
+// installable on-premise) ----------
+// Contrairement aux routes /api/studio/* ci-dessous (skills spécifiques,
+// sessions AI Studio), ce point d'entrée générique existe pour tout client
+// EXTERNE au dashboard web (typiquement local-client/lib/aiGateway.js) qui a
+// simplement besoin d'un prompt -> texte, sans jamais détenir la moindre clé
+// de fournisseur IA (Groq/Gemini/OpenRouter/Hugging Face restent
+// exclusivement côté serveur, voir lib/ai/llmFallbackEngine.js). Même
+// authentification que le reste du dashboard (x-license-key/x-device-id ou
+// mot de passe admin) — voir requireAccess ci-dessus.
+app.post('/api/ai/generate-text', requireAccess, requireModule('studio_video'), async (req, res) => {
+  const prompt = String((req.body || {}).prompt || '').trim().slice(0, 8000);
+  if (!prompt) {
+    return res.status(400).json({ error: 'Prompt manquant.' });
+  }
+  const history = Array.isArray((req.body || {}).history) ? req.body.history.slice(-20) : [];
+  const mode = (req.body || {}).mode || undefined;
+  const skillKey = (req.body || {}).skillKey || undefined;
+
+  try {
+    const { text, provider } = await llmFallbackEngine.generateAIResponse(prompt, history, null, mode, skillKey);
+    res.json({ text, provider });
+  } catch (err) {
+    console.error('Erreur passerelle IA texte (local-client):', err.message);
+    res.status(502).json({ error: 'Échec de la génération de texte IA côté serveur.' });
   }
 });
 

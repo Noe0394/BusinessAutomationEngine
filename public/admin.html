@@ -38,6 +38,12 @@
     .badge.disconnected { background: #eee; color: #777; }
     .status-delivered { color: #1a7a3c; font-weight: bold; }
     .status-failed { color: #c0392b; font-weight: bold; }
+    .cause-ok { color: #1a7a3c; }
+    .cause-bad { color: #c0392b; }
+
+    .manage-row td { background: #f9f9fc; padding: 1rem; }
+    .manage-row .field { margin-bottom: 0.75rem; }
+    .manage-row label.mod { font-weight: normal; display: inline-block; margin-right: 1rem; }
 
     .field { margin-bottom: 1rem; }
     .field label { display: block; font-weight: bold; margin-bottom: 0.3rem; }
@@ -134,16 +140,20 @@
 
       <section>
         <h2>Clés existantes</h2>
+        <div class="field" style="margin-bottom: 1rem;">
+          <label for="license-search">Rechercher une clé (par code ou par note)</label>
+          <input type="text" id="license-search" placeholder="Ex: KEY-AFFFF2D9-2026 ou &quot;client Dupont&quot;" />
+        </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Clé</th><th>Créée le</th><th>Expire le</th><th>Statut</th><th>En ligne</th>
+                <th>Clé</th><th>Créée le</th><th>Expire le</th><th>Statut</th><th>Cause</th><th>En ligne</th>
                 <th>Requêtes</th><th>Modules</th><th>Appareil</th><th>Note</th><th>Action</th>
               </tr>
             </thead>
             <tbody id="licenses-body">
-              <tr><td colspan="10" class="empty">Chargement...</td></tr>
+              <tr><td colspan="11" class="empty">Chargement...</td></tr>
             </tbody>
           </table>
         </div>
@@ -288,88 +298,259 @@
       }
     }
 
-    async function loadLicenses() {
-      const tbody = document.getElementById('licenses-body');
+    // Liste complète mise en cache pour filtrer la recherche sans refaire
+    // d'appel réseau à chaque frappe, et clé actuellement ouverte dans le
+    // panneau "Gérer" (un seul panneau ouvert à la fois, plus simple à gérer
+    // que des IDs uniques par ligne).
+    let allLicenses = [];
+    let managingKey = null;
 
+    // Cause affichée pour aider l'admin à diagnostiquer une clé sans état
+    // "OK" apparent : dérivée en direct des champs de la licence (jamais
+    // stockée telle quelle) sauf pour l'appareil refusé, seul événement
+    // ponctuel non reconstituable après coup — voir licenses.js#recordFailure.
+    function computeCause(lic) {
+      if (!lic.active) return { text: 'Désactivée manuellement', bad: true };
+      if (lic.expiresAt && new Date(lic.expiresAt).getTime() < Date.now()) {
+        return { text: 'Expirée le ' + new Date(lic.expiresAt).toLocaleDateString('fr-FR'), bad: true };
+      }
+      if (lic.lastFailureReason === 'DEVICE_MISMATCH' && lic.lastFailureAt) {
+        const minutesAgo = Math.max(0, Math.round((Date.now() - new Date(lic.lastFailureAt).getTime()) / 60000));
+        return { text: 'Appareil refusé (tentative il y a ' + minutesAgo + ' min)', bad: true };
+      }
+      return { text: 'OK', bad: false };
+    }
+
+    function matchesSearch(lic, query) {
+      if (!query) return true;
+      const haystack = (lic.key + ' ' + (lic.note || '')).toLowerCase();
+      return haystack.includes(query.toLowerCase());
+    }
+
+    async function loadLicenses() {
       try {
         const res = await apiFetch('/api/admin/licenses');
-        const list = await res.json();
-        tbody.innerHTML = '';
+        allLicenses = await res.json();
+        renderLicenses();
+      } catch (err) {
+        document.getElementById('licenses-body').innerHTML =
+          '<tr><td colspan="11" class="empty">Erreur lors du chargement des licences.</td></tr>';
+      }
+    }
 
-        if (!Array.isArray(list) || list.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="10" class="empty">Aucune clé générée.</td></tr>';
-          return;
+    function renderLicenses() {
+      const tbody = document.getElementById('licenses-body');
+      const query = document.getElementById('license-search').value.trim();
+      const list = Array.isArray(allLicenses) ? allLicenses.filter((lic) => matchesSearch(lic, query)) : [];
+      tbody.innerHTML = '';
+
+      if (list.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="11" class="empty">'
+          + (query ? 'Aucune clé ne correspond à la recherche.' : 'Aucune clé générée.') + '</td></tr>';
+        return;
+      }
+
+      list.forEach((lic) => {
+        const tr = document.createElement('tr');
+
+        const keyTd = document.createElement('td');
+        keyTd.textContent = lic.key;
+
+        const createdTd = document.createElement('td');
+        createdTd.textContent = new Date(lic.createdAt).toLocaleDateString();
+
+        const expTd = document.createElement('td');
+        expTd.textContent = lic.expiresAt ? new Date(lic.expiresAt).toLocaleDateString() : 'Illimitée';
+
+        const statusTd = document.createElement('td');
+        statusTd.textContent = lic.active ? 'Active' : 'Désactivée';
+        statusTd.className = lic.active ? 'status-delivered' : 'status-failed';
+
+        const cause = computeCause(lic);
+        const causeTd = document.createElement('td');
+        causeTd.textContent = cause.text;
+        causeTd.className = cause.bad ? 'cause-bad' : 'cause-ok';
+
+        const onlineTd = document.createElement('td');
+        const onlineBadge = document.createElement('span');
+        onlineBadge.className = 'badge ' + (lic.online ? 'connected' : 'disconnected');
+        onlineBadge.textContent = lic.online ? 'En ligne' : 'Hors ligne';
+        onlineTd.appendChild(onlineBadge);
+
+        const requestsTd = document.createElement('td');
+        requestsTd.textContent = lic.requestCount || 0;
+
+        const modulesTd = document.createElement('td');
+        const modules = Array.isArray(lic.allowedModules) ? lic.allowedModules : [];
+        modulesTd.textContent = modules.length > 0 ? modules.map((m) => MODULE_LABELS[m] || m).join(', ') : 'Aucun';
+
+        const deviceTd = document.createElement('td');
+        const deviceBadge = document.createElement('span');
+        deviceBadge.className = 'badge ' + (lic.boundDeviceId ? 'connected' : 'disconnected');
+        deviceBadge.textContent = lic.boundDeviceId ? 'Lié' : 'Libre';
+        deviceTd.appendChild(deviceBadge);
+
+        const noteTd = document.createElement('td');
+        noteTd.textContent = lic.note || '-';
+
+        const actionTd = document.createElement('td');
+        const manageBtn = document.createElement('button');
+        manageBtn.type = 'button';
+        manageBtn.textContent = managingKey === lic.key ? 'Fermer' : 'Gérer';
+        manageBtn.addEventListener('click', () => {
+          managingKey = managingKey === lic.key ? null : lic.key;
+          renderLicenses();
+        });
+        actionTd.appendChild(manageBtn);
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.style.marginLeft = '0.5rem';
+        btn.textContent = lic.active ? 'Désactiver' : 'Activer';
+        btn.addEventListener('click', () => toggleLicense(lic.key, !lic.active));
+        actionTd.appendChild(btn);
+
+        if (lic.boundDeviceId) {
+          const unbindBtn = document.createElement('button');
+          unbindBtn.type = 'button';
+          unbindBtn.style.marginLeft = '0.5rem';
+          unbindBtn.textContent = "Libérer l'appareil";
+          unbindBtn.addEventListener('click', () => unbindDevice(lic.key));
+          actionTd.appendChild(unbindBtn);
         }
 
-        list.forEach((lic) => {
-          const tr = document.createElement('tr');
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.style.marginLeft = '0.5rem';
+        deleteBtn.style.background = '#c0392b';
+        deleteBtn.style.color = '#fff';
+        deleteBtn.textContent = 'Supprimer';
+        deleteBtn.addEventListener('click', () => deleteLicenseKey(lic.key));
+        actionTd.appendChild(deleteBtn);
 
-          const keyTd = document.createElement('td');
-          keyTd.textContent = lic.key;
+        [keyTd, createdTd, expTd, statusTd, causeTd, onlineTd, requestsTd, modulesTd, deviceTd, noteTd, actionTd].forEach((td) => tr.appendChild(td));
+        tbody.appendChild(tr);
 
-          const createdTd = document.createElement('td');
-          createdTd.textContent = new Date(lic.createdAt).toLocaleDateString();
+        if (managingKey === lic.key) {
+          tbody.appendChild(buildManageRow(lic));
+        }
+      });
+    }
 
-          const expTd = document.createElement('td');
-          expTd.textContent = lic.expiresAt ? new Date(lic.expiresAt).toLocaleDateString() : 'Illimitée';
+    document.getElementById('license-search').addEventListener('input', renderLicenses);
 
-          const statusTd = document.createElement('td');
-          statusTd.textContent = lic.active ? 'Active' : 'Désactivée';
-          statusTd.className = lic.active ? 'status-delivered' : 'status-failed';
+    // Panneau "Gérer" : modules autorisés + renouvellement de la durée de
+    // validité pour une clé déjà émise, en un seul enregistrement — voir
+    // POST /api/admin/licenses/:key/update (licenses.js#updateLicenseModules
+    // et #renewLicense). Le sélecteur de durée démarre sur "Ne pas modifier"
+    // : la date d'expiration n'est touchée que si l'admin choisit
+    // explicitement une unité.
+    function buildManageRow(lic) {
+      const tr = document.createElement('tr');
+      tr.className = 'manage-row';
+      const td = document.createElement('td');
+      td.colSpan = 11;
 
-          const onlineTd = document.createElement('td');
-          const onlineBadge = document.createElement('span');
-          onlineBadge.className = 'badge ' + (lic.online ? 'connected' : 'disconnected');
-          onlineBadge.textContent = lic.online ? 'En ligne' : 'Hors ligne';
-          onlineTd.appendChild(onlineBadge);
+      const modulesField = document.createElement('div');
+      modulesField.className = 'field';
+      const modulesLabel = document.createElement('label');
+      modulesLabel.textContent = 'Modules autorisés';
+      modulesField.appendChild(modulesLabel);
+      const currentModules = Array.isArray(lic.allowedModules) ? lic.allowedModules : [];
+      const moduleCheckboxes = {};
+      Object.keys(MODULE_LABELS).forEach((m) => {
+        const label = document.createElement('label');
+        label.className = 'mod';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = currentModules.includes(m);
+        moduleCheckboxes[m] = cb;
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(' ' + MODULE_LABELS[m]));
+        modulesField.appendChild(label);
+      });
+      td.appendChild(modulesField);
 
-          const requestsTd = document.createElement('td');
-          requestsTd.textContent = lic.requestCount || 0;
+      const durationField = document.createElement('div');
+      durationField.className = 'field';
+      const durationLabel = document.createElement('label');
+      durationLabel.textContent = 'Renouveler la durée de validité (à partir de maintenant)';
+      durationField.appendChild(durationLabel);
+      const row = document.createElement('div');
+      row.className = 'row';
+      const valueInput = document.createElement('input');
+      valueInput.type = 'number';
+      valueInput.min = '0';
+      valueInput.value = '30';
+      valueInput.style.maxWidth = '120px';
+      const unitSelect = document.createElement('select');
+      [
+        ['none', 'Ne pas modifier'],
+        ['hours', 'Heure(s)'],
+        ['days', 'Jour(s)'],
+        ['months', 'Mois'],
+        ['years', 'Année(s)'],
+        ['unlimited', 'Illimitée'],
+      ].forEach(([value, label]) => {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        unitSelect.appendChild(opt);
+      });
+      row.appendChild(wrapField(valueInput));
+      row.appendChild(wrapField(unitSelect));
+      durationField.appendChild(row);
+      td.appendChild(durationField);
 
-          const modulesTd = document.createElement('td');
-          const modules = Array.isArray(lic.allowedModules) ? lic.allowedModules : [];
-          modulesTd.textContent = modules.length > 0 ? modules.map((m) => MODULE_LABELS[m] || m).join(', ') : 'Aucun';
+      const feedback = document.createElement('p');
+      feedback.hidden = true;
+      td.appendChild(feedback);
 
-          const deviceTd = document.createElement('td');
-          const deviceBadge = document.createElement('span');
-          deviceBadge.className = 'badge ' + (lic.boundDeviceId ? 'connected' : 'disconnected');
-          deviceBadge.textContent = lic.boundDeviceId ? 'Lié' : 'Libre';
-          deviceTd.appendChild(deviceBadge);
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'primary-btn';
+      saveBtn.textContent = 'Enregistrer';
+      saveBtn.addEventListener('click', async () => {
+        const allowedModules = Object.keys(moduleCheckboxes).filter((m) => moduleCheckboxes[m].checked);
+        const body = { allowedModules };
+        const unit = unitSelect.value;
+        if (unit !== 'none') {
+          body.expiresAt = unit === 'unlimited' ? null : computeExpiresAtFromInputs(valueInput.value, unit);
+        }
+        saveBtn.disabled = true;
+        try {
+          await apiFetch('/api/admin/licenses/' + encodeURIComponent(lic.key) + '/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          managingKey = null;
+          loadLicenses();
+        } catch (err) {
+          feedback.hidden = false;
+          feedback.style.color = '#c0392b';
+          feedback.textContent = 'Erreur lors de l\'enregistrement.';
+          saveBtn.disabled = false;
+        }
+      });
+      td.appendChild(saveBtn);
 
-          const noteTd = document.createElement('td');
-          noteTd.textContent = lic.note || '-';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.style.marginLeft = '0.5rem';
+      cancelBtn.textContent = 'Annuler';
+      cancelBtn.addEventListener('click', () => { managingKey = null; renderLicenses(); });
+      td.appendChild(cancelBtn);
 
-          const actionTd = document.createElement('td');
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.textContent = lic.active ? 'Désactiver' : 'Activer';
-          btn.addEventListener('click', () => toggleLicense(lic.key, !lic.active));
-          actionTd.appendChild(btn);
+      tr.appendChild(td);
+      return tr;
+    }
 
-          if (lic.boundDeviceId) {
-            const unbindBtn = document.createElement('button');
-            unbindBtn.type = 'button';
-            unbindBtn.style.marginLeft = '0.5rem';
-            unbindBtn.textContent = "Libérer l'appareil";
-            unbindBtn.addEventListener('click', () => unbindDevice(lic.key));
-            actionTd.appendChild(unbindBtn);
-          }
-
-          const deleteBtn = document.createElement('button');
-          deleteBtn.type = 'button';
-          deleteBtn.style.marginLeft = '0.5rem';
-          deleteBtn.style.background = '#c0392b';
-          deleteBtn.style.color = '#fff';
-          deleteBtn.textContent = 'Supprimer';
-          deleteBtn.addEventListener('click', () => deleteLicenseKey(lic.key));
-          actionTd.appendChild(deleteBtn);
-
-          [keyTd, createdTd, expTd, statusTd, onlineTd, requestsTd, modulesTd, deviceTd, noteTd, actionTd].forEach((td) => tr.appendChild(td));
-          tbody.appendChild(tr);
-        });
-      } catch (err) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty">Erreur lors du chargement des licences.</td></tr>';
-      }
+    function wrapField(el) {
+      const div = document.createElement('div');
+      div.className = 'field';
+      div.appendChild(el);
+      return div;
     }
 
     async function toggleLicense(key, active) {
@@ -427,12 +608,12 @@
 
     // Durée composée librement (heures/jours/mois/années) plutôt que des
     // préréglages fixes — un admin peut viser une expiration précise à
-    // l'heure près, ou sur plusieurs années, sans valeur imposée.
-    function computeExpiresAt() {
-      const unit = document.getElementById('new-license-duration-unit').value;
+    // l'heure près, ou sur plusieurs années, sans valeur imposée. Partagée
+    // entre le formulaire de création et le panneau "Gérer" (renouvellement).
+    function computeExpiresAtFromInputs(rawAmount, unit) {
       if (unit === 'unlimited') return null;
 
-      const amount = parseInt(document.getElementById('new-license-duration-value').value, 10) || 0;
+      const amount = parseInt(rawAmount, 10) || 0;
       const date = new Date();
 
       if (unit === 'hours') date.setHours(date.getHours() + amount);
@@ -441,6 +622,12 @@
       else if (unit === 'years') date.setFullYear(date.getFullYear() + amount);
 
       return date.toISOString();
+    }
+
+    function computeExpiresAt() {
+      const unit = document.getElementById('new-license-duration-unit').value;
+      const amount = document.getElementById('new-license-duration-value').value;
+      return computeExpiresAtFromInputs(amount, unit);
     }
 
     function showGenerateFeedback(message, isError) {

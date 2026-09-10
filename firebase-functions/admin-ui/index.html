@@ -23,6 +23,12 @@
   form.create input, form.create select { padding: 6px; margin: 4px 6px 4px 0; }
   label.mod { font-size: 0.85rem; margin-right: 10px; }
   #error { color: #b91c1c; margin-top: 8px; }
+  .cause-ok { color: #166534; }
+  .cause-bad { color: #991b1b; }
+  #search { width: 100%; padding: 8px; margin: 12px 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 6px; }
+  .manage-panel { background: #f4f4f4; border-radius: 6px; padding: 12px; margin: 4px 0 12px; }
+  .manage-panel .manage-mod { font-size: 0.85rem; margin-right: 12px; }
+  .manage-panel .row { margin: 8px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -57,9 +63,11 @@
   </form>
   <div id="error"></div>
 
+  <input type="text" id="search" placeholder="Rechercher une clé ou une note...">
+
   <table>
     <thead>
-      <tr><th>Clé</th><th>Note</th><th>Statut</th><th>Expire</th><th>Appareil lié</th><th></th></tr>
+      <tr><th>Clé</th><th>Note</th><th>Statut</th><th>Cause</th><th>Expire</th><th>Modules</th><th>Appareil lié</th><th></th></tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>
@@ -82,13 +90,37 @@ function unlock() {
   refresh();
 }
 
+const MODULE_LABELS = { whatsapp: 'WhatsApp', telegram: 'Telegram', studio_video: 'Studio IA' };
+let allLicenses = [];
+let managingKey = null;
+
+// Même logique que public/admin.html#computeCause côté VPS, gardée en
+// double volontairement : deux fichiers HTML statiques indépendants, pas de
+// module partagé entre le portail VPS et cet admin-ui Firebase.
+function computeCause(l) {
+  if (!l.active) return { text: 'Désactivée manuellement', bad: true };
+  if (l.expiresAt && new Date(l.expiresAt).getTime() < Date.now()) {
+    return { text: 'Expirée le ' + new Date(l.expiresAt).toLocaleDateString('fr-FR'), bad: true };
+  }
+  if (l.lastFailureReason === 'DEVICE_MISMATCH' && l.lastFailureAt) {
+    const minutesAgo = Math.max(0, Math.round((Date.now() - new Date(l.lastFailureAt).getTime()) / 60000));
+    return { text: 'Appareil refusé (tentative il y a ' + minutesAgo + ' min)', bad: true };
+  }
+  return { text: 'OK', bad: false };
+}
+
+function matchesSearch(l, query) {
+  if (!query) return true;
+  return (l.key + ' ' + (l.note || '')).toLowerCase().includes(query.toLowerCase());
+}
+
 async function refresh() {
   document.getElementById('error').textContent = '';
   try {
     const res = await fetch(`${FUNCTIONS_BASE}/listLicensesOffline`, { headers: headers() });
     if (!res.ok) throw new Error((await res.json()).error || 'Erreur');
-    const licenses = await res.json();
-    document.getElementById('rows').innerHTML = licenses.map(rowHtml).join('');
+    allLicenses = await res.json();
+    renderRows();
   } catch (err) {
     if (String(err.message).includes('invalide')) {
       // Secret refusé : retour à l'écran de saisie plutôt que de rester bloqué.
@@ -102,20 +134,105 @@ async function refresh() {
   }
 }
 
+function renderRows() {
+  const query = document.getElementById('search').value.trim();
+  const list = allLicenses.filter((l) => matchesSearch(l, query));
+  document.getElementById('rows').innerHTML = list.length > 0
+    ? list.map(rowHtml).join('')
+    : `<tr><td colspan="8">${query ? 'Aucune clé ne correspond à la recherche.' : 'Aucune clé.'}</td></tr>`;
+}
+
+document.getElementById('search').addEventListener('input', renderRows);
+
 function rowHtml(l) {
   const expires = l.expiresAt ? new Date(l.expiresAt).toLocaleDateString('fr-FR') : 'jamais';
   const device = l.boundDeviceId ? l.boundDeviceId.slice(0, 12) + '…' : '(non lié)';
-  return `<tr>
+  const cause = computeCause(l);
+  const modules = Array.isArray(l.allowedModules) ? l.allowedModules : [];
+  const modulesText = modules.length > 0 ? modules.map((m) => MODULE_LABELS[m] || m).join(', ') : 'Aucun';
+  const row = `<tr>
     <td><code>${l.key}</code></td>
     <td>${l.note || ''}</td>
     <td><span class="pill ${l.active ? 'active' : 'inactive'}">${l.active ? 'active' : 'désactivée'}</span></td>
+    <td class="${cause.bad ? 'cause-bad' : 'cause-ok'}">${cause.text}</td>
     <td>${expires}</td>
+    <td>${modulesText}</td>
     <td>${device}</td>
     <td>
+      <button class="btn secondary" onclick="toggleManage('${l.key}')">${managingKey === l.key ? 'Fermer' : 'Gérer'}</button>
       <button class="btn secondary" onclick="toggleActive('${l.key}', ${!l.active})">${l.active ? 'Désactiver' : 'Activer'}</button>
       <button class="btn danger" onclick="deleteLicense('${l.key}')">Supprimer</button>
     </td>
   </tr>`;
+  return managingKey === l.key ? row + manageRowHtml(l) : row;
+}
+
+// Panneau "Gérer" : modules autorisés + renouvellement de durée en un seul
+// enregistrement — pendant de public/admin.html#buildManageRow côté VPS,
+// mais appelle updateLicenseOffline. Le sélecteur de durée démarre sur "Ne
+// pas modifier" : l'expiration n'est touchée que si l'admin choisit une
+// unité explicitement.
+function manageRowHtml(l) {
+  const modules = Array.isArray(l.allowedModules) ? l.allowedModules : [];
+  const checkboxes = Object.keys(MODULE_LABELS).map((m) => `
+    <label class="manage-mod"><input type="checkbox" class="manage-module" value="${m}" ${modules.includes(m) ? 'checked' : ''}> ${MODULE_LABELS[m]}</label>
+  `).join('');
+  return `<tr><td colspan="8">
+    <div class="manage-panel">
+      <div><strong>Modules autorisés</strong><br>${checkboxes}</div>
+      <div class="row">
+        <strong>Renouveler la durée (à partir de maintenant) :</strong>
+        <input type="number" id="manage-duration-value" value="30" min="0" style="width: 80px;">
+        <select id="manage-duration-unit">
+          <option value="none" selected>Ne pas modifier</option>
+          <option value="hours">Heure(s)</option>
+          <option value="days">Jour(s)</option>
+          <option value="months">Mois</option>
+          <option value="years">Année(s)</option>
+          <option value="unlimited">Illimitée</option>
+        </select>
+      </div>
+      <button class="btn" onclick="saveManage('${l.key}')">Enregistrer</button>
+      <button class="btn secondary" onclick="toggleManage('${l.key}')">Annuler</button>
+    </div>
+  </td></tr>`;
+}
+
+function computeExpiresAtFromInputs(rawAmount, unit) {
+  if (unit === 'unlimited') return null;
+  const amount = parseInt(rawAmount, 10) || 0;
+  const date = new Date();
+  if (unit === 'hours') date.setHours(date.getHours() + amount);
+  else if (unit === 'days') date.setDate(date.getDate() + amount);
+  else if (unit === 'months') date.setMonth(date.getMonth() + amount);
+  else if (unit === 'years') date.setFullYear(date.getFullYear() + amount);
+  return date.toISOString();
+}
+
+function toggleManage(key) {
+  managingKey = managingKey === key ? null : key;
+  renderRows();
+}
+
+async function saveManage(key) {
+  const allowedModules = Array.from(document.querySelectorAll('.manage-module:checked')).map((cb) => cb.value);
+  const unit = document.getElementById('manage-duration-unit').value;
+  const body = { key, allowedModules };
+  if (unit !== 'none') {
+    body.expiresAt = unit === 'unlimited' ? null : computeExpiresAtFromInputs(document.getElementById('manage-duration-value').value, unit);
+  }
+  try {
+    const res = await fetch(`${FUNCTIONS_BASE}/updateLicenseOffline`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || 'Erreur');
+    managingKey = null;
+    refresh();
+  } catch (err) {
+    document.getElementById('error').textContent = 'Erreur : ' + err.message;
+  }
 }
 
 async function createLicense(evt) {

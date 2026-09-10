@@ -1,7 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
-const whatsapp = require('./whatsapp');
+// WHATSAPP_ENGINE : bascule LOCALE uniquement (voir .env de ce PC) — le VPS
+// distant ne définit jamais cette variable et continue donc d'utiliser
+// exclusivement ./whatsapp (Baileys), sans aucun changement de comportement.
+// 'wwebjs' (adapters/whatsapp-wwebjs.js, whatsapp-web.js/Puppeteer) est
+// réservé à un usage local sur ce PC.
+const WHATSAPP_ENGINE = (process.env.WHATSAPP_ENGINE || 'baileys').toLowerCase();
+const whatsapp = WHATSAPP_ENGINE === 'wwebjs' ? require('./whatsapp-wwebjs') : require('./whatsapp');
 const sessionRegulator = require('./sessionRegulator');
 const { CampaignEngine, listTenantsWithPendingCampaigns } = require('../queues/campaignEngine');
 
@@ -117,6 +123,9 @@ function getSessionForRequest(req) {
 // aucun accès légitime, et évite de forcer un re-scan de QR non nécessaire
 // pour le compte WhatsApp déjà en service.
 async function migrateLegacyLocalAuth() {
+  // Spécifique à l'ancienne session Baileys partagée : sans objet pour le
+  // moteur local wwebjs, qui n'a jamais eu de session historique à migrer.
+  if (WHATSAPP_ENGINE === 'wwebjs') return;
   const legacyCredsPath = path.join(whatsapp.AUTH_DIR_BASE, 'creds.json');
   const adminDir = path.join(whatsapp.AUTH_DIR_BASE, ADMIN_TENANT_ID);
 
@@ -137,6 +146,10 @@ async function migrateLegacyLocalAuth() {
 }
 
 async function migrateLegacyRemoteAuth() {
+  // Isolation stricte vis-à-vis du VPS : le moteur local wwebjs ne doit
+  // jamais lire ni écrire le dépôt GitHub de sauvegarde de session utilisé
+  // par le Baileys de production (même si GITHUB_TOKEN est défini en local).
+  if (WHATSAPP_ENGINE === 'wwebjs') return;
   const legacyStore = githubStore.createStore(process.env.GITHUB_WHATSAPP_AUTH_PATH || 'whatsapp_auth.json');
   if (!legacyStore.enabled) return;
 
@@ -214,7 +227,9 @@ async function listTenantsWithSavedSession() {
     }
   }
 
-  if (!githubStore.enabled) {
+  // Isolation stricte vis-à-vis du VPS (voir migrateLegacyRemoteAuth
+  // ci-dessus) : jamais de lecture du dépôt GitHub partagé pour ce moteur.
+  if (!githubStore.enabled || WHATSAPP_ENGINE === 'wwebjs') {
     return tenantsFromLocal;
   }
 

@@ -230,15 +230,30 @@ function getUsageForKey(key) {
   return usageStats.get(key) || null;
 }
 
+// Dernier refus de vérification par clé (pas persisté, même logique que
+// usageStats ci-dessus) — sert uniquement à afficher une "cause" côté
+// panneau admin (ex: "appareil refusé il y a 3 min") ; l'état actif/expiré
+// reste de toute façon dérivable en direct depuis les champs de la licence,
+// seul un refus DEVICE_MISMATCH est un événement ponctuel qu'on ne peut pas
+// reconstituer après coup sans ce suivi.
+const failureStats = new Map(); // key -> { reason: string, at: number(ms) }
+
+function recordFailure(key, reason) {
+  failureStats.set(key, { reason, at: Date.now() });
+}
+
 function listLicensesWithUsage() {
   const now = Date.now();
   return loadLicenses().map((license) => {
     const usage = usageStats.get(license.key);
+    const failure = failureStats.get(license.key);
     return {
       ...license,
       requestCount: usage ? usage.requestCount : 0,
       lastSeenAt: usage ? new Date(usage.lastSeenAt).toISOString() : null,
       online: Boolean(usage && (now - usage.lastSeenAt) < ONLINE_WINDOW_MS),
+      lastFailureReason: failure ? failure.reason : null,
+      lastFailureAt: failure ? new Date(failure.at).toISOString() : null,
     };
   });
 }
@@ -275,6 +290,41 @@ async function setLicenseActive(key, active) {
   return license;
 }
 
+// Modifie les modules autorisés d'une clé déjà émise — jusqu'ici fixés une
+// fois pour toutes à la création (voir createLicense), désormais modifiables
+// depuis le panneau admin pour débloquer/retirer une fonctionnalité sans
+// devoir régénérer une nouvelle clé côté client.
+async function updateLicenseModules(key, allowedModules) {
+  const licenses = loadLicenses();
+  const license = licenses.find((l) => l.key === normalizeKey(key));
+
+  if (!license) {
+    throw new Error('LICENSE_NOT_FOUND');
+  }
+
+  license.allowedModules = normalizeModules(allowedModules);
+  await saveLicenses(licenses);
+  return license;
+}
+
+// Renouvelle une clé (abonnement arrivé à terme ou à prolonger par
+// anticipation) en remplaçant sa date d'expiration — n'affecte jamais
+// `active`, qui reste un interrupteur manuel indépendant : une clé
+// désactivée à la main le reste après renouvellement, il faut la
+// réactiver séparément (voir setLicenseActive) si c'était aussi voulu.
+async function renewLicense(key, expiresAt) {
+  const licenses = loadLicenses();
+  const license = licenses.find((l) => l.key === normalizeKey(key));
+
+  if (!license) {
+    throw new Error('LICENSE_NOT_FOUND');
+  }
+
+  license.expiresAt = expiresAt || null;
+  await saveLicenses(licenses);
+  return license;
+}
+
 async function verifyKey(key, deviceId) {
   if (!key) {
     return { valid: false, reason: 'MISSING_KEY' };
@@ -288,10 +338,12 @@ async function verifyKey(key, deviceId) {
   }
 
   if (!license.active) {
+    recordFailure(license.key, 'INACTIVE');
     return { valid: false, reason: 'INACTIVE' };
   }
 
   if (license.expiresAt && new Date(license.expiresAt).getTime() < Date.now()) {
+    recordFailure(license.key, 'EXPIRED');
     return { valid: false, reason: 'EXPIRED' };
   }
 
@@ -306,6 +358,7 @@ async function verifyKey(key, deviceId) {
     license.boundAt = new Date().toISOString();
     await saveLicenses(licenses);
   } else if (license.boundDeviceId !== deviceId) {
+    recordFailure(license.key, 'DEVICE_MISMATCH');
     return { valid: false, reason: 'DEVICE_MISMATCH' };
   }
 
@@ -350,6 +403,8 @@ module.exports = {
   listLicenses,
   listLicensesWithUsage,
   setLicenseActive,
+  updateLicenseModules,
+  renewLicense,
   verifyKey,
   unbindDevice,
   recordUsage,

@@ -25,6 +25,18 @@ WORKDIR /app
 
 COPY package*.json ./
 
+# Garde-fou de déploiement : ce VPS ne doit exécuter QUE Baileys
+# (adapters/whatsapp.js), jamais whatsapp-web.js/Puppeteer (moteur
+# WHATSAPP_ENGINE=wwebjs réservé au PC local, voir adapters/whatsapp-wwebjs.js
+# et le .env local — cette variable n'est jamais définie ici). Si ces paquets
+# sont un jour ajoutés par erreur à package.json sur la branche déployée, ce
+# build échoue explicitement au lieu d'installer silencieusement Puppeteer +
+# Chromium (~300 Mo, sandbox/mémoire non adaptés à ce serveur) sur le VPS.
+RUN if grep -qE '"(whatsapp-web\.js|puppeteer)"[[:space:]]*:' package.json; then \
+      echo "ERREUR : whatsapp-web.js/puppeteer détectés dans package.json — réservés au moteur LOCAL (PC), jamais au VPS. Retirez-les avant de redéployer." >&2; \
+      exit 1; \
+    fi
+
 RUN npm install
 
 COPY . .
