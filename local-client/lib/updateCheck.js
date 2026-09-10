@@ -1,15 +1,20 @@
-// Vérification de version (point 3 de la feuille de route) — réutilise
-// GET /api/check-update, déjà ajouté côté VPS (voir index.js racine). Ce
-// module fait la comparaison de version et journalise un avertissement ;
-// le TÉLÉCHARGEMENT + L'APPLICATION en arrière-plan d'une mise à jour
-// (remplacement de l'exe packagé, redémarrage) est une étape volontairement
-// non implémentée ici : remplacer un exécutable en cours d'exécution demande
-// un soin particulier (fichier verrouillé sous Windows tant que le process
-// tourne, risque de binaire corrompu si le téléchargement est interrompu) et
-// mérite d'être traité séparément, une fois le packaging (voir
-// package.local-client.json / README.md) en place.
+// Vérification de version — Firebase EN PREMIER (voir
+// firebase-functions/index.js#checkUpdateOffline, métadonnées dans Firestore
+// config/local-client), VPS (GET /api/check-update) en repli, même principe
+// que lib/license.js et lib/aiGateway.js. Ce module ne fait QUE la
+// comparaison de version et renvoyer les métadonnées (downloadUrl, sha256) —
+// le TÉLÉCHARGEMENT + L'APPLICATION réels (remplacement de l'exe,
+// redémarrage) sont gérés par launcher.js, qui tourne AVANT l'app elle-même
+// (jamais de remplacement d'un exécutable en cours d'exécution, verrouillé
+// sous Windows tant que le process tourne). Utilisé ici uniquement pour un
+// avertissement informatif au démarrage de l'app elle-même — voir index.js —
+// qui, par construction, tourne déjà en dernière version puisque le launcher
+// a fait la mise à jour juste avant.
+const axios = require('axios');
 const { client } = require('./vpsClient');
 const localVersion = require('../package.json').version;
+
+const FIREBASE_UPDATE_URL = process.env.FIREBASE_UPDATE_URL || '';
 
 function compareVersions(a, b) {
   const pa = a.split('.').map(Number);
@@ -21,9 +26,22 @@ function compareVersions(a, b) {
   return 0;
 }
 
+async function fetchUpdateInfo() {
+  if (FIREBASE_UPDATE_URL) {
+    try {
+      const { data } = await axios.get(FIREBASE_UPDATE_URL, { timeout: 10_000 });
+      return data;
+    } catch (err) {
+      console.warn('Firebase injoignable pour la vérification de mise à jour — repli sur le VPS :', err.message);
+    }
+  }
+  const { data } = await client.get('/api/check-update');
+  return data;
+}
+
 async function checkForUpdate() {
   try {
-    const { data } = await client.get('/api/check-update');
+    const data = await fetchUpdateInfo();
     const updateAvailable = compareVersions(data.latestVersion, localVersion) > 0;
     return { updateAvailable, currentVersion: localVersion, ...data };
   } catch (err) {
@@ -33,4 +51,4 @@ async function checkForUpdate() {
   }
 }
 
-module.exports = { checkForUpdate };
+module.exports = { checkForUpdate, compareVersions, fetchUpdateInfo };

@@ -37,7 +37,7 @@
 //   firebase functions:secrets:set ADMIN_SECRET
 //   (chaque secret est FACULTATIF — un niveau de la cascade sans secret est
 //   simplement sauté, jamais d'échec du déploiement ni de l'appel)
-//   firebase deploy --only functions:verifyLicenseOffline,functions:createLicenseOffline,functions:listLicensesOffline,functions:setLicenseActiveOffline,functions:updateLicenseOffline,functions:deleteLicenseOffline,functions:generateTextFallback,functions:generateImageFallback,functions:startVideoFallback,functions:pollVideoFallback
+//   firebase deploy --only functions:verifyLicenseOffline,functions:createLicenseOffline,functions:listLicensesOffline,functions:setLicenseActiveOffline,functions:updateLicenseOffline,functions:deleteLicenseOffline,functions:generateTextFallback,functions:generateImageFallback,functions:startVideoFallback,functions:pollVideoFallback,functions:checkUpdateOffline,functions:publishUpdateOffline
 // JAMAIS "firebase deploy --only functions" (sans noms précis) ni
 // ",firestore:rules" — voir README.md : ce projet Firebase est PARTAGÉ avec
 // une autre application (RIEA AFRIQUE), un déploiement non scopé a déjà
@@ -535,4 +535,64 @@ exports.pollVideoFallback = onRequest({ secrets: VIDEO_JOB_SECRETS }, async (req
     await ref.delete();
     res.status(502).json({ error: err.message });
   }
+});
+
+// ---------- Mise à jour silencieuse de local-client/ (voir launcher.js) ----------
+// Pendant de GET /api/check-update côté VPS, mais Firebase reste la source
+// autoritaire (le VPS n'expose son propre /api/check-update que pour un
+// client encore configuré en VPS-only, sans jamais être tenu à jour lui-même
+// — voir CLAUDE.md). Métadonnées dans Firestore (config/local-client), pas
+// dans le code : publier une nouvelle version ne nécessite ni redéploiement
+// de Cloud Function ni recompilation de ce dossier.
+// Public (sans authentification licence) : un client doit pouvoir savoir
+// qu'une mise à jour existe même si sa propre clé est expirée/désactivée.
+exports.checkUpdateOffline = onRequest({ cors: true }, async (req, res) => {
+  const doc = await db.collection('config').doc('local-client').get();
+  if (!doc.exists) {
+    return res.json({ latestVersion: '0.0.0', downloadUrl: '', notes: '', sha256: '' });
+  }
+  const data = doc.data();
+  res.json({
+    latestVersion: data.latestVersion || '0.0.0',
+    downloadUrl: data.downloadUrl || '',
+    notes: data.notes || '',
+    sha256: data.sha256 || '',
+  });
+});
+
+// Publie une nouvelle version — À APPELER APRÈS avoir uploadé le nouvel exe
+// dans Firebase Storage (voir local-client/README.md pour la procédure
+// complète) : ce endpoint ne fait que pointer les métadonnées vers un
+// fichier déjà en place, il ne reçoit jamais le binaire lui-même (trop
+// volumineux — ~150 Mo, voir CLAUDE.md — pour transiter par une requête
+// Cloud Functions). Protégé par ADMIN_SECRET comme les autres endpoints
+// d'administration.
+exports.publishUpdateOffline = onRequest({ secrets: [ADMIN_SECRET], cors: true }, async (req, res) => {
+  if (!requireAdminSecret(req, res)) return;
+
+  const { version, storagePath, notes, sha256 } = req.body || {};
+  if (!version || !storagePath) {
+    return res.status(400).json({ error: 'version et storagePath requis (ex: "1.1.0" et "local-client-releases/cyrus-local-client-v1.1.0.exe").' });
+  }
+
+  // URL signée longue durée (1 an) plutôt que rendre le fichier public —
+  // même raisonnement que STORAGE_PREFIX/getSignedUrl ci-dessus (bucket
+  // partagé, accès uniforme au niveau du bucket possible).
+  const file = bucket.file(storagePath);
+  const [exists] = await file.exists();
+  if (!exists) {
+    return res.status(404).json({ error: `Fichier introuvable dans Storage : ${storagePath}` });
+  }
+  const [downloadUrl] = await file.getSignedUrl({ action: 'read', expires: Date.now() + 365 * 24 * 60 * 60 * 1000 });
+
+  await db.collection('config').doc('local-client').set({
+    latestVersion: String(version),
+    downloadUrl,
+    storagePath,
+    notes: notes || '',
+    sha256: sha256 || '',
+    publishedAt: new Date().toISOString(),
+  });
+
+  res.json({ ok: true, latestVersion: version, downloadUrl });
 });

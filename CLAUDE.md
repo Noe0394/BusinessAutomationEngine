@@ -287,9 +287,21 @@ pour reprendre sans tout relire.
    campagne de test) avant de le distribuer — la compilation qui réussit
    ne garantit pas que whatsapp-web.js/Puppeteer se comportent
    identiquement packagés vs. en `node index.js`.
-3. **Auto-update réel** — `lib/updateCheck.js` ne fait que détecter/
-   journaliser ; télécharger + appliquer silencieusement un nouvel exe
-   reste à écrire.
+3. ~~Auto-update réel~~ — **fait le 2026-09-10** : architecture à deux
+   binaires (`local-client/launcher.js` → `CyrusLauncher.exe`, gère
+   `cyrus-local-client.exe` comme un fichier remplaçable puisqu'il ne
+   tourne jamais lui-même) — voir `local-client/README.md#mise-à-jour-silencieuse`
+   pour le détail et la procédure de publication (`publishUpdateOffline`,
+   métadonnées dans Firestore `config/local-client`). Testé de bout en bout
+   en production (téléchargement, vérification SHA-256, remplacement
+   atomique, relance) avec un faux fichier de test — jamais encore utilisé
+   pour une VRAIE nouvelle version. Bug latent corrigé au passage :
+   `pdfkit` (ajouté le 2026-09-10, voir section PDF) cassait le build pkg
+   (`es-get-iterator`/`deep-equal`, résolution via `exports` non suivie par
+   l'analyse statique de pkg) — corrigé en les ajoutant explicitement à
+   `pkg.assets`. **Reste à faire** : `CyrusLauncher.exe` fait ~320 Mo (embarque
+   tout `node_modules` au lieu de ses seules dépendances réelles) — cosmétique,
+   pas bloquant, voir la note dédiée dans `local-client/README.md`.
 4. **Mobile (Android)** — Option B choisie et bien avancée (voir section 3
    ci-dessus) : projet créé, Baileys embarqué et configuré, pairing par
    code, foreground service. **Bloqué sur l'installation d'un JDK complet**
@@ -300,15 +312,35 @@ pour reprendre sans tout relire.
    PAS commencé, distinct de `local-client/lib/campaigns.js` (qui lui est
    déjà 100% autonome). À clarifier si l'utilisateur veut vraiment ce
    chantier séparé.
-6. ~~Firebase Storage / cascade IA complète côté Firebase~~ — **fait le
-   2026-09-10** : `generateTextFallback`/`generateImageFallback` portent
-   désormais la même cascade multi-fournisseurs que le VPS (voir section
-   Firebase ci-dessus). **Reste à faire manuellement** : définir les 3
-   nouveaux secrets (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`,
-   `HUGGINGFACE_API_KEY`) côté Firebase avec `firebase functions:secrets:set`
-   puis redéployer — sans ça, ces niveaux de la cascade sont simplement
-   sautés (Groq/fal.ai/Pollinations suffisent déjà à garantir une réponse,
-   mais la richesse complète n'est active qu'une fois ces secrets définis).
+6. ~~Firebase Storage / cascade IA complète côté Firebase~~ — **fait ET
+   déployé le 2026-09-10** : `generateTextFallback`/`generateImageFallback`
+   portent la même cascade multi-fournisseurs que le VPS, les 3 nouveaux
+   secrets (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `HUGGINGFACE_API_KEY`)
+   sont définis et les fonctions déployées et testées en production (Groq a
+   répondu ; image générée via repli Pollinations, fal.ai toujours bloqué
+   par son propre crédit épuisé — voir section Firebase). Bug IAM
+   préexistant découvert et corrigé au passage (permission
+   `iam.serviceAccountTokenCreator` manquante sur le compte de service
+   Cloud Functions par défaut, empêchait `getSignedUrl()` de fonctionner —
+   masqué jusqu'ici parce que fal.ai échouait toujours avant d'atteindre
+   cette étape).
+7. ~~Vidéo IA (image-to-video) et génération PDF, indépendantes du VPS~~ —
+   **fait le 2026-09-10** :
+   - Vidéo : `firebase-functions/videoAiEngine.js` (copie de
+     `lib/media/videoAiEngine.js`), job asynchrone soumis via
+     `startVideoFallback` et suivi via `pollVideoFallback`, persisté dans
+     Firestore (`videoJobs/{jobId}`) le temps du polling. Testé de bout en
+     bout (mécanisme confirmé fonctionnel), mais **aucun résultat vidéo
+     réel obtenu** : fal.ai (403, crédit épuisé) ET Replicate (402,
+     facturation non configurée) bloquent au niveau du compte ; Hugging
+     Face (repli "best effort") a aussi échoué (403). Recharger fal.ai
+     et/ou configurer un moyen de paiement Replicate reste une action
+     utilisateur requise.
+   - PDF : `lib/pdf/ebookGenerator.js` copié dans `local-client/lib/pdf/`
+     (aucune dépendance VPS — `pdfkit` pur, aucun appel réseau pour le
+     rendu lui-même) + route `POST /api/ebook/generate` ajoutée côté
+     `local-client/index.js`. Pas encore de bouton dédié dans l'interface
+     PC (accessible via API seulement pour l'instant).
 
 # ARCHITECTURE SYSTEME & DIRECTIVES DE DEVELOPPEMENT PROFESSIONNEL
 
