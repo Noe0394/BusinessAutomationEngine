@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@gradio/client": "^1.19.1",
+    "@resvg/resvg-js": "^2.6.2",
     "@whiskeysockets/baileys": "^6.7.24",
     "axios": "^1.7.7",
     "dejavu-fonts-ttf": "^2.37.3",
@@ -26,6 +27,7 @@
     "pdfkit": "^0.15.2",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
+    "satori": "^0.10.13",
     "telegram": "^2.26.22",
     "xlsx": "^0.18.5"
   },

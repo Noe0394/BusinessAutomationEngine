@@ -37,7 +37,13 @@ services:
       # le chemin serait introuvable dans le conteneur et firebaseSync resterait
       # simplement désactivé (no-op), sans jamais faire planter le démarrage.
       - ./firebase-service-account.json:/app/firebase-service-account.json:ro
+      # Médias générés (affiches/vidéos IA, voir lib/media/imageLinkStore.js)
+      # : anciennement en mémoire (perdus à CHAQUE redémarrage du conteneur,
+      # y compris un simple redéploiement) — persistés ici pour survivre aux
+      # redéploiements, avec la même purge automatique par TTL (6h) qu'avant.
+      - generated_media:/app/generated_media
 
 volumes:
   whatsapp_auth:
   telegram_sessions:
+  generated_media:

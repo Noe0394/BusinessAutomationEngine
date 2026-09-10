@@ -46,7 +46,7 @@ const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const imageLinkStore = require('./lib/media/imageLinkStore');
 const videoAiEngine = require('./lib/media/videoAiEngine');
 const imageAiEngine = require('./lib/media/imageAiEngine');
-const imageCompositorEngine = require('./lib/media/imageCompositorEngine');
+const posterTemplateEngine = require('./lib/media/posterTemplateEngine');
 const storyboardEngine = require('./lib/media/storyboardEngine');
 const videoMixerEngine = require('./lib/media/videoMixerEngine');
 const messageHistory = require('./lib/messageHistory');
@@ -184,8 +184,14 @@ function printAndWriteAdminAccessInstructions() {
 // clé de licence) : CORS ne s'applique pas, la requête suit son cours
 // normalement (l'authentification applicative reste gérée par requireAccess/
 // requireAdmin plus loin, indépendamment de cette origine).
-const ALLOWED_DASHBOARD_ORIGINS = (process.env.DASHBOARD_ORIGIN || PUBLIC_BASE_URL)
-  .split(',')
+// BUG CORRIGÉ (constaté en production : le portail admin, servi depuis
+// PUBLIC_BASE_URL, recevait "Origine non autorisée" dès que DASHBOARD_ORIGIN
+// était configuré) : `DASHBOARD_ORIGIN || PUBLIC_BASE_URL` REMPLAÇAIT
+// PUBLIC_BASE_URL au lieu de l'AJOUTER dès que DASHBOARD_ORIGIN était
+// défini, malgré le commentaire ci-dessus qui documentait bien l'intention
+// inverse ("permet d'AJOUTER d'autres origines"). Les deux sont désormais
+// toujours combinées.
+const ALLOWED_DASHBOARD_ORIGINS = [PUBLIC_BASE_URL, ...(process.env.DASHBOARD_ORIGIN || '').split(',')]
   .map((o) => o.trim().replace(/\/$/, ''))
   .filter(Boolean);
 
@@ -4060,11 +4066,22 @@ async function planOrAsk(skillKey, text, extraInstruction, history) {
   return { raw: trimmed, parsed };
 }
 
+// BUG CORRIGÉ (retour utilisateur, exemples de vraies affiches pro
+// fournis) : l'ancien schéma (titleText/priceText/contactText/badgeText
+// seuls) produisait un simple visuel photo + 2-3 lignes de texte plaqué
+// dessus (voir imageCompositorEngine.js, ffmpeg drawtext) — jamais la mise
+// en page structurée (en-tête logo/marque, liste de bénéfices à puces,
+// bandeau de prix) des exemples réels. Le rendu passe désormais par un
+// vrai moteur de templates (voir lib/media/posterTemplateEngine.js, satori
+// + resvg) que ce schéma alimente en contenu structuré plutôt qu'en texte
+// brut à positions fixes.
 function planImage(text, history) {
   return planOrAsk('designDirectorSkill', text, [
-    'Tu prépares une affiche marketing pour le Studio IA de CYRUS SUPER ASSISTANT.',
-    'Informations importantes à obtenir si absentes de la demande : le prix ou l\'offre exacte, la date limite/durée, le contact (téléphone/WhatsApp) à afficher — invite aussi le client à importer son logo ou une photo du produit directement dans le tchat s\'il ne l\'a pas déjà fait.',
-    'Format JSON si prêt : {"ready":true,"summary":"résumé en français de l\'affiche qui va être créée","imagePromptEnglish":"prompt image professionnel ultra détaillé en anglais","titleText":"titre court","priceText":"prix/offre ou chaîne vide","contactText":"contact ou chaîne vide","badgeText":"badge court ou chaîne vide"}',
+    'Tu prépares une affiche marketing PROFESSIONNELLE (mise en page structurée façon flyer de graphiste — en-tête marque, liste de bénéfices, bandeau de prix, pied de page contact) pour le Studio IA de CYRUS SUPER ASSISTANT.',
+    'Informations importantes à obtenir si absentes de la demande : le nom de l\'entreprise/marque, 3 à 5 bénéfices ou points clés à mettre en avant (courts, percutants), le prix ou l\'offre exacte, le contact (téléphone/WhatsApp) à afficher — invite aussi le client à importer son logo ou une photo du produit directement dans le tchat s\'il ne l\'a pas déjà fait.',
+    'Choisis "template":"product_photo" si une vraie photo du produit/lieu apporte de la valeur (restauration, produit physique, immobilier...), sinon "template":"icons_list" (service, formation, logiciel, offre abstraite) — dans ce second cas N\'INCLUS PAS imagePromptEnglish (aucune photo ne sera générée).',
+    'Choisis "colorTheme" parmi exactement : green, blue, red, purple, brown — celui qui correspond le mieux au secteur/à la marque.',
+    'Format JSON si prêt : {"ready":true,"summary":"résumé en français de l\'affiche qui va être créée","template":"icons_list ou product_photo","businessName":"nom de l\'entreprise","tagline":"accroche courte et percutante (1 phrase)","bulletPoints":[{"text":"bénéfice 1 court"},{"text":"bénéfice 2 court"},{"text":"bénéfice 3 court"}],"priceText":"prix/offre ou chaîne vide","badgeText":"badge court ou chaîne vide (ex: PROMO, NOUVEAU)","contactText":"contact ou chaîne vide","colorTheme":"green|blue|red|purple|brown","imagePromptEnglish":"UNIQUEMENT si template=product_photo : prompt photo professionnel ultra détaillé en anglais"}',
   ].join('\n'), history);
 }
 
@@ -4105,27 +4122,39 @@ function loadAttachmentBuffer(attachment) {
 }
 
 // ---------- Exécution des actions (clic sur un bouton du tchat) ----------
+// Template "product_photo" (voir planImage/posterTemplateEngine.js) : une
+// vraie photo est générée via FLUX/Pollinations (imageAiEngine.js) et
+// intégrée au template comme hero visuel. Template "icons_list" : aucun
+// appel de génération d'image — la mise en page structurée (texte + icônes)
+// suffit et évite un coût/délai FLUX inutile pour une offre abstraite.
 async function executeGenerateImage(payload, messages) {
-  const prompt = `${String(payload.imagePromptEnglish || '').slice(0, 2000)}, ${IMAGE_QUALITY_SUFFIX_EN}`;
-  const { buffer, mimetype } = await imageAiEngine.generateImage({ prompt, width: 1024, height: 1024 });
+  const template = payload.template === 'product_photo' ? 'product_photo' : 'icons_list';
 
-  const logo = loadAttachmentBuffer(findRecentAttachment(messages, 'logo'));
-  const hasOverlayContent = payload.titleText || payload.priceText || payload.contactText || payload.badgeText || logo;
-  let finalBuffer = buffer;
-  let finalMimetype = mimetype;
-  if (hasOverlayContent) {
-    finalBuffer = await imageCompositorEngine.compositeImage({
-      imageBuffer: buffer,
-      titleText: payload.titleText,
-      priceText: payload.priceText,
-      contactText: payload.contactText,
-      badgeText: payload.badgeText,
-      logoBuffer: logo ? logo.buffer : null,
-    });
-    finalMimetype = 'image/jpeg';
+  let photoDataUri = null;
+  if (template === 'product_photo' && payload.imagePromptEnglish) {
+    const prompt = `${String(payload.imagePromptEnglish).slice(0, 2000)}, ${IMAGE_QUALITY_SUFFIX_EN}`;
+    const { buffer, mimetype } = await imageAiEngine.generateImage({ prompt, width: 1024, height: 1024 });
+    photoDataUri = posterTemplateEngine.bufferToDataUri(buffer, mimetype);
   }
 
-  const id = imageLinkStore.register(finalBuffer, finalMimetype, { title: 'Affiche IA — CYRUS SUPER ASSISTANT' });
+  const logo = loadAttachmentBuffer(findRecentAttachment(messages, 'logo'));
+  const logoDataUri = logo ? posterTemplateEngine.bufferToDataUri(logo.buffer, logo.mimetype) : null;
+
+  const finalBuffer = await posterTemplateEngine.renderPoster({
+    template,
+    businessName: payload.businessName,
+    tagline: payload.tagline,
+    summary: payload.summary,
+    bulletPoints: payload.bulletPoints,
+    priceText: payload.priceText,
+    badgeText: payload.badgeText,
+    contactText: payload.contactText,
+    colorTheme: payload.colorTheme,
+    logoDataUri,
+    photoDataUri,
+  });
+
+  const id = imageLinkStore.register(finalBuffer, 'image/png', { title: 'Affiche IA — CYRUS SUPER ASSISTANT' });
   return { text: '✅ Affiche générée.', media: { kind: 'image', url: `${PUBLIC_BASE_URL}/v/${id}`, downloadUrl: `${PUBLIC_BASE_URL}/v/${id}/raw` } };
 }
 
@@ -4211,7 +4240,25 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
   const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
   const userMessage = { role: 'user', text, createdAt: new Date().toISOString(), attachment };
 
-  const intent = detectStudioIntent(text);
+  // BUG CORRIGÉ (constaté en test réel : une conversation de planification
+  // affiche/vidéo/livre "perdait le fil" dès la réponse aux questions de
+  // clarification) : detectStudioIntent(text) n'analyse QUE le message
+  // courant, jamais l'historique — une réponse du type "mon slogan est...,
+  // mes atouts sont..." ne contient plus aucun mot-clé ("affiche", "vidéo"...)
+  // et retombait donc à tort sur l'intention générique 'chat', abandonnant
+  // en cours de route toute la planification déjà entamée (l'utilisateur
+  // recevait alors un texte générique du LLM au lieu de la suite du brief).
+  // Si le DERNIER message assistant était une question de planification
+  // (isPlanningQuestion, voir plus bas), on reste sur CETTE intention tant
+  // qu'un nouveau message ne relance pas explicitement une intention
+  // différente detectée par mots-clés.
+  const lastAssistantMessage = Array.isArray(existing.messages)
+    ? [...existing.messages].reverse().find((m) => m.role === 'assistant')
+    : null;
+  const keywordIntent = detectStudioIntent(text);
+  const intent = (keywordIntent === 'chat' && lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && lastAssistantMessage.intent)
+    ? lastAssistantMessage.intent
+    : keywordIntent;
   let assistantMessage;
 
   try {
@@ -4233,19 +4280,26 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
         };
       } else {
         // Le LLM a posé des questions (brief incomplet) — réponse texte
-        // simple, aucun bouton d'action.
-        assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString() };
+        // simple, aucun bouton d'action. isPlanningQuestion (voir
+        // studioBuildBubble côté frontend) : BUG CORRIGÉ — sans ce marqueur,
+        // cette question de brief avait exactement la même forme qu'une
+        // vraie réponse de chat, et le frontend lui collait à tort les
+        // boutons "📌 Relance Manuelle"/"🚀 Campagne Auto" (prévus pour du
+        // texte de vente fini, pas pour "Quel est le nom de votre
+        // restaurant ?") — ce qui donnait l'impression que le Studio IA ne
+        // générait jamais de vrai visuel.
+        assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString(), isPlanningQuestion: true, intent };
       }
     } else {
-      const { text: localReplyText, category } = copywriterEngine.composeReply(text, existing.messages);
-      const guideContext = category !== 'UNKNOWN' ? localReplyText : null;
-      let replyText = localReplyText;
-      try {
-        const { text: llmText } = await llmFallbackEngine.generateAIResponse(text, existing.messages, guideContext);
-        replyText = llmText;
-      } catch (err) {
-        console.warn('LLM Fallback — cascade entièrement indisponible, réponse locale conservée :', err.message);
-      }
+      // Réponse exclusivement via la cascade d'API IA (Groq -> Gemini ->
+      // OpenRouter -> Hugging Face -> Pollinations, voir llmFallbackEngine.js)
+      // — plus de réponse locale toute faite (composeReply) servie en repli
+      // silencieux si la cascade échoue : un échec total remonte désormais à
+      // l'appelant (voir le catch englobant plus bas, qui affiche déjà un
+      // message d'erreur clair) plutôt que de faire croire à une vraie
+      // réponse IA. generateSessionTitle (ci-dessus) reste local — c'est un
+      // simple intitulé de discussion, pas une réponse fournie à l'utilisateur.
+      const { text: replyText } = await llmFallbackEngine.generateAIResponse(text, existing.messages);
 
       // Rattrapage (voir looksLikeRawMarkupDump ci-dessus) : la demande a été
       // classée 'chat' par detectStudioIntent mais la réponse générique
@@ -4270,7 +4324,11 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
             actions: [{ label: '🎨 Générer l\'affiche HD', action: 'generate_image', payload: parsed }],
           };
         } else {
-          assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString() };
+          // intent forcé à 'image' (pas la variable `intent` englobante, qui
+          // vaut 'chat' ici) : c'est bien planImage() qui a été appelé
+          // juste au-dessus, la reprise de conversation (voir plus haut)
+          // doit donc continuer sur cette planification, pas sur 'chat'.
+          assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString(), isPlanningQuestion: true, intent: 'image' };
         }
       } else {
         await sleep(1500 + Math.floor(Math.random() * 1500));

@@ -21,14 +21,26 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 ENV FFMPEG_BIN=/usr/bin/ffmpeg
 
+# Moteur WhatsApp "wwebjs" (adapters/whatsappEngineWwebjs.js) DÉSACTIVÉ de ce
+# build : whatsapp-web.js/puppeteer retirés de package.json et les libs
+# Chromium headless (précédemment installées ici) supprimées — le disque de
+# ce VPS (9,7 Go) est trop petit pour le téléchargement du binaire Chromium
+# par npm (ENOSPC constaté en production le 2026-09-09). Le code du moteur
+# reste dans le dépôt, inchangé, pour une réactivation future sur une
+# instance au disque plus grand : réinstaller whatsapp-web.js + puppeteer
+# dans package.json et réajouter ici les libs système (voir l'historique Git
+# de ce fichier pour la liste exacte déjà vérifiée sur Debian bookworm).
+
 WORKDIR /app
 
 COPY package*.json ./
 
 # Garde-fou de déploiement : ce VPS ne doit exécuter QUE Baileys
-# (adapters/whatsapp.js), jamais whatsapp-web.js/Puppeteer (moteur
-# WHATSAPP_ENGINE=wwebjs réservé au PC local, voir adapters/whatsapp-wwebjs.js
-# et le .env local — cette variable n'est jamais définie ici). Si ces paquets
+# (adapters/whatsappEngineBaileys.js, via le sélecteur adapters/whatsapp.js),
+# jamais whatsapp-web.js/Puppeteer (moteur WHATSAPP_ENGINE=wwebjs, voir
+# adapters/whatsappEngineWwebjs.js — cette variable n'est jamais définie
+# ici ; whatsapp-web.js/Puppeteer restent de toute façon un usage LOCAL PC
+# via local-client/, jamais ce dépôt racine). Si ces paquets
 # sont un jour ajoutés par erreur à package.json sur la branche déployée, ce
 # build échoue explicitement au lieu d'installer silencieusement Puppeteer +
 # Chromium (~300 Mo, sandbox/mémoire non adaptés à ce serveur) sur le VPS.

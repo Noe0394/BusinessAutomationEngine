@@ -59,7 +59,12 @@
        l'en-tête + la barre d'onglets, pour ne jamais paraître écrasé — voir
        la feuille de route : "prend 100% de la largeur/hauteur disponible". */
     .panel.active { display: block; min-height: calc(100vh - 130px); }
-    #panel-studio.active { display: flex; flex-direction: column; }
+    /* Studio IA en "un bloc qui remplit l'écran" (demande explicite) : plus
+       de carte flottante (marge/coins arrondis/ombre) comme les autres
+       onglets — un bloc plein, bord à bord, qui occupe toute la largeur et
+       la hauteur disponibles (min-height hérité de .panel.active
+       ci-dessus). */
+    #panel-studio.active { display: flex; flex-direction: column; margin: 0; padding: 0.75rem 1rem 1rem; border-radius: 0; box-shadow: none; }
     /* :not([hidden]) impératif ici aussi : #studio-assistant-view/
        #studio-ebook-view basculent via .hidden en JS (sous-onglet
        Assistant/Générateur de Livres) — un display imposé sans cette garde
@@ -254,7 +259,7 @@
     .image-link-uploader-status { color: #444; word-break: break-all; }
     .image-link-uploader button:not(.image-link-uploader-label) { padding: 0.4rem 0.7rem; border-radius: 6px; border: 1px solid #075E54; background: #fff; color: #075E54; font-weight: bold; white-space: nowrap; }
 
-    /* Onglet Copywriter Studio IA (assistant + générateur de livres). */
+    /* Onglet Studio IA (assistant + générateur de livres). */
     .studio-layout { display: flex; gap: 1.25rem; margin-top: 1rem; min-height: 0; }
     .studio-sidebar { flex: 0 0 220px; display: flex; flex-direction: column; gap: 0.75rem; min-height: 0; }
     .studio-sidebar > button#studio-new-chat-btn { background: #6c4fd6; color: #fff; border: none; border-radius: 8px; padding: 0.8rem; font-weight: bold; min-height: 48px; }
@@ -386,7 +391,7 @@
       <button type="button" class="tab-btn" data-tab="prospects">🎯 Contacts / Prospects</button>
       <button type="button" class="tab-btn" data-tab="share">🔗 Groupes / Diffusion</button>
       <button type="button" class="tab-btn" data-tab="relance">📇 Relance Manuelle Express</button>
-      <button type="button" class="tab-btn" data-tab="studio">🧠 Copywriter Studio IA</button>
+      <button type="button" class="tab-btn" data-tab="studio">🧠 Studio IA</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -1470,28 +1475,24 @@
       </div>
     </section>
 
-    <!-- Onglet Copywriter Studio IA : assistant marketing/closing 100% local
-         (aucune API externe — voir lib/ai/localCopywriterEngine.js) avec
-         historique des discussions persistant, et générateur de livres/
-         ebooks PDF (voir lib/pdf/ebookGenerator.js). -->
+    <!-- Onglet Studio IA : assistant marketing/closing + génération
+         d'affiches/vidéos/livres, exclusivement via la cascade d'API IA
+         (voir lib/ai/llmFallbackEngine.js — plus de réponse locale toute
+         faite, voir index.js) avec historique des discussions persistant,
+         et export PDF (voir lib/pdf/ebookGenerator.js). -->
     <section class="panel" id="panel-studio">
-      <h2>Copywriter Studio IA</h2>
-      <p class="empty">
-        Assistant marketing, closing &amp; rédaction 100% local — aucune donnée envoyée à l'extérieur, aucune
-        dépendance à une API externe. Posez une question ou générez un livre complet en PDF.
-      </p>
+      <h2>Studio IA</h2>
 
-      <!-- Verrouillage d'accès (feuille de route) : le Studio IA (Copywriter
-           IA, Studio Média, Générateur de Livres, Vidéo IA) fait désormais
-           partie du module de licence "studio_video" (voir licenses.js) —
-           affiché uniquement si la clé de licence utilisée ne l'inclut pas
-           (hasModule('studio_video'), voir applyStudioLockState). Un admin
-           ou une clé sans restriction (currentAllowedModules === null) ne
-           voit jamais cet écran. -->
+      <!-- Verrouillage d'accès (feuille de route) : le Studio IA fait
+           désormais partie du module de licence "studio_video" (voir
+           licenses.js) — affiché uniquement si la clé de licence utilisée ne
+           l'inclut pas (hasModule('studio_video'), voir
+           applyStudioLockState). Un admin ou une clé sans restriction
+           (currentAllowedModules === null) ne voit jamais cet écran. -->
       <div id="studio-lock-screen" hidden>
         <p class="empty">
-          🔒 Le Studio IA (Copywriter IA, Studio Média, Générateur de Livres, Vidéo IA) est une fonctionnalité
-          sous licence. Activez une clé incluant le module "Studio IA" pour y accéder.
+          🔒 Le Studio IA est une fonctionnalité sous licence. Activez une clé incluant le module "Studio IA" pour y
+          accéder.
         </p>
         <form id="studio-unlock-form">
           <div class="field">
@@ -1531,8 +1532,8 @@
             <p id="studio-feedback" hidden></p>
             <p class="image-link-uploader-status" id="studio-attachment-status" hidden></p>
             <div class="studio-input-row">
-              <label class="image-link-uploader-label" for="studio-attachment-input" title="Joindre un logo (PNG) ou une photo produit">
-                ➕<input type="file" id="studio-attachment-input" accept="image/*" hidden>
+              <label class="image-link-uploader-label" for="studio-attachment-input" title="Joindre un média (image, vidéo ou PDF)">
+                ➕<input type="file" id="studio-attachment-input" accept="image/*,video/*,application/pdf" hidden>
               </label>
               <textarea id="studio-input" placeholder="Écrivez votre message... (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"></textarea>
               <button type="button" id="studio-send-btn" title="Envoyer" aria-label="Envoyer">➤</button>
@@ -2106,7 +2107,7 @@
       // requireModule('facebook')/channelAllowed() côté serveur), et
       // "scheduler" filtre lui-même les canaux Telegram/WhatsApp selon
       // hasModule() — pas besoin de masquer ces onglets entiers. L'onglet
-      // "studio" (Copywriter Studio IA) reste lui aussi toujours VISIBLE
+      // "studio" (Studio IA) reste lui aussi toujours VISIBLE
       // (jamais masqué comme whatsapp/telegram ci-dessous) même sans le
       // module "studio_video" : un clic dessus affiche l'écran d'activation
       // (voir applyStudioLockState) plutôt que de cacher complètement la
@@ -6895,9 +6896,9 @@
       'fb-groups-message', 'sched-message', 'rule-message-input', 'share-message-text']
       .forEach((id) => mountImageToLinkUploader(id));
 
-    // ---------- Onglet "Copywriter Studio IA" : assistant (historique de
-    // discussions persistant + composition 100% locale, voir
-    // lib/ai/localCopywriterEngine.js côté serveur) et générateur de livres
+    // ---------- Onglet "Studio IA" : assistant (historique de
+    // discussions persistant + réponses via la cascade d'API IA, voir
+    // lib/ai/llmFallbackEngine.js côté serveur) et générateur de livres
     // PDF (voir lib/pdf/ebookGenerator.js). ----------
     const studioState = { sessions: [], currentSessionId: null };
 
@@ -7088,6 +7089,19 @@
       }
     }
 
+    // Libellé de la pièce jointe utilisateur (voir studio-attachment-input,
+    // désormais image/vidéo/PDF et plus seulement image) — dérivé du
+    // mimetype réel plutôt que du rôle deviné côté serveur (logo/photo,
+    // pertinent seulement pour une image) pour ne jamais afficher "Photo
+    // jointe" sur une vidéo ou un PDF.
+    function studioAttachmentLabel(attachment) {
+      const mimetype = (attachment && attachment.mimetype) || '';
+      if (mimetype.startsWith('video/')) return '📎 Vidéo jointe';
+      if (mimetype === 'application/pdf') return '📎 PDF joint';
+      if (mimetype.startsWith('image/')) return attachment.role === 'logo' ? '📎 Logo joint' : '📎 Photo jointe';
+      return '📎 Média joint';
+    }
+
     function studioBuildBubble(msg, options) {
       const opts = options || {};
       const bubble = document.createElement('div');
@@ -7099,7 +7113,7 @@
         const attNote = document.createElement('p');
         attNote.className = 'empty';
         attNote.style.margin = '0.3rem 0 0';
-        attNote.textContent = msg.attachment.role === 'logo' ? '📎 Logo joint' : '📎 Photo jointe';
+        attNote.textContent = studioAttachmentLabel(msg.attachment);
         bubble.appendChild(attNote);
       }
 
@@ -7132,7 +7146,14 @@
           actions.appendChild(btn);
         });
         bubble.appendChild(actions);
-      } else if (msg.role === 'assistant' && !msg.media && !msg.pendingJobToken) {
+      } else if (msg.role === 'assistant' && !msg.media && !msg.pendingJobToken && !msg.isPlanningQuestion) {
+        // isPlanningQuestion (voir index.js) : une question de clarification
+        // du brief affiche/vidéo/livre (ex: "Quel est le nom de votre
+        // restaurant ?") n'est PAS un texte de vente fini — jamais de bouton
+        // "Relance Manuelle"/"Campagne Auto" dessus (BUG CORRIGÉ : ces
+        // boutons apparaissaient à tort sur les questions elles-mêmes,
+        // laissant croire que le Studio IA ne produisait jamais de vrai
+        // visuel).
         // "📌 Utiliser pour la campagne" : transmet le texte de CYRUS vers la
         // Relance Manuelle Express (alimente immédiatement le moteur de
         // Spintax local via relance-intention) OU vers la campagne
@@ -7311,7 +7332,7 @@
       if (!document.getElementById('relance-card').hidden) {
         relanceRefreshMessage();
       }
-      relanceFeedback('Texte transmis depuis le Copywriter Studio IA — chargez la file d\'attente si besoin, ou "Varier" pour une autre tournure.', false);
+      relanceFeedback('Texte transmis depuis le Studio IA — chargez la file d\'attente si besoin, ou "Varier" pour une autre tournure.', false);
     }
 
     // Bascule vers l'onglet WhatsApp et place le texte comme 1er pas texte
@@ -7326,7 +7347,7 @@
         campaignSequence.unshift({ type: 'text', text });
       }
       renderCampaignSequence();
-      showCampaignFeedback('Texte transmis depuis le Copywriter Studio IA dans la séquence de campagne (1er pas texte).', false);
+      showCampaignFeedback('Texte transmis depuis le Studio IA dans la séquence de campagne (1er pas texte).', false);
     }
 
     // ---------- Générateur de livres/ebooks PDF ----------
