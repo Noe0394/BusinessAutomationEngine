@@ -6,11 +6,22 @@
 //   — les deux côtés peuvent créer/vérifier une licence en autorité, et
 //   convergent l'un vers l'autre en temps réel (voir local-client/lib/license.js,
 //   qui appelle désormais Firebase en PREMIER, VPS en repli).
-// - IA (generateTextFallback, generateImageFallback) : ici bien un mode
-//   dégradé au sens strict, UNIQUEMENT quand le VPS central ne répond pas
-//   (voir lib/aiGateway.js#failover) — le VPS (lib/ai/llmFallbackEngine.js)
-//   reste l'autorité normale, ce dossier ne reproduit qu'un seul fournisseur
-//   par type, pas la cascade complète du backend principal.
+// - IA (generateTextFallback, generateImageFallback) : décision du
+//   2026-09-10 — porte désormais la MÊME cascade multi-fournisseurs que le
+//   VPS (lib/ai/llmFallbackEngine.js pour le texte, lib/media/imageAiEngine.js
+//   pour l'image), pas un seul fournisseur MVP comme avant. Objectif exprimé
+//   par l'utilisateur : que le VPS puisse disparaître (impayé, résiliation)
+//   sans que ça n'affecte la génération IA sur PC/téléphone — local-client/
+//   appelle déjà Firebase en PREMIER pour l'IA (voir
+//   local-client/lib/aiGateway.js), le VPS n'étant plus qu'un repli.
+//   Texte : Groq -> Gemini -> OpenRouter -> Hugging Face -> Pollinations
+//   (public, sans clé, garantit toujours une réponse).
+//   Image : fal.ai (FLUX) -> Pollinations (public, sans clé).
+//   Chaque niveau est optionnel (secret absent = niveau sauté), voir
+//   callGroq/callGemini/etc. ci-dessous — copie volontairement dupliquée de
+//   la logique VPS (runtime Cloud Functions séparé, pas d'import
+//   cross-projet possible), à resynchroniser manuellement si la cascade VPS
+//   évolue (nouveau modèle, nouveau fournisseur).
 //
 // Déploiement (à faire une fois, depuis ce dossier, avec le CLI Firebase de
 // l'utilisateur — jamais depuis une session Claude Code qui n'a pas accès à
@@ -18,8 +29,13 @@
 //   firebase login
 //   firebase use <votre-project-id>
 //   firebase functions:secrets:set GROQ_API_KEY
+//   firebase functions:secrets:set GEMINI_API_KEY
+//   firebase functions:secrets:set OPENROUTER_API_KEY
+//   firebase functions:secrets:set HUGGINGFACE_API_KEY
 //   firebase functions:secrets:set FAL_KEY
 //   firebase functions:secrets:set ADMIN_SECRET
+//   (chaque secret est FACULTATIF — un niveau de la cascade sans secret est
+//   simplement sauté, jamais d'échec du déploiement ni de l'appel)
 //   firebase deploy --only functions:verifyLicenseOffline,functions:createLicenseOffline,functions:listLicensesOffline,functions:setLicenseActiveOffline,functions:updateLicenseOffline,functions:deleteLicenseOffline,functions:generateTextFallback,functions:generateImageFallback
 // JAMAIS "firebase deploy --only functions" (sans noms précis) ni
 // ",firestore:rules" — voir README.md : ce projet Firebase est PARTAGÉ avec
@@ -43,6 +59,9 @@ const bucket = admin.storage().bucket();
 const STORAGE_PREFIX = 'cyrus-failover';
 
 const GROQ_API_KEY = defineSecret('GROQ_API_KEY');
+const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
+const OPENROUTER_API_KEY = defineSecret('OPENROUTER_API_KEY');
+const HUGGINGFACE_API_KEY = defineSecret('HUGGINGFACE_API_KEY');
 const FAL_KEY = defineSecret('FAL_KEY');
 const ADMIN_SECRET = defineSecret('ADMIN_SECRET');
 
@@ -254,33 +273,149 @@ async function checkLicenseForFallback(req) {
   return { ok: true };
 }
 
-// ---------- Passerelle IA en mode dégradé (MVP : un seul fournisseur par
-// type, PAS la cascade complète de lib/ai/llmFallbackEngine.js) ----------
-exports.generateTextFallback = onRequest({ secrets: [GROQ_API_KEY] }, async (req, res) => {
-  const auth = await checkLicenseForFallback(req);
-  if (!auth.ok) return res.status(401).json({ error: auth.error });
+// ---------- Passerelle IA — cascade multi-fournisseurs (texte) ----------
+// Portage de lib/ai/llmFallbackEngine.js (VPS), simplifié : pas de contexte
+// CYRUS ni de détection de compétence marketing (marketingSkills.js,
+// skillsRegistry) — ce sont des dépendances propres au Studio IA du VPS,
+// hors sujet ici puisque local-client/lib/aiGateway.js n'envoie que
+// `{ prompt }`, jamais history/mode/skillKey. Chaque call* retourne `null`
+// (secret absent, niveau sauté) plutôt que de lever une erreur.
+const TEXT_REQUEST_TIMEOUT_MS = 15_000;
+const TEXT_SYSTEM_PROMPT = [
+  'Tu es l\'assistant IA de CYRUS SUPER ASSISTANT.',
+  'Tu es un assistant IA généraliste à part entière : tu réponds à N\'IMPORTE QUELLE question, dans N\'IMPORTE QUEL domaine — jamais de refus, jamais de réponse hors-sujet.',
+  'Réponds toujours avec un ton humain, chaleureux et direct — jamais robotique.',
+  'Sois concis et concret.',
+].join(' ');
 
-  const prompt = String((req.body || {}).prompt || '').trim();
-  if (!prompt) return res.status(400).json({ error: 'Prompt manquant.' });
+async function callGroqText(prompt) {
+  const apiKey = GROQ_API_KEY.value();
+  if (!apiKey) return null;
+  const res = await axios.post(
+    'https://api.groq.com/openai/v1/chat/completions',
+    { model: 'openai/gpt-oss-120b', messages: [{ role: 'system', content: TEXT_SYSTEM_PROMPT }, { role: 'user', content: prompt }] },
+    { headers: { Authorization: `Bearer ${apiKey}` }, timeout: TEXT_REQUEST_TIMEOUT_MS },
+  );
+  const text = res.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Réponse Groq vide ou de forme inattendue.');
+  return text.trim();
+}
 
-  try {
-    const { data } = await axios.post(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        // Même modèle que lib/ai/llmFallbackEngine.js (racine, niveau Groq) —
-        // vérifié fonctionnel en production ; "llama-3.3-70b-versatile"
-        // (essayé initialement) renvoie 404 sur ce compte.
-        model: 'openai/gpt-oss-120b',
-        messages: [{ role: 'user', content: prompt }],
-      },
-      { headers: { Authorization: `Bearer ${GROQ_API_KEY.value()}` } },
-    );
-    res.json({ text: data.choices[0].message.content, provider: 'groq (mode dégradé)' });
-  } catch (err) {
-    console.error('Échec génération texte (mode dégradé) :', err.message);
-    res.status(502).json({ error: 'Échec de la génération de texte IA (mode dégradé).' });
+async function callGeminiText(prompt) {
+  const apiKey = GEMINI_API_KEY.value();
+  if (!apiKey) return null;
+  const res = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
+    { contents: [{ role: 'user', parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: TEXT_SYSTEM_PROMPT }] } },
+    { timeout: TEXT_REQUEST_TIMEOUT_MS },
+  );
+  const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Réponse Gemini vide ou de forme inattendue.');
+  return text.trim();
+}
+
+async function callOpenRouterText(prompt) {
+  const apiKey = OPENROUTER_API_KEY.value();
+  if (!apiKey) return null;
+  const model = process.env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free';
+  const res = await axios.post(
+    'https://openrouter.ai/api/v1/chat/completions',
+    { model, messages: [{ role: 'system', content: TEXT_SYSTEM_PROMPT }, { role: 'user', content: prompt }] },
+    { headers: { Authorization: `Bearer ${apiKey}` }, timeout: TEXT_REQUEST_TIMEOUT_MS },
+  );
+  const text = res.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Réponse OpenRouter vide ou de forme inattendue.');
+  return text.trim();
+}
+
+async function callHuggingFaceText(prompt) {
+  const apiKey = HUGGINGFACE_API_KEY.value();
+  if (!apiKey) return null;
+  const res = await axios.post(
+    'https://router.huggingface.co/v1/chat/completions',
+    { model: 'Qwen/Qwen2.5-72B-Instruct', messages: [{ role: 'system', content: TEXT_SYSTEM_PROMPT }, { role: 'user', content: prompt }] },
+    { headers: { Authorization: `Bearer ${apiKey}` }, timeout: TEXT_REQUEST_TIMEOUT_MS },
+  );
+  const text = res.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Réponse Hugging Face vide ou de forme inattendue.');
+  return text.trim();
+}
+
+// Fallback ultime sans clé — garantit une réponse dans 100% des cas.
+async function callPollinationsText(prompt) {
+  const enrichedPrompt = `${TEXT_SYSTEM_PROMPT}\n\nUtilisateur: ${prompt}\nAssistant:`;
+  const res = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(enrichedPrompt)}`, {
+    timeout: TEXT_REQUEST_TIMEOUT_MS, responseType: 'text', transformResponse: (data) => data,
+  });
+  const text = typeof res.data === 'string' ? res.data : '';
+  if (!text.trim()) throw new Error('Réponse Pollinations vide.');
+  return text.trim();
+}
+
+const TEXT_PROVIDERS = [
+  { name: 'groq', call: callGroqText },
+  { name: 'gemini', call: callGeminiText },
+  { name: 'openrouter', call: callOpenRouterText },
+  { name: 'huggingface', call: callHuggingFaceText },
+  { name: 'pollinations', call: callPollinationsText },
+];
+
+exports.generateTextFallback = onRequest(
+  { secrets: [GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, HUGGINGFACE_API_KEY] },
+  async (req, res) => {
+    const auth = await checkLicenseForFallback(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const prompt = String((req.body || {}).prompt || '').trim();
+    if (!prompt) return res.status(400).json({ error: 'Prompt manquant.' });
+
+    const errors = [];
+    for (const provider of TEXT_PROVIDERS) {
+      try {
+        const text = await provider.call(prompt);
+        if (text === null) continue; // secret absent : niveau sauté
+        return res.json({ text, provider: `${provider.name} (Firebase)` });
+      } catch (err) {
+        const reason = err.response?.status ? `HTTP ${err.response.status}` : (err.message || String(err));
+        errors.push(`${provider.name}: ${reason}`);
+        console.warn(`Cascade texte Firebase — échec "${provider.name}" (${reason}), passage au suivant.`);
+      }
+    }
+    console.error('Échec génération texte (tous fournisseurs) :', errors.join(' | '));
+    res.status(502).json({ error: 'Échec de la génération de texte IA (tous les fournisseurs ont échoué).' });
+  },
+);
+
+// ---------- Passerelle IA — cascade multi-fournisseurs (image) ----------
+// Portage de lib/media/imageAiEngine.js (VPS) : fal.ai (FLUX) -> Pollinations
+// (public, sans clé). L'image est toujours rapatriée dans Firebase Storage
+// (voir STORAGE_PREFIX) plutôt que de renvoyer l'URL du fournisseur brute.
+async function generateImageViaFal(prompt) {
+  const apiKey = FAL_KEY.value();
+  if (!apiKey) return null;
+  const { data } = await axios.post(
+    'https://fal.run/fal-ai/flux/schnell',
+    { prompt, num_images: 1, output_format: 'jpeg' },
+    { headers: { Authorization: `Key ${apiKey}` }, timeout: 30_000 },
+  );
+  const falUrl = data?.images?.[0]?.url;
+  if (!falUrl) throw new Error('Réponse fal.ai sans URL d\'image.');
+  const imgRes = await axios.get(falUrl, { responseType: 'arraybuffer', timeout: 60_000 });
+  return { buffer: Buffer.from(imgRes.data), mimetype: imgRes.headers['content-type'] || 'image/jpeg', provider: 'fal' };
+}
+
+// Repli gratuit sans clé — modèle "sana" imposé par Pollinations (qualité
+// inférieure à FLUX/fal.ai), utilisé uniquement si fal.ai est absent/échoue.
+async function generateImageViaPollinations(prompt) {
+  const seed = Math.floor(Math.random() * 1_000_000);
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true&seed=${seed}&enhance=true&safe=true`;
+  const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 30_000 });
+  const contentType = res.headers['content-type'] || '';
+  if (!contentType.startsWith('image/')) {
+    throw new Error('Pollinations a renvoyé une réponse non-image (service saturé).');
   }
-});
+  return { buffer: Buffer.from(res.data), mimetype: contentType, provider: 'pollinations' };
+}
 
 exports.generateImageFallback = onRequest({ secrets: [FAL_KEY] }, async (req, res) => {
   const auth = await checkLicenseForFallback(req);
@@ -289,33 +424,38 @@ exports.generateImageFallback = onRequest({ secrets: [FAL_KEY] }, async (req, re
   const prompt = String((req.body || {}).prompt || '').trim();
   if (!prompt) return res.status(400).json({ error: 'Prompt manquant.' });
 
+  let image;
   try {
-    const { data } = await axios.post(
-      'https://fal.run/fal-ai/flux/schnell',
-      { prompt },
-      { headers: { Authorization: `Key ${FAL_KEY.value()}` } },
-    );
-    const falUrl = data.images?.[0]?.url;
-    if (!falUrl) throw new Error('Réponse fal.ai sans URL d\'image.');
+    image = await generateImageViaFal(prompt);
+  } catch (err) {
+    console.warn('Génération image fal.ai échouée (Firebase), repli Pollinations :', err.message);
+  }
+  if (!image) {
+    try {
+      image = await generateImageViaPollinations(prompt);
+    } catch (err) {
+      console.error('Échec génération image (tous fournisseurs, Firebase) :', err.message);
+      return res.status(502).json({ error: 'Échec de la génération image IA (tous les fournisseurs ont échoué).' });
+    }
+  }
 
+  try {
     // Rapatrie l'image chez nous (Firebase Storage) plutôt que de renvoyer
-    // l'URL fal.ai brute, dont la durée de rétention n'est pas garantie —
-    // voir STORAGE_PREFIX plus haut (chemin dédié, aucune règle Storage à
-    // toucher, Admin SDK uniquement).
-    const imageRes = await axios.get(falUrl, { responseType: 'arraybuffer' });
+    // l'URL du fournisseur brute, dont la durée de rétention n'est pas
+    // garantie — voir STORAGE_PREFIX plus haut (chemin dédié, aucune règle
+    // Storage à toucher, Admin SDK uniquement).
     const filePath = `${STORAGE_PREFIX}/${crypto.randomUUID()}.jpg`;
     const file = bucket.file(filePath);
-    await file.save(Buffer.from(imageRes.data), { contentType: 'image/jpeg' });
+    await file.save(image.buffer, { contentType: image.mimetype });
     // URL signée plutôt que makePublic() : fonctionne quel que soit le mode
     // d'accès du bucket (l'"accès uniforme au niveau du bucket", courant sur
     // les buckets récents, désactive les ACL par objet et ferait échouer
     // makePublic()) — et évite de rendre un fichier public dans un bucket
     // partagé sans savoir si son mode d'accès le permet.
     const [url] = await file.getSignedUrl({ action: 'read', expires: Date.now() + 7 * 24 * 60 * 60 * 1000 });
-
-    res.json({ url, provider: 'fal.ai (mode dégradé)' });
+    res.json({ url, provider: `${image.provider} (Firebase)` });
   } catch (err) {
-    console.error('Échec génération image (mode dégradé) :', err.message);
-    res.status(502).json({ error: 'Échec de la génération image IA (mode dégradé).' });
+    console.error('Échec upload Storage de l\'image générée (Firebase) :', err.message);
+    res.status(502).json({ error: 'Échec de la sauvegarde de l\'image générée.' });
   }
 });

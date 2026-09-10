@@ -147,17 +147,30 @@ déployé sur le VPS.
     `deleteLicenseOffline` : CRUD licences complet, protégé par le secret
     `ADMIN_SECRET` (en-tête `x-admin-secret`) — **volontairement distinct**
     de `ADMIN_PASSWORD` du VPS.
-  - `generateTextFallback` (Groq, modèle `openai/gpt-oss-120b` —
-    `llama-3.3-70b-versatile` renvoie 404 sur ce compte) et
-    `generateImageFallback` (fal.ai → rapatrié dans Firebase Storage,
-    chemin `cyrus-failover/`, URL signée 7 jours) : passerelle IA, un seul
-    fournisseur par type (pas la cascade complète du VPS).
-  - **`generateImageFallback` est bloqué** : compte fal.ai en 403
-    "TOP_UP" (crédit épuisé) — vérifié que ce n'est pas un bug de code
-    (même erreur en appelant fal.ai directement avec la même clé, hors
-    Firebase). Affecte AUSSI la génération d'image en production sur le
-    VPS (même `FAL_KEY`). **Action utilisateur requise : recharger
-    fal.ai.**
+  - `generateTextFallback` et `generateImageFallback` : décision du
+    2026-09-10 (demande explicite — le VPS doit pouvoir disparaître sans
+    affecter la génération IA sur PC/téléphone) — portent désormais la
+    MÊME cascade multi-fournisseurs que le VPS, pas un seul fournisseur MVP
+    comme avant. Texte : Groq (`openai/gpt-oss-120b`) -> Gemini
+    (`gemini-3.6-flash`) -> OpenRouter (`google/gemma-4-31b-it:free`) ->
+    Hugging Face (`Qwen/Qwen2.5-72B-Instruct`) -> Pollinations (public, sans
+    clé, garantit toujours une réponse). Image : fal.ai (FLUX) ->
+    Pollinations (public, sans clé) → rapatriée dans Firebase Storage
+    (chemin `cyrus-failover/`, URL signée 7 jours) quel que soit le
+    fournisseur ayant répondu. Secrets à définir en plus de `GROQ_API_KEY`/
+    `FAL_KEY`/`ADMIN_SECRET` (facultatifs, niveau sauté si absent) :
+    `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `HUGGINGFACE_API_KEY` — voir la
+    liste `firebase functions:secrets:set` en tête de
+    `firebase-functions/index.js`. Logique dupliquée volontairement depuis
+    `lib/ai/llmFallbackEngine.js`/`lib/media/imageAiEngine.js` (runtime
+    Cloud Functions séparé, pas d'import cross-projet) — à resynchroniser
+    manuellement si la cascade VPS évolue.
+  - **fal.ai reste bloqué** (compte en 403 "TOP_UP", crédit épuisé,
+    affecte VPS ET Firebase de la même façon puisque même `FAL_KEY`) mais
+    n'est plus bloquant pour la génération d'image : le repli Pollinations
+    ci-dessus prend le relais automatiquement (qualité inférieure à FLUX,
+    mais fonctionnel). Recharger fal.ai reste souhaitable pour retrouver la
+    qualité FLUX, mais n'est plus une urgence.
   - **Admin UI** : https://cyrus-license-admin.web.app (site Hosting
     dédié `cyrus-license-admin`, cible de déploiement `cyrus-admin` dans
     `.firebaserc`) — page simple (créer/lister/activer/supprimer une
@@ -287,8 +300,15 @@ pour reprendre sans tout relire.
    PAS commencé, distinct de `local-client/lib/campaigns.js` (qui lui est
    déjà 100% autonome). À clarifier si l'utilisateur veut vraiment ce
    chantier séparé.
-6. **Firebase Storage / cascade IA complète** côté Firebase — actuellement
-   MVP un seul fournisseur (Groq/fal.ai), pas la cascade complète du VPS.
+6. ~~Firebase Storage / cascade IA complète côté Firebase~~ — **fait le
+   2026-09-10** : `generateTextFallback`/`generateImageFallback` portent
+   désormais la même cascade multi-fournisseurs que le VPS (voir section
+   Firebase ci-dessus). **Reste à faire manuellement** : définir les 3
+   nouveaux secrets (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`,
+   `HUGGINGFACE_API_KEY`) côté Firebase avec `firebase functions:secrets:set`
+   puis redéployer — sans ça, ces niveaux de la cascade sont simplement
+   sautés (Groq/fal.ai/Pollinations suffisent déjà à garantir une réponse,
+   mais la richesse complète n'est active qu'une fois ces secrets définis).
 
 # ARCHITECTURE SYSTEME & DIRECTIVES DE DEVELOPPEMENT PROFESSIONNEL
 
