@@ -269,11 +269,25 @@ pour reprendre sans tout relire.
   Temurin 17, ~150-200 Mo) et relancer avec `JAVA_HOME` pointant dessus.
   **Déjà en cache local, pas à retélécharger** : Gradle 8.3, NDK
   25.1.8937393, Android SDK Platform 34.
-- **Prochaine étape concrète** : installer un JDK complet → `JAVA_HOME=...
-  ./gradlew assembleDebug` dans `mobile/CyrusMobile/android/` → connecter un
-  téléphone Android → `npx react-native run-android` → saisir le code
-  d'association pour valider le pairing de bout en bout (texte seul, pas de
-  médias/groupes à ce stade).
+- **JDK installé et build réussi le 2026-09-10** : Eclipse Temurin 17 via
+  winget (`EclipseAdoptium.Temurin.17.JDK`,
+  `C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot`). Il manquait
+  aussi `android/local.properties` (`sdk.dir` vers
+  `C:\Users\HP\AppData\Local\Android\Sdk`, absent jusqu'ici — fichier
+  machine-spécifique, gitignored, à recréer sur toute autre machine).
+  `JAVA_HOME=... ./gradlew assembleDebug` dans `mobile/CyrusMobile/android/`
+  a produit avec succès
+  `android/app/build/outputs/apk/debug/app-debug.apk` (140 Mo, gitignored).
+  Build long (~21 min) la première fois (téléchargement CMake 3.22.1 +
+  compilation native arm64-v8a/armeabi-v7a/x86_64) — ralenti ce jour-là par
+  un AUTRE build Gradle tournant en parallèle sur la même machine à 4 Go de
+  RAM (`RIEA AFRIQUE APP`, projet sans rapport) ; éviter de lancer un gros
+  build Android en même temps qu'un autre process lourd sur ce PC.
+- **Prochaine étape concrète** : connecter un téléphone Android (USB, mode
+  débogage activé) → `npx react-native run-android` (ou installer l'APK
+  directement) → saisir le code d'association pour valider le pairing de
+  bout en bout (texte seul, pas de médias/groupes à ce stade) — jamais
+  encore testé sur un vrai appareil.
 
 ### Ce qui reste à faire
 1. **Recharger fal.ai** (bloquant pour la génération d'image, VPS ET
@@ -315,10 +329,13 @@ pour reprendre sans tout relire.
    précisé autrement.
 4. **Mobile (Android)** — Option B choisie et bien avancée (voir section 3
    ci-dessus) : projet créé, Baileys embarqué et configuré, pairing par
-   code, foreground service. **Bloqué sur l'installation d'un JDK complet**
-   (jmods manquants côté JDK Android Studio) avant de pouvoir tester sur un
-   vrai appareil — pas un problème de code. iOS non commencé (hors scope du
-   premier spike).
+   code, foreground service. ~~Bloqué sur l'installation d'un JDK complet~~
+   — **résolu le 2026-09-10** (JDK installé, `local.properties` créé,
+   `assembleDebug` réussi, voir section 3). **Reste à faire** : tester sur
+   un vrai appareil Android (jamais fait) — brancher en USB, débogage
+   activé, `npx react-native run-android` ou installer l'APK directement,
+   puis valider le pairing par code de bout en bout. iOS non commencé (hors
+   scope du premier spike).
 5. **Planification de campagnes SaaS/VPS** (`queues/campaignEngine.js`) —
    PAS commencé, distinct de `local-client/lib/campaigns.js` (qui lui est
    déjà 100% autonome). À clarifier si l'utilisateur veut vraiment ce

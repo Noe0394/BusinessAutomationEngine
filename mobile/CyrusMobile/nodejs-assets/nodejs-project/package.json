@@ -1,0 +1,14 @@
+{
+  "name": "cyrus-mobile-node",
+  "version": "1.0.0",
+  "description": "Projet Node embarque (nodejs-mobile-react-native) - Baileys tourne reellement sur le telephone, sans serveur/VPS. Version Baileys figee a 6.7.16 : la 6.7.17+ exige Node >=20, incompatible avec le runtime Node 18.20.4 embarque par nodejs-mobile-react-native (derniere version disponible a ce jour).",
+  "main": "main.js",
+  "author": "",
+  "license": "",
+  "dependencies": {
+    "baileys": "6.7.16"
+  },
+  "allowScripts": {
+    "protobufjs@7.6.6": true
+  }
+}
