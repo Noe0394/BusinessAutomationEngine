@@ -1,17 +1,17 @@
 [
   {
-    "boundAt": null,
     "expiresAt": null,
-    "note": "",
+    "active": true,
+    "boundAt": null,
+    "boundDeviceId": null,
+    "createdAt": "2026-09-10T08:34:50.992Z",
     "key": "KEY-AFFFF2D9-2026",
+    "note": "",
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
-    ],
-    "active": true,
-    "boundDeviceId": null,
-    "createdAt": "2026-09-10T08:34:50.992Z"
+    ]
   },
   {
     "boundDeviceId": null,
