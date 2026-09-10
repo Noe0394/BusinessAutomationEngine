@@ -1,20 +1,20 @@
 [
   {
-    "expiresAt": null,
-    "active": true,
     "boundAt": null,
-    "boundDeviceId": null,
-    "createdAt": "2026-09-10T08:34:50.992Z",
-    "key": "KEY-AFFFF2D9-2026",
-    "note": "",
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
-    ]
+    ],
+    "createdAt": "2026-09-10T08:34:50.992Z",
+    "note": "",
+    "active": true,
+    "boundDeviceId": null,
+    "expiresAt": null,
+    "key": "KEY-AFFFF2D9-2026"
   },
   {
-    "boundDeviceId": null,
+    "boundDeviceId": "23af4689-010f-4025-ae44-46d559493b6c",
     "allowedModules": [
       "whatsapp",
       "telegram",
@@ -22,7 +22,7 @@
     ],
     "note": "Noe 1",
     "createdAt": "2026-09-10T07:21:56.094Z",
-    "boundAt": null,
+    "boundAt": "2026-09-10T14:18:44.382Z",
     "key": "KEY-E5164DF3-2026",
     "active": true,
     "expiresAt": "2026-09-30T00:00:00.000Z"
