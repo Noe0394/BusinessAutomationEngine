@@ -12,8 +12,8 @@
       "id": "257cd1f8-c38a-4242-8816-27c8ba15293d",
       "name": "Campagne du 11/09/2026 16:28:06",
       "total": 376,
-      "sent": 332,
-      "success": 332,
+      "sent": 333,
+      "success": 333,
       "failed": 0,
       "skippedDuplicates": 0,
       "messageHash": "0480e0a124befe0ad0060e0b",
@@ -26,9 +26,9 @@
       "createdAt": "2026-09-11T16:28:09.036Z",
       "startedAt": "2026-09-11T16:28:09.036Z",
       "finishedAt": null,
-      "lastProgressAt": "2026-09-11T18:27:13.493Z",
-      "nextIndex": 332,
-      "lastProcessedIndex": 331,
+      "lastProgressAt": "2026-09-11T18:27:29.251Z",
+      "nextIndex": 333,
+      "lastProcessedIndex": 332,
       "recipients": [
         {
           "telephone": "+22569309837",
@@ -3198,8 +3198,8 @@
         },
         {
           "to": "22674158115@s.whatsapp.net",
-          "status": "pending",
-          "timestamp": null
+          "status": "sent",
+          "timestamp": "2026-09-11T18:27:29.251Z"
         },
         {
           "to": "22661242499@s.whatsapp.net",
@@ -3749,10 +3749,10 @@
         "245956548985",
         "22678604032",
         "22676584120",
-        "22676325281"
+        "22676325281",
+        "22674158115"
       ],
       "pendingContactIds": [
-        "22674158115",
         "22661242499",
         "22567478290",
         "22559723470",
