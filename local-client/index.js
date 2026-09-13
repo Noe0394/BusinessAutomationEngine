@@ -183,6 +183,56 @@ async function main() {
     res.json({ ok: true });
   });
 
+  // ---------- Pont WHATSAPP_LOCAL (couche intelligence -> machine PC) ----------
+  // Clé d'accès partagée (secret partagé VPS<->PC) : lue de MACHINE_KEY,
+  // sinon générée une fois et persistée dans DATA_DIR/machine-key.txt
+  // (jamais commitée). Voir lib/machine.js pour le contrat d'actions.
+  const machine = require('./lib/machine');
+  let machineKey = String(process.env.MACHINE_KEY || '').trim();
+  if (!machineKey) {
+    const fs = require('fs');
+    const keyPath = path.join(DATA_DIR, 'machine-key.txt');
+    try {
+      if (fs.existsSync(keyPath)) machineKey = fs.readFileSync(keyPath, 'utf8').trim();
+      if (!machineKey) {
+        machineKey = require('crypto').randomBytes(24).toString('hex');
+        fs.writeFileSync(keyPath, machineKey, 'utf8');
+      }
+    } catch (e) {
+      machineKey = require('crypto').randomBytes(24).toString('hex');
+    }
+    console.log(`Clé machine (WHATSAPP_LOCAL) : ${machineKey} — configurez-la côté orchestrateur.`);
+  }
+
+  app.use('/api/machine', (req, res, next) => {
+    const provided = String(req.get('x-machine-key') || '').trim();
+    const ok = machineKey && provided && provided.length === machineKey.length
+      && require('crypto').timingSafeEqual(Buffer.from(provided), Buffer.from(machineKey));
+    if (!ok) return res.status(401).json({ error: 'MACHINE_KEY_INVALID' });
+    next();
+  });
+
+  // Carte machine (Machine view) : ce que cette machine sait faire + état.
+  app.get('/api/machine', async (req, res) => {
+    try {
+      const s = await machine.getStatus();
+      res.json(s.result);
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  // Un job = une action du registre intelligence, exécutée réellement ici.
+  app.post('/api/machine/job', async (req, res) => {
+    try {
+      const { action, payload } = req.body || {};
+      const out = await machine.execute(action, payload);
+      res.status(out.ok ? 200 : 400).json(out);
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
   // ---------- Page Connexions : historique unifié WhatsApp + Telegram ----------
   app.get('/api/history', (req, res) => {
     res.json(db.listSentHistory(100));

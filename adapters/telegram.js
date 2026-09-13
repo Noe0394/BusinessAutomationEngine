@@ -493,6 +493,35 @@ function createSession(tenantId) {
   }
 
   /**
+   * Membres d'un groupe/canal (action EXTRACT_MEMBERS de la couche
+   * intelligence). groupId est la chaîne produite par getGroups()
+   * (id.toString()) ; on la convertit en nombre car gramjs traiterait une
+   * chaîne numérique comme un username. Jamais de throw : session
+   * déconnectée, identifiant invalide ou groupe inaccessible → [].
+   */
+  async function getGroupMembers(groupId, opts = {}) {
+    if (!connected) return [];
+    try {
+      const limit = Number((opts && opts.limit) || 200) || 200;
+      const numId = Number(String(groupId).trim());
+      if (!numId) return [];
+      let entity = null;
+      try { entity = await client.getEntity(numId); } catch (e) { entity = numId; }
+      const participants = await client.getParticipants(entity, { limit });
+      return (participants || []).map((u) => ({
+        id: u && u.id != null ? u.id.toString() : null,
+        username: (u && u.username) || null,
+        firstName: (u && u.firstName) || '',
+        lastName: (u && u.lastName) || '',
+        name: [u && u.firstName, u && u.lastName].filter(Boolean).join(' ') || (u && u.username) || '',
+        phone: (u && u.phone) || null,
+      })).filter((m) => m.id);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /**
    * Résout un identifiant fourni par l'utilisateur (username "@untel" ou
    * numéro de téléphone) vers une entité Telegram utilisable par
    * sendMessage/sendFile. Un username se résout directement via getEntity.
@@ -582,6 +611,7 @@ function createSession(tenantId) {
     submitPassword,
     getLoginError,
     getGroups,
+    getGroupMembers,
     resolveRecipient,
     sendMessage,
     sendMedia,

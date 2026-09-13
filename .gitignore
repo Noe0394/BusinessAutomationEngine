@@ -20,6 +20,8 @@ keyword_rules.json
 keyword_media/
 campaigns_state/
 message_history/
+# État de la couche intelligence (un fichier par tenant, écrit par le bridge).
+.intelligence-state*.json
 ai_studio_sessions/
 public/dist/
 # Sortie de build (scripts/build-public.js) : générée à chaque déploiement Vercel.

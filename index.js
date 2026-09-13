@@ -57,6 +57,7 @@ const ebookGenerator = require('./lib/pdf/ebookGenerator');
 // existante. NE TOUCHE PAS à la gestion de sessions/connexion Baileys ni aux
 // moteurs d'envoi.
 const { createVpsBridge } = require('./lib/intelligence/vps-bridge');
+const humanContextEngine = require('./lib/intelligence/human-context-engine');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -4718,9 +4719,28 @@ app.post('/api/ebooks/generate', requireAccess, requireModule('studio_video'), u
 // (analyze, intuition, objective, execute, chat, actions, health).
 // Authentification alignée sur toute l'API (mot de passe admin ou clé de
 // licence) — le bridge ne détourne aucune session existante.
+//
+// Runtime VPS_BAILEYS : la couche intelligence exécute ses actions sur les
+// moteurs RÉELS du serveur (whatsappManager/telegramManager + moteurs de
+// campagne + social-adapters + licenses) — voir
+// lib/intelligence/runtimes/vps-runtime.js. Aucune session n'est créée
+// ici : le runtime consomme getOrCreate() comme le font déjà les endpoints
+// de campagne existants, et se replie sur le tenant admin (__admin__) quand
+// l'action ne nomme pas une session réelle. stateFile = défaut du bridge
+// (persistance par tenant pour reprise/idempotence après redémarrage).
+const { createVpsRuntime } = require('./lib/intelligence/runtimes/vps-runtime.js');
 app.use('/', requireAccess, createVpsBridge({
-  runtime: null,
-  stateFile: process.env.INTELLIGENCE_STATE_FILE || null,
+  runtime: createVpsRuntime({
+    whatsappManager,
+    telegramManager,
+    licenses,
+    facebook,
+    mediaPublisher,
+    humanContext: humanContextEngine,
+    env: process.env,
+    logger: (msg) => console.error('[intelligence-runtime]', msg),
+  }),
+  stateFile: process.env.INTELLIGENCE_STATE_FILE || undefined,
 }));
 
 app.use((err, req, res, next) => {
