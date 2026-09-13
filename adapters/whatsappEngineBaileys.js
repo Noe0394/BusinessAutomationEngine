@@ -405,6 +405,28 @@ function createSession(tenantId) {
           // onAccountReset ci-dessus.
           notifyAccountReset();
           scheduleReconnect();
+        } else if (!wasRegisteredBeforeThisAttempt && consecutiveFailures >= 3) {
+          // Constaté en production (tenant "__admin__", 2026-09-13) : un
+          // appairage JAMAIS finalisé qui échoue à répétition (QR/code
+          // régénéré puis fermeture quasi immédiate, code 428 ou 401, en
+          // boucle sur des heures) ne se rétablit jamais tout seul en
+          // conservant les mêmes identifiants — l'identité d'appareil
+          // (devicePairingData) de ces tentatives finit par être flaguée par
+          // l'anti-abus WhatsApp (même mécanisme que documenté plus haut pour
+          // qrTimeout), et retenter avec cette identité échoue indéfiniment.
+          // Un tenant flambant neuf sur ce même VPS/IP s'appaire sans
+          // problème (vérifié en diagnostic) — la cause est bien l'identité
+          // de CE tenant, pas l'IP. Purger après 3 échecs consécutifs sans
+          // jamais avoir réussi force une IDENTITÉ D'APPAREIL neuve au
+          // prochain essai (nouveau QR/code), sans rapport avec le cas
+          // ci-dessus (aucune session valide à révoquer ici, jamais
+          // enregistrée) — donc pas d'onAccountReset()/campagne à annuler.
+          console.log(
+            `Connexion WhatsApp fermée (tenant "${tenantId}"). (code: ${statusCode}) — ${consecutiveFailures} échecs consécutifs sans appairage réussi, régénération d'une identité d'appareil neuve.`,
+          );
+          fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+          consecutiveFailures = 0;
+          scheduleReconnect();
         } else {
           // Tout autre cas (coupure réseau, timeout de QR non scanné à
           // temps, 401 pendant un appairage jamais finalisé...) : on relance

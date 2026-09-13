@@ -20,6 +20,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { EventEmitter } = require('events');
+const { mock } = require('node:test');
 
 let passed = 0;
 let failed = 0;
@@ -182,6 +183,55 @@ function lastSocket() {
     const code = await p;
     assert('résolu après un retry', code === '1234-5678-9012-3456', code);
     assert('la demande a été retentée (2 appels)', sock.codeCalls.length === 2, String(sock.codeCalls.length));
+    session.dispose();
+  }
+
+  section('Échecs répétés sans jamais s’appairer -> régénération d’identité neuve (purge)');
+
+  {
+    // Reproduit le blocage constaté en production (tenant "__admin__",
+    // 2026-09-13) : un appairage jamais finalisé qui échoue en boucle
+    // (QR/code régénéré puis fermeture quasi immédiate, ex. code 428) ne se
+    // rétablissait jamais tout seul — les mêmes identifiants (jamais
+    // enregistrés) étaient retentés indéfiniment. Après 3 échecs consécutifs
+    // enregistrés (donc à la 4e fermeture), le moteur doit purger AUTH_DIR
+    // pour forcer une identité d'appareil neuve au prochain essai.
+    // Les reconnexions automatiques passent par scheduleReconnect() (délais
+    // réels 3s/6s/12s...) : horloge simulée (node:test mock.timers) pour ne
+    // pas ralentir la suite, plutôt que de rappeler connect() à la main (ce
+    // qui laisserait le minuteur programmé par le close() précédent toujours
+    // en attente et fausserait le compteur consecutiveFailures).
+    async function flushMicrotasks() { for (let i = 0; i < 8; i += 1) await null; }
+
+    const session = createSession('pair-test-6');
+    const authDir = path.join(AUTH_DIR_TEST, 'pair-test-6');
+
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      await session.connect();
+      assert('AUTH_DIR créé au premier connect()', fs.existsSync(authDir));
+      fs.writeFileSync(path.join(authDir, 'marker.json'), '{}'); // témoin de l'identité "actuelle"
+
+      lastSocket().close(428); // échec 1 (consecutiveFailures 0 -> 1), reconnexion programmée à 3s
+      mock.timers.tick(3_000);
+      await flushMicrotasks();
+
+      lastSocket().close(428); // échec 2 (1 -> 2), reconnexion à 6s
+      mock.timers.tick(6_000);
+      await flushMicrotasks();
+
+      lastSocket().close(428); // échec 3 (2 -> 3), reconnexion à 12s
+      mock.timers.tick(12_000);
+      await flushMicrotasks();
+      assert('identité PAS encore purgée après seulement 3 échecs', fs.existsSync(path.join(authDir, 'marker.json')));
+
+      lastSocket().close(428); // échec 4 : consecutiveFailures valait 3 au moment du test -> purge
+      await flushMicrotasks();
+
+      assert('AUTH_DIR purgé après échecs consécutifs sans appairage réussi', !fs.existsSync(authDir));
+    } finally {
+      mock.timers.reset();
+    }
     session.dispose();
   }
 
