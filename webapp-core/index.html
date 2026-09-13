@@ -209,19 +209,12 @@
   <section id="screen-intelligence" class="screen">
     <div class="content">
       <div class="card">
-        <h2>🧠 Interface de dialogue direct</h2>
-        <label for="intel-objective">Exprime ton objectif en langage naturel</label>
-        <textarea id="intel-objective" placeholder='Ex: "Aujourd\'hui, je veux vendre 10 packs de formation et générer 100 000 FCFA"'></textarea>
-        <button class="primary" id="intel-plan-btn" style="margin-top:10px;">🗺️ Décomposer en plan de tâches</button>
-        <p class="error" id="intel-objective-error"></p>
-      </div>
-
-      <div class="card" id="intel-plan-card" style="display:none;">
-        <h2>Plan généré</h2>
-        <p id="intel-summary" style="font-size:13px; color:var(--text-dim); margin-top:6px;"></p>
-        <div id="intel-tasks"></div>
-        <div class="row" style="margin-top:12px;">
-          <button class="secondary" id="intel-open-campaigns">📢 Ouvrir les campagnes</button>
+        <h2>🧠 Chat Intelligent — Objectif du jour</h2>
+        <p style="font-size:12px; color:var(--text-dim); margin:0 0 10px;">Exprime ton objectif en langage naturel — le système pose les questions nécessaires (cible, canaux), construit un plan réel (mêmes moteurs que le mode VPS) et te renvoie vers les campagnes, préremplies, pour l'exécuter.</p>
+        <div id="goalchat-messages" class="goalchat-messages"></div>
+        <div class="row" style="margin-top:10px; align-items:flex-end;">
+          <textarea id="goalchat-input" placeholder='Ex: "Je veux vendre 50 produits aujourd\'hui"' style="flex:3; min-width:0;"></textarea>
+          <button class="primary" id="goalchat-send-btn" style="flex:0 0 auto; width:auto;">➤ Envoyer</button>
         </div>
       </div>
 
@@ -259,6 +252,7 @@
 <script src="lib/intelligence/task-parser.js"></script>
 <script src="lib/intelligence/automation-engine.js"></script>
 <script src="lib/intelligence/action-executor.js"></script>
+<script src="lib/intelligence/goal-chat.js"></script>
 <script src="chat-core.js"></script>
 </body>
 </html>

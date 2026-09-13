@@ -13,6 +13,9 @@ const db = require('./lib/db');
 const campaigns = require('./lib/campaigns');
 const ebookGenerator = require('./lib/pdf/ebookGenerator');
 const { DATA_DIR } = require('./lib/paths');
+const taskParser = require('./lib/intelligence/task-parser');
+const humanContext = require('./lib/intelligence/human-context-engine');
+const goalChat = require('./lib/intelligence/goal-chat');
 
 const PORT = process.env.LOCAL_PORT || 4100;
 
@@ -231,6 +234,33 @@ async function main() {
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
     }
+  });
+
+  // ---------- Chat Intelligent (Goal Chat, voir lib/intelligence/goal-chat.js)
+  // ---------- Même moteur que le mode VPS (task-parser + human-context-engine),
+  // en session mémoire par sessionId. Contrairement au VPS, "run-plan" n'est
+  // PAS auto-exécuté ici : le client redirige vers l'onglet Campagnes (canal
+  // préréglé) plutôt que de réimplémenter un moteur d'envoi côté chat — le
+  // vrai envoi passe toujours par POST /api/campaigns (lib/campaigns.js).
+  const goalChatSessions = new Map();
+  app.post('/api/intelligence/goal-chat', (req, res) => {
+    const { message, sessionId, action } = req.body || {};
+    let state = sessionId ? goalChatSessions.get(sessionId) : null;
+    if (!state) {
+      state = goalChat.createSession({});
+      goalChatSessions.set(state.sessionId, state);
+    }
+    if (action === 'restart') {
+      goalChatSessions.delete(state.sessionId);
+      const fresh = goalChat.createSession({});
+      goalChatSessions.set(fresh.sessionId, fresh);
+      return res.json({ ok: true, sessionId: fresh.sessionId, kind: 'question', reply: goalChat.WELCOME });
+    }
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'Le champ "message" est requis (ou action:"restart").' });
+    }
+    const out = goalChat.step(state, { message, parser: taskParser, humanContext });
+    res.json(Object.assign({ ok: true, sessionId: state.sessionId }, out));
   });
 
   // ---------- Page Connexions : historique unifié WhatsApp + Telegram ----------

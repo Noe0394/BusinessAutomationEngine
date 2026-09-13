@@ -47,6 +47,12 @@
   ul { padding-left: 0; list-style: none; margin: 0; }
   li { border: 1px solid var(--border); background: var(--bg); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
   small { color: var(--text-dim); display: block; margin-bottom: 4px; }
+  #goalchat-messages { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; padding: 4px 2px; margin-top: 10px; }
+  .goalchat-msg { max-width: 88%; padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; line-height: 1.45; font-size: 13px; }
+  .goalchat-msg.user { align-self: flex-end; background: var(--cyan); color: #04141A; }
+  .goalchat-msg.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--border); }
+  .goalchat-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .goalchat-chips button { padding: 6px 12px; font-size: 12px; margin: 0; }
 </style>
 </head>
 <body>
@@ -54,6 +60,7 @@
 
   <nav>
     <button id="nav-statut" class="active" onclick="showTab('statut')">WhatsApp</button>
+    <button id="nav-intelligence" onclick="showTab('intelligence')">💬 Chat Intelligent</button>
     <button id="nav-telegram" onclick="showTab('telegram')">Telegram</button>
     <button id="nav-contacts" onclick="showTab('contacts')">Contacts</button>
     <button id="nav-campagnes" onclick="showTab('campagnes')">Campagnes</button>
@@ -71,6 +78,19 @@
     <textarea id="text" placeholder="Message"></textarea>
     <button onclick="sendTestMessage()">Envoyer</button>
     <div id="sendResult"></div>
+  </section>
+
+  <!-- Chat Intelligent (Goal Chat) : même moteur que le mode VPS
+       (lib/intelligence/goal-chat.js, orchestre task-parser +
+       human-context-engine) — voir public/intelligence.js. -->
+  <section id="tab-intelligence" class="tab">
+    <h2>💬 Chat Intelligent — Objectif du jour</h2>
+    <small>Exprime ton objectif en langage naturel — le système pose les questions nécessaires (cible, canaux) et construit un plan réel.</small>
+    <div id="goalchat-messages"></div>
+    <div class="row" style="margin-top:8px;">
+      <input id="goalchat-input" placeholder='Ex: "Je veux vendre 50 produits aujourd&#39;hui"'>
+      <button onclick="goalChatSendClick()">Envoyer</button>
+    </div>
   </section>
 
   <!-- Telegram (MTProto/GramJS, voir lib/telegram.js) : login par
@@ -225,5 +245,6 @@
 <script src="/lib/smartTextGenerator.js"></script>
 <script src="/app.js"></script>
 <script src="/relance.js"></script>
+<script src="/intelligence.js"></script>
 </body>
 </html>
