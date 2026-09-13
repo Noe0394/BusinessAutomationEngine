@@ -384,6 +384,7 @@
 
     <nav id="tabs">
       <button type="button" class="tab-btn active" data-tab="connections">🔌 Connexions &amp; Intégrations</button>
+      <button type="button" class="tab-btn" data-tab="goalchat">💬 Chat Intelligent</button>
       <button type="button" class="tab-btn" data-tab="whatsapp">WhatsApp</button>
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
       <button type="button" class="tab-btn" data-tab="facebook">Facebook</button>
@@ -489,6 +490,24 @@
         <button type="button" id="tt-connect-btn">Se connecter avec TikTok</button>
       </div>
 
+    </section>
+
+    <!-- Onglet Chat Intelligent : fenêtre de dialogue objectif -> plan, câblée
+         sur le VRAI moteur intelligence (lib/intelligence/goal-chat.js, qui
+         orchestre task-parser + human-context-engine + automation-engine côté
+         serveur via POST /api/intelligence/goal-chat) — zéro simulation. Le
+         plan proposé ne s'exécute que sur confirmation explicite de l'utilisateur. -->
+    <section class="panel" id="panel-goalchat">
+      <h2>💬 Chat Intelligent</h2>
+      <p class="empty">Exprimez votre objectif en langage naturel — le système intelligent pose les questions nécessaires, construit un plan d'actions réel et l'exécute sur votre confirmation.</p>
+      <div class="studio-chat">
+        <div id="goalchat-messages" class="studio-messages"></div>
+        <p id="goalchat-feedback" hidden></p>
+        <div class="studio-input-row">
+          <textarea id="goalchat-input" placeholder="Ex. « Je veux vendre 50 produits aujourd'hui » (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"></textarea>
+          <button type="button" id="goalchat-send-btn" title="Envoyer" aria-label="Envoyer">➤</button>
+        </div>
+      </div>
     </section>
 
     <!-- Onglet WhatsApp : groupes, import, centre d'envoi -->
@@ -2487,8 +2506,157 @@
         if (btn.dataset.tab === 'share') { shareLoadGroups(); }
         if (btn.dataset.tab === 'relance') { relanceLoadQueue(); }
         if (btn.dataset.tab === 'studio') { studioLoadSessionsList(); }
+        if (btn.dataset.tab === 'goalchat') { goalChatInit(); }
       });
     });
+
+    // ---------- Onglet "Chat Intelligent" : fenêtre de dialogue objectif ->
+    // plan, câblée sur POST /api/intelligence/goal-chat (voir
+    // lib/intelligence/goal-chat.js) — orchestre les VRAIS moteurs déjà en
+    // place côté serveur (task-parser, human-context-engine, automation-engine
+    // + action-executor). Rien n'est exécuté avant confirmation explicite
+    // (bouton "🚀 Oui, lancer maintenant"). ----------
+    const goalChatState = { sessionId: null, welcomed: false };
+
+    function goalChatFeedback(message, isError) {
+      const el = document.getElementById('goalchat-feedback');
+      el.textContent = message || '';
+      el.hidden = !message;
+      el.className = isError ? 'error' : 'ok';
+    }
+
+    function goalChatAppendBubble(role, text) {
+      const container = document.getElementById('goalchat-messages');
+      const bubble = document.createElement('div');
+      bubble.className = 'studio-msg ' + (role === 'user' ? 'user' : 'assistant');
+      bubble.textContent = text;
+      container.appendChild(bubble);
+      container.scrollTop = container.scrollHeight;
+      return bubble;
+    }
+
+    function goalChatAppendChips(labels, onPick) {
+      if (!labels || !labels.length) return;
+      const container = document.getElementById('goalchat-messages');
+      const row = document.createElement('div');
+      row.className = 'studio-msg-actions';
+      labels.forEach((label) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        btn.addEventListener('click', () => onPick(label));
+        row.appendChild(btn);
+      });
+      container.appendChild(row);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function goalChatAppendPlanActions(actions) {
+      if (!actions || !actions.length) return;
+      const container = document.getElementById('goalchat-messages');
+      const row = document.createElement('div');
+      row.className = 'studio-msg-actions';
+      actions.forEach((a) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = a.label;
+        btn.addEventListener('click', () => goalChatHandleAction(a.id));
+        row.appendChild(btn);
+      });
+      container.appendChild(row);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    async function goalChatPost(body) {
+      const res = await apiFetch('/api/intelligence/goal-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ sessionId: goalChatState.sessionId }, body)),
+      });
+      return res.json();
+    }
+
+    function goalChatHandleResponse(data) {
+      if (!data || !data.ok) { goalChatFeedback((data && data.error) || 'Réponse invalide du système intelligent.', true); return; }
+      if (data.sessionId) goalChatState.sessionId = data.sessionId;
+      if (data.reply && data.reply.text) goalChatAppendBubble('assistant', data.reply.text);
+      if (data.quick) goalChatAppendChips(data.quick, (label) => goalChatSend(label));
+      if (data.kind === 'plan' && data.actions) goalChatAppendPlanActions(data.actions);
+    }
+
+    async function goalChatSend(message) {
+      goalChatFeedback('');
+      goalChatAppendBubble('user', message);
+      try {
+        goalChatHandleResponse(await goalChatPost({ message }));
+      } catch (err) {
+        if (err.message !== 'unauthorized') goalChatFeedback('Erreur de communication avec le système intelligent.', true);
+      }
+    }
+
+    async function goalChatHandleAction(actionId) {
+      if (actionId === 'navigate-campaigns') {
+        document.querySelector('.tab-btn[data-tab="share"]').click();
+        return;
+      }
+      if (actionId === 'restart') {
+        try {
+          const data = await goalChatPost({ action: 'restart' });
+          goalChatState.sessionId = data.sessionId;
+          document.getElementById('goalchat-messages').innerHTML = '';
+          goalChatFeedback('');
+          if (data.reply) {
+            goalChatAppendBubble('assistant', data.reply.text);
+            goalChatAppendChips(data.reply.quick, (label) => goalChatSend(label));
+          }
+        } catch (err) {
+          if (err.message !== 'unauthorized') goalChatFeedback('Erreur.', true);
+        }
+        return;
+      }
+      if (actionId === 'run-plan') {
+        goalChatFeedback('Exécution du plan en cours...', false);
+        try {
+          const data = await goalChatPost({ action: 'run-plan' });
+          if (data.ok && data.execution) {
+            const exec = data.execution;
+            goalChatAppendBubble('assistant', '✅ Plan exécuté : ' + (exec.executed || 0) + ' action(s) lancée(s)' + (exec.error ? ' — ' + exec.error : '') + '.');
+            goalChatFeedback('');
+          } else {
+            goalChatFeedback('Exécution incomplète — voir le journal des campagnes.', true);
+          }
+        } catch (err) {
+          if (err.message !== 'unauthorized') goalChatFeedback('Erreur lors de l\'exécution du plan.', true);
+        }
+      }
+    }
+
+    document.getElementById('goalchat-send-btn').addEventListener('click', () => {
+      const input = document.getElementById('goalchat-input');
+      const message = input.value.trim();
+      if (!message) return;
+      input.value = '';
+      goalChatSend(message);
+    });
+    document.getElementById('goalchat-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        document.getElementById('goalchat-send-btn').click();
+      }
+    });
+
+    // Accueil affiché au premier passage sur l'onglet (miroir client de
+    // goalChat.WELCOME côté serveur — purement cosmétique, aucun appel réseau
+    // tant que l'utilisateur n'a rien tapé/cliqué).
+    function goalChatInit() {
+      if (goalChatState.welcomed) return;
+      goalChatState.welcomed = true;
+      goalChatAppendBubble('assistant', "👋 Je suis le système intelligent de CYRUS. Dis-moi ton objectif — par exemple :");
+      goalChatAppendChips(
+        ['Vendre 50 produits aujourd\'hui', 'Trouver 20 prospects', 'Publier 3 contenus', 'Faire un suivi automatique'],
+        (label) => goalChatSend(label),
+      );
+    }
 
     // ---------- Connexions : WhatsApp (PC / Mobile) ----------
     let statusInterval = null;
