@@ -43,11 +43,15 @@ async function main() {
   app.use(express.static(path.join(__dirname, 'public')));
 
   app.get('/api/status', async (req, res) => {
-    res.json({
-      connected: whatsapp.isConnected(),
-      qr: whatsapp.getQRCode(),
-      qrImage: await whatsapp.getQRCodeImage(),
-    });
+    try {
+      res.json({
+        connected: whatsapp.isConnected(),
+        qr: whatsapp.getQRCode(),
+        qrImage: await whatsapp.getQRCodeImage(),
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Purement informatif désormais (voir lib/selfUpdate.js, qui applique
@@ -55,8 +59,12 @@ async function main() {
   // si une mise à jour vient d'apparaître EN COURS de session (elle ne sera
   // appliquée qu'au prochain redémarrage, jamais en cours de route).
   app.get('/api/update-status', async (req, res) => {
-    const { checkForUpdate } = require('./lib/updateCheck');
-    res.json(await checkForUpdate());
+    try {
+      const { checkForUpdate } = require('./lib/updateCheck');
+      res.json(await checkForUpdate());
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.post('/api/whatsapp/send', async (req, res) => {
@@ -129,8 +137,16 @@ async function main() {
   });
 
   app.post('/api/telegram/logout', async (req, res) => {
-    await telegram.logout();
-    res.json({ ok: true });
+    try {
+      await telegram.logout();
+      res.json({ ok: true });
+    } catch (err) {
+      // Seule route de ce fichier sans try/catch jusqu'ici : une erreur
+      // imprévue (ex. client.logout() inexistant côté GramJS, voir
+      // lib/telegram.js) faisait planter tout le process au lieu de
+      // renvoyer une erreur HTTP — corrigé en même temps que le bug lui-même.
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.post('/api/telegram/send', async (req, res) => {
@@ -269,14 +285,19 @@ async function main() {
   });
 
   app.post('/api/whatsapp/logout', async (req, res) => {
-    await whatsapp.logout();
-    // Relance immédiatement une session vierge (nouveau QR) plutôt que de
-    // laisser whatsapp-web.js inactif jusqu'au prochain redémarrage complet
-    // du serveur - même esprit que logoutWhatsApp() côté mobile/webapp.
-    whatsapp.connect().catch((err) => {
-      console.error('Erreur lors de la reconnexion WhatsApp après déconnexion :', err.message);
-    });
-    res.json({ ok: true });
+    try {
+      await whatsapp.logout();
+      // Relance immédiatement une session vierge (nouveau QR) plutôt que de
+      // laisser whatsapp-web.js inactif jusqu'au prochain redémarrage complet
+      // du serveur - même esprit que logoutWhatsApp() côté mobile/webapp.
+      whatsapp.connect().catch((err) => {
+        console.error('Erreur lors de la reconnexion WhatsApp après déconnexion :', err.message);
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Erreur lors de la déconnexion WhatsApp :', err.stack || err.message);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Import manuel ou CSV (déjà parsé côté navigateur, voir public/app.js) :

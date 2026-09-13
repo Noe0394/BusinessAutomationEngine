@@ -164,9 +164,24 @@ function getLoginError() {
 }
 
 async function logout() {
+  // GramJS n'expose pas de méthode client.logout() (bug jamais exercé
+  // jusqu'ici : ce chemin plantait tout le process avec un TypeError, aucun
+  // try/catch ne pouvant rattraper un throw synchrone sur un appel de
+  // méthode inexistante) — la révocation réelle passe par l'appel API brut
+  // auth.LogOut, voir adapters/telegram.js#logout (racine, déjà éprouvé).
   if (client) {
-    await client.logout().catch(() => {});
-    await client.disconnect().catch(() => {});
+    try {
+      if (connected) {
+        await client.invoke(new Api.auth.LogOut());
+      }
+    } catch (err) {
+      console.warn('Erreur lors du logout Telegram (nettoyage local effectué quand même) :', err.message);
+    }
+    try {
+      await client.disconnect();
+    } catch (err) {
+      // ignore
+    }
   }
   client = null;
   connected = false;
