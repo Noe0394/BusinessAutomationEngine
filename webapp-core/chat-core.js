@@ -72,24 +72,79 @@
     container.scrollTop = container.scrollHeight;
   }
 
+  function goalChannelValue(ctx) {
+    const chan = ctx && ctx.channels && ctx.channels[0];
+    return chan === 'TELEGRAM' ? 'telegram' : 'whatsapp';
+  }
+
+  function navigateToScreen(name) {
+    const navBtn = document.querySelector('.nav button[data-screen="' + name + '"]');
+    if (navBtn) navBtn.click();
+  }
+
+  // "Lancer" prépare RÉELLEMENT l'envoi (contacts déjà importés, message
+  // généré à partir de l'objectif) puis ouvre la Relance Manuelle Express
+  // avec la file prête — mais ne réimplémente JAMAIS l'envoi lui-même : le
+  // premier clic ("Envoyer & Suivant", ou l'activation du Mode Série
+  // Continu) reste la main de l'utilisateur, un message à la fois — c'est
+  // la seule voie d'envoi qui existe dans un onglet navigateur (voir
+  // adapters/browser.js). Le moteur exploite ce mode manuel, il ne le
+  // contourne pas.
+  async function runPlanViaRelance(ctx) {
+    const store = window.CyrusStore;
+    const channel = goalChannelValue(ctx);
+    const rawContacts = await store.getContacts(channel);
+    if (!rawContacts || !rawContacts.length) {
+      goalAppendBubble('assistant', "⚠️ Aucun contact " + (channel === 'telegram' ? 'Telegram' : 'WhatsApp') + " importé pour l'instant — importe une liste ou extrait un groupe dans l'onglet Campagnes, puis relance ton objectif.");
+      navigateToScreen('campaigns');
+      return;
+    }
+    const unblocked = await store.filterBlocked(channel, rawContacts);
+    if (!unblocked.length) {
+      goalAppendBubble('assistant', '⚠️ Tous les contacts disponibles sont dans la liste noire — rien à relancer sur ce canal.');
+      return;
+    }
+
+    const intention = GC.buildObjectiveString(ctx);
+    const campaign = await store.createCampaign(channel, {
+      name: 'Objectif IA — ' + new Date().toLocaleString('fr-FR'),
+      text: intention,
+      delayMinMs: 8000,
+      delayMaxMs: 20000,
+      recipients: unblocked.map((c) => ({ to: c.identifier, name: c.name })),
+    });
+
+    navigateToScreen('relance');
+    const channelSelect = document.getElementById('relance-channel');
+    const intentionField = document.getElementById('relance-intention');
+    if (channelSelect) channelSelect.value = channel;
+    if (intentionField) intentionField.value = intention;
+    const reloadBtn = document.getElementById('relance-reload-btn');
+    if (reloadBtn) reloadBtn.click(); // charge la file + génère un message personnalisé par contact
+
+    goalAppendBubble('assistant', '✅ File de Relance Manuelle Express prête : ' + unblocked.length + ' contact(s) sur ' + (channel === 'telegram' ? 'Telegram' : 'WhatsApp') + ', message généré à partir de ton objectif. Rien n\'est envoyé sans ta confirmation — valide "Envoyer & Suivant" (ou active le Mode Série Continu) dans l\'onglet Relance Manuelle. (Campagne : ' + campaign.id + ')');
+  }
+
   function goalHandleAction(actionId) {
-    if (actionId === 'navigate-campaigns' || actionId === 'run-plan') {
-      // "Lancer" en local ne réimplémente jamais l'envoi (voir en-tête) :
-      // on ouvre l'onglet Campagnes avec le canal détecté préréglé — le
-      // VRAI envoi se fait toujours via le formulaire existant
-      // (campaigns-core.js), qui vérifie contacts importés/liste noire/etc.
+    if (actionId === 'navigate-campaigns') {
       const ctx = goalSession && goalSession.ctx;
-      const chan = ctx && ctx.channels && ctx.channels[0];
       const select = document.getElementById('camp-channel');
-      if (select && chan) {
-        const v = chan === 'TELEGRAM' ? 'telegram' : 'whatsapp';
+      if (select && ctx) {
+        const v = goalChannelValue(ctx);
         if (Array.from(select.options).some((o) => o.value === v)) {
           select.value = v;
           select.dispatchEvent(new Event('change'));
         }
       }
-      const navBtn = document.querySelector('.nav button[data-screen="campaigns"]');
-      if (navBtn) navBtn.click();
+      navigateToScreen('campaigns');
+      return;
+    }
+    if (actionId === 'run-plan') {
+      const ctx = goalSession && goalSession.ctx;
+      if (!ctx) return;
+      runPlanViaRelance(ctx).catch((err) => {
+        goalAppendBubble('assistant', '⚠️ Erreur lors de la préparation de la relance : ' + (err && err.message || err));
+      });
       return;
     }
     if (actionId === 'restart') {

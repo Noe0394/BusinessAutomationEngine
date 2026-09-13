@@ -234,6 +234,13 @@
 <script src="lib/personalization.js"></script>
 <script src="lib/smartTextGenerator.js"></script>
 <script src="lib/contactsImport.js"></script>
+<!-- window.Cyrus.db (IndexedDB) : requis par adapters/browser.js
+     (`const db = window.Cyrus.db`) — DOIT être chargé avant adapter.js,
+     sans quoi CyrusStore capture `db` à `undefined` et TOUTE la
+     persistance (contacts/campagnes/liste noire/historique) plante
+     silencieusement au premier appel. Absent d'index.html jusqu'ici
+     (jamais exercé en test réel avant ce diagnostic). -->
+<script src="lib/db.js"></script>
 <!-- L'adaptateur (mobile.js ou desktop.js) est injecté ici par sync.js selon
      la plateforme cible - il DOIT définir window.CyrusEngine/CyrusStore
      avant les scripts ci-dessous. Voir adapters/CONTRACT.md. -->
