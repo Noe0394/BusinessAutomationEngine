@@ -374,6 +374,12 @@ function createSession(tenantId) {
 
       if (connection === 'close') {
         connected = false;
+        // Un QR affiché n'est plus valable une fois la connexion fermée : on le
+        // purge pour ne jamais laisser la garde d'attente de requestPairingCode
+        // (voir waitForStreamReady) résoudre sur le QR périmé d'un socket mort —
+        // le prochain QR réel réarmera latestQR. Sert aussi de signal honnête à
+        // getQRCode() pendant la fenêtre de reconnexion.
+        latestQR = null;
         stopHeartbeat();
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const loggedOut = statusCode === DisconnectReason.loggedOut;
@@ -509,6 +515,91 @@ function createSession(tenantId) {
     });
   }
 
+  // ---- Garde d'attente avant la demande d'un code d'appairage ----
+  // Cause racine des "Connection Closed" / "Connection Failure" / "TIMEOUT"
+  // constatés sur la génération du code (diagnostic du 2026-09-13) : le moteur
+  // appelait sock.requestPairingCode() immédiatement après connect()/logout(),
+  // pendant que la WebSocket WhatsApp était encore en phase CONNECTING (le
+  // noise handshake n'étant pas terminé). Côté Baileys, envoyer le nœud 'iq'
+  // de demande de code sur une ws dont ws.isOpen est faux lève
+  // Boom('Connection Closed', {statusCode: connectionClosed}) — un défaut de
+  // SÉQUENCEMENT de l'appelant, pas un défaut de protocole/version. La voie
+  // sûre est d'attendre que le flux soit réellement armé AVANT d'envoyer la
+  // demande.
+  //
+  // Signal d'armement : pour un appareil JAMAIS enregistré, connection==='open'
+  // ne survient qu'APRÈS l'appairage réussi — jamais avant. Le seul signal
+  // fiable "le flux est prêt pour un appairage" est l'émission d'un `qr` dans
+  // connection.update (émis juste après le handshake, quand WhatsApp offre le
+  // mode pair-device). Un socket déjà enregistré (cas d'un requestPairingCode
+  // suivant un logout) aboutit directement en 'open'. Une fermeture avant
+  // armement rejette la promesse avec le statusCode, pour une erreur honnête.
+  function waitForStreamReady(targetSock, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      // Déjà armé (le listener principal a déjà émis un QR pour ce socket —
+      // ex. l'utilisateur a laissé la connexion s'établir avant de cliquer sur
+      // "Obtenir le code") : aucune attente nécessaire.
+      if (latestQR) {
+        resolve();
+        return;
+      }
+
+      let settled = false;
+      let timer = null;
+
+      const finalize = (err) => {
+        if (settled) return;
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (targetSock && targetSock.ev && typeof targetSock.ev.off === 'function') {
+          try {
+            targetSock.ev.off('connection.update', onUpdate);
+          } catch (err) {
+            // l'écouteur a pu être déjà détaché par doConnect() — sans gravité
+          }
+        }
+        if (err) reject(err);
+        else resolve();
+      };
+
+      const onUpdate = (update) => {
+        if (settled) return;
+        if (update && update.qr) {
+          finalize();
+        } else if (update && update.connection === 'open') {
+          finalize();
+        } else if (update && update.connection === 'close') {
+          const statusCode = update.lastDisconnect?.error?.output?.statusCode;
+          finalize(
+            new Error(
+              statusCode
+                ? `Connexion WhatsApp fermée avant l'appairage (code: ${statusCode}).`
+                : "Connexion WhatsApp fermée avant l'appairage.",
+            ),
+          );
+        }
+      };
+
+      if (targetSock && targetSock.ev) {
+        try {
+          targetSock.ev.on('connection.update', onUpdate);
+        } catch (err) {
+          // finalize() fera de toute façon le ménage
+        }
+      }
+
+      // Le QR Baileys vit 120s (voir qrTimeout) ; l'armement du flux arrive en
+      // quelques secondes au pire. 30s est un garde-fou large qui ne masque
+      // jamais un vrai refus WhatsApp (ceux-ci arrivent via 'close', pas ici).
+      timer = setTimeout(() => {
+        finalize(new Error("Connexion WhatsApp non armée pour l'appairage (TIMEOUT)."));
+      }, timeoutMs || 30_000);
+    });
+  }
+
   async function requestPairingCode(phoneNumber) {
     const digits = String(phoneNumber).replace(/\D/g, '');
     if (!digits) {
@@ -532,8 +623,35 @@ function createSession(tenantId) {
       throw new Error('Adaptateur WhatsApp non initialisé.');
     }
 
-    const rawCode = await sock.requestPairingCode(digits);
-    return rawCode.replace(/-/g, '').match(/.{1,4}/g).join('-');
+    // Attente de l'armement du flux (voir waitForStreamReady au-dessus), puis
+    // demande du code. Une fermeture réelle (code: 401/408/428…) rejette
+    // immédiatement au lieu d'un "Connection Closed" trompeur. La relecture de
+    // `sock` à chaque tentative absorbe une reconnexion déclenchée par le
+    // moteur entre deux essais.
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const targetSock = sock;
+      try {
+        await waitForStreamReady(targetSock);
+        const rawCode = await targetSock.requestPairingCode(digits);
+        return rawCode.replace(/-/g, '').match(/.{1,4}/g).join('-');
+      } catch (err) {
+        lastError = err;
+        const isSequencingError = (e) =>
+          e && e.message && /Connection Closed|connection closed|closed before/i.test(e.message);
+        // Seul un échec de séquencement (socket pas encore armé entre la garde
+        // et l'envoi effectif) est retenté — les refus WhatsApp réels (401,
+        // 408, 428, timeout d'attente...) sont définitifs et remontés tels
+        // quels. Passé ce délai, l'armement est acquis (voir le fast-path
+        // latestQR de waitForStreamReady), donc le retry résout ou échoue vite.
+        if (isSequencingError(err) && attempt < 3) {
+          await new Promise((r) => setTimeout(r, 500));
+          continue;
+        }
+        break;
+      }
+    }
+    throw lastError || new Error("Impossible de générer le code d'appairage.");
   }
 
   async function getGroupMetadata(groupId) {

@@ -94,10 +94,25 @@ Context, vps-bridge restent intacts.
       `https://34-135-20-27.sslip.io` (commentaire sslip.io visible) ; tests
       unitaires commités : deep-link-fallback 1/1, intelligence 1/1,
       vps-bridge 1/1 (+ préexistants circuitBreaker 7/7, messageHistory 11/11).
+      **Enrichissement commits postérieurs** : test dédié du bras d'exécution
+      réel `test/vps-runtime.test.js` **19/19** (commit `1729aa1`) — couvre
+      execute()→registre 12 actions, EXTRACT_MEMBERS (@lid filtrés)→SEND_CAMPAIGN,
+      pause/reprise par canal, GENERATE_ACCESS_KEY, repli local
+      CREATE_USER_ACCOUNT, GENERATE_VIDEO structuré, runtime sans moteur
+      (zéro-effet). `humanContext` injecté dans `createVpsRuntime` côté
+      `index.js` comme dans le test (corrige le HUMAN_CONTEXT_NOT_CONFIGURED).
+      **En cours** : smoke test authentifié `POST /api/intelligence/analyze`
+      (clé `KEY-AFFFF2D9-2026` + device lié, conteneur `licenses.json` lu OK) —
+      différé par le classificateur `auto/best-free` (Bash bloqué en continu).
       **Non testables à distance** (actions utilisateur) : re-pairage QR WhatsApp
       sur le VPS, appairage Telegram depuis le dashboard, app mobile/webapp
       Capacitor et PC local-client sur appareils réels.
 - [ ] 10. Rapport final (URL, commit hash, preuves).
+      **2026-09-13 — RAPPORT RÉDIGÉ, en attente du dernier smoke test
+      authentifié (classificateur `auto/best-free` bloquant Bash) avant
+      validation.** Voir `docs/RAPPORT-FINAL.md` (URL unique Vercel, 2 modes,
+      commits, preuves de déploiement et de test ; dernière case = analyse
+      réelle `POST /api/intelligence/analyze` à confirmer).
 
 ## Règles permanentes
 

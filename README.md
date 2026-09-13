@@ -6,7 +6,7 @@ et `lib/`. L'interface (`public/dashboard.html`) est déployée séparément
 (actuellement Vercel) et lui parle en cross-origin via `public/config.js`
 (`window.CYRUS_API_BASE`, voir `public/config.example.js`).
 
-**Hébergement actuel : VPS Google Cloud dédié (34.68.84.124)**, en
+**Hébergement actuel : VPS Google Cloud dédié (34.135.20.27)**, en
 attendant un retour sur Render une fois la facturation régularisée — voir la
 note en bas de page. Aucune différence de code entre les trois options
 (VPS/Koyeb/Render) : même `Dockerfile`, mêmes variables d'environnement
@@ -21,19 +21,19 @@ Voir `setup-vps.sh` à la racine — installe Docker + Docker Compose, clone
 ou un redémarrage du VPS), puis installe et configure **Caddy** comme
 reverse proxy HTTPS gratuit devant le port 3000. Nécessite un fichier `.env`
 sur le VPS (copié depuis `.env.example`, jamais commité) rempli avec les
-vraies clés, plus obligatoirement `PUBLIC_BASE_URL=https://34-68-84-124.sslip.io`
+vraies clés, plus obligatoirement `PUBLIC_BASE_URL=https://34-135-20-27.sslip.io`
 et `DASHBOARD_ORIGIN` (l'origine Vercel).
 
 ### HTTPS gratuit sans nom de domaine (sslip.io + Caddy)
 
 [sslip.io](https://sslip.io) est un service DNS public gratuit qui résout
-`34-68-84-124.sslip.io` **directement** vers l'IP `34.68.84.124` — aucun
+`34-135-20-27.sslip.io` **directement** vers l'IP `34.135.20.27` — aucun
 achat de nom de domaine nécessaire. Caddy (voir `Caddyfile` à la racine)
 utilise ce nom pour obtenir automatiquement un vrai certificat Let's
 Encrypt (impossible sur une IP nue, qui n'a pas de nom à certifier) et fait
 reverse-proxy vers le backend en local (`localhost:3000`). `setup-vps.sh`
 installe et configure Caddy automatiquement (dernière étape du script) ;
-`public/config.js` pointe déjà vers `https://34-68-84-124.sslip.io`.
+`public/config.js` pointe déjà vers `https://34-135-20-27.sslip.io`.
 
 ⚠️ Si le certificat n'est pas délivré immédiatement après le premier
 lancement de `setup-vps.sh`, vérifier que les ports **80 et 443** sont
