@@ -1,30 +1,44 @@
 [
   {
-    "boundAt": null,
-    "allowedModules": [
-      "whatsapp",
-      "telegram",
-      "studio_video"
-    ],
-    "createdAt": "2026-09-10T08:34:50.992Z",
+    "boundAt": "2026-09-10T20:11:51.827Z",
     "note": "",
     "active": true,
-    "boundDeviceId": null,
-    "expiresAt": null,
-    "key": "KEY-AFFFF2D9-2026"
-  },
-  {
-    "boundDeviceId": "23af4689-010f-4025-ae44-46d559493b6c",
+    "key": "KEY-AFFFF2D9-2026",
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
     ],
-    "note": "Noe 1",
-    "createdAt": "2026-09-10T07:21:56.094Z",
+    "boundDeviceId": "0ed27840-4a82-460a-8439-5b36774031e1",
+    "createdAt": "2026-09-10T08:34:50.992Z",
+    "expiresAt": null
+  },
+  {
     "boundAt": "2026-09-10T14:18:44.382Z",
+    "boundDeviceId": "23af4689-010f-4025-ae44-46d559493b6c",
+    "createdAt": "2026-09-10T07:21:56.094Z",
+    "expiresAt": "2026-09-30T00:00:00.000Z",
     "key": "KEY-E5164DF3-2026",
+    "allowedModules": [
+      "whatsapp",
+      "telegram",
+      "studio_video"
+    ],
     "active": true,
-    "expiresAt": "2026-09-30T00:00:00.000Z"
+    "note": "Noe 1"
+  },
+  {
+    "boundDeviceId": "69d59421-b07a-41da-a327-9cffdaf20a0d",
+    "note": "",
+    "boundAt": "2026-09-13T15:26:53.394Z",
+    "key": "KEY-FB6EF0A6-2026",
+    "expiresAt": null,
+    "createdAt": "2026-09-13T06:43:21.463Z",
+    "allowedModules": [
+      "whatsapp",
+      "telegram",
+      "studio_video"
+    ],
+    "active": true
   }
 ]
