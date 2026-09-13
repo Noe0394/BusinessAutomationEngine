@@ -2121,6 +2121,10 @@
     // currentAllowedModules === null (admin, ou clé créée avant
     // l'introduction des modules) signifie "aucune restriction".
     function applyModuleVisibility() {
+      // "goalchat" (Chat Intelligent) reste toujours visible comme
+      // "connections" : lui-même n'envoie jamais rien (il construit un plan
+      // puis renvoie vers Campagnes/WhatsApp/Telegram, où le filtrage par
+      // module s'applique déjà normalement).
       // "scheduler" et "prospects" restent toujours visibles comme
       // "connections" : le module Facebook y est toujours autorisé (voir
       // requireModule('facebook')/channelAllowed() côté serveur), et
@@ -2132,7 +2136,7 @@
       // (voir applyStudioLockState) plutôt que de cacher complètement la
       // fonctionnalité — meilleure incitation à l'achat qu'un onglet absent.
       const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'))
-        .filter((btn) => !['connections', 'scheduler', 'prospects', 'share', 'studio'].includes(btn.dataset.tab));
+        .filter((btn) => !['connections', 'goalchat', 'scheduler', 'prospects', 'share', 'studio'].includes(btn.dataset.tab));
 
       applyStudioLockState();
 
