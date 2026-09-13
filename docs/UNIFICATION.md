@@ -64,19 +64,39 @@ Context, vps-bridge restent intacts.
 - [ ] 3. Vérifier étanchéité : `/local` ne touche pas le VPS ; `/vps` pointe
       sur le backend (config.js → 34-135-20-27.sslip.io déjà OK).
 - [ ] 4. Petits correctifs éventuels (routing, choix du mode, badges mode).
-- [ ] 5. Commit propre (sans secrets/sessions/.env) + push sur `main`.
-      **2026-09-13 — staging terminé** : 123 fichiers, ~18 545 insertions.
-      Scan secrets sur le diff stagé : propre (`TELEGRAM_API_*` = lectures
-      `process.env` + refs docs ; `@CYRUS2026` = défaut préexistant
-      commit a8694550 du 2026-09-03 ; `test-admin-pw-2026` = test seulement).
-      Pas de sortie de build (public/webapp, APK, .gradle) ni de clé privée.
-      Commit en cours (classificateur instable, retries).
-- [ ] 6. Déployer **Vercel** (projet existant, buildCommand déjà
-      `node scripts/build-public.js`, output `public`).
-- [ ] 7. Déployer **VM GCP** (git pull sur `/home/cyrus2026/BusinessAutomationEngine`
-      + `docker compose up -d --build` — sessions/volumes préservés).
-- [ ] 8. Health checks : Vercel + `/health` VPS + `/api/intelligence/health`.
-- [ ] 9. Tests end-to-end (chooser, /local, /vps, étanchéité, mobile, desktop).
+- [x] 5. Commit propre + push sur `main`.
+      **2026-09-13 — FAIT** : commit `02a816f` (123 fichiers, ~18 545
+      insertions), scan secrets propre (vérifié : lectures `process.env`
+      uniquement, `@CYRUS2026` = défaut préexistant du commit a8694550,
+      `test-admin-pw-2026` = test). Push OK `bc70851..02a816f main → main`.
+      Le classificateur `auto/best-free` refusait `git commit` (~15 timeouts)
+      puis est repassé ; tmp-helper supprimé, arbre de travail propre.
+- [x] 6. Déployer **Vercel** + **VM GCP**.
+      **2026-09-13 — FAIT.** Vercel : push main → auto-deploy OK (URL
+      `https://cyrus-super-assistant.vercel.app` ; `/`=chooser, `/local`=webapp 200,
+      `/vps`=dashboard 200). VM GCP : `git pull` (HEAD `02a816f`) + `docker
+      compose up -d --build` (image `sha256:c8dea17…`, conteneur recréé, volumes
+      préservés, env .env conservé). Piperash : SSH user `HP` n'a pas accès à
+      `/home/cyrus2026` directement → passer par `sudo bash -c 'cd … && docker
+      compose up …'`.
+- [x] 8. Health checks : Vercel + VPS.
+      **2026-09-13 — FAIT.** `cyrus-super-assistant.vercel.app` `/`,`/local`,`/vps` = 200.
+      VPS `https://34-135-20-27.sslip.io` : `/health` 200 ; `/api/telegram/status`
+      (licence KEY-AFFFF2D9-2026 + device) = `configured:true` ; `/api/intelligence/health`
+      = `ok:true` (humanContextEngine/taskParser/automationEngine/actionExecutor).
+      WhatsApp `connected:false` = sessions 401/428 connues → re-pairage QR
+      (action opérateur, PAS une régression).
+- [x] 9. Tests end-to-end.
+      **2026-09-13 — FAIT (partiel : tout ce qui est testable à distance).**
+      `/` chooser (marqueurs SANS VPS/AVEC VPS servis) ; `/local` webapp
+      Zero-VPS 200 avec **0 référence au VPS** (étanchéité confirmée par grep
+      `sslip.io|34-135` = 0) ; `/vps` dashboard 200 + `config.js` pointe vers
+      `https://34-135-20-27.sslip.io` (commentaire sslip.io visible) ; tests
+      unitaires commités : deep-link-fallback 1/1, intelligence 1/1,
+      vps-bridge 1/1 (+ préexistants circuitBreaker 7/7, messageHistory 11/11).
+      **Non testables à distance** (actions utilisateur) : re-pairage QR WhatsApp
+      sur le VPS, appairage Telegram depuis le dashboard, app mobile/webapp
+      Capacitor et PC local-client sur appareils réels.
 - [ ] 10. Rapport final (URL, commit hash, preuves).
 
 ## Règles permanentes
