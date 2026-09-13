@@ -47,6 +47,18 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- Liste noire manuelle (opt-out) - distincte de tout anti-doublons
+  -- temporaire : un identifiant ici est exclu de toute NOUVELLE campagne
+  -- (voir lib/campaigns.js#createCampaign) jusqu'à retrait explicite. La
+  -- colonne "channel" distingue WhatsApp/Telegram (un même numéro peut être
+  -- bloqué sur l'un et pas l'autre).
+  CREATE TABLE IF NOT EXISTS blocklist (
+    channel TEXT NOT NULL,
+    identifier TEXT NOT NULL,
+    added_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (channel, identifier)
+  );
 `);
 
 function upsertContact({ jid, nom, telephone }) {
@@ -82,4 +94,52 @@ function getContactName(jid) {
   return (row && row.nom) || null;
 }
 
-module.exports = { db, upsertContact, recordMessage, listContacts, listMessages, getContactName };
+// ---------- Liste noire ----------
+function addToBlocklist(channel, identifier) {
+  db.prepare(`
+    INSERT INTO blocklist (channel, identifier) VALUES (?, ?)
+    ON CONFLICT(channel, identifier) DO NOTHING
+  `).run(channel, identifier);
+}
+
+function removeFromBlocklist(channel, identifier) {
+  db.prepare('DELETE FROM blocklist WHERE channel = ? AND identifier = ?').run(channel, identifier);
+}
+
+function getBlocklist(channel) {
+  return db.prepare('SELECT * FROM blocklist WHERE channel = ? ORDER BY added_at DESC').all(channel);
+}
+
+function isBlocked(channel, identifier) {
+  return Boolean(db.prepare('SELECT 1 FROM blocklist WHERE channel = ? AND identifier = ?').get(channel, identifier));
+}
+
+// ---------- Historique des envois (page Connexions) ----------
+// Les deux canaux partagent la table `messages` (jid préfixé "tg:" côté
+// Telegram, voir lib/telegram.js#sendMessage) - un simple filtre sur le
+// préfixe distingue le canal pour l'affichage, sans colonne dédiée.
+function listSentHistory(limit = 100) {
+  return db.prepare(`
+    SELECT jid, body, created_at FROM messages WHERE direction = 'out'
+    ORDER BY created_at DESC LIMIT ?
+  `).all(limit).map((row) => ({
+    channel: row.jid.startsWith('tg:') ? 'telegram' : 'whatsapp',
+    identifier: row.jid.replace(/^tg:/, '').replace(/@(c\.us|s\.whatsapp\.net)$/, ''),
+    body: row.body,
+    sentAt: row.created_at,
+  }));
+}
+
+module.exports = {
+  db,
+  upsertContact,
+  recordMessage,
+  listContacts,
+  listMessages,
+  getContactName,
+  addToBlocklist,
+  removeFromBlocklist,
+  getBlocklist,
+  isBlocked,
+  listSentHistory,
+};

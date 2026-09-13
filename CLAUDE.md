@@ -332,12 +332,266 @@ pour reprendre sans tout relire.
      une architecture entièrement différente et non faisable en l'état.
   7. **Aucune bibliothèque alternative d'embarquement Node trouvée** sur
      npm (recherche faite) qui supporterait Node ≥20 pour React Native.
-  8. **État actuel : BLOQUÉ, sans solution restante identifiée qui
-     respecte la contrainte "zéro serveur externe" de l'utilisateur.**
-     Reprendre uniquement si : (a) `nodejs-mobile-react-native` publie un
-     jour une version Node ≥20, (b) une autre lib d'embarquement Node
-     apparaît, ou (c) l'utilisateur accepte de reconsidérer la contrainte
-     zéro-serveur.
+  8. **Baileys embarqué (Node 18) : BLOQUÉ**, sans solution restante
+     identifiée qui respecte la contrainte "zéro serveur externe" de
+     l'utilisateur. Reprendre uniquement si : (a)
+     `nodejs-mobile-react-native` publie un jour une version Node ≥20, (b)
+     une autre lib d'embarquement Node apparaît, ou (c) l'utilisateur
+     accepte de reconsidérer la contrainte zéro-serveur.
+  9. **Piste alternative retenue : WebView Android + injection JS directe**
+     (proposée par l'utilisateur le 2026-09-10, toujours "zéro serveur" —
+     le téléphone reste l'unique exécuteur). Idée : réutiliser la valeur
+     réelle de whatsapp-web.js, qui n'est pas Puppeteer lui-même mais ses
+     scripts `Injected/*.js` (hook de `window.Store`), en les faisant
+     tourner dans la WebView **native** Android (`react-native-webview`)
+     au lieu d'un Chromium piloté par CDP.
+     - **Test minimal réalisé et RÉUSSI** (`WebViewTest.tsx`, écran
+       accessible depuis un lien en haut de l'écran d'accueil de l'app) :
+       WebView avec User-Agent desktop Chrome chargeant
+       `https://web.whatsapp.com` — la page se charge intégralement et
+       affiche un **vrai QR code scannable** (confirmé visuellement sur
+       appareil réel, TECNO CL6k, 2026-09-10). Script de sonde injecté
+       confirme `canvas=true`, `titre="WhatsApp"`,
+       `html=630512 caractères`. `minSdkVersion` relevé de 21 à 24 (requis
+       par `react-native-webview`, voir `android/build.gradle`) — aucune
+       perte de compatibilité réelle en 2026.
+     - **Hypothèse validée** : rien n'empêche `web.whatsapp.com` de tourner
+       normalement dans une WebView Android native avec le bon
+       User-Agent. L'étape suivante (non commencée) est de porter les
+       scripts `Injected/*.js` de whatsapp-web.js et le pont natif↔JS pour
+       lire/envoyer des messages — travail substantiel, à ne démarrer
+       qu'après validation explicite de l'utilisateur vu l'ampleur.
+     - Limite observée sur le test (cosmétique, pas bloquante) : la page
+       déborde horizontalement dans la WebView (pas de scaling
+       "responsive" appliqué) — à corriger plus tard via un viewport
+       injecté ou du CSS si besoin, sans rapport avec la faisabilité.
+     - **Pont réel construit et déployé** (`whatsappWebBridge.ts` +
+       `WhatsAppWebEngine.tsx`, accessible via le lien "🚀 Moteur WhatsApp
+       (WebView réel)" sur l'écran d'accueil, coexiste avec l'écran Baileys
+       existant sans le remplacer). Réécriture minimale (texte seul, pas
+       un port complet de whatsapp-web.js/Utils.js) qui réutilise les
+       mêmes modules internes que whatsapp-web.js
+       (`window.require('WAWebSocketModel')`, `WAWebCollections`,
+       `WAWebSendMsgChatAction`, etc. — voir
+       `local-client/node_modules/whatsapp-web.js/src/Client.js` et
+       `src/util/Injected/Utils.js` comme référence, extraits et
+       simplifiés au strict nécessaire). `window.require` est un global
+       exposé par le bundle WhatsApp Web lui-même, pas par
+       Puppeteer/whatsapp-web.js — fonctionne donc à l'identique dans la
+       WebView native.
+     - **Testé sur l'appareil réel (2026-09-10)** : après rechargement de
+       l'app, l'écran affiche `WA: UNPAIRED · Pont: prêt` — confirmation
+       que le script injecté a bien accroché l'état interne réel de
+       WhatsApp Web (pas une valeur simulée) et que `bridge-ready` a bien
+       été émis. Panneau de test (ID destinataire, texte, bouton Envoyer,
+       journal des messages reçus) opérationnel et vide comme attendu
+       (aucun appairage encore fait).
+     - **APPAIRAGE RÉEL CONFIRMÉ le 2026-09-10** (numéro WhatsApp Business
+       de l'utilisateur, via l'option "Se connecter avec le numéro de
+       téléphone" de WhatsApp Web lui-même — code à 8 chiffres saisi côté
+       téléphone). L'écran passe bien de `WA: UNPAIRED` à `WA: CONNECTED`,
+       confirmant que le pont lit l'état interne réel. Un premier essai
+       avec un autre numéro avait échoué ("impossible de se connecter") ;
+       cause non déterminée avec certitude (numéro différent, ou
+       simplement un essai transitoire raté côté WhatsApp — pas
+       nécessairement lié à Business vs. standard). À revisiter seulement
+       si le pairing échoue de façon répétée et reproductible.
+     - **Bug trouvé et corrigé sur l'envoi de message** : le panneau de
+       test envoyait le numéro brut tel quel (ex. `22664977093`) à
+       `WidFactory.createWid()`, qui exige un ID complet et rejetait avec
+       `InvalidWidError: wid error: invalid wid`. Corrigé dans
+       `WhatsAppWebEngine.tsx` (`send()`) : ajout automatique du suffixe
+       `@c.us` si absent — même tolérance que l'écran Baileys existant
+       (`App.tsx`, suffixe `@s.whatsapp.net` pour Baileys, `@c.us` pour
+       whatsapp-web.js/WA Web, cf.
+       `local-client/node_modules/whatsapp-web.js/src/Client.js:2225`).
+     - **Deuxième bug trouvé et corrigé sur l'envoi** : `whatsappWebBridge.ts`
+       tentait de créer une conversation absente via
+       `Collections.Chat.find(chatWid)`, qui n'est pas une méthode
+       publique valide dans ce contexte (`TypeError: this.findImpl is not
+       a function`). Corrigé en reprenant le vrai flux de whatsapp-web.js
+       (`window.WWebJS.getChat`, voir Utils.js ligne ~868) : résolution
+       via `window.require('WAWebFindChatAction').findOrCreateLatestChat(chatWid)`.
+     - **ENVOI ET RÉCEPTION CONFIRMÉS DE BOUT EN BOUT sur l'appareil réel
+       (2026-09-10)**, après les deux corrections ci-dessus : message
+       texte envoyé avec succès (`Envoyé à 22664977093@c.us`) ET capté par
+       le hook de réception (`Collections.Msg.on('add', ...)`), qui a
+       affiché le message envoyé dans le journal de l'app (`Moi: Test
+       CYRUS bridge WebView`) — la preuve que le même chemin de code qui a
+       affiché ce message sortant affichera un message entrant réel
+       (même hook, aucune distinction de traitement). **Le blocage mobile
+       WhatsApp documenté plus haut (Baileys/Node 18) est donc résolu par
+       cette voie alternative** : connexion, envoi et réception texte
+       fonctionnent tous les trois, en zéro-serveur, via
+       `WhatsAppWebEngine.tsx` + `whatsappWebBridge.ts`. Le moteur Baileys
+       reste en place mais n'est plus la voie à développer davantage.
+     - **UI de conversation réelle construite (2026-09-10)**, remplaçant
+       le panneau de test brut : `WhatsAppWebEngine.tsx` masque
+       maintenant la WebView WhatsApp Web une fois connecté (réduite
+       hors-écran via un style absolu, pas démontée — le pont injecté doit
+       continuer de tourner pour recevoir les messages), et affiche à la
+       place une vraie interface de conversation par contact (bulles
+       envoyé/reçu animées, barre de saisie, un contact actif à la fois —
+       toujours dans l'esprit minimal du spike). Pendant l'appairage
+       (non connecté), la WebView redevient visible en plein écran (le QR
+       doit rester visible/interactif).
+     - **Bug trouvé et corrigé** : `FlatList inverted` (utilisé pour
+       afficher les messages du plus récent en bas) appliquait un miroir
+       qui rendait le texte de `ListEmptyComponent` illisible (inversé/
+       mirroir), constaté sur l'appareil. Remplacé par une liste normale
+       (données triées plus ancien→plus récent) avec défilement
+       automatique vers le bas via `scrollToEnd` sur `onContentSizeChange`
+       — plus robuste que de compenser le miroir avec un contre-transform.
+       Confirmé visuellement corrigé sur l'appareil réel.
+     - **Confirmé fonctionnel par l'utilisateur (2026-09-10, test manuel
+       direct sur l'appareil)** : ouverture d'un contact + envoi/réception
+       via la nouvelle UI de conversation valident bien de bout en bout
+       (mon automatisation adb avait échoué a re-tester ça elle-même —
+       clavier tiers du TECNO CL6k perdant des caractères lors de la
+       frappe injectée trop rapide — mais le test manuel de l'utilisateur
+       confirme que le code fonctionne correctement).
+     - **Liste des conversations et reconnexion ajoutées (2026-09-10)** :
+       `WhatsAppWebEngine.tsx` affiche maintenant un écran de liste
+       (conversations dérivées des messages vus depuis l'ouverture de
+       l'app, triées par récence, avatar + aperçu du dernier message) avec
+       navigation vers/depuis une conversation individuelle (flèche
+       retour). Si la session se coupe après une connexion réussie
+       (`waState` repasse à autre chose que `CONNECTED`), un bandeau
+       "Session WhatsApp interrompue" s'affiche et la WebView redevient
+       visible automatiquement (même mécanisme que l'appairage initial) —
+       confirmé fonctionnel sur l'appareil réel (navigation liste ↔
+       conversation testée, empty states corrects).
+     - **Persistance du processus en arrière-plan déjà en place** : un
+       service de premier plan Android (`KeepAliveService.kt`, démarré
+       sans condition au lancement dans `MainApplication.kt`) maintient le
+       processus de l'app vivant quand elle passe en arrière-plan — ce
+       mécanisme est au niveau du processus, donc couvre automatiquement
+       la WebView du moteur actuel sans code supplémentaire (il avait été
+       écrit à l'origine pour le thread Node/Baileys, mais s'applique
+       identiquement à n'importe quel code tournant dans ce process).
+       **Non re-testé en conditions réelles pour ce moteur précis** (app
+       en arrière-plan plusieurs minutes + réception d'un message) — les
+       ROM TECNO/Infinix sont connues pour être agressives sur la gestion
+       batterie des apps en arrière-plan malgré un service de premier
+       plan ; à vérifier par l'utilisateur si l'usage réel révèle des
+       messages manqués app fermée.
+     - **Bug trouvé et corrigé (2026-09-10, signalé par l'utilisateur)** :
+       "Echec envoi : Error: No lid for user" lors d'un changement de
+       destinataire. Cause : WhatsApp adresse certains contacts en
+       interne au format "LID" (identifiant privé, déploiement progressif
+       côté WhatsApp, indépendant de ce projet) plutôt que par numéro de
+       téléphone ; `chat.id.isLid()` renvoie alors vrai pour ce contact et
+       le code appelait `getMaybeMeLidUser()` sans filet — cette fonction
+       lève l'erreur au lieu de renvoyer une valeur vide quand le compte
+       de l'utilisateur n'a pas (encore) d'identité LID résolue. Corrigé
+       dans `whatsappWebBridge.ts` (`__cyrusSend`) par un repli sur
+       `getMaybeMePnUser()` (identité numéro classique) si l'identité LID
+       est indisponible, plutôt que de planter. Déployé et l'app recharge
+       bien (connexion confirmée) ; **non re-testé sur le contact précis
+       qui a déclenché l'erreur** (dépend de l'adressage LID côté
+       WhatsApp pour ce contact spécifique, pas reproductible par un
+       numéro de test arbitraire) — à confirmer par l'utilisateur en
+       retentant le changement de destinataire qui avait échoué.
+     - **Reste à faire pour "utilisable en production"** : rien d'autre
+       identifié comme bloquant à ce stade pour l'usage "texte seul, un
+       contact à la fois" du spike. Pistes d'amélioration non urgentes :
+       persistance de la liste de conversations sur disque (elle se vide
+       actuellement à chaque redémarrage de l'app, en mémoire seulement),
+       et validation réelle du comportement en arrière-plan prolongé.
+     - Fragilité assumée et documentée dans `whatsappWebBridge.ts` : les
+       noms de modules WA internes utilisés peuvent changer à une future
+       mise à jour de WhatsApp Web — même fragilité structurelle que
+       whatsapp-web.js côté PC.
+
+### 4. PIVOT vers webapp Capacitor (`mobile/webapp/`, session du 2026-09-10 soir)
+
+**`mobile/CyrusMobile/` (React Native + nodejs-mobile-react-native) est
+abandonné pour Telegram/IA, mais reste en l'état** (le moteur WhatsApp y est
+pleinement fonctionnel, voir section 3 ci-dessus) — le nouveau chantier
+mobile est `mobile/webapp/`, un projet Capacitor séparé.
+
+**Déclencheur** : tentative d'ajouter Telegram (GramJS) au runtime Node
+embarqué de `mobile/CyrusMobile/` — a fait planter tout le process natif
+(`node::TrapWebAssemblyOrContinue`, crash natif, pas une exception JS) dès
+le chargement de `telegram/client/TelegramClient.js`. Cause : GramJS utilise
+un module crypto compilé en WebAssembly (SRP/2FA) incompatible avec le
+runtime Node 18 embarqué par `nodejs-mobile-react-native` sur cette
+architecture. Aucun correctif identifié côté runtime embarqué.
+
+**Décision (utilisateur)** : plutôt que de continuer à debugger ce crash
+natif, pivot vers une **webapp unique** (HTML/CSS/JS standard, pas de
+framework/bundler côté UI) encapsulée par **Capacitor** pour Android —
+préserve le principe "zéro serveur" (tout tourne sur l'appareil) tout en
+évitant le runtime Node embarqué pour Telegram.
+
+**Contrainte technique découverte en cours de route** : un `<iframe>`
+cross-origin classique dans une page web NE PEUT PAS injecter de JS dans
+`web.whatsapp.com`/`web.telegram.org` (same-origin policy du navigateur,
+vraie sur PC comme sur mobile — ce n'est pas une limite Capacitor). D'où
+`EmbeddedWebViewPlugin.java`, un plugin Capacitor natif custom (Java, pas de
+dépendance Kotlin ajoutée) qui reproduit ce que `react-native-webview`
+offrait côté React Native : une WebView Android pilotable depuis JS
+(`open`/`setVisible`/`setBounds`/`evaluate`/`close`), avec un pont
+`window.Cyrus.postMessage` équivalent à `window.ReactNativeWebView.postMessage`.
+Plusieurs instances nommées (`id`) coexistent (une pour WhatsApp, une pour
+Telegram).
+
+**Telegram Web (`web.telegram.org/k/`) exploré en direct (Chrome devtools,
+compte déjà connecté observé — API confirmée réelle, PAS un port de
+GramJS)** : expose `window.rootScope.managers.{appMessagesManager,
+appUsersManager, ...}` avec `appMessagesManager.sendText/sendMessage`
+(callables, confirmés `typeof === 'function'`) et
+`rootScope.addEventListener('history_multiappend', ...)` pour la réception.
+Contrairement au pont WhatsApp (entièrement validé, réutilisé tel quel
+depuis `mobile/CyrusMobile/whatsappWebBridge.ts`), **le pont Telegram
+(`www/telegramBridge.js`) est un premier jet non éprouvé** : la détection
+d'état (`rootScope.myId`) est confirmée fonctionner sur appareil réel
+(affiche "Connecté" pour une session déjà autorisée), mais l'envoi
+(`sendText`) et le format exact de `history_multiappend` n'ont pas encore
+été exercés de bout en bout.
+
+**Bugs rencontrés et corrigés pendant la mise en place** :
+- `local.properties` manquant (`sdk.dir`) — copié depuis
+  `mobile/CyrusMobile/android/local.properties`.
+- Capacitor 7 exige JDK 21 pour compiler (`error: invalid source release:
+  21` avec JDK 17) — utiliser le JBR fourni avec Android Studio
+  (`C:\Program Files\Android\Android Studio\jbr`) comme `JAVA_HOME` pour ce
+  projet, pas le JDK 17 utilisé par `mobile/CyrusMobile/`.
+- `EmbeddedWebViewPlugin` faisait planter l'app à CHAQUE lancement
+  (`ClassCastException: CoordinatorLayout$LayoutParams cannot be cast to
+  FrameLayout$LayoutParams`) : le parent réel de la WebView Capacitor est
+  un `CoordinatorLayout` (pas un `FrameLayout` comme supposé initialement).
+  Corrigé en construisant un `ViewGroup.LayoutParams` générique dans
+  `open()` (converti automatiquement vers le bon type concret par
+  `ViewGroup.addView()` en interne) et en castant vers
+  `ViewGroup.MarginLayoutParams` (supertype commun portant `setMargins`)
+  dans `setBounds()`, jamais vers un type layout concret précis.
+- Une WebView native ajoutée par-dessus la WebView Capacitor s'affiche
+  TOUJOURS par-dessus tout le contenu HTML, quel que soit le CSS/z-index
+  (couche native séparée) : une WebView embarquée en plein écran masquait
+  entièrement l'entête/la nav de l'app. Corrigé via `setBounds()`
+  (positionnement en pixels écran calculés côté JS via
+  `getBoundingClientRect() * devicePixelRatio`) + masquage explicite de la
+  WebView inactive à chaque changement d'onglet (`syncWebViewVisibility()`
+  dans `www/app.js`) — sans ça la WebView de l'onglet précédent restait
+  visible et bloquait les autres onglets.
+
+**Confirmé fonctionnel sur appareil réel (2026-09-10)** : app se lance sans
+crash, QR WhatsApp réel affiché (nav/entête restent cliquables par-dessus),
+bascule d'onglet WhatsApp↔Telegram fonctionne (masquage/affichage correct
+des deux WebViews), détection d'état Telegram confirmée sur une session
+déjà connectée. **Non encore testés** : appairage WhatsApp réel (scan QR),
+envoi/réception Telegram réel, écran Génération IA (licence + appels
+Firebase, code écrit mais jamais lancé sur appareil).
+
+**Contrainte utilisateur reconfirmée pendant cette session** : coût de
+données mobiles élevé perçu par l'utilisateur sur les cycles
+build→install→relancer répétés (même si le build Gradle lui-même tourne en
+local sur le PC et que `adb install` passe par USB, donc ne consomme pas de
+données mobiles directement — mais CHAQUE relance fait recharger
+`web.whatsapp.com`/`web.telegram.org` en vrai sur la connexion du
+téléphone). Ne plus enchaîner les cycles de test sans confirmation
+explicite ; grouper les correctifs avant de rebuilder.
 
 ### Ce qui reste à faire
 1. **Recharger fal.ai** (bloquant pour la génération d'image, VPS ET
@@ -419,6 +673,296 @@ pour reprendre sans tout relire.
      rendu lui-même) + route `POST /api/ebook/generate` ajoutée côté
      `local-client/index.js`. Pas encore de bouton dédié dans l'interface
      PC (accessible via API seulement pour l'instant).
+
+### 5. Parité fonctionnelle `mobile/webapp/` avec `public/dashboard.html` (session du 2026-09-10, suite du pivot Capacitor)
+
+**Constat de départ** : `public/dashboard.html` (l'interface de référence à
+dupliquer) est en réalité du HTML/JS vanilla (9087 lignes) — **pas du React**,
+malgré la demande initiale de l'utilisateur qui l'assumait. Confirmé avec
+l'utilisateur : on continue en HTML/JS pur, cohérent avec le choix déjà acté
+pour `mobile/webapp/` (pas de framework/bundler, voir section 4). Confirmé
+aussi : la cible est "Web + mobile", pas seulement Android — **implication non
+encore traitée** : un simple onglet de navigateur PC ne peut pas ouvrir de
+WebView native et lui injecter du JS (même contrainte cross-origin que celle
+qui a motivé `EmbeddedWebViewPlugin.java` côté Android, voir section 4) ; le
+candidat naturel pour le "Web PC" est `local-client/` (Express + whatsapp-web.js/
+Puppeteer, a déjà sa propre UI minimale servie en localhost, voir
+`local-client/public/`) plutôt qu'une page web classique — **pas commencé**,
+`local-client/` n'a aujourd'hui ni Telegram ni parité d'interface avec
+`dashboard.html`.
+
+**Audit d'écart fait** (lecture seule, dashboard.html vs `mobile/webapp/`) :
+export Excel des groupes = absent, filtrage de contacts = partiel (dédup
+intra-fichier seulement), moteur de campagne = bonne base mais sans reprise
+fiable après fermeture d'app, **Mode Manuel Express (deep links wa.me/tg://) =
+totalement absent** (la fonctionnalité la plus riche du dashboard), page
+connexions/historiques = partielle, module Facebook = absent (dépend
+structurellement d'un backend OAuth, à clarifier avec l'utilisateur si
+demandé).
+
+**Réalisé cette session** (dans `mobile/webapp/www/` uniquement — dossier créé
+aujourd'hui, jamais commité, aucun fichier VPS touché) :
+- `lib/db.js` passé en v2 : nouveau store `sentLog` (journal de tout envoi
+  réellement déclenché, campagne ou manuel) permettant `wasSentRecently()`
+  (anti-doublons 48h, équivalent local du Smart Screening de
+  `POST /api/messages/manual-import` côté VPS) et `getLatestCampaign()`.
+- `campaign.js` : suivi des échecs d'envoi (`failed[]`, avant simplement
+  ignorés), reprise automatique d'une campagne encore `'running'` au
+  redémarrage de l'app (avant : `sentIdentifiers` repartait toujours de zéro
+  en mémoire, la persistance SQLite/IndexedDB promise par le commentaire
+  d'en-tête du fichier n'était pas branchée), et export Excel/CSV des membres
+  de groupe déjà extraits (bouton "📥 Exporter (Excel)", réutilise
+  `lib/fileExport.js` qui existait déjà mais n'était encore appelé nulle
+  part).
+- `lib/smartTextGenerator.js` (nouveau) : port fidèle du composant
+  "Copywriter IA Intelligent" du dashboard (accroche + puces d'avantages +
+  appel à l'action, synonymisation) — pur JS, zéro réseau.
+- `lib/manualRelance.js` (nouveau, sans DOM) + `relance.js` (nouveau, wiring
+  DOM) : **Mode Manuel Express** complet — file reprise de la dernière
+  campagne du canal (contacts absents de `campaign.sent`) ou import direct
+  d'un fichier avec anti-doublons 48h, rotation de variantes A/B/C, génération
+  de texte via l'intention, deep link `https://wa.me/...?text=...` /
+  `https://t.me/...`, ouverture via `window.open(url, '_system')` (délègue à
+  Android la résolution vers l'app WhatsApp/Telegram installée), copie
+  presse-papiers, Mode Série Continu avec décompte, compteur de rythme,
+  raccourcis clavier. Nouvel onglet "📇 Relance Manuelle" dans `index.html`.
+- **Simplification assumée** : pas de support Image-to-Link (aperçu visuel
+  joint au message) — cette fonctionnalité du dashboard héberge l'image sur
+  le serveur pour produire un lien public avec balises OG, structurellement
+  incompatible avec "zéro serveur" tel quel ; à reprendre plus tard via
+  Firebase Storage + Hosting si l'utilisateur le demande.
+
+**Non testé sur appareil** (aucun build/install fait cette session — voir la
+contrainte données mobiles de l'utilisateur, section 4 fin de session
+précédente) : uniquement relecture de code + `node --check` sur les fichiers
+JS modifiés/créés. `window.open(url, '_system')` pour déclencher
+WhatsApp/Telegram depuis la WebView Capacitor n'a jamais été vérifié
+concrètement sur ce projet — à valider au prochain cycle de build groupé.
+
+**"Web PC" (`local-client/`) réalisé dans la foulée, même session** — Telegram
+(GramJS) ajouté et UI étendue :
+- `lib/telegram.js` (nouveau) : session Telegram mono-poste, adapté fidèlement
+  du pattern multi-tenant déjà éprouvé de `adapters/telegram.js` (racine,
+  jamais modifié ni requis directement — copié/adapté comme le veut la
+  convention déjà en place pour `local-client/`, voir tête de
+  `lib/campaigns.js`). Flux numéro → code → mot de passe 2FA éventuel,
+  session sauvegardée dans `%APPDATA%\CyrusLocalClient\telegram_session.txt`.
+  **Bug attrapé avant exécution** : premier jet avec
+  `require('telegram/tl')` pour `Api` — corrigé en `require('telegram')`
+  (comme la racine) après un `node -e "require(...)"` qui aurait sinon
+  planté au premier appel réel à `resolveRecipient`.
+- `lib/telegramRecipients.js` (nouveau) : équivalent Telegram de
+  `lib/whatsappRecipients.js#normalizeRecipientEntry` (identifiant
+  `@username` ou numéro brut, jamais suffixé contrairement au JID WhatsApp).
+- `lib/campaigns.js` : genericisé pour dispatcher WhatsApp/Telegram par
+  `config.channel` (stocké dans `config_json`, aucune migration SQLite
+  requise — une campagne existante sans `channel` reste traitée comme
+  `'whatsapp'`). Le listener de reprise auto après reconnexion est maintenant
+  filtré par canal (une reconnexion WhatsApp ne réveille plus une campagne
+  Telegram en pause, et inversement — bug qu'aurait introduit une
+  génericisation naïve). Ajout de `markManualSent(id, to)` pour la Relance
+  Manuelle Express desktop (voir plus bas).
+- `lib/whatsapp.js` : ajout de `getGroups()`/`getGroupMembers()` (whatsapp-web.js
+  expose directement `client.getChats()`/`chat.participants`, pas besoin du
+  rappel `groupMetadata.update()` du pont WebView mobile).
+- `index.js` : routes `/api/telegram/*` (status/login start-code-password/
+  logout/send/groups/groups/:id/members) + `/api/whatsapp/groups*` +
+  `/api/campaigns/:id/mark-sent` ; `telegram.connect()` appelé au démarrage
+  comme `whatsapp.connect()`.
+- `public/` (UI, toujours sans framework) : nouvel onglet Telegram (login par
+  code, miroir du QR WhatsApp), onglet Campagnes étendu (sélecteur de canal +
+  extraction de groupes avec "Importer comme destinataires"/"Exporter
+  (Excel)", export via SheetJS **client-side** — `public/lib/xlsx.full.min.js`
+  copié depuis `mobile/webapp/www/lib/` en local, aucun réseau — un vrai
+  onglet de navigateur peut déclencher un téléchargement `XLSX.writeFile`
+  directement, contrairement à la sandbox de la WebView Capacitor mobile).
+  Nouvel onglet **Relance Manuelle Express** (`public/relance.js`, réutilise
+  `public/lib/smartTextGenerator.js` copié tel quel de `mobile/webapp/www/lib/`)
+  : source = destinataires `pending`/`error` de la campagne la plus récente du
+  canal choisi (pas de mode "import direct sans campagne" ici, simplification
+  assumée — créer une campagne sans la démarrer sert le même besoin). Différence
+  notable avec le mobile : cette page tourne dans un VRAI onglet de navigateur
+  (ouvert par `open()`), donc `window.open()` y est un vrai popup avec blocage
+  standard — la détection `opened === null` du dashboard d'origine s'applique
+  ici telle quelle, sans l'incertitude documentée côté Capacitor.
+- **Sécurité corrigée en cours de route** : le premier jet de la liste de
+  groupes construisait le HTML via un gabarit de chaîne avec
+  `onclick="...(...)"` interpolant le NOM du groupe (donnée externe non
+  fiable, un nom de groupe WhatsApp/Telegram peut contenir des guillemets/HTML)
+  — remplacé par une construction DOM impérative (`createElement`/
+  `addEventListener`) avant tout usage, aucune injection possible.
+- **Non testé** : nécessite un vrai numéro de téléphone et une saisie
+  interactive de code (impossible à valider de façon autonome) — seule la
+  relecture de code + `node --check` sur tous les fichiers modifiés/créés a
+  été faite. `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` à renseigner dans
+  `local-client/.env` (mêmes valeurs que la racine, voir `.env.example`)
+  avant le premier test.
+
+### Filtrage de contacts (liste noire) + page Connexions unifiée (même session, suite)
+
+Sur demande explicite de l'utilisateur ("fais tout proprement") : les deux
+points 2 et 3 ci-dessus ont été réalisés, sur mobile ET desktop.
+
+**Liste noire (opt-out manuel)** — distincte de l'anti-doublons 48h déjà en
+place pour la Relance Manuelle Express (temporaire, automatique) : un
+identifiant ajouté ici est exclu de **toute nouvelle campagne**, jusqu'à
+retrait explicite.
+- Mobile : nouveau store IndexedDB `blocklist` (`lib/db.js` passé en v3),
+  `db.filterBlocked()` appliqué dans `campaign.js` (import fichier ET
+  extraction de groupe) et dans `lib/manualRelance.js` (reprise de campagne ET
+  import direct). UI de gestion (ajouter/retirer) dans l'onglet Campagnes.
+- Desktop : nouvelle table SQLite `blocklist` (`lib/db.js`), filtrage
+  appliqué au point d'entrée unique `lib/campaigns.js#createCampaign` (donc
+  valable quelle que soit la source des destinataires — saisie manuelle ou
+  extraction de groupe, sans dupliquer la logique de filtrage). Une campagne
+  dont TOUS les destinataires sont bloqués lève une erreur explicite plutôt
+  que de créer une campagne vide. UI de gestion dans l'onglet Campagnes,
+  routes `GET/POST/DELETE /api/blocklist`.
+
+**Page Connexions unifiée** — statut + déconnexion propre des deux moteurs
+et historique des envois, au lieu de pastilles dispersées par écran.
+- Mobile (nouvel onglet "🔌 Connexions", `connexions.js`) : historique via
+  `db.getSentLog()` (déjà écrit, jusqu'ici jamais affiché). Déconnexion
+  réelle ajoutée à `EmbeddedWebViewPlugin.java` (nouvelle méthode
+  `logout(id)`) — **distincte de `close()`** : `CookieManager`/`WebStorage`
+  sont partagés par toutes les WebView de l'app (pas isolés par instance),
+  donc un simple `close()` laisserait la session WhatsApp Web/Telegram Web
+  intacte et rechargerait une session déjà connectée à la réouverture au
+  lieu de redemander un appairage — `logout()` efface explicitement cookies
+  + stockage web avant de détruire la vue. `app.js` expose
+  `window.Cyrus.connections.{logoutWhatsApp,logoutTelegram}` (seul point
+  d'entrée externe sur l'état par ailleurs privé de son IIFE) et réinitialise
+  tout l'état local (relance automatiquement une session vierge si l'onglet
+  du canal est actif).
+- Desktop (nouvel onglet "Connexions") : `lib/db.js#listSentHistory()`
+  réutilise la table `messages` déjà existante (filtrée sur
+  `direction='out'`, canal déduit du préfixe `tg:` sur le jid) — aucune
+  nouvelle table. Route `POST /api/whatsapp/logout` ajoutée (manquait
+  totalement avant, seul Telegram avait déjà la sienne) : appelle
+  `whatsapp.logout()` PUIS relance immédiatement `whatsapp.connect()` pour
+  qu'un nouveau QR apparaisse sans redémarrage complet du serveur.
+
+**Bugs trouvés et corrigés avant toute exécution** (relecture + `node --check`
+systématique sur chaque fichier touché, aucun test réel encore fait) :
+- `local-client/lib/db.js` : un backtick parasite dans un commentaire SQL
+  (`` `channel` `` pour styliser un nom de colonne) fermait prématurément le
+  template literal JS englobant tout le bloc `CREATE TABLE`, cassant le
+  fichier entier (`SyntaxError: missing ) after argument list`). Corrigé en
+  reformulant le commentaire sans backticks.
+
+**Toujours non testé** (aucune action utilisateur possible de façon autonome
+pour la connexion Telegram réelle ; aucun cycle build/install fait sur mobile
+par respect de la contrainte données mobiles) — seule la relecture de code et
+`node --check` ont été faits sur l'ensemble des fichiers modifiés/créés cette
+session, mobile et desktop confondus.
+
+**Bug UX réel signalé par l'utilisateur et corrigé, avec test réel cette
+fois** (2026-09-10, fin de session) : "l'interface est vide... on ne voit
+même pas le code" — le QR WhatsApp de `local-client/` n'existait qu'en ASCII
+dans le terminal du SERVEUR (`qrcode-terminal`), invisible pour quiconque ne
+regarde pas ce terminal précis (choix déjà fait avant cette session, voir
+`README.md`). Corrigé : `npm install qrcode` (génération PNG, distinct de
+`qrcode-terminal` conservé pour le debug console) + `lib/whatsapp.js#getQRCodeImage()`
+régénère un data URL à la demande à partir du QR courant + `GET /api/status`
+l'expose + `public/app.js` l'affiche en `<img>`. **Vérifié réellement** (pas
+juste relu) : décodage du base64 renvoyé par l'API, vérification de la
+signature PNG, rendu visuel confirmé — vrai QR scannable. Au passage,
+l'utilisateur a aussi signalé que l'interface était "blanche et fade" :
+`public/index.html` (jamais stylé depuis une version brouillon) reprend
+maintenant les tokens de couleur du thème sombre/cyan déjà utilisé côté
+mobile (`--bg: #0A0E14`, `--cyan: #22D3EE`, etc.) pour la cohérence visuelle
+entre les deux plateformes.
+
+**Piège process Windows découvert pendant ce test** : `TaskStop` sur une
+tâche `npm start` lancée en arrière-plan ne tue PAS forcément le vrai
+processus `node.exe` sous-jacent (wrapper npm sur Windows) — un ancien serveur
+est resté vivant plusieurs minutes après un `TaskStop` "réussi", tenant le
+port 4100 et servant une session WhatsApp/QR périmée à un onglet Chrome resté
+ouvert. Diagnostic fiable : `netstat -ano | grep :4100` puis
+`Get-Process -Id <pid>` (PowerShell) pour identifier le VRAI process
+propriétaire du port avant de conclure qu'un serveur est bien arrêté — ne pas
+se fier au seul statut retourné par `TaskStop`.
+
+### Cahier des charges "Zero-VPS" reformulé par l'utilisateur (2026-09-10, nouvelle demande dans la même session)
+
+L'utilisateur a rouvert la demande avec un cahier des charges formel
+redemandant l'essentiel de ce qui précède, plus quelques exigences précises
+vérifiées puis traitées :
+
+1. **Foreground Service Android sur `mobile/webapp/`** — confirmé absent
+   (contrairement à l'ancien projet `mobile/CyrusMobile/` qui en avait un).
+   Porté à l'identique : `KeepAliveService.java` (traduction Java du
+   `KeepAliveService.kt` de CyrusMobile — ce projet est en Java, pas Kotlin),
+   déclaré dans `AndroidManifest.xml` (`foregroundServiceType="remoteMessaging"`,
+   permissions `FOREGROUND_SERVICE`/`FOREGROUND_SERVICE_REMOTE_MESSAGING`/
+   `POST_NOTIFICATIONS`), démarré sans condition dans `MainActivity.java#onCreate`
+   (pas de classe `Application` custom dans ce projet Capacitor, contrairement
+   à `MainApplication.kt` côté CyrusMobile — démarrage au niveau Activity à la
+   place, équivalent). Couvre les deux WebView embarquées (WhatsApp ET
+   Telegram, alors que l'original ne couvrait que WhatsApp). **Non testé**
+   (nécessiterait un cycle build/install complet, pas fait par respect de la
+   contrainte données mobiles) — relecture de code uniquement, en miroir
+   fidèle d'un pattern déjà validé sur appareil réel ailleurs dans ce dépôt.
+2. **Optimisations Puppeteer sur `local-client/lib/whatsapp.js`** — `--single-process`
+   ajouté, heap V8 abaissé de 256 à 150 Mo, et blocage des requêtes
+   `image`/`media`/`font` ajouté via `client.pupPage.setRequestInterception`
+   (hooké sur les évènements `qr`/`loading_screen`/`ready`, le plus tôt
+   possible). **Délibérément PAS de blocage CSS** malgré la demande littérale
+   ("CSS non critique") : aucun moyen fiable de distinguer un CSS critique
+   d'un CSS décoratif via l'API Puppeteer, bloquer les feuilles de style
+   casserait entièrement la mise en page de WhatsApp Web — seuls
+   images/vidéo/audio/polices sont bloqués (dégrade l'affichage des photos de
+   profil/aperçus média, jamais l'envoi/réception de texte). **Testé
+   réellement en conditions réelles** : redémarrage du serveur avec les
+   nouveaux flags, session WhatsApp déjà appairée restaurée avec succès
+   (`connected: true` via `GET /api/status`), aucun crash. Mesure RAM prise
+   sur le vif (PowerShell `Get-Process`) : le processus Chromium
+   `--single-process` consomme ~610 Mo de Working Set — **la limite de 150 Mo
+   ne plafonne que le tas JS (V8), pas l'empreinte totale du moteur Chromium**
+   (code natif, moteur de rendu, pile réseau, tout fusionné dans un seul
+   processus par `--single-process`) ; l'optimisation réelle attendue est
+   surtout de contenir la CROISSANCE mémoire sur une session longue (media
+   accumulé), pas de réduire drastiquement l'empreinte de base — à ne pas
+   présenter comme une réduction spectaculaire de RAM totale.
+3. **Persistance de session Telegram mobile ("StringSession")** — terminologie
+   du cahier des charges inadaptée à l'architecture réelle : le concept
+   StringSession appartient à GramJS, abandonné le 2026-09-10 au profit du
+   pont WebView (voir section 4 plus haut). Rien à coder : la persistance est
+   déjà garantie nativement par le stockage propre de la WebView Android
+   (cookies/IndexedDB), identique au mécanisme déjà validé côté WhatsApp.
+   Rappel utile pour la suite : contrairement à WhatsApp, l'envoi/réception
+   Telegram (`telegramBridge.js`) n'a jamais été validé de bout en bout sur un
+   vrai échange (seule la détection d'état l'a été).
+4. **Electron pour le PC** — question posée à l'utilisateur (redondance avec
+   le `.exe` `pkg` déjà fonctionnel de `local-client/`) : l'utilisateur a
+   perçu la question comme un doute sur ma compréhension du projet plutôt que
+   comme un choix d'architecture à trancher. **Décision prise unilatéralement
+   pour ne pas re-bloquer sur une question** : rester sur `local-client/`
+   (Node + navigateur système + packaging `.exe` existant), appliquer
+   uniquement les optimisations RAM demandées (fait, voir point 2) — pas de
+   chantier Electron entamé. À reconsidérer seulement si l'utilisateur le
+   redemande explicitement.
+5. **UI dupliquée / duplication du projet React** — rappel (déjà tranché
+   plus tôt dans cette session, redemandé ici en des termes similaires) :
+   `public/dashboard.html` est du HTML/JS vanilla, pas du React — la
+   duplication dans `mobile/webapp/www/` et `local-client/public/` suit ce
+   même style, jamais l'ancien code VPS.
+
+**Reste à faire pour la parité complète** :
+1. Build + test réel sur appareil Android du Foreground Service (point 1
+   ci-dessus) et de Telegram sur `local-client/` de bout en bout (login réel,
+   envoi, campagne, extraction de groupes) — action utilisateur requise, à
+   grouper en un seul cycle de test.
+2. Tester la page Connexions (déconnexion réelle des deux moteurs, mobile ET
+   desktop) et la liste noire (blocage effectif à l'import) sur appareil/PC
+   réel — à grouper avec le point 1.
+3. Surveiller en usage réel si `--single-process` + heap 150 Mo cause des
+   crashs Puppeteer (voir le commentaire "A SURVEILLER" dans
+   `lib/whatsapp.js`) — premier réflexe si ça arrive : remonter le heap ou
+   retirer `--single-process`, pas chercher ailleurs.
+4. Support Image-to-Link si demandé (voir simplification plus haut).
+5. Décision utilisateur sur le module Facebook (hors "zéro-serveur" en
+   l'état).
 
 # ARCHITECTURE SYSTEME & DIRECTIVES DE DEVELOPPEMENT PROFESSIONNEL
 

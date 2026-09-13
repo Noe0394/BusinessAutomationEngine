@@ -1,0 +1,268 @@
+// Session Telegram locale, mono-poste (un seul client, meme principe que
+// lib/whatsapp.js) - flux de connexion GramJS (numero -> code -> mot de
+// passe 2FA eventuel) et helpers d'envoi adaptes de adapters/telegram.js
+// (racine du depot, jamais modifie ni requis directement ici - local-client
+// reste un dossier autonome packageable en .exe, voir lib/campaigns.js pour
+// la meme justification). Session sauvegardee dans un simple fichier local
+// (voir lib/paths.js#TELEGRAM_SESSION_PATH), jamais synchronisee ailleurs.
+const fs = require('fs');
+const { TelegramClient, Api } = require('telegram');
+const { NewMessage } = require('telegram/events');
+const { StringSession } = require('telegram/sessions');
+const { TELEGRAM_SESSION_PATH } = require('./paths');
+const { upsertContact, recordMessage } = require('./db');
+
+const API_ID = parseInt(process.env.TELEGRAM_API_ID, 10) || null;
+const API_HASH = process.env.TELEGRAM_API_HASH || null;
+
+if (!API_ID || !API_HASH) {
+  console.warn(
+    'TELEGRAM_API_ID / TELEGRAM_API_HASH non définis dans local-client/.env : le module Telegram ' +
+    'est inactif (les routes /api/telegram/* renverront une erreur 503). Obtenir ces identifiants ' +
+    'sur https://my.telegram.org (identifiants de l\'APPLICATION, pas du compte).',
+  );
+}
+
+let client = null;
+let connected = false;
+let codeResolver = null;
+let passwordResolver = null;
+let loginError = null;
+const stateListeners = [];
+
+function isConfigured() {
+  return Boolean(API_ID && API_HASH);
+}
+
+function isConnected() {
+  return connected;
+}
+
+function notifyState() {
+  stateListeners.forEach((cb) => {
+    try {
+      cb({ connected });
+    } catch (err) {
+      // ignore
+    }
+  });
+}
+
+function onStateChange(callback) {
+  stateListeners.push(callback);
+}
+
+function loadSessionString() {
+  try {
+    return fs.readFileSync(TELEGRAM_SESSION_PATH, 'utf8').trim();
+  } catch (err) {
+    return '';
+  }
+}
+
+function saveSessionString(value) {
+  fs.writeFileSync(TELEGRAM_SESSION_PATH, value, 'utf8');
+}
+
+function registerIncomingHandler() {
+  client.addEventHandler((event) => {
+    if (!event.message || event.message.out) return;
+    try {
+      const jid = String(event.message.senderId || event.message.chatId || '');
+      upsertContact({ jid: `tg:${jid}` });
+      recordMessage({ jid: `tg:${jid}`, direction: 'in', body: event.message.message || '' });
+    } catch (err) {
+      console.error('Erreur enregistrement message Telegram entrant (SQLite) :', err.message);
+    }
+  }, new NewMessage({}));
+}
+
+// Restaure une session deja autorisee au demarrage, sans redemander de code -
+// no-op silencieux si aucune session ou credentials absents (meme esprit que
+// whatsapp.connect(), appele inconditionnellement depuis index.js).
+async function connect() {
+  if (!isConfigured() || client) return;
+  const stringSession = new StringSession(loadSessionString());
+  client = new TelegramClient(stringSession, API_ID, API_HASH, { connectionRetries: 5 });
+  registerIncomingHandler();
+  await client.connect();
+  connected = await client.checkAuthorization();
+  notifyState();
+  if (connected) console.log('Telegram (local-client) : session restaurée, connecté.');
+}
+
+function currentStep() {
+  if (connected) return 'connected';
+  if (loginError) return 'error';
+  if (passwordResolver) return 'password_required';
+  if (codeResolver) return 'code_required';
+  return 'pending';
+}
+
+// Flux pilote par callbacks internes a GramJS (client.start()) - les routes
+// HTTP /api/telegram/login/code et /login/password resolvent codeResolver/
+// passwordResolver au fur et a mesure que l'utilisateur saisit ces valeurs
+// dans l'interface (voir index.js), sans WebSocket/SSE : le frontend
+// re-interroge GET /api/telegram/status pour savoir quelle etape afficher.
+async function startLogin(phoneNumber) {
+  if (!isConfigured()) throw new Error('TELEGRAM_NOT_CONFIGURED');
+
+  if (client) {
+    try { await client.disconnect(); } catch (err) { /* ignore */ }
+  }
+
+  const stringSession = new StringSession('');
+  client = new TelegramClient(stringSession, API_ID, API_HASH, { connectionRetries: 5 });
+  registerIncomingHandler();
+  await client.connect();
+
+  codeResolver = null;
+  passwordResolver = null;
+  loginError = null;
+  connected = false;
+
+  client.start({
+    phoneNumber: async () => phoneNumber,
+    phoneCode: async () => new Promise((resolve) => { codeResolver = resolve; }),
+    password: async () => new Promise((resolve) => { passwordResolver = resolve; }),
+    onError: (err) => {
+      loginError = err;
+      console.error('Telegram (local-client) : erreur pendant la connexion :', err);
+    },
+  }).then(() => {
+    saveSessionString(client.session.save());
+    connected = true;
+    notifyState();
+    console.log('Telegram (local-client) : connexion établie et session sauvegardée.');
+  }).catch((err) => {
+    loginError = err;
+    console.error('Telegram (local-client) : échec de connexion :', err);
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  return currentStep();
+}
+
+async function submitCode(code) {
+  if (!codeResolver) throw new Error('NO_PENDING_CODE_REQUEST');
+  codeResolver(code);
+  codeResolver = null;
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  return currentStep();
+}
+
+async function submitPassword(password) {
+  if (!passwordResolver) throw new Error('NO_PENDING_PASSWORD_REQUEST');
+  passwordResolver(password);
+  passwordResolver = null;
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  return currentStep();
+}
+
+function getLoginError() {
+  return loginError ? (loginError.message || String(loginError)) : null;
+}
+
+async function logout() {
+  if (client) {
+    await client.logout().catch(() => {});
+    await client.disconnect().catch(() => {});
+  }
+  client = null;
+  connected = false;
+  try { fs.unlinkSync(TELEGRAM_SESSION_PATH); } catch (err) { /* ignore */ }
+  notifyState();
+}
+
+async function getGroups() {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const dialogs = await client.getDialogs({ limit: 200 });
+  return dialogs
+    .filter((d) => d.isGroup || d.isChannel)
+    .map((d) => ({
+      id: d.id ? d.id.toString() : null,
+      name: d.title || d.name || 'Sans nom',
+      isChannel: Boolean(d.isChannel),
+    }))
+    .filter((g) => g.id);
+}
+
+// Membres d'un groupe/canal (feuille de route "extraction + export Excel") -
+// client.getParticipants resout directement l'entite a partir de l'id texte
+// renvoye par getGroups.
+async function getGroupMembers(groupId) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const entity = await client.getEntity(groupId);
+  const participants = await client.getParticipants(entity, { limit: 5000 });
+  return participants.map((p) => ({
+    id: p.id ? p.id.toString() : null,
+    username: p.username || '',
+    phone: p.phone || '',
+    firstName: p.firstName || '',
+    lastName: p.lastName || '',
+  })).filter((p) => p.id);
+}
+
+// Resout un identifiant fourni par l'utilisateur (username "@untel" ou
+// numero de telephone) vers une entite Telegram utilisable par sendMessage -
+// un numero necessite contacts.importContacts (l'API MTProto n'autorise pas
+// la recherche libre d'un numero), voir adapters/telegram.js#resolveRecipient
+// (racine) pour la justification complete de cette contrainte.
+async function resolveRecipient(identifier) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const value = String(identifier || '').trim();
+  if (!value) throw new Error('EMPTY_RECIPIENT');
+
+  const looksLikeUsername = value.startsWith('@') || /^[a-zA-Z][a-zA-Z0-9_]{4,31}$/.test(value);
+  if (looksLikeUsername) {
+    const username = value.startsWith('@') ? value : `@${value}`;
+    try {
+      return await client.getEntity(username);
+    } catch (err) {
+      throw new Error('RECIPIENT_NOT_FOUND');
+    }
+  }
+
+  const digits = value.replace(/[^\d+]/g, '');
+  if (!digits.replace('+', '')) throw new Error('INVALID_RECIPIENT');
+  const phone = digits.startsWith('+') ? digits : `+${digits}`;
+
+  try {
+    const result = await client.invoke(new Api.contacts.ImportContacts({
+      contacts: [new Api.InputPhoneContact({
+        clientId: Math.floor(Math.random() * 1_000_000_000),
+        phone,
+        firstName: 'Contact',
+        lastName: '',
+      })],
+    }));
+    if (!result.users || result.users.length === 0) throw new Error('RECIPIENT_NOT_FOUND');
+    return result.users[0];
+  } catch (err) {
+    if (err.message === 'RECIPIENT_NOT_FOUND') throw err;
+    throw new Error('RECIPIENT_NOT_FOUND');
+  }
+}
+
+async function sendMessage(to, text) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const entity = await resolveRecipient(to);
+  const result = await client.sendMessage(entity, { message: text });
+  recordMessage({ jid: `tg:${to}`, direction: 'out', body: text });
+  return result;
+}
+
+module.exports = {
+  isConfigured,
+  isConnected,
+  onStateChange,
+  connect,
+  startLogin,
+  submitCode,
+  submitPassword,
+  getLoginError,
+  logout,
+  getGroups,
+  getGroupMembers,
+  sendMessage,
+};

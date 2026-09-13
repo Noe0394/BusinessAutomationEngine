@@ -26,6 +26,10 @@ import {
   View,
 } from 'react-native';
 import nodejs from 'nodejs-mobile-react-native';
+import WebViewTest from './WebViewTest';
+import WhatsAppWebEngine from './WhatsAppWebEngine';
+import TelegramEngine from './TelegramEngine';
+import AiEngine from './AiEngine';
 
 const COLORS = {
   bg: '#0A0E14',
@@ -136,6 +140,17 @@ function RevealBox({children}: {children: React.ReactNode}) {
 }
 
 function App(): React.JSX.Element {
+  // Bascule TEMPORAIRE vers l'ecran de test WebView (voir WebViewTest.tsx) —
+  // n'affecte jamais le flux Baileys existant, juste un acces cote pour
+  // valider l'hypothese avant d'investir plus loin.
+  const [showWebViewTest, setShowWebViewTest] = useState(false);
+  // Moteur reel WebView + injection JS (voir WhatsAppWebEngine.tsx), suite
+  // du test ci-dessus une fois l'hypothese validee (2026-09-10) — coexiste
+  // avec le flux Baileys, ne le remplace pas tant qu'il n'est pas valide de
+  // bout en bout sur un vrai echange de messages.
+  const [showWhatsAppEngine, setShowWhatsAppEngine] = useState(false);
+  const [showTelegramEngine, setShowTelegramEngine] = useState(false);
+  const [showAiEngine, setShowAiEngine] = useState(false);
   const [nodeReady, setNodeReady] = useState(false);
   const [connected, setConnected] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -211,6 +226,54 @@ function App(): React.JSX.Element {
 
   const canRequestCode = nodeReady && phoneNumber.length > 0 && !requesting;
 
+  if (showWebViewTest) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
+        <PressableScale style={styles.backButton} onPress={() => setShowWebViewTest(false)}>
+          <Text style={styles.backButtonText}>← Retour</Text>
+        </PressableScale>
+        <WebViewTest />
+      </SafeAreaView>
+    );
+  }
+
+  if (showWhatsAppEngine) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
+        <PressableScale style={styles.backButton} onPress={() => setShowWhatsAppEngine(false)}>
+          <Text style={styles.backButtonText}>← Retour</Text>
+        </PressableScale>
+        <WhatsAppWebEngine />
+      </SafeAreaView>
+    );
+  }
+
+  if (showTelegramEngine) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
+        <PressableScale style={styles.backButton} onPress={() => setShowTelegramEngine(false)}>
+          <Text style={styles.backButtonText}>← Retour</Text>
+        </PressableScale>
+        <TelegramEngine />
+      </SafeAreaView>
+    );
+  }
+
+  if (showAiEngine) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
+        <PressableScale style={styles.backButton} onPress={() => setShowAiEngine(false)}>
+          <Text style={styles.backButtonText}>← Retour</Text>
+        </PressableScale>
+        <AiEngine />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
@@ -219,6 +282,18 @@ function App(): React.JSX.Element {
         <Text style={styles.brand}>
           CYRUS <Text style={styles.brandAccent}>SUPER ASSISTANT</Text>
         </Text>
+        <PressableScale style={styles.testLink} onPress={() => setShowWebViewTest(true)}>
+          <Text style={styles.testLinkText}>🧪 Test WebView WhatsApp Web</Text>
+        </PressableScale>
+        <PressableScale style={styles.testLink} onPress={() => setShowWhatsAppEngine(true)}>
+          <Text style={styles.testLinkText}>🚀 Moteur WhatsApp (WebView réel)</Text>
+        </PressableScale>
+        <PressableScale style={styles.testLink} onPress={() => setShowTelegramEngine(true)}>
+          <Text style={styles.testLinkText}>✈️ Telegram</Text>
+        </PressableScale>
+        <PressableScale style={styles.testLink} onPress={() => setShowAiEngine(true)}>
+          <Text style={styles.testLinkText}>🤖 Génération IA</Text>
+        </PressableScale>
         <View style={styles.statusRow}>
           <View style={styles.statusPill}>
             <PulseDot active={nodeReady} />
@@ -328,6 +403,10 @@ const styles = StyleSheet.create({
   brand: {fontSize: 22, fontWeight: '800', color: COLORS.textPrimary, letterSpacing: 0.5},
   brandAccent: {color: COLORS.cyan, fontWeight: '800'},
   statusRow: {flexDirection: 'row', marginTop: 10, gap: 8},
+  testLink: {marginTop: 10, alignSelf: 'flex-start'},
+  testLinkText: {color: COLORS.textSecondary, fontSize: 11, textDecorationLine: 'underline'},
+  backButton: {margin: 12, alignSelf: 'flex-start'},
+  backButtonText: {color: COLORS.cyan, fontSize: 14, fontWeight: '700'},
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',

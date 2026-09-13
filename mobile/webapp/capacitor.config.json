@@ -1,0 +1,8 @@
+{
+  "appId": "com.cyrusmobile.webapp",
+  "appName": "CYRUS SUPER ASSISTANT",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  }
+}

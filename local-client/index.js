@@ -7,6 +7,7 @@ const open = require('open');
 const { verifyLicense } = require('./lib/license');
 const { checkAndSelfUpdate } = require('./lib/selfUpdate');
 const whatsapp = require('./lib/whatsapp');
+const telegram = require('./lib/telegram');
 const aiGateway = require('./lib/aiGateway');
 const db = require('./lib/db');
 const campaigns = require('./lib/campaigns');
@@ -38,8 +39,12 @@ async function main() {
   app.use(express.json({ limit: '15mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
 
-  app.get('/api/status', (req, res) => {
-    res.json({ connected: whatsapp.isConnected(), qr: whatsapp.getQRCode() });
+  app.get('/api/status', async (req, res) => {
+    res.json({
+      connected: whatsapp.isConnected(),
+      qr: whatsapp.getQRCode(),
+      qrImage: await whatsapp.getQRCodeImage(),
+    });
   });
 
   // Purement informatif désormais (voir lib/selfUpdate.js, qui applique
@@ -61,8 +66,137 @@ async function main() {
     }
   });
 
+  // ---------- Extraction de groupes WhatsApp (feuille de route "export Excel")
+  // ---------- Le fichier lui-même est produit côté navigateur (SheetJS, voir
+  // public/lib/xlsx.full.min.js + public/app.js) à partir de ce JSON — pas de
+  // dépendance xlsx côté serveur.
+  app.get('/api/whatsapp/groups', async (req, res) => {
+    try {
+      res.json(await whatsapp.getGroups());
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/whatsapp/groups/:id/members', async (req, res) => {
+    try {
+      res.json(await whatsapp.getGroupMembers(req.params.id));
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  // ---------- Telegram (MTProto/GramJS, voir lib/telegram.js) ----------
+  // Flux de connexion en 3 étapes (numéro -> code -> mot de passe 2FA
+  // éventuel) piloté par polling de GET /api/telegram/status plutôt qu'un
+  // WebSocket — le frontend affiche le champ correspondant à `step`.
+  app.get('/api/telegram/status', (req, res) => {
+    res.json({
+      configured: telegram.isConfigured(),
+      connected: telegram.isConnected(),
+      error: telegram.getLoginError(),
+    });
+  });
+
+  app.post('/api/telegram/login/start', async (req, res) => {
+    try {
+      const step = await telegram.startLogin(String(req.body?.phone || '').trim());
+      res.json({ step });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/telegram/login/code', async (req, res) => {
+    try {
+      const step = await telegram.submitCode(String(req.body?.code || '').trim());
+      res.json({ step });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/telegram/login/password', async (req, res) => {
+    try {
+      const step = await telegram.submitPassword(String(req.body?.password || ''));
+      res.json({ step });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/telegram/logout', async (req, res) => {
+    await telegram.logout();
+    res.json({ ok: true });
+  });
+
+  app.post('/api/telegram/send', async (req, res) => {
+    try {
+      const { to, text } = req.body || {};
+      await telegram.sendMessage(to, text);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/telegram/groups', async (req, res) => {
+    try {
+      res.json(await telegram.getGroups());
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/telegram/groups/:id/members', async (req, res) => {
+    try {
+      res.json(await telegram.getGroupMembers(req.params.id));
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
   app.get('/api/contacts', (req, res) => {
     res.json(db.listContacts());
+  });
+
+  // ---------- Liste noire (voir lib/db.js, appliquée dans
+  // lib/campaigns.js#createCampaign) ----------
+  app.get('/api/blocklist', (req, res) => {
+    const channel = req.query.channel === 'telegram' ? 'telegram' : 'whatsapp';
+    res.json(db.getBlocklist(channel));
+  });
+
+  app.post('/api/blocklist', (req, res) => {
+    const { channel, identifier } = req.body || {};
+    const resolvedChannel = channel === 'telegram' ? 'telegram' : 'whatsapp';
+    const value = String(identifier || '').trim();
+    if (!value) return res.status(400).json({ error: 'Identifiant manquant.' });
+    db.addToBlocklist(resolvedChannel, value);
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/blocklist', (req, res) => {
+    const { channel, identifier } = req.body || {};
+    const resolvedChannel = channel === 'telegram' ? 'telegram' : 'whatsapp';
+    db.removeFromBlocklist(resolvedChannel, String(identifier || '').trim());
+    res.json({ ok: true });
+  });
+
+  // ---------- Page Connexions : historique unifié WhatsApp + Telegram ----------
+  app.get('/api/history', (req, res) => {
+    res.json(db.listSentHistory(100));
+  });
+
+  app.post('/api/whatsapp/logout', async (req, res) => {
+    await whatsapp.logout();
+    // Relance immédiatement une session vierge (nouveau QR) plutôt que de
+    // laisser whatsapp-web.js inactif jusqu'au prochain redémarrage complet
+    // du serveur - même esprit que logoutWhatsApp() côté mobile/webapp.
+    whatsapp.connect().catch((err) => {
+      console.error('Erreur lors de la reconnexion WhatsApp après déconnexion :', err.message);
+    });
+    res.json({ ok: true });
   });
 
   // Import manuel ou CSV (déjà parsé côté navigateur, voir public/app.js) :
@@ -92,8 +226,8 @@ async function main() {
 
   app.post('/api/campaigns', (req, res) => {
     try {
-      const { name, recipients, text, delayMinMs, delayMaxMs } = req.body || {};
-      const campaign = campaigns.createCampaign(name, recipients, { text, delayMinMs, delayMaxMs });
+      const { name, recipients, text, delayMinMs, delayMaxMs, channel } = req.body || {};
+      const campaign = campaigns.createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channel });
       res.json(campaign);
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -127,6 +261,18 @@ async function main() {
   app.post('/api/campaigns/:id/cancel', (req, res) => {
     try {
       campaigns.cancelCampaign(req.params.id);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Relance Manuelle Express (voir public/relance.js) : trace un envoi
+  // déclenché manuellement via deep link, sans passer par la boucle
+  // automatique de lib/campaigns.js#runLoop.
+  app.post('/api/campaigns/:id/mark-sent', (req, res) => {
+    try {
+      campaigns.markManualSent(req.params.id, String(req.body?.to || ''));
       res.json({ ok: true });
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -221,6 +367,9 @@ async function main() {
 
   whatsapp.connect().catch((err) => {
     console.error('Erreur lors de la connexion WhatsApp :', err.message);
+  });
+  telegram.connect().catch((err) => {
+    console.error('Erreur lors de la connexion Telegram :', err.message);
   });
 }
 

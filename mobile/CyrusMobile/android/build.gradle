@@ -1,7 +1,11 @@
 buildscript {
     ext {
         buildToolsVersion = "34.0.0"
-        minSdkVersion = 21
+        // 24 (Android 7.0, 2016) minimum, releve de 21 : impose par
+        // react-native-webview (voir WebViewTest.tsx) — aucune perte de
+        // compatibilite reelle en 2026, la quasi-totalite du parc Android
+        // actif est deja au-dela de cette version.
+        minSdkVersion = 24
         compileSdkVersion = 34
         targetSdkVersion = 34
         ndkVersion = "25.1.8937393"

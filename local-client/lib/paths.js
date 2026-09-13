@@ -22,5 +22,6 @@ module.exports = {
   DATA_DIR,
   DB_PATH: path.join(DATA_DIR, 'local.db'),
   WHATSAPP_AUTH_DIR: path.join(DATA_DIR, 'whatsapp_auth'),
+  TELEGRAM_SESSION_PATH: path.join(DATA_DIR, 'telegram_session.txt'),
   DEVICE_ID_PATH: path.join(DATA_DIR, 'device-id.txt'),
 };

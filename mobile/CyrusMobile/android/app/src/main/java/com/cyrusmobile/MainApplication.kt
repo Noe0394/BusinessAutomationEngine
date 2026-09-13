@@ -45,10 +45,13 @@ class MainApplication : Application(), ReactApplication {
     ReactNativeFlipper.initializeFlipper(this, reactNativeHost.reactInstanceManager)
 
     // Demarre le service de premier plan des le lancement de l'appli, pour
-    // que le processus (donc le thread Node/Baileys) survive au passage en
-    // arriere-plan. Pas de bridge natif dedie : plus simple pour ce spike,
-    // quitte a affiner plus tard (ex: ne demarrer qu'une fois connecte a
-    // WhatsApp) une fois la faisabilite validee sur un vrai appareil.
+    // que le processus survive au passage en arriere-plan. Couvre les deux
+    // moteurs WhatsApp qui ont tourne dans ce process au fil du projet : le
+    // thread Node embarque (Baileys, bloque - voir CLAUDE.md) et surtout la
+    // WebView du moteur actuel (WhatsAppWebEngine.tsx), qui doit continuer
+    // d'executer son JS pour recevoir les messages meme app en arriere-plan.
+    // Pas de bridge natif dedie : plus simple pour ce spike, quitte a
+    // affiner plus tard (ex: ne demarrer qu'une fois connecte a WhatsApp).
     val serviceIntent = Intent(this, KeepAliveService::class.java)
     ContextCompat.startForegroundService(this, serviceIntent)
   }

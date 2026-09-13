@@ -1,0 +1,21 @@
+{
+  "name": "cyrus-webapp",
+  "version": "1.0.0",
+  "description": "CYRUS SUPER ASSISTANT — webapp unique (HTML/CSS/JS standard, sans framework de build) encapsulee via Capacitor pour Android. Remplace le client React Native (mobile/CyrusMobile) suite au crash natif de GramJS dans le runtime Node embarque (nodejs-mobile-react-native) — voir CLAUDE.md pour l'historique complet. Tout tourne cote client (WebView), zero serveur/VPS pour WhatsApp/Telegram/IA.",
+  "private": true,
+  "scripts": {
+    "sync": "npx cap sync android",
+    "open:android": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/filesystem": "^7.0.0",
+    "@capacitor/share": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
+    "esbuild": "^0.28.2",
+    "telegram": "^2.26.22"
+  }
+}

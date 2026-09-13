@@ -20,6 +20,16 @@ if (!globalThis.crypto) {
   globalThis.crypto = require('node:crypto').webcrypto;
 }
 
+// Polyfill "self" : GramJS (telegram.js, voir Telegram plus bas) reference
+// "self.crypto.subtle" dans node_modules/telegram/crypto/crypto.js — "self"
+// est un global navigateur/worker, absent en Node pur (meme ici, malgre le
+// polyfill crypto ci-dessus qui couvre "globalThis.crypto" mais pas "self"
+// lui-meme). Sans ça : "ReferenceError: self is not defined" au premier
+// hash/PBKDF2 GramJS (des la connexion Telegram).
+if (typeof self === 'undefined') {
+  globalThis.self = globalThis;
+}
+
 const path = require('path');
 const rn_bridge = require('rn-bridge');
 const {
@@ -139,6 +149,76 @@ rn_bridge.app.on('pause', (pauseLock) => {
   // continuer de tourner en arriere-plan (c'est tout le but du foreground
   // service Android a mettre en place cote React Native).
   pauseLock.release();
+});
+
+// Config persistee (deviceId + cle de licence pour les appels Firebase, voir
+// AiEngine.tsx) - stockage via ce runtime Node plutot qu'une dependance
+// native RN supplementaire (AsyncStorage), voir config.js.
+const config = require('./config');
+
+rn_bridge.channel.on('get-config', () => {
+  rn_bridge.channel.post('config', {
+    deviceId: config.getDeviceId(),
+    licenseKey: config.getLicenseKey(),
+  });
+});
+
+rn_bridge.channel.on('set-license-key', ({ licenseKey }) => {
+  config.setLicenseKey(licenseKey);
+  rn_bridge.channel.post('config', {
+    deviceId: config.getDeviceId(),
+    licenseKey: config.getLicenseKey(),
+  });
+});
+
+// Telegram (adapte de adapters/telegram.js, mono-utilisateur, sans serveur -
+// voir telegram.js). Tourne dans ce meme runtime Node embarque, comme
+// Baileys ci-dessus.
+const telegram = require('./telegram');
+
+telegram.init().catch(() => {}); // restauration silencieuse d'une session existante
+
+rn_bridge.channel.on('telegram-login-start', async ({ apiId, apiHash, phoneNumber }) => {
+  try {
+    const step = await telegram.startLogin(Number(apiId), apiHash, phoneNumber);
+    rn_bridge.channel.post('telegram-login-step', { step, error: telegram.getLoginError() });
+  } catch (err) {
+    rn_bridge.channel.post('telegram-login-step', { step: 'error', error: String(err) });
+  }
+});
+
+rn_bridge.channel.on('telegram-submit-code', async ({ code }) => {
+  try {
+    const step = await telegram.submitCode(code);
+    rn_bridge.channel.post('telegram-login-step', { step, error: telegram.getLoginError() });
+  } catch (err) {
+    rn_bridge.channel.post('telegram-login-step', { step: 'error', error: String(err) });
+  }
+});
+
+rn_bridge.channel.on('telegram-submit-password', async ({ password }) => {
+  try {
+    const step = await telegram.submitPassword(password);
+    rn_bridge.channel.post('telegram-login-step', { step, error: telegram.getLoginError() });
+  } catch (err) {
+    rn_bridge.channel.post('telegram-login-step', { step: 'error', error: String(err) });
+  }
+});
+
+rn_bridge.channel.on('telegram-send', async ({ to, text }) => {
+  try {
+    await telegram.sendMessage(to, text);
+    rn_bridge.channel.post('telegram-send-result', { ok: true, to });
+  } catch (err) {
+    rn_bridge.channel.post('telegram-send-result', { ok: false, to, error: String(err) });
+  }
+});
+
+telegram.onIncomingMessage((msg) => {
+  rn_bridge.channel.post('telegram-message', {
+    from: msg.senderId ? msg.senderId.toString() : (msg.chatId ? msg.chatId.toString() : 'inconnu'),
+    text: msg.message || '',
+  });
 });
 
 connect();

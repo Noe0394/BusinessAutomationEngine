@@ -1,10 +1,17 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "echo 'Interface statique : aucun build necessaire, voir public/dashboard.html'",
+  "buildCommand": "node scripts/build-public.js",
   "installCommand": "echo 'Interface statique : aucune dependance backend a installer'",
   "outputDirectory": "public",
+  "redirects": [
+    { "source": "/local", "destination": "/local/", "permanent": false }
+  ],
   "rewrites": [
-    { "source": "/", "destination": "/dashboard.html" },
-    { "source": "/dashboard", "destination": "/dashboard.html" }
+    { "source": "/local/(.*)", "destination": "/webapp/$1" },
+    { "source": "/local/", "destination": "/webapp/index.html" },
+    { "source": "/vps", "destination": "/dashboard.html" },
+    { "source": "/dashboard", "destination": "/dashboard.html" },
+    { "source": "/chooser", "destination": "/chooser.html" },
+    { "source": "/", "destination": "/chooser.html" }
   ]
 }

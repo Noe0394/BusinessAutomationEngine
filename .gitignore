@@ -22,7 +22,19 @@ campaigns_state/
 message_history/
 ai_studio_sessions/
 public/dist/
+# Sortie de build (scripts/build-public.js) : générée à chaque déploiement Vercel.
+public/webapp/
 .vercel
 .env*
 firebase-service-account.json
 .claude/settings.local.json
+
+# Captures d'ecran de debug (adb screencap) - peuvent contenir du contenu
+# WhatsApp reel/prive vu pendant les tests sur appareil, jamais a versionner.
+mobile/**/*.png
+
+# Clés SSH privées — ne JAMAIS versionner (voir docs/VPS-SSH.md)
+*.pem
+*.ppk
+id_rsa
+id_ed25519

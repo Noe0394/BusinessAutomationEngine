@@ -53,6 +53,11 @@ const messageHistory = require('./lib/messageHistory');
 const { personalizeMessage, buildPersonalizationVars } = require('./lib/personalization');
 const ebookGenerator = require('./lib/pdf/ebookGenerator');
 
+// Couche Human & Context Intelligence (dual-env) branchée sur l'architecture
+// existante. NE TOUCHE PAS à la gestion de sessions/connexion Baileys ni aux
+// moteurs d'envoi.
+const { createVpsBridge } = require('./lib/intelligence/vps-bridge');
+
 const app = express();
 const PORT = process.env.PORT || 10000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '@CYRUS2026';
@@ -4708,6 +4713,15 @@ app.post('/api/ebooks/generate', requireAccess, requireModule('studio_video'), u
     res.status(500).json({ error: 'Échec de la génération du PDF.' });
   }
 });
+
+// Couche Human & Context Intelligence : endpoints /api/intelligence/*
+// (analyze, intuition, objective, execute, chat, actions, health).
+// Authentification alignée sur toute l'API (mot de passe admin ou clé de
+// licence) — le bridge ne détourne aucune session existante.
+app.use('/', requireAccess, createVpsBridge({
+  runtime: null,
+  stateFile: process.env.INTELLIGENCE_STATE_FILE || null,
+}));
 
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {

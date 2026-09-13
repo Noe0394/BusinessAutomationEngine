@@ -9,10 +9,25 @@
 // manuellement avec lib/whatsappRecipients.js, lib/personalization.js et
 // lib/spintax.js à la racine si ces fonctions pures évoluent côté backend.
 const crypto = require('crypto');
-const { db, getContactName } = require('./db');
+const { db, getContactName, isBlocked } = require('./db');
 const whatsapp = require('./whatsapp');
+const telegram = require('./telegram');
 const { normalizeRecipientEntry } = require('./whatsappRecipients');
+const { normalizeRecipientEntry: normalizeTelegramRecipientEntry } = require('./telegramRecipients');
 const { personalizeMessage } = require('./personalization');
+
+// Dispatch WhatsApp/Telegram par canal - `channel` vit dans config_json (pas
+// de colonne dediee, voir rowToCampaign) : aucune migration de schema requise
+// pour ajouter Telegram aux campagnes deja persistees (une campagne existante
+// sans `channel` explicite est traitee comme 'whatsapp', comportement
+// historique inchange).
+function adapterFor(channel) {
+  return channel === 'telegram' ? telegram : whatsapp;
+}
+
+function normalizerFor(channel) {
+  return channel === 'telegram' ? normalizeTelegramRecipientEntry : normalizeRecipientEntry;
+}
 
 // Évite qu'un double-clic "Démarrer" (ou un redémarrage rapide du serveur
 // pendant qu'une boucle précédente tourne encore) ne lance deux boucles
@@ -58,12 +73,22 @@ function saveResults(id, results) {
 // recipients : tableau de chaînes ("2250700000000" ou déjà un JID) ou
 // d'objets { telephone, nom } — même format accepté que le backend
 // principal (voir lib/whatsappRecipients.js#normalizeRecipientEntry).
-function createCampaign(name, recipients, { text, delayMinMs, delayMaxMs } = {}) {
+function createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channel } = {}) {
   if (!name || !name.trim()) throw new Error('Nom de campagne manquant.');
   if (!Array.isArray(recipients) || recipients.length === 0) throw new Error('Liste de destinataires vide.');
   if (!text || !text.trim()) throw new Error('Message manquant.');
 
-  const normalized = recipients.map((r) => normalizeRecipientEntry(r, getContactName));
+  const resolvedChannel = channel === 'telegram' ? 'telegram' : 'whatsapp';
+  const normalizedAll = recipients.map((r) => normalizerFor(resolvedChannel)(r, getContactName));
+  // Liste noire (voir lib/db.js#isBlocked) - appliquée ici, point d'entrée
+  // UNIQUE de toute campagne quelle que soit la source des destinataires
+  // (saisie manuelle ou extraction de groupe, voir index.js) : un contact
+  // bloqué n'entre jamais dans `results`, donc jamais dans la boucle d'envoi.
+  const normalized = normalizedAll.filter((r) => !isBlocked(resolvedChannel, r.to));
+  const blockedCount = normalizedAll.length - normalized.length;
+  if (normalized.length === 0) {
+    throw new Error(blockedCount > 0 ? 'Tous les destinataires sont dans la liste noire.' : 'Liste de destinataires vide.');
+  }
   const results = normalized.map((r) => ({ to: r.to, nom: r.nom, status: 'pending', error: null, sentAt: null }));
   const id = crypto.randomUUID();
 
@@ -73,11 +98,19 @@ function createCampaign(name, recipients, { text, delayMinMs, delayMaxMs } = {})
   `).run(
     id,
     name.trim(),
-    JSON.stringify({ text, delayMinMs: delayMinMs || 8000, delayMaxMs: delayMaxMs || 20000, recipients: normalized }),
+    JSON.stringify({
+      text, channel: resolvedChannel, delayMinMs: delayMinMs || 8000, delayMaxMs: delayMaxMs || 20000, recipients: normalized,
+    }),
     JSON.stringify(results),
   );
 
-  return getCampaign(id);
+  // blockedCount est une propriété TRANSIENTE (pas persistée en base) sur la
+  // valeur de retour de cet appel précis - juste de quoi informer l'appelant
+  // HTTP (voir index.js) du nombre de destinataires exclus par la liste
+  // noire, sans changer la forme de l'objet campagne stocké/relu ailleurs.
+  const created = getCampaign(id);
+  created.blockedCount = blockedCount;
+  return created;
 }
 
 async function runLoop(id) {
@@ -94,10 +127,12 @@ async function runLoop(id) {
         break;
       }
 
-      // Ne consomme jamais de destinataire si la session WhatsApp est
+      const adapter = adapterFor(campaign.config.channel);
+
+      // Ne consomme jamais de destinataire si la session du canal est
       // coupée — met en pause plutôt que de perdre silencieusement un envoi
       // ou d'accumuler des erreurs pour toute la liste restante.
-      if (!whatsapp.isConnected()) {
+      if (!adapter.isConnected()) {
         setStatus(id, 'paused');
         break;
       }
@@ -105,7 +140,7 @@ async function runLoop(id) {
       const recipient = campaign.config.recipients[nextIndex];
       const results = campaign.results;
       try {
-        await whatsapp.sendMessage(recipient.to, personalizeMessage(campaign.config.text, recipient.vars));
+        await adapter.sendMessage(recipient.to, personalizeMessage(campaign.config.text, recipient.vars));
         results[nextIndex] = { ...results[nextIndex], status: 'sent', sentAt: new Date().toISOString() };
       } catch (err) {
         results[nextIndex] = { ...results[nextIndex], status: 'error', error: err.message };
@@ -151,21 +186,37 @@ function cancelCampaign(id) {
   setStatus(id, 'cancelled');
 }
 
-// Si la session WhatsApp se reconnecte alors qu'une campagne a été mise en
-// pause PAR ce moteur (déconnexion, pas par l'utilisateur), on la reprend
-// automatiquement — sans ça une coupure réseau temporaire immobiliserait
-// une campagne jusqu'à une action manuelle. Une campagne mise en pause
-// explicitement par l'utilisateur redémarrerait aussi ici : compromis
+// Trace un envoi déclenché par la Relance Manuelle Express (deep link ouvert
+// manuellement, voir public/relance.js) plutôt que par la boucle automatique
+// ci-dessus — même tableau `results`, pour que ce contact n'apparaisse plus
+// comme pending/error dans la file au prochain chargement.
+function markManualSent(id, to) {
+  const campaign = getCampaign(id);
+  if (!campaign) throw new Error('Campagne introuvable.');
+  const results = campaign.results.map((r) => (r.to === to ? { ...r, status: 'sent', sentAt: new Date().toISOString() } : r));
+  saveResults(id, results);
+}
+
+// Si la session d'un canal se reconnecte alors qu'une campagne DE CE CANAL a
+// été mise en pause PAR ce moteur (déconnexion, pas par l'utilisateur), on la
+// reprend automatiquement — sans ça une coupure réseau temporaire
+// immobiliserait une campagne jusqu'à une action manuelle. Une campagne mise
+// en pause explicitement par l'utilisateur redémarrerait aussi ici : compromis
 // accepté pour un usage mono-poste (voir README.md, pas de distinction
-// pause-auto/pause-manuelle dans ce premier jet).
-whatsapp.onStateChange(({ connected }) => {
-  if (!connected) return;
+// pause-auto/pause-manuelle dans ce premier jet). Filtré par canal : la
+// reconnexion WhatsApp ne doit jamais réveiller une campagne Telegram en
+// pause faute de session Telegram, et inversement.
+function resumePausedCampaigns(channel) {
   for (const campaign of listCampaigns()) {
-    if (campaign.status === 'paused' && campaign.results.some((r) => r.status === 'pending')) {
+    const campaignChannel = campaign.config.channel || 'whatsapp';
+    if (campaignChannel === channel && campaign.status === 'paused' && campaign.results.some((r) => r.status === 'pending')) {
       startCampaign(campaign.id);
     }
   }
-});
+}
+
+whatsapp.onStateChange(({ connected }) => { if (connected) resumePausedCampaigns('whatsapp'); });
+telegram.onStateChange(({ connected }) => { if (connected) resumePausedCampaigns('telegram'); });
 
 module.exports = {
   createCampaign,
@@ -174,4 +225,5 @@ module.exports = {
   startCampaign,
   pauseCampaign,
   cancelCampaign,
+  markManualSent,
 };

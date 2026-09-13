@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>CYRUS SUPER ASSISTANT</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <p class="brand">CYRUS <span class="accent">SUPER ASSISTANT</span></p>
+    <div class="nav">
+      <button data-screen="connexions">🔌 Connexions</button>
+      <button data-screen="campaigns">📢 Campagnes</button>
+      <button data-screen="relance">📇 Relance Manuelle</button>
+      <button data-screen="ai">🤖 Génération IA</button>
+      <button data-screen="intelligence">🧠 Commandes</button>
+    </div>
+  </div>
+
+  <!-- ===================== CONNEXIONS ===================== -->
+  <section id="screen-connexions" class="screen active">
+    <div class="content">
+      <div class="card">
+        <div class="list-row">
+          <span><span class="dot" id="wa-dot"></span>WhatsApp — <span id="wa-status-text">Vérification...</span></span>
+          <button class="secondary" id="wa-logout-btn">Déconnecter</button>
+        </div>
+        <div class="connect-slot" id="wa-connect-slot"></div>
+      </div>
+
+      <div class="card">
+        <div class="list-row">
+          <span><span class="dot" id="tg-dot"></span>Telegram — <span id="tg-status-text">Vérification...</span></span>
+          <button class="secondary" id="tg-logout-btn">Déconnecter</button>
+        </div>
+        <div class="connect-slot" id="tg-connect-slot"></div>
+      </div>
+
+      <div class="card">
+        <div class="list-row">
+          <h2 style="margin:0;">Historique des envois</h2>
+          <button class="plain" id="history-refresh-btn">🔄 Actualiser</button>
+        </div>
+        <div id="history-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CAMPAGNES ===================== -->
+  <section id="screen-campaigns" class="screen">
+    <div class="content">
+      <div class="card">
+        <label for="camp-channel">Canal</label>
+        <select id="camp-channel">
+          <option value="whatsapp">🚀 WhatsApp</option>
+          <option value="telegram">✈️ Telegram</option>
+        </select>
+      </div>
+
+      <div class="card">
+        <h2>1. Contacts</h2>
+        <label for="camp-file-input">Importer un fichier .xlsx / .csv</label>
+        <input type="file" id="camp-file-input" accept=".csv,.xlsx,.xls" />
+        <p class="empty" id="camp-contacts-count" style="padding:8px 0; text-align:left;">Aucun contact importé.</p>
+      </div>
+
+      <div class="card">
+        <h2>2. Ou extraire depuis un groupe existant</h2>
+        <button class="primary" id="camp-list-groups-btn">Lister mes groupes</button>
+        <div id="camp-groups-list"></div>
+      </div>
+
+      <details class="card">
+        <summary style="cursor:pointer; font-weight:700; font-size:14px;">🚫 Liste noire (contacts jamais recontactés)</summary>
+        <div class="row" style="margin-top:10px;">
+          <input type="text" id="blocklist-add-input" placeholder="Numéro ou @username à bloquer" />
+          <button class="secondary" id="blocklist-add-btn">Bloquer</button>
+        </div>
+        <div id="blocklist-list" style="margin-top:8px;"></div>
+      </details>
+
+      <div class="card">
+        <h2>3. Message</h2>
+        <label for="camp-message">Spintax {option1|option2}, variables {first_name}</label>
+        <textarea id="camp-message" placeholder="Bonjour {first_name|}, {Découvrez|Profitez de} notre offre..."></textarea>
+        <button class="secondary" id="camp-preview-btn" style="margin-top:8px;">Aperçu (3 exemples)</button>
+        <div id="camp-preview-result" style="margin-top:8px; font-size:13px; color:var(--text-dim);"></div>
+      </div>
+
+      <div class="card">
+        <h2>4. Tempo entre chaque envoi (secondes)</h2>
+        <div class="row">
+          <input type="number" id="camp-delay-min" value="8" min="1" placeholder="Min" />
+          <input type="number" id="camp-delay-max" value="20" min="1" placeholder="Max" />
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <button class="primary" id="camp-start-btn">Démarrer</button>
+          <button class="secondary" id="camp-pause-btn">Pause</button>
+        </div>
+        <p id="camp-status" style="margin-top:10px; font-size:13px; color:var(--text-dim);">Aucune campagne en cours.</p>
+        <div class="progress-bar"><div class="progress-fill" id="camp-progress-fill"></div></div>
+      </div>
+
+      <div class="card">
+        <h2>Campagnes</h2>
+        <div id="campaigns-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== RELANCE MANUELLE ===================== -->
+  <section id="screen-relance" class="screen">
+    <div class="content">
+      <div class="card">
+        <label for="relance-channel">Canal</label>
+        <select id="relance-channel">
+          <option value="whatsapp">🚀 WhatsApp</option>
+          <option value="telegram">✈️ Telegram</option>
+        </select>
+      </div>
+
+      <div class="card">
+        <label for="relance-intention">Mon Intention de Campagne (optionnel)</label>
+        <textarea id="relance-intention" placeholder="Ex: Promo -50%, lien: https://..."></textarea>
+        <p class="empty" style="text-align:left; padding:6px 0 0;">Laissez vide pour garder le message de la campagne d'origine. Renseignée, elle alimente le générateur de texte.</p>
+      </div>
+
+      <details class="card">
+        <summary style="cursor:pointer; font-weight:700; font-size:14px;">⚙️ Test A/B/C (optionnel)</summary>
+        <label for="relance-variant-a">Variante A</label>
+        <textarea id="relance-variant-a"></textarea>
+        <label for="relance-variant-b">Variante B</label>
+        <textarea id="relance-variant-b"></textarea>
+        <label for="relance-variant-c">Variante C</label>
+        <textarea id="relance-variant-c"></textarea>
+      </details>
+
+      <div class="card">
+        <button class="primary" id="relance-reload-btn">🔄 Charger la file d'attente</button>
+        <span id="relance-rhythm-counter" style="display:none; font-size:12px; color:var(--text-dim); margin-top:8px;"></span>
+      </div>
+
+      <div class="card">
+        <label for="relance-import-file">📂 Ou importer directement un fichier Excel/CSV</label>
+        <input type="file" id="relance-import-file" accept=".csv,.xlsx,.xls" />
+      </div>
+
+      <p id="relance-feedback" class="error" style="display:none; padding: 0 16px;"></p>
+
+      <div class="card" id="relance-series-panel" style="display:none;">
+        <label style="display:flex; align-items:center; gap:8px; margin-top:0;"><input type="checkbox" id="relance-series-toggle" /> Mode Série Continu</label>
+        <label id="relance-series-tempo-field" style="display:none;">Tempo : <span id="relance-series-tempo-value">8s</span>
+          <input type="range" id="relance-series-tempo" min="5" max="15" value="8" step="1" />
+        </label>
+        <span id="relance-series-countdown" style="display:none; font-size:12px; color:var(--cyan);"></span>
+        <button class="secondary" id="relance-series-pause-btn" style="display:none; margin-top:10px;">⏸️ Pause la série</button>
+      </div>
+
+      <p id="relance-empty" class="empty">Cliquez sur "Charger la file d'attente" pour afficher les contacts à relancer.</p>
+
+      <div class="card" id="relance-card" style="display:none;">
+        <div class="list-row">
+          <span id="relance-counter" style="font-size:12px; color:var(--text-dim);"></span>
+          <span class="badge" id="relance-status-badge"></span>
+        </div>
+        <p id="relance-contact-label" style="font-weight:700; margin:10px 0;"></p>
+        <label for="relance-message-text">Message (modifiable avant l'envoi)</label>
+        <textarea id="relance-message-text"></textarea>
+        <p id="relance-prefill-notice" style="font-size:12px; margin-top:8px;"></p>
+        <div class="row" style="margin-top:12px;">
+          <button class="plain" id="relance-copy-btn">📋 Copier</button>
+          <button class="plain" id="relance-regenerate-btn">🔄 Varier</button>
+          <button class="plain" id="relance-call-btn">📞 Appeler</button>
+          <button class="plain" id="relance-skip-btn">⏭️ Ignorer</button>
+        </div>
+        <button class="primary" id="relance-launch-btn" style="width:100%; margin-top:10px;">🚀 Envoyer &amp; Suivant</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== GÉNÉRATION IA ===================== -->
+  <section id="screen-ai" class="screen">
+    <div class="content">
+      <div class="card" id="ai-license-card">
+        <label for="ai-license-input">Clé de licence</label>
+        <input id="ai-license-input" placeholder="Ex: CYRUS-XXXX-XXXX" autocapitalize="characters" />
+        <button class="primary" id="ai-license-btn" style="margin-top:10px;">Valider</button>
+        <p class="error" id="ai-license-error"></p>
+      </div>
+      <div class="card" id="ai-generate-card" style="display:none;">
+        <label for="ai-prompt">Prompt</label>
+        <textarea id="ai-prompt" placeholder="Décris ce que tu veux générer..."></textarea>
+        <div class="row" style="margin-top:12px;">
+          <button class="primary" id="ai-text-btn">Texte</button>
+          <button class="primary" id="ai-image-btn">Image</button>
+        </div>
+        <p class="error" id="ai-error"></p>
+        <div id="ai-result" class="card" style="display:none; margin-top:14px;"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== COMMANDES NATURELLES (Chat-to-Action) ===================== -->
+  <section id="screen-intelligence" class="screen">
+    <div class="content">
+      <div class="card">
+        <h2>🧠 Interface de dialogue direct</h2>
+        <label for="intel-objective">Exprime ton objectif en langage naturel</label>
+        <textarea id="intel-objective" placeholder='Ex: "Aujourd\'hui, je veux vendre 10 packs de formation et générer 100 000 FCFA"'></textarea>
+        <button class="primary" id="intel-plan-btn" style="margin-top:10px;">🗺️ Décomposer en plan de tâches</button>
+        <p class="error" id="intel-objective-error"></p>
+      </div>
+
+      <div class="card" id="intel-plan-card" style="display:none;">
+        <h2>Plan généré</h2>
+        <p id="intel-summary" style="font-size:13px; color:var(--text-dim); margin-top:6px;"></p>
+        <div id="intel-tasks"></div>
+        <div class="row" style="margin-top:12px;">
+          <button class="secondary" id="intel-open-campaigns">📢 Ouvrir les campagnes</button>
+        </div>
+      </div>
+
+      <details class="card">
+        <summary style="cursor:pointer; font-weight:700; font-size:14px;">🧠 Analyser une réponse client (Human Context)</summary>
+        <label for="intel-msg">Message reçu du client</label>
+        <input id="intel-msg" placeholder='Ex: "Je vais réfléchir"' />
+        <button class="secondary" id="intel-analyze-btn" style="margin-top:10px;">Analyser &amp; choisir une stratégie</button>
+        <div id="intel-analysis" style="margin-top:10px;"></div>
+      </details>
+    </div>
+  </section>
+</div>
+
+<script src="lib/xlsx.full.min.js"></script>
+<script src="lib/spintax.js"></script>
+<script src="lib/personalization.js"></script>
+<script src="lib/smartTextGenerator.js"></script>
+<script src="lib/contactsImport.js"></script>
+<!-- L'adaptateur (mobile.js ou desktop.js) est injecté ici par sync.js selon
+     la plateforme cible - il DOIT définir window.CyrusEngine/CyrusStore
+     avant les scripts ci-dessous. Voir adapters/CONTRACT.md. -->
+<script src="adapter.js"></script>
+<script src="app-core.js"></script>
+<script src="campaigns-core.js"></script>
+<!-- Moteur Relance Manuelle (contrat window.CyrusStore) — doit être chargé
+     après adapter.js (CyrusStore) et avant relance-core.js qui l'utilise. -->
+<script src="lib/manualRelance.js"></script>
+<script src="relance-core.js"></script>
+<script src="connexions-core.js"></script>
+<!-- Couche Human & Context Intelligence (UMD : Node ET navigateur) — l'interface
+     de dialogue direct tourne 100% localement (zéro serveur). Tous les moteurs
+     restent disponibles dans les deux runtimes. -->
+<script src="lib/intelligence/human-context-engine.js"></script>
+<script src="lib/intelligence/task-parser.js"></script>
+<script src="lib/intelligence/automation-engine.js"></script>
+<script src="lib/intelligence/action-executor.js"></script>
+<script src="chat-core.js"></script>
+</body>
+</html>

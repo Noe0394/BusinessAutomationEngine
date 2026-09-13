@@ -4,34 +4,61 @@
 <meta charset="utf-8">
 <title>CYRUS — Client local</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 30px auto; padding: 0 16px; color: #1a1a1a; }
-  h1 { font-size: 1.3rem; }
-  h2 { font-size: 1.05rem; margin-top: 0; }
-  nav { display: flex; gap: 8px; margin-bottom: 16px; }
-  nav button { padding: 8px 14px; border: 1px solid #ccc; background: #f4f4f4; border-radius: 6px; cursor: pointer; }
-  nav button.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+  :root {
+    --bg: #0A0E14;
+    --card: #131A24;
+    --border: #1F2A38;
+    --cyan: #22D3EE;
+    --cyan-dim: rgba(34, 211, 238, 0.12);
+    --green: #34D399;
+    --green-dim: rgba(52, 211, 153, 0.12);
+    --red: #F87171;
+    --red-dim: rgba(248, 113, 113, 0.12);
+    --text: #F1F5F9;
+    --text-dim: #7C8A9C;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); }
+  body { font-family: -apple-system, Roboto, system-ui, sans-serif; max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; color: var(--text); }
+  h1 { font-size: 1.4rem; font-weight: 800; margin: 0 0 18px; }
+  h1 .accent { color: var(--cyan); }
+  h2 { font-size: 1rem; margin: 0 0 10px; color: var(--text); }
+  nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+  nav button {
+    padding: 8px 14px; border: 1px solid var(--cyan); background: var(--cyan-dim); color: var(--cyan);
+    border-radius: 10px; cursor: pointer; font-weight: 700; font-size: 13px;
+  }
+  nav button.active { background: var(--cyan); color: #04141A; }
   .tab { display: none; }
   .tab.active { display: block; }
-  #status { display: inline-block; padding: 6px 12px; border-radius: 8px; font-weight: 600; }
-  #status.connected { background: #dcfce7; color: #166534; }
-  #status.disconnected { background: #fee2e2; color: #991b1b; }
-  input, textarea, button { font-size: 0.95rem; padding: 8px; margin: 4px 0; width: 100%; box-sizing: border-box; }
+  h2 { padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-top: 24px; }
+  h2:first-child { margin-top: 0; }
+  #status, #tg-status, #conn-wa-status, #conn-tg-status { display: inline-block; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 13px; }
+  .connected { background: var(--green-dim) !important; color: var(--green); }
+  .disconnected { background: var(--red-dim) !important; color: var(--red); }
+  #qr { text-align: center; margin-top: 12px; }
+  #qr img { border-radius: 10px; background: #fff; padding: 10px; }
+  input, textarea, select { font-size: 0.95rem; padding: 10px; margin: 4px 0; width: 100%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
   textarea { min-height: 80px; }
-  button { cursor: pointer; width: auto; }
+  button { cursor: pointer; width: auto; font-size: 0.9rem; padding: 9px 14px; background: var(--cyan); color: #04141A; border: none; border-radius: 8px; font-weight: 700; margin: 4px 4px 4px 0; }
+  button:hover { filter: brightness(1.08); }
   .row { display: flex; gap: 8px; }
   .row > * { flex: 1; }
-  ul { padding-left: 0; list-style: none; }
-  li { border: 1px solid #eee; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
-  small { color: #666; }
+  ul { padding-left: 0; list-style: none; margin: 0; }
+  li { border: 1px solid var(--border); background: var(--bg); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  small { color: var(--text-dim); display: block; margin-bottom: 4px; }
 </style>
 </head>
 <body>
-  <h1>CYRUS — Client local (whatsapp-web.js)</h1>
+  <h1>CYRUS <span class="accent">SUPER ASSISTANT</span> — Client local</h1>
 
   <nav>
-    <button id="nav-statut" class="active" onclick="showTab('statut')">Statut</button>
+    <button id="nav-statut" class="active" onclick="showTab('statut')">WhatsApp</button>
+    <button id="nav-telegram" onclick="showTab('telegram')">Telegram</button>
     <button id="nav-contacts" onclick="showTab('contacts')">Contacts</button>
     <button id="nav-campagnes" onclick="showTab('campagnes')">Campagnes</button>
+    <button id="nav-relance" onclick="showTab('relance')">Relance Manuelle</button>
+    <button id="nav-connexions" onclick="showTab('connexions')">Connexions</button>
   </nav>
 
   <section id="tab-statut" class="tab active">
@@ -44,6 +71,34 @@
     <textarea id="text" placeholder="Message"></textarea>
     <button onclick="sendTestMessage()">Envoyer</button>
     <div id="sendResult"></div>
+  </section>
+
+  <!-- Telegram (MTProto/GramJS, voir lib/telegram.js) : login par
+       numéro -> code -> mot de passe 2FA éventuel, au lieu du QR WhatsApp. -->
+  <section id="tab-telegram" class="tab">
+    <h2>Connexion Telegram</h2>
+    <div id="tg-status" class="disconnected">Vérification...</div>
+
+    <div id="tg-login-phone">
+      <input id="tg-phone" placeholder="Numéro (ex: +2250700000000)">
+      <button onclick="tgStartLogin()">Se connecter</button>
+    </div>
+    <div id="tg-login-code" style="display:none;">
+      <input id="tg-code" placeholder="Code reçu par Telegram">
+      <button onclick="tgSubmitCode()">Valider le code</button>
+    </div>
+    <div id="tg-login-password" style="display:none;">
+      <input id="tg-password" type="password" placeholder="Mot de passe (validation en 2 étapes)">
+      <button onclick="tgSubmitPassword()">Valider le mot de passe</button>
+    </div>
+    <div id="tg-login-result"></div>
+    <button id="tg-logout-btn" style="display:none;" onclick="tgLogout()">Déconnecter Telegram</button>
+
+    <h2>Message test</h2>
+    <input id="tg-to" placeholder="@username ou numéro">
+    <textarea id="tg-text" placeholder="Message"></textarea>
+    <button onclick="sendTgTestMessage()">Envoyer</button>
+    <div id="tg-sendResult"></div>
   </section>
 
   <section id="tab-contacts" class="tab">
@@ -59,8 +114,18 @@
 
   <section id="tab-campagnes" class="tab">
     <h2>Nouvelle campagne</h2>
+    <small>Canal</small>
+    <select id="campChannel">
+      <option value="whatsapp">WhatsApp</option>
+      <option value="telegram">Telegram</option>
+    </select>
     <input id="campName" placeholder="Nom de la campagne">
-    <small>Destinataires — une ligne par contact : "numéro" ou "numéro,nom" (utilisable dans le message via {nom}).</small>
+
+    <h2>Extraire depuis un groupe existant</h2>
+    <button onclick="listGroups()">Lister mes groupes</button>
+    <ul id="groupsList"></ul>
+
+    <small>Destinataires — une ligne par contact : "numéro" ou "numéro,nom" (utilisable dans le message via {nom}). Pour Telegram, "@username" ou "@username,nom".</small>
     <textarea id="campRecipients" placeholder="2250700000001,Awa&#10;2250700000002"></textarea>
     <textarea id="campText" placeholder="Message (ex: Bonjour {nom}, ...)"></textarea>
     <div class="row">
@@ -78,8 +143,87 @@
 
     <h2>Campagnes</h2>
     <ul id="campaignsList"></ul>
+
+    <h2>🚫 Liste noire (contacts jamais recontactés)</h2>
+    <small>Canal de la liste noire ci-dessous</small>
+    <select id="blocklistChannel" onchange="refreshBlocklist()">
+      <option value="whatsapp">WhatsApp</option>
+      <option value="telegram">Telegram</option>
+    </select>
+    <div class="row">
+      <input id="blocklistAddInput" placeholder="Numéro ou @username à bloquer">
+      <button onclick="addToBlocklistUi()">Bloquer</button>
+    </div>
+    <ul id="blocklistList"></ul>
   </section>
 
+  <!-- Relance Manuelle Express : port desktop de public/dashboard.html (voir
+       relance.js) - reprend les contacts encore en attente/échec de la
+       dernière campagne du canal choisi et prépare, un par un, le deep link
+       wa.me/t.me à ouvrir + le texte à coller. -->
+  <section id="tab-relance" class="tab">
+    <h2>Relance Manuelle Express</h2>
+    <small>Canal</small>
+    <select id="relChannel" onchange="relanceLoadQueue()">
+      <option value="whatsapp">WhatsApp</option>
+      <option value="telegram">Telegram</option>
+    </select>
+
+    <small>Mon Intention de Campagne (optionnel — alimente le générateur de texte si renseignée)</small>
+    <textarea id="relIntention" placeholder="Ex: Promo -50%, lien: https://..." onchange="relanceRefreshMessage()"></textarea>
+
+    <div class="row">
+      <div><small>Variante A</small><textarea id="relVariantA" onchange="relancePrerenderAll()"></textarea></div>
+      <div><small>Variante B</small><textarea id="relVariantB" onchange="relancePrerenderAll()"></textarea></div>
+      <div><small>Variante C</small><textarea id="relVariantC" onchange="relancePrerenderAll()"></textarea></div>
+    </div>
+
+    <button onclick="relanceLoadQueue()">Charger la file d'attente</button>
+    <div id="relFeedback"></div>
+
+    <div id="relEmpty"><small>Cliquez sur "Charger la file d'attente" pour afficher les contacts à relancer.</small></div>
+
+    <div id="relCard" style="display:none; border:1px solid #ddd; border-radius:8px; padding:12px; margin-top:12px;">
+      <div class="row">
+        <strong id="relCounter"></strong>
+        <span id="relBadge"></span>
+      </div>
+      <p id="relContactLabel" style="font-weight:600;"></p>
+      <textarea id="relMessageText"></textarea>
+      <p id="relPrefillNotice"></p>
+      <div class="row">
+        <button onclick="relanceCopy()">Copier</button>
+        <button onclick="relanceRegenerate()">Varier</button>
+        <button onclick="relanceSkip()">Ignorer</button>
+        <button onclick="relanceLaunch()">Envoyer &amp; Suivant</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Connexions : statut + déconnexion propre des deux moteurs et
+       historique unifié des envois (voir lib/db.js#listSentHistory, table
+       `messages` déjà alimentée par lib/whatsapp.js et lib/telegram.js). -->
+  <section id="tab-connexions" class="tab">
+    <h2>Connexions</h2>
+    <div class="row">
+      <div>
+        <div id="conn-wa-status" class="disconnected">Vérification...</div>
+        <button onclick="connLogoutWhatsapp()">Déconnecter WhatsApp</button>
+      </div>
+      <div>
+        <div id="conn-tg-status" class="disconnected">Vérification...</div>
+        <button onclick="connLogoutTelegram()">Déconnecter Telegram</button>
+      </div>
+    </div>
+
+    <h2>Historique des envois</h2>
+    <button onclick="refreshHistory()">🔄 Actualiser</button>
+    <ul id="historyList"></ul>
+  </section>
+
+<script src="/lib/xlsx.full.min.js"></script>
+<script src="/lib/smartTextGenerator.js"></script>
 <script src="/app.js"></script>
+<script src="/relance.js"></script>
 </body>
 </html>

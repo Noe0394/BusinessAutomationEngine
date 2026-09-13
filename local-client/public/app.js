@@ -2,6 +2,10 @@
 // fetch() vers le serveur local (jamais directement vers le VPS, voir
 // index.js/lib/*.js côté serveur pour ça).
 
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => el.classList.remove('active'));
   document.querySelectorAll('nav button').forEach((el) => el.classList.remove('active'));
@@ -14,17 +18,130 @@ async function refreshStatus() {
   const data = await res.json();
   const el = document.getElementById('status');
   const qrEl = document.getElementById('qr');
+  const connEl = document.getElementById('conn-wa-status');
   if (data.connected) {
     el.textContent = 'Connecté';
     el.className = 'connected';
     qrEl.innerHTML = '';
-  } else if (data.qr) {
-    el.textContent = 'En attente de scan du QR code (affiché dans le terminal du serveur)';
+  } else if (data.qrImage) {
+    // Image reelle (voir lib/whatsapp.js#getQRCodeImage) - avant cette
+    // fonctionnalite, le QR n'existait qu'en ASCII dans le terminal du
+    // SERVEUR (invisible pour quiconque ne regarde pas ce terminal precis) ;
+    // regeneree a chaque appel, l'image suit automatiquement le
+    // renouvellement du code (expire au bout de ~20-60s cote WhatsApp).
+    el.textContent = 'Scannez ce QR code avec WhatsApp (Appareils liés → Lier un appareil)';
     el.className = 'disconnected';
+    qrEl.innerHTML = `<img src="${data.qrImage}" width="280" height="280" alt="QR code WhatsApp">`;
   } else {
     el.textContent = 'Déconnecté';
     el.className = 'disconnected';
+    qrEl.innerHTML = '';
   }
+  // Miroir sur la page Connexions unifiée - source unique de vérité mise à
+  // jour ici, pas de second appel /api/status séparé.
+  if (connEl) { connEl.textContent = 'WhatsApp : ' + el.textContent; connEl.className = el.className; }
+}
+
+async function connLogoutWhatsapp() {
+  await fetch('/api/whatsapp/logout', { method: 'POST' });
+  refreshStatus();
+}
+
+// ---------- Telegram ----------
+
+async function refreshTgStatus() {
+  const res = await fetch('/api/telegram/status');
+  const data = await res.json();
+  const el = document.getElementById('tg-status');
+  document.getElementById('tg-logout-btn').style.display = data.connected ? 'block' : 'none';
+
+  if (!data.configured) {
+    el.textContent = 'TELEGRAM_API_ID / TELEGRAM_API_HASH non configurés (voir .env).';
+    el.className = 'disconnected';
+  } else if (data.connected) {
+    el.textContent = 'Connecté';
+    el.className = 'connected';
+    document.getElementById('tg-login-phone').style.display = 'none';
+    document.getElementById('tg-login-code').style.display = 'none';
+    document.getElementById('tg-login-password').style.display = 'none';
+  } else {
+    el.textContent = data.error ? ('Erreur : ' + data.error) : 'Non connecté';
+    el.className = 'disconnected';
+  }
+
+  // Miroir sur la page Connexions unifiée, quel que soit le chemin ci-dessus.
+  const connEl = document.getElementById('conn-tg-status');
+  if (connEl) { connEl.textContent = 'Telegram : ' + el.textContent; connEl.className = el.className; }
+}
+
+async function connLogoutTelegram() {
+  await fetch('/api/telegram/logout', { method: 'POST' });
+  refreshTgStatus();
+}
+
+// ---------- Historique (page Connexions) ----------
+async function refreshHistory() {
+  const res = await fetch('/api/history');
+  const entries = await res.json();
+  const el = document.getElementById('historyList');
+  if (entries.length === 0) { el.innerHTML = '<li>Aucun envoi tracé pour l\'instant.</li>'; return; }
+  el.innerHTML = entries.map((e) => {
+    const label = e.channel === 'telegram' ? 'Telegram' : 'WhatsApp';
+    return `<li><strong>[${label}]</strong> ${escapeHtml(e.identifier)} — <small>${escapeHtml(e.sentAt)}</small><br>${escapeHtml((e.body || '').slice(0, 120))}</li>`;
+  }).join('');
+}
+
+function tgShowStep(step) {
+  document.getElementById('tg-login-phone').style.display = step === 'pending' || !step ? 'block' : 'none';
+  document.getElementById('tg-login-code').style.display = step === 'code_required' ? 'block' : 'none';
+  document.getElementById('tg-login-password').style.display = step === 'password_required' ? 'block' : 'none';
+  if (step === 'connected') refreshTgStatus();
+  if (step === 'error') document.getElementById('tg-login-result').textContent = 'Échec de connexion — réessayez.';
+}
+
+async function tgStartLogin() {
+  const phone = document.getElementById('tg-phone').value.trim();
+  const res = await fetch('/api/telegram/login/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone }),
+  });
+  const data = await res.json();
+  if (!res.ok) { document.getElementById('tg-login-result').textContent = 'Erreur : ' + data.error; return; }
+  tgShowStep(data.step);
+}
+
+async function tgSubmitCode() {
+  const code = document.getElementById('tg-code').value.trim();
+  const res = await fetch('/api/telegram/login/code', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
+  });
+  const data = await res.json();
+  if (!res.ok) { document.getElementById('tg-login-result').textContent = 'Erreur : ' + data.error; return; }
+  tgShowStep(data.step);
+}
+
+async function tgSubmitPassword() {
+  const password = document.getElementById('tg-password').value;
+  const res = await fetch('/api/telegram/login/password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }),
+  });
+  const data = await res.json();
+  if (!res.ok) { document.getElementById('tg-login-result').textContent = 'Erreur : ' + data.error; return; }
+  tgShowStep(data.step);
+}
+
+async function tgLogout() {
+  await fetch('/api/telegram/logout', { method: 'POST' });
+  refreshTgStatus();
+}
+
+async function sendTgTestMessage() {
+  const to = document.getElementById('tg-to').value;
+  const text = document.getElementById('tg-text').value;
+  const res = await fetch('/api/telegram/send', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to, text }),
+  });
+  const data = await res.json();
+  document.getElementById('tg-sendResult').textContent = res.ok ? 'Envoyé.' : ('Erreur : ' + data.error);
 }
 
 async function sendTestMessage() {
@@ -73,10 +190,87 @@ async function refreshContacts() {
   list.innerHTML = contacts.map((c) => `<li>${c.nom || '(sans nom)'} — ${c.telephone || c.jid}</li>`).join('');
 }
 
+// ---------- Extraction de groupes (WhatsApp ou Telegram, voir /api/<canal>/groups) ----------
+
+function slugify(s) {
+  return String(s || 'groupe').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'groupe';
+}
+
+// Construction imperative (pas de template literal + onclick interpolé) : un
+// nom de groupe WhatsApp/Telegram est une donnée EXTERNE non fiable (peut
+// contenir guillemets/HTML) - la construire via createElement/textContent
+// évite toute injection, contrairement à un innerHTML avec onclick="...(...)"
+// interpolé.
+async function listGroups() {
+  const channel = document.getElementById('campChannel').value;
+  const res = await fetch(`/api/${channel}/groups`);
+  const el = document.getElementById('groupsList');
+  el.innerHTML = '';
+  if (!res.ok) { el.innerHTML = '<li>Échec du chargement des groupes.</li>'; return; }
+  const groups = await res.json();
+  if (groups.length === 0) { el.innerHTML = '<li>Aucun groupe trouvé.</li>'; return; }
+
+  groups.forEach((g) => {
+    const li = document.createElement('li');
+    const title = document.createElement('strong');
+    title.textContent = g.name || g.id;
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const importBtn = document.createElement('button');
+    importBtn.textContent = 'Importer comme destinataires';
+    importBtn.addEventListener('click', () => importGroupMembers(channel, g.id));
+
+    const exportBtn = document.createElement('button');
+    exportBtn.textContent = 'Exporter (Excel)';
+    exportBtn.addEventListener('click', () => exportGroupMembers(channel, g.id, g.name || g.id));
+
+    row.appendChild(importBtn);
+    row.appendChild(exportBtn);
+    li.appendChild(title);
+    li.appendChild(row);
+    el.appendChild(li);
+  });
+}
+
+async function fetchGroupMembers(channel, groupId) {
+  const res = await fetch(`/api/${channel}/groups/${encodeURIComponent(groupId)}/members`);
+  if (!res.ok) throw new Error((await res.json()).error || 'Échec.');
+  return res.json();
+}
+
+async function importGroupMembers(channel, groupId) {
+  try {
+    const members = await fetchGroupMembers(channel, groupId);
+    const lines = members.map((m) => (channel === 'telegram' ? (m.username ? '@' + m.username : m.phone) : m.id.replace('@c.us', '')));
+    const textarea = document.getElementById('campRecipients');
+    textarea.value = (textarea.value ? textarea.value + '\n' : '') + lines.filter(Boolean).join('\n');
+    alert(members.length + ' membre(s) ajouté(s) à la liste de destinataires.');
+  } catch (err) {
+    alert('Échec : ' + err.message);
+  }
+}
+
+async function exportGroupMembers(channel, groupId, groupName) {
+  try {
+    const members = await fetchGroupMembers(channel, groupId);
+    const rows = channel === 'telegram'
+      ? members.map((m) => ({ identifiant: m.username ? '@' + m.username : m.phone, nom: (m.firstName + ' ' + m.lastName).trim() }))
+      : members.map((m) => ({ identifiant: m.id.replace('@c.us', ''), admin: m.isAdmin ? 'oui' : 'non' }));
+    const sheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Membres');
+    XLSX.writeFile(workbook, `membres-${slugify(groupName)}.xlsx`);
+  } catch (err) {
+    alert('Échec de l\'export : ' + err.message);
+  }
+}
+
 // ---------- Campagnes ----------
 
 async function createCampaign() {
   const name = document.getElementById('campName').value;
+  const channel = document.getElementById('campChannel').value;
   const recipients = parseContactsInput(document.getElementById('campRecipients').value)
     .map((c) => ({ telephone: c.telephone, nom: c.nom }));
   const text = document.getElementById('campText').value;
@@ -86,11 +280,11 @@ async function createCampaign() {
   const res = await fetch('/api/campaigns', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, recipients, text, delayMinMs, delayMaxMs }),
+    body: JSON.stringify({ name, recipients, text, delayMinMs, delayMaxMs, channel }),
   });
   const data = await res.json();
   document.getElementById('campResult').textContent = res.ok
-    ? `Campagne créée (${data.results.length} destinataire(s)).`
+    ? `Campagne créée (${data.results.length} destinataire(s))` + (data.blockedCount ? ` — ${data.blockedCount} exclu(s), liste noire.` : '.')
     : ('Erreur : ' + data.error);
   refreshCampaigns();
 }
@@ -112,15 +306,62 @@ async function refreshCampaigns() {
     if (c.status === 'draft' || c.status === 'paused') actions.push(`<button onclick="campaignAction('${c.id}','start')">Démarrer</button>`);
     if (c.status === 'running') actions.push(`<button onclick="campaignAction('${c.id}','pause')">Pause</button>`);
     if (c.status !== 'completed' && c.status !== 'cancelled') actions.push(`<button onclick="campaignAction('${c.id}','cancel')">Annuler</button>`);
+    const channelLabel = (c.config && c.config.channel === 'telegram') ? 'Telegram' : 'WhatsApp';
     return `<li>
-      <strong>${c.name}</strong> — ${c.status} (${sent}/${total} envoyés, ${errors} erreur(s))
+      <strong>${c.name}</strong> [${channelLabel}] — ${c.status} (${sent}/${total} envoyés, ${errors} erreur(s))
       <div>${actions.join(' ')}</div>
     </li>`;
   }).join('');
 }
 
+// ---------- Liste noire ----------
+async function refreshBlocklist() {
+  const channel = document.getElementById('blocklistChannel').value;
+  const res = await fetch(`/api/blocklist?channel=${channel}`);
+  const list = await res.json();
+  const el = document.getElementById('blocklistList');
+  el.innerHTML = '';
+  if (list.length === 0) { el.innerHTML = '<li>Aucun contact bloqué pour ce canal.</li>'; return; }
+  list.forEach((b) => {
+    const li = document.createElement('li');
+    const label = document.createElement('span');
+    label.textContent = b.identifier;
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = 'Retirer';
+    removeBtn.addEventListener('click', () => removeFromBlocklistUi(channel, b.identifier));
+    li.appendChild(label);
+    li.appendChild(removeBtn);
+    el.appendChild(li);
+  });
+}
+
+async function addToBlocklistUi() {
+  const channel = document.getElementById('blocklistChannel').value;
+  const input = document.getElementById('blocklistAddInput');
+  const raw = input.value.trim();
+  if (!raw) return;
+  const identifier = raw.startsWith('@') ? raw : raw.replace(/\D/g, '');
+  if (!identifier) return;
+  await fetch('/api/blocklist', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel, identifier }),
+  });
+  input.value = '';
+  refreshBlocklist();
+}
+
+async function removeFromBlocklistUi(channel, identifier) {
+  await fetch('/api/blocklist', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel, identifier }),
+  });
+  refreshBlocklist();
+}
+
 refreshStatus();
+refreshTgStatus();
 refreshContacts();
 refreshCampaigns();
+refreshBlocklist();
+refreshHistory();
 setInterval(refreshStatus, 3000);
+setInterval(refreshTgStatus, 3000);
 setInterval(refreshCampaigns, 4000);

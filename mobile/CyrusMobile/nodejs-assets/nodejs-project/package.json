@@ -6,7 +6,8 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "baileys": "6.7.16"
+    "baileys": "6.7.16",
+    "telegram": "^2.26.22"
   },
   "allowScripts": {
     "protobufjs@7.6.6": true
