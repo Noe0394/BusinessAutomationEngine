@@ -37,6 +37,7 @@ const FILES = [
   'lib/intelligence/task-parser.js',
   'lib/intelligence/automation-engine.js',
   'lib/intelligence/action-executor.js',
+  'lib/intelligence/goal-chat.js',
   'adapters/CONTRACT.md',
   'adapters/browser.js',
 ];
