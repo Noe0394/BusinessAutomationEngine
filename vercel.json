@@ -12,6 +12,6 @@
     { "source": "/vps", "destination": "/dashboard.html" },
     { "source": "/dashboard", "destination": "/dashboard.html" },
     { "source": "/chooser", "destination": "/chooser.html" },
-    { "source": "/", "destination": "/chooser.html" }
+    { "source": "/", "destination": "/index.html" }
   ]
 }

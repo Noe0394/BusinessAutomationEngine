@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>CYRUS SUPER ASSISTANT — Plateforme Unifiée d'Automatisation</title>
+<meta name="description" content="CYRUS SUPER ASSISTANT : automatisez vos communications WhatsApp, Telegram, Facebook, YouTube & TikTok. Deux modes : VPS (cloud 24/7) ou Local (100% sur votre appareil)." />
+<style>
+  :root{
+    --bg:#0A0E14; --bg2:#0E1520; --panel:#111827; --panel2:#0B1220;
+    --border:#1E293B; --border2:#24344B;
+    --text:#E2E8F0; --text-dim:#94A3B8; --text-faint:#64748B;
+    --cyan:#22D3EE; --cyan-soft:rgba(34,211,238,.14);
+    --green:#10B981; --green-soft:rgba(16,185,129,.14);
+    --blue:#3B82F6; --blue-soft:rgba(59,130,246,.14);
+    --violet:#8B5CF6; --violet-soft:rgba(139,92,246,.14);
+    --amber:#F59E0B; --amber-soft:rgba(245,158,11,.13);
+    --red:#EF4444;
+    --radius:16px; --radius-sm:10px;
+    --maxw:1120px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;padding:0 calc(16px);overflow-x:hidden}
+  a{color:var(--cyan);text-decoration:none}
+  img,video{max-width:100%}
+  .wrap{max-width:var(--maxw);margin:0 auto}
+  section{padding:72px 0;border-top:1px solid rgba(30,41,59,.55)}
+  h2.sec-title{font-size:clamp(24px,3.4vw,36px);text-align:center;letter-spacing:.2px}
+  h2.sec-title .acc{color:var(--cyan)}
+  .sec-sub{color:var(--text-dim);text-align:center;max-width:640px;margin:12px auto 40px;font-size:15px}
+
+  /* ---------- Header ---------- */
+  header.nav{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  .nav-in{max-width:var(--maxw);margin:0 auto;display:flex;align-items:center;gap:16px;padding:12px 0;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:15px;letter-spacing:.3px;color:var(--text)}
+  .brand img{width:28px;height:28px;object-fit:contain;border-radius:6px}
+  .brand span{color:var(--cyan)}
+  .nav-links{margin-left:auto;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .nav-links a{color:var(--text-dim);font-size:13.5px;font-weight:600}
+  .nav-links a:hover{color:var(--cyan)}
+  .nav-links a.cta{background:linear-gradient(135deg,var(--cyan),#0EA5E9);color:#06222B;padding:9px 16px;border-radius:999px;font-weight:800}
+  .nav-links a.cta:hover{filter:brightness(1.08)}
+
+  /* ---------- Hero ---------- */
+  #hero{position:relative;border-top:none;padding:84px 0 72px;text-align:center;overflow:hidden}
+  #hero::before{content:"";position:absolute;inset:-20% -10% auto;height:70%;background:radial-gradient(ellipse 60% 50% at 50% 0%,rgba(34,211,238,.14),transparent 70%);pointer-events:none}
+  .hero-logo{width:118px;height:118px;object-fit:contain;border-radius:24px;border:1px solid var(--border2);box-shadow:0 18px 50px rgba(0,0,0,.45);margin:0 auto 22px;display:block;background:#0B1220}
+  .hero-badge{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--cyan);background:var(--cyan-soft);border:1px solid rgba(34,211,238,.35);padding:6px 14px;border-radius:999px;letter-spacing:.4px}
+  h1{font-size:clamp(34px,6.4vw,60px);font-weight:900;letter-spacing:.3px;line-height:1.08;margin:18px 0 10px}
+  h1 .acc{color:var(--cyan)}
+  .hero-lead{color:var(--text-dim);font-size:clamp(15px,2vw,18px);max-width:720px;margin:0 auto}
+  .hero-lead b{color:var(--text)}
+  .hero-cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:32px}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:14px 26px;border-radius:999px;font-weight:800;font-size:15px;border:1px solid transparent;cursor:pointer;transition:transform .12s,box-shadow .15s}
+  .btn:active{transform:scale(.985)}
+  .btn-primary{background:linear-gradient(135deg,var(--cyan),#0EA5E9);color:#06222B;box-shadow:0 10px 28px rgba(34,211,238,.28)}
+  .btn-primary:hover{box-shadow:0 14px 34px rgba(34,211,238,.4)}
+  .btn-ghost{background:rgba(255,255,255,.04);border-color:var(--border2);color:var(--text)}
+  .btn-ghost:hover{border-color:var(--cyan);color:var(--cyan)}
+  .hero-tags{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:34px}
+  .tag{font-size:12px;font-weight:600;color:var(--text-dim);border:1px solid var(--border);background:var(--panel);padding:6px 12px;border-radius:999px}
+
+  /* ---------- Piliers ---------- */
+  .pillars{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:8px}
+  .pillar{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:26px 22px}
+  .pillar .ico{font-size:26px}
+  .pillar h3{font-size:17px;margin:12px 0 8px}
+  .pillar p{color:var(--text-dim);font-size:13.5px}
+
+  /* ---------- Services ---------- */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:24px 22px;transition:border-color .15s,transform .15s}
+  .card:hover{border-color:var(--border2);transform:translateY(-2px)}
+  .card .emoji{font-size:24px}
+  .card h3{font-size:16.5px;margin:10px 0 6px}
+  .card p{color:var(--text-dim);font-size:13.5px}
+  .card ul{list-style:none;margin-top:10px;display:grid;gap:5px}
+  .card li{font-size:12.5px;color:var(--text-dim);padding-left:18px;position:relative}
+  .card li::before{content:"✓";position:absolute;left:0;color:var(--cyan);font-weight:800}
+
+  /* ---------- Vidéos ---------- */
+  .videos{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
+  .video-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .video-card video{width:100%;display:block;background:#000;aspect-ratio:16/9;object-fit:contain}
+  .video-card figcaption{padding:14px 16px;font-size:13px;color:var(--text-dim)}
+
+  /* ---------- Modes ---------- */
+  .modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px}
+  .mode{padding:30px 26px;border-radius:20px;border:1px solid var(--border);display:flex;flex-direction:column}
+  .mode .mode-tag{font-size:11px;font-weight:800;letter-spacing:1px;padding:5px 12px;border-radius:999px;align-self:flex-start}
+  .mode h3{font-size:22px;margin:14px 0 4px}
+  .mode .mode-desc{color:var(--text-dim);font-size:13.5px;margin-bottom:16px}
+  .mode ul{list-style:none;display:grid;gap:8px;margin-bottom:22px}
+  .mode li{font-size:13.5px;color:var(--text);padding-left:26px;position:relative}
+  .mode li::before{position:absolute;left:0;top:1px;font-weight:800}
+  .mode.local li::before{content:"✓";color:var(--green)}
+  .mode.vps li::before{content:"✓";color:var(--blue)}
+  .mode small{color:var(--text-faint);font-size:12px;line-height:1.5}
+  .mode .choose{margin-top:auto;padding-top:16px}
+  .mode .choose .btn{width:100%;justify-content:center}
+  .mode.local{background:linear-gradient(180deg,rgba(16,185,129,.10),rgba(16,185,129,.03) 40%);border-color:rgba(16,185,129,.35)}
+  .mode.vps{background:linear-gradient(180deg,rgba(59,130,246,.10),rgba(59,130,246,.03) 40%);border-color:rgba(59,130,246,.35)}
+  .mode.local .mode-tag{background:var(--green-soft);color:var(--green);border:1px solid rgba(16,185,129,.4)}
+  .mode.vps .mode-tag{background:var(--blue-soft);color:#60A5FA;border:1px solid rgba(59,130,246,.4)}
+  .btn-local{background:linear-gradient(135deg,var(--green),#059669);color:#03281C}
+  .btn-vps{background:linear-gradient(135deg,var(--blue),#2563EB);color:#EAF2FF}
+
+  .compare{margin-top:26px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .compare table{width:100%;border-collapse:collapse;font-size:13px}
+  .compare th,.compare td{padding:12px 16px;text-align:left;border-bottom:1px solid rgba(30,41,59,.6)}
+  .compare th{color:var(--text-faint);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.6px;background:var(--panel2)}
+  .compare tr:last-child td{border-bottom:none}
+  .compare td:first-child{color:var(--text-dim)}
+  .compare .ok{color:var(--green);font-weight:800}
+  .compare .okv{color:#60A5FA;font-weight:800}
+  .compare .warn{color:var(--amber);font-size:12px}
+
+  /* ---------- CTA final ---------- */
+  #access{text-align:center;border-bottom:1px solid rgba(30,41,59,.55)}
+  #access h2{font-size:clamp(24px,4vw,40px)}
+  #access p{color:var(--text-dim);max-width:560px;margin:14px auto 30px}
+
+  /* ---------- Footer ---------- */
+  footer{padding:40px 0 56px;color:var(--text-faint);font-size:13px}
+  .foot-grid{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center}
+  .foot-links a{margin-right:16px;color:var(--text-faint)}
+  .foot-links a:hover{color:var(--cyan)}
+
+  @media (max-width:620px){
+    section{padding:56px 0}
+    .nav-links{gap:12px}
+    .nav-links a:not(.cta){display:none}
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/"><img src="media/logo.jpg" alt="Logo CYRUS" />CYRUS <span>SUPER ASSISTANT</span></a>
+    <nav class="nav-links">
+      <a href="#presentation">Présentation</a>
+      <a href="#capacites">Capacités</a>
+      <a href="#medias">Vidéos</a>
+      <a href="#modes">Les deux modes</a>
+      <a class="cta" href="/chooser">Accéder aux fonctionnalités</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ================= HERO ================= -->
+<section id="hero">
+  <div class="wrap">
+    <img class="hero-logo" src="media/logo.jpg" alt="Logo officiel CYRUS SUPER ASSISTANT" />
+    <span class="hero-badge">☁️ Plateforme Unifiée d'Automatisation</span>
+    <h1>CYRUS <span class="acc">SUPER ASSISTANT</span></h1>
+    <p class="hero-lead">
+      Automatisez vos <b>communications</b>, vos <b>campagnes</b> et votre <b>création de contenu</b>
+      sur WhatsApp, Telegram, Facebook, YouTube &amp; TikTok — en toute autonomie, avec un
+      <b>contrôle total</b> de vos données.
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="/chooser">🚀 ACCÉDER AUX FONCTIONNALITÉS</a>
+      <a class="btn btn-ghost" href="#modes">Voir les deux modes</a>
+    </div>
+    <div class="hero-tags">
+      <span class="tag">📡 WhatsApp · Telegram · Facebook</span>
+      <span class="tag">🎥 YouTube · TikTok</span>
+      <span class="tag">🧠 IA &amp; Commandes naturelles</span>
+      <span class="tag">📊 Rapports de campagne</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PRÉSENTATION ================= -->
+<section id="presentation">
+  <div class="wrap">
+    <h2 class="sec-title">Qu'est-ce que <span class="acc">CYRUS</span> ?</h2>
+    <p class="sec-sub">Un assistant professionnel d'automatisation commerciale : il prospecte, relaie, programme et diffuse vos messages et contenus sur plusieurs plateformes, selon votre intention — en continu sur le cloud, ou 100% sur vos propres appareils.</p>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="ico">📢</div>
+        <h3>Prospection &amp; campagnes</h3>
+        <p>Campagnes multi-canaux en file d'attente, import Excel/CSV, spintax et personnalisation — avec une temporisation maîtrisée.</p>
+      </div>
+      <div class="pillar">
+        <div class="ico">🧠</div>
+        <h3>Intelligence &amp; IA</h3>
+        <p>Compréhension d'objectifs en langage naturel, plan d'actions, analyse de contexte humain, génération de textes, d'images et de vidéos.</p>
+      </div>
+      <div class="pillar">
+        <div class="ico">💡</div>
+        <h3>Deux modes d'utilisation</h3>
+        <p>Le même produit, deux moteurs : un environnement serveur optimisé (VPS) ou un environnement local entièrement sous votre contrôle.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CAPACITÉS ================= -->
+<section id="capacites">
+  <div class="wrap">
+    <h2 class="sec-title">Capacités &amp; <span class="acc">services</span></h2>
+    <p class="sec-sub">Fonctionnalités réellement présentes dans la plateforme, réparties selon le mode choisi.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="emoji">📡</div>
+        <h3>Connexions plateformes</h3>
+        <p>Branchez vos canaux de communication et pilotez-les depuis une interface unique.</p>
+        <ul>
+          <li>WhatsApp (Baileys / WebJS selon le mode)</li>
+          <li>Telegram (MTProto / client local)</li>
+          <li>Facebook · YouTube · TikTok</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="emoji">📢</div>
+        <h3>Campagnes multi-canaux</h3>
+        <p>Envois en masse séquencés, avec contrôles de tempo et de sécurité.</p>
+        <ul>
+          <li>Import .xlsx / .csv de contacts</li>
+          <li>Spintax {option1|option2} &amp; variables {first_name}</li>
+          <li>File d'attente, pause, reprise, liste noire</li>
+          <li>Rapport final de campagne</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="emoji">📇</div>
+        <h3>Relance Manuelle Express</h3>
+        <p>Relancez vos prospects un par un avec un copywriter IA intégré.</p>
+        <ul>
+          <li>Génération de texte depuis votre intention</li>
+          <li>Variantes A / B / C</li>
+          <li>Liens directs wa.me / t.me</li>
+          <li>Mode Série Continu avec compteur de rythme</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="emoji">🧠</div>
+        <h3>Studio IA</h3>
+        <p>Création de contenu assistée par intelligence artificielle.</p>
+        <ul>
+          <li>Copywriting &amp; génération de texte</li>
+          <li>Génération d'images</li>
+          <li>Storyboard vidéo IA multi-scènes</li>
+          <li>Déclinaison dans tous les formats</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="emoji">🗓️</div>
+        <h3>Programmation &amp; planification</h3>
+        <p>Planifiez vos publications et programmations sur vos canaux.</p>
+        <ul>
+          <li>Planificateur de contenu par mots-clés</li>
+          <li>Publication &amp; programmation Facebook</li>
+          <li>Programmé sur les groupes gérés</li>
+          <li>Suivi unifié par canal</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="emoji">🎯</div>
+        <h3>Prospects &amp; diffusion</h3>
+        <p>Capturez, filtrez et diffusez vers vos audiences qualifiées.</p>
+        <ul>
+          <li>Règles de mots-clés &amp; capture de prospects</li>
+          <li>Import / diffusion vers groupes</li>
+          <li>Gestion contact multi-canal</li>
+          <li>Export du suivi</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= VIDÉOS ================= -->
+<section id="medias">
+  <div class="wrap">
+    <h2 class="sec-title">CYRUS en <span class="acc">vidéo</span></h2>
+    <p class="sec-sub">Découvrez le système et ses services.</p>
+    <div class="videos">
+      <figure class="video-card">
+        <video controls preload="metadata" playsinline src="media/video-1.mp4"></video>
+        <figcaption>Présentation du système CYRUS SUPER ASSISTANT — 1/2</figcaption>
+      </figure>
+      <figure class="video-card">
+        <video controls preload="metadata" playsinline src="media/video-2.mp4"></video>
+        <figcaption>Présentation des services et fonctionnalités — 2/2</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ================= DEUX MODES ================= -->
+<section id="modes">
+  <div class="wrap">
+    <h2 class="sec-title">Deux modes d'<span class="acc">utilisation</span></h2>
+    <p class="sec-sub">Le même CYRUS, deux moteurs. Choisissez celui qui correspond à votre besoin — les deux gardent leur propre système de licence et de contrôle d'accès.</p>
+
+    <div class="modes">
+      <div class="mode vps">
+        <span class="mode-tag">☁️ MODE VPS</span>
+        <h3>Cloud automatique 24/7</h3>
+        <p class="mode-desc">Un serveur dédié (VPS) exécute CYRUS en continu. Vous vous connectez au tableau de bord sécurisé et l'automatisation tourne même lorsque vous êtes déconnecté.</p>
+        <ul>
+          <li>WhatsApp &amp; Telegram <b>automatiques</b> (Baileys / MTProto)</li>
+          <li>Multi-campagnes en file d'attente, multi-locataires</li>
+          <li>Facebook : publication, programmation, planificateur par mots-clés, groupes gérés</li>
+          <li>YouTube &amp; TikTok : publication de contenus</li>
+          <li>Prospects capturés automatiquement (règles de mots-clés)</li>
+          <li>Studio IA complet : texte, image, vidéo multi-scènes</li>
+          <li>Rapport final de campagne</li>
+        </ul>
+        <small>Principe : clé de licence + verrouillage par appareil. Accès via le tableau de bord VPS, navigation et commandes complètes.</small>
+        <div class="choose"><a class="btn btn-vps" href="/vps">☁️ Accéder au mode VPS</a></div>
+      </div>
+
+      <div class="mode local">
+        <span class="mode-tag">💻 MODE LOCAL</span>
+        <h3>100% sur votre appareil</h3>
+        <p class="mode-desc">Aucun serveur central : CYRUS s'exécute entièrement sur votre appareil. Vos contacts et vos campagnes restent chez vous.</p>
+        <ul>
+          <li>WhatsApp &amp; Telegram <b>depuis votre appareil</b> (liens directs, client local)</li>
+          <li>Campagnes locales : import, spintax, variantes, liste noire, tempo</li>
+          <li>Relance Manuelle Express : copywriter local, A/B/C, mode série</li>
+          <li>Génération IA texte &amp; image (clé de licence dédiée)</li>
+          <li>Commandes en langage naturel → plan de tâches</li>
+          <li>Analyse de réponse client (Human Context)</li>
+          <li>Également disponible en application PC &amp; mobile</li>
+        </ul>
+        <small>Principe : zéro serveur CYRUS — stockage local (IndexedDB / SQLite selon l'application), moteur prêt à l'emploi, aucune donnée centralisée.</small>
+        <div class="choose"><a class="btn btn-local" href="/local">💻 Accéder au mode local</a></div>
+      </div>
+    </div>
+
+    <div class="compare">
+      <table>
+        <thead><tr><th></th><th>☁️ Mode VPS</th><th>💻 Mode Local</th></tr></thead>
+        <tbody>
+          <tr><td>Où tourne CYRUS ?</td><td class="okv">Serveur dédié (cloud)</td><td class="ok">Sur votre appareil</td></tr>
+          <tr><td>WhatsApp</td><td class="okv">Automatique — Baileys</td><td class="ok">Local — WebJS / WebView / liens directs</td></tr>
+          <tr><td>Telegram</td><td class="okv">Automatique — MTProto</td><td class="ok">Client local</td></tr>
+          <tr><td>Campagnes programmées en continu</td><td class="okv">Oui — scheduler</td><td class="warn">Locales, à la session</td></tr>
+          <tr><td>Facebook / YouTube / TikTok</td><td class="okv">Oui</td><td class="warn">Non (dépend du backend social)</td></tr>
+          <tr><td>Studio IA vidéo</td><td class="okv">Oui (module licencié)</td><td class="ok">Texte &amp; image</td></tr>
+          <tr><td>Données hébergées</td><td class="warn">Serveur (VPS)</td><td class="ok">Chez vous</td></tr>
+          <tr><td>Licence</td><td class="okv">Clé + appareil (serveur/licences)</td><td class="ok">Clé dédiée (vérification locale)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CTA FINAL ================= -->
+<section id="access">
+  <div class="wrap">
+    <h2>Prêt à automatiser ?</h2>
+    <p>Choisissez votre mode d'utilisation, authentifiez-vous avec votre clé, puis accédez aux fonctionnalités autorisées.</p>
+    <a class="btn btn-primary" href="/chooser" style="font-size:17px;padding:16px 34px">🚀 ACCÉDER AUX FONCTIONNALITÉS</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-grid">
+    <span>© 2026 CYRUS SUPER ASSISTANT — Plateforme Unifiée d'Automatisation</span>
+    <nav class="foot-links">
+      <a href="/legal/terms.html">Conditions d'utilisation</a>
+      <a href="/legal/privacy.html">Confidentialité</a>
+      <a href="/legal/data-deletion.html">Suppression des données</a>
+      <a href="/chooser">Choisir le mode</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>
