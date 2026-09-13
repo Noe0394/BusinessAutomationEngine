@@ -32,6 +32,7 @@ const FILES = [
   'lib/smartTextGenerator.js',
   'lib/contactsImport.js',
   'lib/manualRelance.js',
+  'lib/extensionBridge.js',
   'lib/xlsx.full.min.js',
   'lib/intelligence/human-context-engine.js',
   'lib/intelligence/task-parser.js',

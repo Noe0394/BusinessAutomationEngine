@@ -1,48 +1,119 @@
 // Adaptateur de plateforme NAVIGATEUR (mode "SANS VPS" /local)
 // ------------------------------------------------------------------------------
 // Implémente le contrat window.CyrusEngine / window.CyrusStore (voir
-// adapters/CONTRACT.md) en navigateur pur : aucun serveur, aucun VPS, aucune
-// connexion Baileys/Telegram.
+// adapters/CONTRACT.md) en navigateur pur : aucun serveur, aucun VPS.
 //
-//   - CyrusEngine.sendMessage  : retourne un deep link wa.me/t.me (Mode Manuel
-//     Express), copie le texte dans le presse-papiers ; l'utilisateur valide
-//     l'envoi lui-même dans l'app de messagerie. Il n'y a PAS de fil WhatsApp
-//     dans un onglet navigateur — cette limite est assumée et documentée.
+//   - CyrusEngine.sendMessage (WhatsApp) : si l'extension compagnon (voir
+//     browser-extension/ à la racine du dépôt, lib/extensionBridge.js ici)
+//     est installée ET WhatsApp Web connecté dans son onglet dédié, envoi
+//     RÉEL sans aucun clic humain — l'extension a accès aux modules internes
+//     de web.whatsapp.com, ce qu'un onglet classique ne peut jamais avoir
+//     (same-origin policy). Sinon, repli sur le Mode Manuel Express (deep
+//     link wa.me/t.me, clic humain requis — limite du navigateur seul,
+//     documentée, jamais contournée par une fausse simulation).
 //   - CyrusStore               : IndexedDB locale (webapp-core/lib/db.js) +
 //     helpers campagne + export fichier navigateur (blob téléchargé).
 //   - executionMode            : déterministe, lecture seule = 'local'.
 //
-// Aucune clé API, aucun secret embarqué. Zéro accès réseau hors IndexedDB et
-// génération IA Firebase (app-core.js, inchangée).
+// Aucune clé API, aucun secret embarqué. Zéro accès réseau hors IndexedDB,
+// extension compagnon (WhatsApp) et génération IA Firebase (app-core.js).
 (function () {
   'use strict';
 
   window.__CYRUS_MODE__ = 'local'; // déterministe : cette interface EST le mode local
 
   const db = window.Cyrus.db; // store IndexedDB (webapp-core/lib/db.js)
+  const extBridge = window.Cyrus.extensionBridge; // webapp-core/lib/extensionBridge.js
 
   // ------------------------------------------------------------------ ENGINE
+  const stateListeners = [];
+  let pollTimer = null;
+  let lastKnown = { whatsapp: { connected: false } };
+
+  function startPollingIfNeeded() {
+    if (pollTimer || !stateListeners.length) return;
+    pollTimer = setInterval(async () => {
+      const s = await extBridge.ping();
+      const connected = !!(s.installed && s.connected);
+      if (connected !== lastKnown.whatsapp.connected) {
+        lastKnown.whatsapp = { connected };
+        // Contrat (adapters/CONTRACT.md#onStateChange) : callback(status),
+        // UN seul argument — même shape que getStatus(). connexions-core.js
+        // l'appelle `(data) => renderStatus(channel, data)`, pas
+        // `(channel, data)` : un appel à deux arguments casserait le rendu
+        // (channel reçu comme "status").
+        stateListeners.forEach((cb) => { try { cb({ connected }); } catch (e) { /* ignore */ } });
+      }
+    }, 4000);
+  }
+
   const engine = {
-    // Pas de session WhatsApp/Telegram dans un navigateur : le statut est
-    // volontairement "Non connecté" + explication injectée par mountConnectUI.
+    // WhatsApp : reflète l'état réel de l'extension quand elle est présente
+    // (installed:true + connected selon Socket.state === 'CONNECTED' côté
+    // WhatsApp Web) ; sinon "Non connecté" + explication Mode Manuel Express,
+    // injectée par mountConnectUI.
     async getStatus(channel) {
+      if (channel === 'whatsapp') {
+        const s = await extBridge.ping();
+        if (s.installed) {
+          lastKnown.whatsapp = { connected: !!s.connected };
+          return { connected: !!s.connected, configured: true, error: null, mode: 'extension' };
+        }
+      }
       return { connected: false, configured: null, error: null, mode: 'local' };
     },
-    onStateChange() { /* aucun changement possible : état statique */ },
+    onStateChange(channel, callback) {
+      // Contrat : callback(status) par canal — on ne poll que WhatsApp (seul
+      // canal avec un état réel à surveiller côté extension).
+      if (channel !== 'whatsapp') return;
+      stateListeners.push(callback);
+      startPollingIfNeeded();
+    },
     mountConnectUI(channel, containerEl) {
       if (!containerEl) return;
       if (containerEl.querySelector('.cyrus-manual-explain')) return;
       const box = document.createElement('div');
       box.className = 'cyrus-manual-explain';
       box.style.cssText = 'margin-top:10px;padding:10px;border:1px solid var(--border,#1e293b);border-radius:8px;font-size:12px;color:var(--text-dim,#94a3b8);line-height:1.5;';
-      box.textContent = channel === 'whatsapp'
-        ? '🟢 Mode local (SANS VPS) : aucune connexion WhatsApp automatique. Les envois passent par un lien wa.me ouvrant votre WhatsApp — Mode Manuel Express.'
-        : '🟢 Mode local (SANS VPS) : aucune connexion Telegram automatique. Les envois passent par un lien t.me ouvrant votre Telegram — Mode Manuel Express.';
+
+      if (channel === 'whatsapp') {
+        extBridge.ping().then((s) => {
+          if (s.installed) {
+            box.innerHTML = '';
+            const status = document.createElement('div');
+            status.textContent = s.connected
+              ? '🟢 Extension CYRUS connectée — envoi WhatsApp 100% automatique actif, aucun clic requis.'
+              : '🟡 Extension CYRUS installée, WhatsApp Web pas encore connecté sur cet appareil.';
+            box.appendChild(status);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = s.connected ? '🔄 Ouvrir WhatsApp Web' : '📷 Connecter WhatsApp (scanner le QR)';
+            btn.style.cssText = 'margin-top:8px;';
+            btn.addEventListener('click', () => extBridge.openWhatsApp());
+            box.appendChild(btn);
+          } else {
+            box.textContent = '🟢 Mode local (SANS VPS) : sans l\'extension navigateur compagnon (non détectée), les envois passent par un lien wa.me — Mode Manuel Express (clic manuel requis dans WhatsApp). Voir browser-extension/README.md pour l\'installer et activer l\'envoi 100% automatique sur ce PC.';
+          }
+        });
+        containerEl.appendChild(box);
+        return;
+      }
+
+      box.textContent = '🟢 Mode local (SANS VPS) : aucune connexion Telegram automatique. Les envois passent par un lien t.me ouvrant votre Telegram — Mode Manuel Express.';
       containerEl.appendChild(box);
     },
-    // Envoi : Mode Manuel Express. Construit le deep link, copie le texte,
-    // ouvre le lien. Retourne { ok:true, sentVia:'MANUAL_EXPRESS' }.
+    // Envoi WhatsApp : extension compagnon si installée+connectée (envoi RÉEL,
+    // zéro clic) ; sinon Mode Manuel Express (deep link, clic humain requis —
+    // limite du navigateur seul, jamais contournée par une simulation).
     async sendMessage(channel, to, text) {
+      if (channel === 'whatsapp') {
+        const s = await extBridge.ping();
+        if (s.installed && s.connected) {
+          const result = await extBridge.sendMessage(to, text);
+          if (result.ok) return { ok: true, sentVia: 'EXTENSION', channel: channel };
+          return { ok: false, sentVia: 'EXTENSION', channel: channel, error: result.error || 'ECHEC_ENVOI_EXTENSION' };
+        }
+      }
       const link = buildDeepLink(String(channel).toLowerCase(), to, text, {});
       try { await navigator.clipboard.writeText(text || ''); } catch (e) { /* non bloquant */ }
       let opened = null;
@@ -55,9 +126,27 @@
         manualNote: 'Lien ' + (link.label) + ' ouvert — validez l\'envoi dans l\'application.',
       };
     },
-    async getGroups() { return []; },          // pas de liste de groupes hors session
-    async getGroupMembers() { return []; },
-    async logout() { return { ok: true }; },   // aucune session à déconnecter
+    async getGroups(channel) {
+      if (channel === 'whatsapp') {
+        const s = await extBridge.ping();
+        if (s.installed && s.connected) {
+          const r = await extBridge.getGroups();
+          if (r.ok) return r.groups;
+        }
+      }
+      return [];
+    },
+    async getGroupMembers(channel, groupId) {
+      if (channel === 'whatsapp') {
+        const s = await extBridge.ping();
+        if (s.installed && s.connected) {
+          const r = await extBridge.getGroupMembers(groupId);
+          if (r.ok) return r.members;
+        }
+      }
+      return [];
+    },
+    async logout() { return { ok: true }; },   // aucune session à déconnecter (voir extension pour WhatsApp)
   };
 
   function buildDeepLink(channel, target, text, opts) {

@@ -241,6 +241,10 @@
      silencieusement au premier appel. Absent d'index.html jusqu'ici
      (jamais exercé en test réel avant ce diagnostic). -->
 <script src="lib/db.js"></script>
+<!-- Client de l'extension navigateur compagnon (voir browser-extension/ à la
+     racine du dépôt) — DOIT être chargé avant adapter.js/adapters/browser.js
+     qui le référence (window.Cyrus.extensionBridge). -->
+<script src="lib/extensionBridge.js"></script>
 <!-- L'adaptateur (mobile.js ou desktop.js) est injecté ici par sync.js selon
      la plateforme cible - il DOIT définir window.CyrusEngine/CyrusStore
      avant les scripts ci-dessous. Voir adapters/CONTRACT.md. -->

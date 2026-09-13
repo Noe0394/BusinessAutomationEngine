@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "CYRUS — Pont WhatsApp Web",
+  "version": "1.0.0",
+  "description": "Permet au mode Local de CYRUS SUPER ASSISTANT d'envoyer réellement des messages WhatsApp depuis le navigateur, sans clic manuel dans WhatsApp Web.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwSqI3WgniGiTK59dhYpWQxjip+rvMnXlBcEwKvvPzLZo00AmzOmwdauvP0f6Q4e+pXXYrjDQYeQGnTPjXrljoG8GkF7keuCzEHyDAH0fOVNb0ypLt0jkMJqbPra4lMTWVi35/+FaSHO4pkxWTpDUSBIlmpVlw+GGuFjwKWWW7uAgdXjxTnS9JEPuesmO7mcyYqnGSMeHQ8nCiW8g/HWuDlqqtGD/OKpgltEwJKABEVx/UkWmWw7mruuGhtnyh1ac/5p8KoBqQuNlHF1sgvt/Xg8ojDRgdA7p+T6N9ClecNDj9432oWpCpcume0Qqa9P7RKgwQBKtcBOBJsqL2g5qDQIDAQAB",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["tabs", "scripting"],
+  "host_permissions": ["https://web.whatsapp.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["injected-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content-relay.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://cyrus-super-assistant.vercel.app/*",
+      "https://*.vercel.app/*",
+      "http://localhost/*",
+      "http://127.0.0.1/*"
+    ]
+  }
+}

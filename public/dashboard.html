@@ -433,6 +433,14 @@
           <button type="button" id="whatsapp-logout-btn" class="stop-button">🔄 Réinitialiser / Se déconnecter de WhatsApp</button>
         </div>
         <p id="whatsapp-logout-feedback" hidden></p>
+
+        <!-- Extension compagnon (voir browser-extension/) : filet de secours
+             pour la Relance Manuelle Express si la session Baileys tombe
+             (rate-limit, révocation) — envoi réel sans clic humain, PC
+             uniquement. Non lié au statut Baileys ci-dessus : les deux
+             coexistent, l'extension ne remplace jamais Baileys, elle prend
+             le relais uniquement dans l'onglet Relance Manuelle Express. -->
+        <p id="whatsapp-extension-hint" class="empty" style="margin-top:0.75rem;"></p>
       </div>
 
       <div class="conn-block" data-module="telegram">
@@ -1981,6 +1989,48 @@
     function apiUrl(path) {
       return /^https?:\/\//.test(path) ? path : API_BASE + path;
     }
+    // ---------- Extension navigateur compagnon (voir browser-extension/ à la
+    // racine du dépôt, et webapp-core/lib/extensionBridge.js pour la même
+    // logique côté mode Local) ----------
+    // Utile aussi en mode VPS : quand la session Baileys est interrompue
+    // (rate-limit WhatsApp, session révoquée...), la Relance Manuelle
+    // Express (ci-dessous, relanceLaunchCurrent) redevient le seul moyen de
+    // continuer à progresser vers l'objectif sans attendre un re-pairage —
+    // avec l'extension installée, cet envoi "manuel" est en réalité RÉEL et
+    // sans clic humain (mêmes modules internes WhatsApp Web que Baileys
+    // n'utilise pas, mais que l'extension peut scripter légitimement).
+    const CYRUS_EXTENSION_ID = 'jipfnoinknhgogheokkmildhfdbhomep';
+    function extensionCall(message, timeoutMs) {
+      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
+        return Promise.resolve({ ok: false, installed: false });
+      }
+      return new Promise((resolve) => {
+        let settled = false;
+        const timer = timeoutMs ? setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve({ ok: false, installed: false, error: 'TIMEOUT' });
+        }, timeoutMs) : null;
+        try {
+          chrome.runtime.sendMessage(CYRUS_EXTENSION_ID, message, (response) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            if (chrome.runtime.lastError || !response) { resolve({ ok: false, installed: false }); return; }
+            resolve(Object.assign({ installed: true }, response));
+          });
+        } catch (e) {
+          if (timer) clearTimeout(timer);
+          resolve({ ok: false, installed: false });
+        }
+      });
+    }
+    const cyrusExtension = {
+      ping: () => extensionCall({ action: 'ping' }, 1200),
+      openWhatsApp: () => extensionCall({ action: 'openWhatsApp' }, 5000),
+      sendMessage: (to, text) => extensionCall({ action: 'sendMessage', to, text }, 30000),
+    };
+
     const AUTH_TYPE_KEY = 'auth_type'; // 'admin' | 'license'
     const AUTH_VALUE_KEY = 'auth_value';
     const state = { groups: [], selectedGroupIds: new Set(), importedContacts: [] };
@@ -2498,7 +2548,7 @@
         btn.classList.add('active');
         document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
         if (btn.dataset.tab === 'connections') {
-          if (hasModule('whatsapp')) pollStatus();
+          if (hasModule('whatsapp')) { pollStatus(); refreshExtensionHint(); }
           if (hasModule('telegram')) tgRefreshStatus();
           if (hasModule('facebook')) fbRefreshStatus();
           if (hasModule('studio_video')) mediaRefreshStatus();
@@ -2833,6 +2883,23 @@
       } catch (err) {
         // apiFetch gère déjà la redirection vers le login en cas de 401
       }
+    }
+
+    // Statut de l'extension compagnon (voir cyrusExtension plus haut) —
+    // indépendant de pollStatus() (Baileys) : les deux coexistent, affichés
+    // côte à côte. Sert de filet de secours à la Relance Manuelle Express
+    // si la session Baileys tombe.
+    async function refreshExtensionHint() {
+      const hint = document.getElementById('whatsapp-extension-hint');
+      if (!hint) return;
+      const s = await cyrusExtension.ping();
+      if (!s.installed) {
+        hint.textContent = '💡 Extension navigateur compagnon non détectée — en cas d\'interruption de la session ci-dessus, la Relance Manuelle Express reste disponible en mode manuel (clic requis). Voir browser-extension/README.md pour activer l\'envoi 100% automatique en secours sur ce PC.';
+        return;
+      }
+      hint.textContent = s.connected
+        ? '🤖 Extension CYRUS connectée — sert de filet de secours automatique (sans clic) pour la Relance Manuelle Express si cette session Baileys est interrompue.'
+        : '🟡 Extension CYRUS installée mais WhatsApp Web pas encore connecté sur cet appareil (nécessaire pour servir de filet de secours).';
     }
 
     document.getElementById('whatsapp-logout-btn').addEventListener('click', async () => {
@@ -6899,6 +6966,27 @@
       const rawText = document.getElementById('relance-message-text').value;
       const text = await relanceVerifyImageLink(rawText);
       const hasImageLink = relanceState.imageUrls.some((url) => url && text.includes(url));
+
+      // Extension compagnon (WhatsApp uniquement, voir cyrusExtension
+      // ci-dessus) : envoi RÉEL sans clic humain si elle est installée et
+      // WhatsApp Web connecté dans son onglet dédié. Sinon, repli normal sur
+      // le deep link (clic humain requis) — jamais de simulation silencieuse.
+      if (channel === 'whatsapp' && item.phone) {
+        const ext = await cyrusExtension.ping();
+        if (ext.installed && ext.connected) {
+          const result = await cyrusExtension.sendMessage(item.phone.replace(/^\+/, ''), text);
+          if (result.ok) {
+            relanceFeedback('🤖 Envoyé automatiquement via l\'extension CYRUS (aucun clic requis).', false);
+            relanceState.sentCount += 1;
+            relanceUpdateRhythmDisplay();
+            relanceState.cursor += 1;
+            relanceRenderCard();
+            return;
+          }
+          relanceFeedback('⚠️ Envoi automatique via l\'extension a échoué (' + (result.error || 'raison inconnue') + ') — repli sur le lien manuel.', true);
+          // Continue vers le repli deep link ci-dessous plutôt que d'abandonner ce contact.
+        }
+      }
 
       try {
         await navigator.clipboard.writeText(text);
