@@ -254,10 +254,15 @@ class CampaignEngine {
   // onActivity : callback optionnel (voir adapters/sessionRegulator.js)
   // invoqué après chaque envoi réel — repousse l'échéance d'inactivité de 15
   // minutes du tenant pendant qu'une campagne tourne en tâche de fond.
-  constructor(tenantId, session, onActivity) {
+  constructor(tenantId, session, onActivity, onNetworkStatusChange) {
     this.tenantId = tenantId;
     this.session = session;
     this.onActivity = onActivity;
+    // Bascule anti-spam transparente (voir ai-engine/platformOrchestrator.js
+    // et lib/circuitBreaker.js) — notifié à CHAQUE transition de
+    // networkStatus ('normal'|'degraded_network'|'circuit_open'), jamais à
+    // chaque envoi. Optionnel : absent, aucun changement de comportement.
+    this.onNetworkStatusChange = onNetworkStatusChange || null;
     // Toutes les campagnes connues de ce tenant (en cours, en pause, en
     // attente, ou terminées — voir MAX_RETAINED_CAMPAIGNS pour l'élagage de
     // l'historique). Clé = campaign.id.
@@ -309,6 +314,12 @@ class CampaignEngine {
 
   _recordSendLatency(elapsedMs) {
     if (this.networkHealth.recordLatency(elapsedMs)) {
+      if (this.onNetworkStatusChange) {
+        this.onNetworkStatusChange({
+          tenantId: this.tenantId, channel: 'WHATSAPP', status: 'degraded_network',
+          retryAfterSeconds: this.networkHealth.getRetryAfterSeconds(),
+        });
+      }
       console.log(
         `Campagne (tenant "${this.tenantId}"): latence élevée (${elapsedMs}ms) sur 2 requêtes consécutives — ` +
         `statut 'degraded_network', pause de ${circuitBreaker.DEGRADED_NETWORK_PAUSE_MS / 60000} min.`,
@@ -385,9 +396,17 @@ class CampaignEngine {
     if (campaign.stopRequested || campaign.superseded) return;
 
     const wasCircuitOpen = health.networkStatus === 'circuit_open';
+    const wasAssisted = !!campaign.assistedMode;
     health.networkStatus = 'normal';
     campaign.paused = false;
+    campaign.assistedMode = false;
     this._persist(campaign);
+    if (this.onNetworkStatusChange && (wasCircuitOpen || wasAssisted)) {
+      this.onNetworkStatusChange({
+        tenantId: this.tenantId, channel: 'WHATSAPP', status: 'normal',
+        campaignId: campaign.id, campaignName: campaign.name,
+      });
+    }
     console.log(
       `Campagne (tenant "${this.tenantId}", "${campaign.name}"): health check nominal — reprise de l'envoi` +
       `${wasCircuitOpen ? ' au destinataire précédemment en échec de surcharge' : ''}.`,
@@ -734,7 +753,25 @@ class CampaignEngine {
         if (circuitBreaker.isOverloadError(err)) {
           overloadDetected = true;
           const backoffMs = this.networkHealth.recordOverloadFailure(err);
+          // Mode Semi-Automatique / Manuel Assisté (bascule anti-spam, voir
+          // ai-engine/platformOrchestrator.js) : dès le 2e échec de surcharge
+          // CONSÉCUTIF (signal de trouble persistant, pas un simple aléa
+          // réseau isolé) — n'affecte PAS la reprise automatique déjà en
+          // place ci-dessus (_waitForNetworkHold), seulement un signal
+          // surfacé au vendeur pour qu'il bascule sur l'onglet "Relance
+          // Manuelle Express" (déjà existant, public/dashboard.html) plutôt
+          // que de compter uniquement sur la reprise automatique.
+          if (this.networkHealth.consecutiveOverloadFailures >= 2) campaign.assistedMode = true;
           if (!shouldAbort()) this._persist(campaign);
+          if (this.onNetworkStatusChange) {
+            this.onNetworkStatusChange({
+              tenantId: this.tenantId, channel: 'WHATSAPP', status: 'circuit_open',
+              consecutiveOverloadFailures: this.networkHealth.consecutiveOverloadFailures,
+              assistedMode: !!campaign.assistedMode,
+              retryAfterSeconds: Math.round(backoffMs / 1000),
+              campaignId: campaign.id, campaignName: campaign.name,
+            });
+          }
           console.log(
             `Campagne (tenant "${this.tenantId}", "${campaign.name}"): signal de surcharge détecté (${err.message}) — ` +
             `statut 'circuit_open', nouvelle tentative pour ${to} dans ${Math.round(backoffMs / 60000)} min (index ${i} conservé).`,

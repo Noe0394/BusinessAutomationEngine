@@ -168,10 +168,12 @@ function messageHashParts(message, persistedMedia) {
 // Telegram de ce même tenant : aucune campagne, aucun destinataire, aucun
 // résultat n'est jamais partagé entre deux clés de licence.
 class TelegramCampaignEngine {
-  constructor(tenantId, session, onActivity) {
+  constructor(tenantId, session, onActivity, onNetworkStatusChange) {
     this.tenantId = tenantId;
     this.session = session;
     this.onActivity = onActivity;
+    // Voir queues/campaignEngine.js#onNetworkStatusChange — même patron.
+    this.onNetworkStatusChange = onNetworkStatusChange || null;
     // Voir queues/campaignEngine.js#campaigns/resolvedSequences/activeCampaignId
     // (même principe, adapté à une pièce jointe unique au lieu d'une
     // séquence de plusieurs étapes).
@@ -208,6 +210,12 @@ class TelegramCampaignEngine {
 
   _recordSendLatency(elapsedMs) {
     if (this.networkHealth.recordLatency(elapsedMs)) {
+      if (this.onNetworkStatusChange) {
+        this.onNetworkStatusChange({
+          tenantId: this.tenantId, channel: 'TELEGRAM', status: 'degraded_network',
+          retryAfterSeconds: this.networkHealth.getRetryAfterSeconds(),
+        });
+      }
       console.log(
         `Campagne Telegram (tenant "${this.tenantId}"): latence élevée (${elapsedMs}ms) sur 2 requêtes consécutives — ` +
         `statut 'degraded_network', pause de ${circuitBreaker.DEGRADED_NETWORK_PAUSE_MS / 60000} min.`,
@@ -281,9 +289,17 @@ class TelegramCampaignEngine {
     if (campaign.stopRequested || campaign.superseded) return;
 
     const wasCircuitOpen = health.networkStatus === 'circuit_open';
+    const wasAssisted = !!campaign.assistedMode;
     health.networkStatus = 'normal';
     campaign.paused = false;
+    campaign.assistedMode = false;
     this._persist(campaign);
+    if (this.onNetworkStatusChange && (wasCircuitOpen || wasAssisted)) {
+      this.onNetworkStatusChange({
+        tenantId: this.tenantId, channel: 'TELEGRAM', status: 'normal',
+        campaignId: campaign.id, campaignName: campaign.name,
+      });
+    }
     console.log(
       `Campagne Telegram (tenant "${this.tenantId}", "${campaign.name}"): health check nominal — reprise de l'envoi` +
       `${wasCircuitOpen ? ' au destinataire précédemment en échec de surcharge' : ''}.`,
@@ -592,7 +608,19 @@ class TelegramCampaignEngine {
         if (circuitBreaker.isOverloadError(err)) {
           overloadDetected = true;
           const backoffMs = this.networkHealth.recordOverloadFailure(err);
+          // Voir queues/campaignEngine.js#assistedMode — même patron (FLOOD_WAIT
+          // Telegram inclus, voir lib/circuitBreaker.js#getFloodWaitMs).
+          if (this.networkHealth.consecutiveOverloadFailures >= 2) campaign.assistedMode = true;
           if (!shouldAbort()) this._persist(campaign);
+          if (this.onNetworkStatusChange) {
+            this.onNetworkStatusChange({
+              tenantId: this.tenantId, channel: 'TELEGRAM', status: 'circuit_open',
+              consecutiveOverloadFailures: this.networkHealth.consecutiveOverloadFailures,
+              assistedMode: !!campaign.assistedMode,
+              retryAfterSeconds: Math.round(backoffMs / 1000),
+              campaignId: campaign.id, campaignName: campaign.name,
+            });
+          }
           console.log(
             `Campagne Telegram (tenant "${this.tenantId}", "${campaign.name}"): signal de surcharge détecté (${err.message}) — ` +
             `statut 'circuit_open', nouvelle tentative pour ${identifier} dans ${Math.round(backoffMs / 60000)} min (index ${i} conservé).`,

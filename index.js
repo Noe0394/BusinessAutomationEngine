@@ -59,6 +59,15 @@ const ebookGenerator = require('./lib/pdf/ebookGenerator');
 const { createVpsBridge } = require('./lib/intelligence/vps-bridge');
 const humanContextEngine = require('./lib/intelligence/human-context-engine');
 
+// Chat-Driven Agent Orchestrator (voir docs/PARITE-LOCAL.md) — point d'entrée
+// unique du Copywriter Studio IA pour les commandes de pilotage (campagnes,
+// paiement/remise, comptes élèves, rapports, clarification de nouvelle
+// offre). `intelligenceBridge` (assigné plus bas, au montage de
+// createVpsBridge) fournit le runtime/moteur RÉELS déjà branchés — jamais
+// dupliqués ici.
+const chatOrchestrator = require('./ai-engine/chatOrchestrator');
+let intelligenceBridge = null;
+
 const app = express();
 const PORT = process.env.PORT || 10000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '@CYRUS2026';
@@ -3987,6 +3996,11 @@ function foldAccents(text) {
   return String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
+// Voir userMessage.saleIntent ci-dessus — détecte le SUFFIXE "et mets-le en
+// vente" d'une demande de génération de contenu, indépendamment de
+// detectStudioIntent (qui reste, lui, inchangé : image/vidéo/livre/chat).
+const SALE_SUFFIX_RE = /(et\s+(?:mets|met)[\s-]le\s+en\s+vente|et\s+vends[\s-]le|puis\s+g[ée]n[èe]re\s+(?:un\s+)?lien\s+de\s+(?:paiement|vente)|et\s+cr[ée]e?\s+(?:le\s+)?(?:lien\s+de\s+)?(?:paiement|vente))/i;
+
 function detectStudioIntent(text) {
   const t = foldAccents(text);
   if (/\b(livre|e-?book|ouvrage|guide|manuel|formation pdf|rapport pdf|brochure numerique)\b/i.test(t)) return 'book';
@@ -4121,6 +4135,18 @@ function findRecentAttachment(messages, role) {
   return null;
 }
 
+// Voir userMessage.saleIntent plus haut — cherche le message utilisateur le
+// plus récent portant cette marque, pour enchaîner sur le prix APRÈS la
+// génération réelle (voir POST .../actions), quel que soit le nombre de
+// tours de planification écoulés entre-temps (brief incomplet -> questions).
+function findRecentSaleIntent(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i] && list[i].role === 'user') return !!list[i].saleIntent;
+  }
+  return false;
+}
+
 function loadAttachmentBuffer(attachment) {
   if (!attachment) return null;
   const entry = imageLinkStore.get(attachment.id);
@@ -4244,7 +4270,16 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
 
   const isFirstMessage = !Array.isArray(existing.messages) || existing.messages.length === 0;
   const title = isFirstMessage ? copywriterEngine.generateSessionTitle(text) : null;
-  const userMessage = { role: 'user', text, createdAt: new Date().toISOString(), attachment };
+  // §1.2 du cahier des charges "Orchestrateur Inter-Modules" — Génération de
+  // contenus de A à Z : détecte une demande de type "crée un guide PDF sur X
+  // ET MET-LE EN VENTE" pour enchaîner AUTOMATIQUEMENT, une fois le contenu
+  // généré (voir POST .../actions plus bas), une invite à préciser le prix —
+  // qui relance ensuite le flux paiement déjà construit
+  // (ai-engine/chatOrchestrator.js#handlePayment) via la continuation
+  // normale de la conversation. Jamais un prix inventé : voir la même
+  // philosophie dans ai-engine/offerClarifier.js.
+  const saleIntent = SALE_SUFFIX_RE.test(text);
+  const userMessage = { role: 'user', text, createdAt: new Date().toISOString(), attachment, saleIntent };
 
   // BUG CORRIGÉ (constaté en test réel : une conversation de planification
   // affiche/vidéo/livre "perdait le fil" dès la réponse aux questions de
@@ -4268,6 +4303,34 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
   let assistantMessage;
 
   try {
+    // Chat-Driven Agent Orchestrator (voir ai-engine/chatOrchestrator.js) —
+    // consulté AVANT le pipeline image/vidéo/livre/chat existant : une
+    // commande de pilotage (campagne, paiement, compte élève, rapport,
+    // nouvelle offre) prend le pas sur la classification par mots-clés
+    // ci-dessus. Retourne `null` si aucune commande n'est détectée (message
+    // de conversation normal) — l'exécution retombe alors sur le pipeline
+    // existant inchangé.
+    const orchestrated = intelligenceBridge ? await chatOrchestrator.handle({
+      text,
+      history: existing.messages,
+      tenantId,
+      sessionId: req.params.id,
+      lastAssistantMessage,
+    }, {
+      runtime: intelligenceBridge.runtime,
+      engineFor: intelligenceBridge.engineFor,
+      humanContext: humanContextEngine,
+    }).catch((err) => {
+      console.warn('Chat-Driven Agent Orchestrator — échec, repli sur le pipeline existant :', err.message);
+      return null;
+    }) : null;
+
+    if (orchestrated) {
+      assistantMessage = { role: 'assistant', createdAt: new Date().toISOString(), ...orchestrated };
+      const updated = await aiStudioStore.appendMessages(tenantId, req.params.id, [userMessage, assistantMessage], title);
+      return res.json({ session: updated });
+    }
+
     if (intent === 'image' || intent === 'video' || intent === 'book') {
       const planner = intent === 'image' ? planImage : (intent === 'video' ? planVideo : planBook);
       const { raw, parsed } = await planner(text, existing.messages);
@@ -4280,9 +4343,10 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
         };
         assistantMessage = {
           role: 'assistant',
-          text: String(parsed.summary || raw).slice(0, 2000),
+          text: String(parsed.summary || raw).slice(0, 2000) + (saleIntent ? '\n\n💰 Une fois généré, donnez-moi le prix et je prépare le lien de paiement.' : ''),
           createdAt: new Date().toISOString(),
           actions: [{ ...actionByIntent[intent], payload: parsed }],
+          saleIntent,
         };
       } else {
         // Le LLM a posé des questions (brief incomplet) — réponse texte
@@ -4375,6 +4439,13 @@ app.post('/api/ai-studio/sessions/:id/actions', requireAccess, requireModule('st
     else if (action === 'generate_book') result = await executeGenerateBook(payload);
     else return res.status(400).json({ error: `Action inconnue : ${action}` });
 
+    // Chaînage "génération -> vente" (voir userMessage.saleIntent) : pour
+    // image/livre, `result` est déjà le contenu final (pas un job différé
+    // comme la vidéo, voir POST .../video-status pour son propre chaînage).
+    if (action !== 'generate_video' && result && result.text && findRecentSaleIntent(existing.messages)) {
+      result = { ...result, text: `${result.text}\n\n💰 Quel est le prix ? Je prépare le lien de paiement dès que vous me le donnez.` };
+    }
+
     const assistantMessage = { role: 'assistant', createdAt: new Date().toISOString(), ...result };
     const updated = await aiStudioStore.appendMessages(tenantId, req.params.id, [assistantMessage], null);
     res.json({ session: updated });
@@ -4428,9 +4499,16 @@ app.post('/api/ai-studio/sessions/:id/video-status', requireAccess, requireModul
     }
 
     const id = imageLinkStore.register(buffer, mimetype, { title: 'Vidéo IA — CYRUS SUPER ASSISTANT' });
+    // Voir userMessage.saleIntent / POST .../actions — même chaînage
+    // "génération -> vente", appliqué ici une fois le job vidéo (différé)
+    // réellement terminé plutôt qu'au moment du clic sur le bouton.
+    const existingForSale = await aiStudioStore.getSession(tenantId, req.params.id);
+    const saleHint = findRecentSaleIntent(existingForSale && existingForSale.messages)
+      ? '\n\n💰 Quel est le prix ? Je prépare le lien de paiement dès que vous me le donnez.'
+      : '';
     const assistantMessage = {
       role: 'assistant',
-      text: '✅ Vidéo générée.',
+      text: `✅ Vidéo générée.${saleHint}`,
       createdAt: new Date().toISOString(),
       media: { kind: 'video', url: `${PUBLIC_BASE_URL}/v/${id}`, downloadUrl: `${PUBLIC_BASE_URL}/v/${id}/raw` },
     };
@@ -4729,7 +4807,7 @@ app.post('/api/ebooks/generate', requireAccess, requireModule('studio_video'), u
 // l'action ne nomme pas une session réelle. stateFile = défaut du bridge
 // (persistance par tenant pour reprise/idempotence après redémarrage).
 const { createVpsRuntime } = require('./lib/intelligence/runtimes/vps-runtime.js');
-app.use('/', requireAccess, createVpsBridge({
+intelligenceBridge = createVpsBridge({
   runtime: createVpsRuntime({
     whatsappManager,
     telegramManager,
@@ -4738,10 +4816,78 @@ app.use('/', requireAccess, createVpsBridge({
     mediaPublisher,
     humanContext: humanContextEngine,
     env: process.env,
+    // ANSWER_STUDENT_QUERY (action-executor.js) — jamais un require direct
+    // de llmFallbackEngine dans le registre dual-env, voir son commentaire
+    // d'en-tête ; injecté ici uniquement côté VPS (Node).
+    llm: (prompt, history, context) => llmFallbackEngine.generateAIResponse(prompt, history, context).then((r) => r.text),
     logger: (msg) => console.error('[intelligence-runtime]', msg),
   }),
   stateFile: process.env.INTELLIGENCE_STATE_FILE || undefined,
-}));
+});
+app.use('/', requireAccess, intelligenceBridge.router);
+
+// Filtrage privé/pro + tuteur pédagogique auto (§3/§4 du cahier des charges
+// "Chat-Driven Agent Orchestrator", voir lib/intelligence/message-triage.js
+// et docs/PARITE-LOCAL.md). Câblé sur CHAQUE message WhatsApp/Telegram
+// entrant, tous tenants confondus (voir adapters/{whatsappManager,
+// telegramManager}.js#setIncomingMessageHandler) — SANS JAMAIS envoyer de
+// réponse automatique par défaut : AUTO_ANSWER_STUDENT_QUERIES doit valoir
+// exactement "true" dans .env pour activer l'envoi réel (défaut : classifie
+// et alimente la FAQ passive du profil business, sans jamais écrire au
+// client) — choix assumé : un agent qui se met à répondre automatiquement à
+// de vrais clients WhatsApp/Telegram sans validation explicite préalable de
+// l'utilisateur serait une action à risque, pas seulement une fonctionnalité.
+const messageTriage = require('./lib/intelligence/message-triage');
+const businessProfileStore = require('./ai-engine/storageAdapter');
+const AUTO_ANSWER_STUDENT_QUERIES = process.env.AUTO_ANSWER_STUDENT_QUERIES === 'true';
+
+function extractIncomingText(channel, msg) {
+  if (channel === 'WHATSAPP') {
+    const m = msg && msg.message;
+    return (m && (m.conversation || (m.extendedTextMessage && m.extendedTextMessage.text) || (m.imageMessage && m.imageMessage.caption) || (m.videoMessage && m.videoMessage.caption))) || '';
+  }
+  // TELEGRAM (GramJS) : msg.message porte le texte brut.
+  return (msg && msg.message) || '';
+}
+
+async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }) {
+  const text = extractIncomingText(channel, msg).trim();
+  if (!text) return;
+
+  const classification = messageTriage.classify(text);
+
+  // Onboarding passif (§3) : alimente la FAQ du profil business, jamais les
+  // faits produits/prix (autorité exclusive de ai-engine/offerClarifier.js).
+  if (classification.category === 'business') {
+    const profile = await businessProfileStore.get('business_profiles', tenantId, { tenantId, offers: [], faq: [] });
+    messageTriage.recordFaqSignal(profile, text);
+    businessProfileStore.set('business_profiles', tenantId, profile);
+  }
+
+  if (!AUTO_ANSWER_STUDENT_QUERIES || classification.category !== 'business') return;
+  if (!intelligenceBridge || !intelligenceBridge.runtime || !intelligenceBridge.runtime.actionExecutor) return;
+
+  const profile = await businessProfileStore.get('business_profiles', tenantId, { offers: [] });
+  const context = (profile.offers || []).length
+    ? `Offres connues du vendeur :\n${profile.offers.map((o) => `- ${o.name || o.category} : ${o.description || ''} (${o.price || ''})`).join('\n')}`
+    : null;
+
+  const out = await intelligenceBridge.runtime.actionExecutor.execute('ANSWER_STUDENT_QUERY', { question: text, context }, { tenantId });
+  if (!out.ok || !out.result || !out.result.answer) return;
+
+  try {
+    if (channel === 'WHATSAPP') {
+      await session.sendMessage(msg.key.remoteJid, out.result.answer);
+    } else if (typeof msg.reply === 'function') {
+      await msg.reply({ message: out.result.answer });
+    }
+  } catch (err) {
+    console.error(`Échec d'envoi de la réponse auto tuteur (tenant "${tenantId}", ${channel}) :`, err.message);
+  }
+}
+
+whatsappManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
+telegramManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
 
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {

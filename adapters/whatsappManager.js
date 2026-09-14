@@ -4,6 +4,7 @@ const githubStore = require('../githubStore');
 const whatsapp = require('./whatsapp');
 const sessionRegulator = require('./sessionRegulator');
 const { CampaignEngine, listTenantsWithPendingCampaigns } = require('../queues/campaignEngine');
+const platformOrchestrator = require('../ai-engine/platformOrchestrator');
 
 // Registre des instances WhatsApp par tenant — le cœur de l'isolation
 // stricte demandée : chaque clé de licence obtient sa propre instance
@@ -14,6 +15,18 @@ const { CampaignEngine, listTenantsWithPendingCampaigns } = require('../queues/c
 const ADMIN_TENANT_ID = '__admin__';
 
 const tenants = new Map(); // tenantId assaini -> { session, campaignEngine, initStarted }
+
+// Filtrage privé/pro (voir lib/intelligence/message-triage.js) + tuteur
+// pédagogique auto — callback UNIQUE, réglé une fois au démarrage par
+// index.js (setIncomingMessageHandler ci-dessous), jamais un require direct
+// de lib/intelligence/* ici : ce module reste volontairement découplé de la
+// couche intelligence, comme le reste de adapters/ (voir onIncomingMessage,
+// déjà utilisé par queues/campaignEngine.js pour la pause de campagne —
+// ceci est un DEUXIÈME abonné indépendant, pas un remplacement).
+let incomingMessageHandler = null;
+function setIncomingMessageHandler(fn) {
+  incomingMessageHandler = typeof fn === 'function' ? fn : null;
+}
 
 function sanitizeTenantId(rawId) {
   const cleaned = String(rawId || '').trim().replace(/[^A-Za-z0-9_-]/g, '_');
@@ -30,12 +43,25 @@ function getOrCreate(rawTenantId) {
   if (!tenants.has(tenantId)) {
     sessionRegulator.ensureCapacity('whatsapp', tenantId);
     const session = whatsapp.createSession(tenantId);
-    const campaignEngine = new CampaignEngine(tenantId, session, () => sessionRegulator.touch('whatsapp', tenantId));
+    const campaignEngine = new CampaignEngine(
+      tenantId,
+      session,
+      () => sessionRegulator.touch('whatsapp', tenantId),
+      platformOrchestrator.onCampaignNetworkStatusChange,
+    );
     // Voir adapters/whatsapp.js#onAccountReset et CampaignEngine#reset : dès
     // que le NUMÉRO WhatsApp connecté sous ce tenant change (déconnexion
     // manuelle, ré-appairage, révocation détectée), la campagne de l'ancien
     // numéro est annulée proprement plutôt que de verrouiller le nouveau.
     session.onAccountReset(() => campaignEngine.reset());
+    if (typeof session.onIncomingMessage === 'function') {
+      session.onIncomingMessage((msg) => {
+        if (!incomingMessageHandler) return;
+        Promise.resolve(incomingMessageHandler({ channel: 'WHATSAPP', tenantId, session, msg })).catch((err) => {
+          console.error(`Erreur dans le filtrage privé/pro WhatsApp (tenant "${tenantId}") :`, err.message);
+        });
+      });
+    }
     tenants.set(tenantId, { session, campaignEngine, initStarted: false });
     sessionRegulator.register('whatsapp', tenantId, {
       protected: tenantId === ADMIN_TENANT_ID,
@@ -313,4 +339,5 @@ module.exports = {
   bootReconnectAllPairedTenants,
   listActiveEntries,
   getStorageStatus,
+  setIncomingMessageHandler,
 };

@@ -4,6 +4,7 @@ const githubStore = require('../githubStore');
 const telegram = require('./telegram');
 const sessionRegulator = require('./sessionRegulator');
 const { TelegramCampaignEngine, listTenantsWithPendingCampaigns } = require('../queues/telegramCampaignEngine');
+const platformOrchestrator = require('../ai-engine/platformOrchestrator');
 
 // Registre des instances Telegram par tenant — même isolation stricte que
 // adapters/whatsappManager.js : chaque clé de licence obtient sa PROPRE
@@ -17,6 +18,12 @@ const { TelegramCampaignEngine, listTenantsWithPendingCampaigns } = require('../
 const ADMIN_TENANT_ID = '__admin__';
 
 const tenants = new Map(); // tenantId assaini -> { session, campaignEngine, initStarted }
+
+// Voir adapters/whatsappManager.js#setIncomingMessageHandler — même patron.
+let incomingMessageHandler = null;
+function setIncomingMessageHandler(fn) {
+  incomingMessageHandler = typeof fn === 'function' ? fn : null;
+}
 
 function sanitizeTenantId(rawId) {
   const cleaned = String(rawId || '').trim().replace(/[^A-Za-z0-9_-]/g, '_');
@@ -32,13 +39,26 @@ function getOrCreate(rawTenantId) {
   if (!tenants.has(tenantId)) {
     sessionRegulator.ensureCapacity('telegram', tenantId);
     const session = telegram.createSession(tenantId);
-    const campaignEngine = new TelegramCampaignEngine(tenantId, session, () => sessionRegulator.touch('telegram', tenantId));
+    const campaignEngine = new TelegramCampaignEngine(
+      tenantId,
+      session,
+      () => sessionRegulator.touch('telegram', tenantId),
+      platformOrchestrator.onCampaignNetworkStatusChange,
+    );
     // Voir adapters/telegram.js#onAccountReset et
     // TelegramCampaignEngine#reset : dès que le COMPTE Telegram connecté
     // sous ce tenant change (déconnexion manuelle, ré-appairage), la
     // campagne de l'ancien compte est annulée proprement plutôt que de
     // verrouiller le nouveau.
     session.onAccountReset(() => campaignEngine.reset());
+    if (typeof session.onIncomingMessage === 'function') {
+      session.onIncomingMessage((msg) => {
+        if (!incomingMessageHandler) return;
+        Promise.resolve(incomingMessageHandler({ channel: 'TELEGRAM', tenantId, session, msg })).catch((err) => {
+          console.error(`Erreur dans le filtrage privé/pro Telegram (tenant "${tenantId}") :`, err.message);
+        });
+      });
+    }
     tenants.set(tenantId, { session, campaignEngine, initStarted: false });
     sessionRegulator.register('telegram', tenantId, {
       protected: tenantId === ADMIN_TENANT_ID,
@@ -215,4 +235,5 @@ module.exports = {
   bootResumePendingCampaigns,
   listActiveEntries,
   getStorageStatus,
+  setIncomingMessageHandler,
 };

@@ -30,6 +30,7 @@
 //   firebase use <votre-project-id>
 //   firebase functions:secrets:set GROQ_API_KEY
 //   firebase functions:secrets:set GEMINI_API_KEY
+//   firebase functions:secrets:set DEEPSEEK_API_KEY
 //   firebase functions:secrets:set OPENROUTER_API_KEY
 //   firebase functions:secrets:set HUGGINGFACE_API_KEY
 //   firebase functions:secrets:set REPLICATE_API_TOKEN
@@ -37,7 +38,12 @@
 //   firebase functions:secrets:set ADMIN_SECRET
 //   (chaque secret est FACULTATIF — un niveau de la cascade sans secret est
 //   simplement sauté, jamais d'échec du déploiement ni de l'appel)
-//   firebase deploy --only functions:verifyLicenseOffline,functions:createLicenseOffline,functions:listLicensesOffline,functions:setLicenseActiveOffline,functions:updateLicenseOffline,functions:deleteLicenseOffline,functions:generateTextFallback,functions:generateImageFallback,functions:startVideoFallback,functions:pollVideoFallback,functions:checkUpdateOffline,functions:publishUpdateOffline
+//   firebase deploy --only functions:verifyLicenseOffline,functions:createLicenseOffline,functions:listLicensesOffline,functions:setLicenseActiveOffline,functions:updateLicenseOffline,functions:deleteLicenseOffline,functions:grantAccessOnPurchase,functions:grantModuleAccess,functions:generateTextFallback,functions:generateImageFallback,functions:startVideoFallback,functions:pollVideoFallback,functions:checkUpdateOffline,functions:publishUpdateOffline
+// grantAccessOnPurchase/grantModuleAccess (ajoutées pour le Chat-Driven Agent
+// Orchestrator, voir docs/PARITE-LOCAL.md) : NE JAMAIS DÉPLOYER sans
+// confirmation explicite de l'utilisateur — même règle que tout déploiement
+// touchant ce projet Firebase partagé (voir plus bas, incident du
+// 2026-09-09).
 // JAMAIS "firebase deploy --only functions" (sans noms précis) ni
 // ",firestore:rules" — voir README.md : ce projet Firebase est PARTAGÉ avec
 // une autre application (RIEA AFRIQUE), un déploiement non scopé a déjà
@@ -62,6 +68,7 @@ const STORAGE_PREFIX = 'cyrus-failover';
 
 const GROQ_API_KEY = defineSecret('GROQ_API_KEY');
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
+const DEEPSEEK_API_KEY = defineSecret('DEEPSEEK_API_KEY');
 const OPENROUTER_API_KEY = defineSecret('OPENROUTER_API_KEY');
 const HUGGINGFACE_API_KEY = defineSecret('HUGGINGFACE_API_KEY');
 const REPLICATE_API_TOKEN = defineSecret('REPLICATE_API_TOKEN');
@@ -259,6 +266,109 @@ exports.deleteLicenseOffline = onRequest({ secrets: [ADMIN_SECRET], cors: true }
   res.json({ ok: true });
 });
 
+// ---------- Onboarding & Délivrance élève (Chat-Driven Agent Orchestrator) ----------
+// APPELÉES depuis lib/intelligence/action-executor.js#CREATE_USER_ACCOUNT et
+// #GRANT_MODULE_ACCESS (voir action-executor.js — commentaires en tête de
+// fichier, "Test 5 du cahier") mais JAMAIS implémentées côté Cloud Functions
+// jusqu'ici : chaque appel tombait silencieusement sur le repli local de
+// action-executor.js (statut CREATED_LOCALLY_AWAITING_SYNC), sans jamais
+// synchroniser réellement le compte élève vers Firestore. Comblé ici.
+//
+// Collections dédiées cyrus_students / cyrus_access_keys — noms préfixés
+// "cyrus_" pour éviter toute collision avec les collections de RIEA AFRIQUE
+// sur ce même projet Firebase partagé (voir mémoire globale
+// preserve-existing-infrastructure : vérifier l'absence de collision avant
+// de créer une nouvelle collection dans ce projet — déjà fait ici par
+// construction, ce préfixe est la convention déjà en place dans ce dépôt).
+const CYRUS_STUDENTS_COLLECTION = 'cyrus_students';
+const CYRUS_ACCESS_KEYS_COLLECTION = 'cyrus_access_keys';
+
+// Même format que lib/intelligence/action-executor.js#generateAccessKey
+// (6 groupes de 4, sans caractères ambigus) — dupliqué ici volontairement
+// (runtime Cloud Functions séparé, pas d'import cross-projet, même
+// convention déjà en place pour la cascade LLM de ce fichier).
+const ACCESS_KEY_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+function generateCyrusAccessKey() {
+  const groups = [];
+  for (let g = 0; g < 6; g += 1) {
+    let s = '';
+    for (let i = 0; i < 4; i += 1) s += ACCESS_KEY_CHARS[crypto.randomInt(ACCESS_KEY_CHARS.length)];
+    groups.push(s);
+  }
+  return groups.join('-');
+}
+
+// Pendant réel de action-executor.js#CREATE_USER_ACCOUNT — achat confirmé ->
+// création du compte étudiant + clé d'accès. Idempotence NON garantie ici
+// (chaque appel crée un nouveau studentId) : action-executor.js n'envoie cet
+// appel qu'une seule fois par achat (jamais en retry automatique) — à
+// surveiller si un futur appelant venait à réessayer sur timeout.
+exports.grantAccessOnPurchase = onRequest({ secrets: [ADMIN_SECRET], cors: true }, async (req, res) => {
+  if (!requireAdminSecret(req, res)) return;
+
+  const { student, purchase, tenantId, accessKey } = req.body || {};
+  if (!student || !purchase) return res.status(400).json({ error: 'student et purchase requis.' });
+
+  const studentId = `cyrus_st_${crypto.randomBytes(6).toString('hex')}`;
+  const shouldGenerateKey = !accessKey || accessKey.generate !== false;
+  const generatedKey = shouldGenerateKey ? generateCyrusAccessKey() : null;
+  const createdAt = new Date().toISOString();
+
+  const doc = {
+    fullName: student.fullName || null,
+    email: student.email || null,
+    phone: student.phone || null,
+    sku: purchase.sku || null,
+    amount: purchase.amount || null,
+    currency: purchase.currency || 'FCFA',
+    transactionId: purchase.transactionId || null,
+    paidAt: purchase.paidAt || createdAt,
+    tenantId: tenantId || 'default',
+    accessKey: generatedKey,
+    modules: [],
+    createdAt,
+  };
+
+  await db.collection(CYRUS_STUDENTS_COLLECTION).doc(studentId).set(doc);
+  if (generatedKey) {
+    await db.collection(CYRUS_ACCESS_KEYS_COLLECTION).doc(generatedKey).set({
+      studentId, sku: purchase.sku || null, issuedAt: createdAt,
+    });
+  }
+
+  res.status(201).json({ studentId, accessKey: generatedKey, status: 'CREATED' });
+});
+
+// Pendant réel de action-executor.js#GRANT_MODULE_ACCESS — élève déjà connu
+// (recherche par id explicite, sinon par téléphone/email), ajoute un module
+// à sa liste d'accès sans recréer de compte ni de clé.
+exports.grantModuleAccess = onRequest({ secrets: [ADMIN_SECRET], cors: true }, async (req, res) => {
+  if (!requireAdminSecret(req, res)) return;
+
+  const { student, module } = req.body || {};
+  if (!module || !module.key) return res.status(400).json({ error: 'module.key requis.' });
+  if (!student || (!student.id && !student.phone && !student.email)) {
+    return res.status(400).json({ error: 'student.id, student.phone ou student.email requis.' });
+  }
+
+  let studentRef = null;
+  if (student.id) {
+    studentRef = db.collection(CYRUS_STUDENTS_COLLECTION).doc(student.id);
+    const doc = await studentRef.get();
+    if (!doc.exists) studentRef = null;
+  } else {
+    const field = student.phone ? 'phone' : 'email';
+    const value = student.phone || student.email;
+    const snap = await db.collection(CYRUS_STUDENTS_COLLECTION).where(field, '==', value).limit(1).get();
+    if (!snap.empty) studentRef = snap.docs[0].ref;
+  }
+
+  if (!studentRef) return res.status(404).json({ error: 'Étudiant introuvable.' });
+
+  await studentRef.update({ modules: admin.firestore.FieldValue.arrayUnion(module.key) });
+  res.status(200).json({ status: 'GRANTED', moduleKey: module.key });
+});
+
 async function checkLicenseForFallback(req) {
   const key = req.get('x-license-key');
   const deviceId = req.get('x-device-id');
@@ -317,6 +427,19 @@ async function callGeminiText(prompt) {
   return text.trim();
 }
 
+async function callDeepSeekText(prompt) {
+  const apiKey = DEEPSEEK_API_KEY.value();
+  if (!apiKey) return null;
+  const res = await axios.post(
+    'https://api.deepseek.com/chat/completions',
+    { model: 'deepseek-chat', messages: [{ role: 'system', content: TEXT_SYSTEM_PROMPT }, { role: 'user', content: prompt }] },
+    { headers: { Authorization: `Bearer ${apiKey}` }, timeout: TEXT_REQUEST_TIMEOUT_MS },
+  );
+  const text = res.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Réponse DeepSeek vide ou de forme inattendue.');
+  return text.trim();
+}
+
 async function callOpenRouterText(prompt) {
   const apiKey = OPENROUTER_API_KEY.value();
   if (!apiKey) return null;
@@ -358,13 +481,33 @@ async function callPollinationsText(prompt) {
 const TEXT_PROVIDERS = [
   { name: 'groq', call: callGroqText },
   { name: 'gemini', call: callGeminiText },
+  { name: 'deepseek', call: callDeepSeekText },
   { name: 'openrouter', call: callOpenRouterText },
   { name: 'huggingface', call: callHuggingFaceText },
   { name: 'pollinations', call: callPollinationsText },
 ];
 
+// Extrait de generateTextFallback (même cascade) pour être réutilisable en
+// interne (pas de self-appel HTTP) — voir generateEbookFallback plus bas,
+// qui écrit chaque chapitre séquentiellement avec cette même fonction.
+async function runTextCascade(prompt) {
+  const errors = [];
+  for (const provider of TEXT_PROVIDERS) {
+    try {
+      const text = await provider.call(prompt);
+      if (text === null) continue; // secret absent : niveau sauté
+      return { text, provider: `${provider.name} (Firebase)` };
+    } catch (err) {
+      const reason = err.response?.status ? `HTTP ${err.response.status}` : (err.message || String(err));
+      errors.push(`${provider.name}: ${reason}`);
+      console.warn(`Cascade texte Firebase — échec "${provider.name}" (${reason}), passage au suivant.`);
+    }
+  }
+  throw new Error('Échec de la génération de texte IA (tous les fournisseurs ont échoué) : ' + errors.join(' | '));
+}
+
 exports.generateTextFallback = onRequest(
-  { secrets: [GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, HUGGINGFACE_API_KEY] },
+  { secrets: [GROQ_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, OPENROUTER_API_KEY, HUGGINGFACE_API_KEY] },
   async (req, res) => {
     const auth = await checkLicenseForFallback(req);
     if (!auth.ok) return res.status(401).json({ error: auth.error });
@@ -372,20 +515,64 @@ exports.generateTextFallback = onRequest(
     const prompt = String((req.body || {}).prompt || '').trim();
     if (!prompt) return res.status(400).json({ error: 'Prompt manquant.' });
 
-    const errors = [];
-    for (const provider of TEXT_PROVIDERS) {
-      try {
-        const text = await provider.call(prompt);
-        if (text === null) continue; // secret absent : niveau sauté
-        return res.json({ text, provider: `${provider.name} (Firebase)` });
-      } catch (err) {
-        const reason = err.response?.status ? `HTTP ${err.response.status}` : (err.message || String(err));
-        errors.push(`${provider.name}: ${reason}`);
-        console.warn(`Cascade texte Firebase — échec "${provider.name}" (${reason}), passage au suivant.`);
-      }
+    try {
+      const { text, provider } = await runTextCascade(prompt);
+      res.json({ text, provider });
+    } catch (err) {
+      console.error(err.message);
+      res.status(502).json({ error: 'Échec de la génération de texte IA (tous les fournisseurs ont échoué).' });
     }
-    console.error('Échec génération texte (tous fournisseurs) :', errors.join(' | '));
-    res.status(502).json({ error: 'Échec de la génération de texte IA (tous les fournisseurs ont échoué).' });
+  },
+);
+
+// ---------- Générateur d'ebook (parité avec local-client/index.js#POST
+// /api/ebook/generate et public/dashboard.html Studio IA > Générateur de
+// Livres) — même moteur pdfkit (ebookGenerator.js, copié à l'identique
+// depuis lib/pdf/), même rédaction séquentielle chapitre par chapitre via
+// runTextCascade ci-dessus. Seul point d'accès ebook pour le mobile
+// (Capacitor, aucun serveur Node local possible) — voir mobile/webapp/www.
+exports.generateEbookFallback = onRequest(
+  { secrets: [GROQ_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, OPENROUTER_API_KEY, HUGGINGFACE_API_KEY], timeoutSeconds: 300, memory: '512MiB' },
+  async (req, res) => {
+    const auth = await checkLicenseForFallback(req);
+    if (!auth.ok) return res.status(401).json({ error: auth.error });
+
+    const {
+      title, subtitle, author, date, watermarkText, introduction, conclusion,
+      chapterTopics, coverImageBase64, logoImageBase64,
+    } = req.body || {};
+    const topics = Array.isArray(chapterTopics) ? chapterTopics : [];
+    if (topics.length === 0) return res.status(400).json({ error: 'Aucun sujet de chapitre à rédiger.' });
+
+    try {
+      const chapters = [];
+      for (const topic of topics) {
+        const chapterPrompt = `Chapitre à rédiger intégralement pour le livre "${title}" : "${topic}"`;
+        // eslint-disable-next-line no-await-in-loop -- rédaction séquentielle volontaire
+        const { text: content } = await runTextCascade(chapterPrompt);
+        chapters.push({ title: String(topic).slice(0, 150), content: String(content || '').slice(0, 6000) });
+      }
+
+      const { generateEbookPdf } = require('./lib/pdf/ebookGenerator');
+      const pdfBuffer = await generateEbookPdf({
+        title: String(title || 'Livre généré par IA').slice(0, 150),
+        subtitle: subtitle ? String(subtitle).slice(0, 200) : undefined,
+        author: author ? String(author).slice(0, 150) : undefined,
+        date: date ? String(date).slice(0, 60) : undefined,
+        watermarkText: watermarkText ? String(watermarkText).slice(0, 60) : undefined,
+        introduction: introduction ? String(introduction).slice(0, 6000) : undefined,
+        conclusion: conclusion ? String(conclusion).slice(0, 6000) : undefined,
+        coverImageBuffer: coverImageBase64 ? Buffer.from(coverImageBase64, 'base64') : undefined,
+        logoImageBuffer: logoImageBase64 ? Buffer.from(logoImageBase64, 'base64') : undefined,
+        chapters,
+      });
+      res.set('Content-Type', 'application/pdf');
+      res.set('Content-Disposition', `attachment; filename="${String(title || 'livre').replace(/[^a-z0-9]+/gi, '_').slice(0, 80)}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (err) {
+      console.error('Échec génération ebook :', err.message);
+      res.status(502).json({ error: err.message || 'Échec de la génération de l\'ebook.' });
+    }
   },
 );
 
