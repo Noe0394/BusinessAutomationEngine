@@ -1,9 +1,11 @@
 // Client de l'extension navigateur compagnon (voir browser-extension/ à la
-// racine du dépôt) — seule voie d'envoi WhatsApp 100% automatique (sans clic
-// humain dans WhatsApp Web) possible dans un onglet navigateur classique,
-// voir adapters/browser.js pour le contexte complet. Absente/non installée :
+// racine du dépôt) — seule voie d'envoi WhatsApp/Telegram 100% automatique
+// (sans clic humain) possible dans un onglet navigateur classique, voir
+// adapters/browser.js pour le contexte complet. Absente/non installée :
 // toutes les fonctions ci-dessous résolvent { installed:false }, l'appelant
-// retombe sur le Mode Manuel Express (deep link).
+// retombe sur le Mode Manuel Express (deep link). `channel` vaut 'whatsapp'
+// ou 'telegram' — l'extension gère un onglet/état distinct par canal (voir
+// browser-extension/background.js).
 (function () {
   'use strict';
 
@@ -47,11 +49,11 @@
   window.Cyrus = window.Cyrus || {};
   window.Cyrus.extensionBridge = {
     EXTENSION_ID: EXTENSION_ID,
-    ping: function () { return call({ action: 'ping' }, PING_TIMEOUT_MS); },
-    getStatus: function () { return call({ action: 'getStatus' }, PING_TIMEOUT_MS); },
-    openWhatsApp: function () { return call({ action: 'openWhatsApp' }, 5000); },
-    sendMessage: function (to, text) { return call({ action: 'sendMessage', to: to, text: text }, 30000); },
-    getGroups: function () { return call({ action: 'getGroups' }, 18000); },
-    getGroupMembers: function (groupId) { return call({ action: 'getGroupMembers', groupId: groupId }, 18000); },
+    ping: function (channel) { return call({ action: 'ping', channel: channel }, PING_TIMEOUT_MS); },
+    getStatus: function (channel) { return call({ action: 'getStatus', channel: channel }, PING_TIMEOUT_MS); },
+    open: function (channel) { return call({ action: 'open', channel: channel }, 5000); },
+    sendMessage: function (channel, to, text) { return call({ action: 'sendMessage', channel: channel, to: to, text: text }, 30000); },
+    getGroups: function (channel) { return call({ action: 'getGroups', channel: channel }, 18000); },
+    getGroupMembers: function (channel, groupId) { return call({ action: 'getGroupMembers', channel: channel, groupId: groupId }, 18000); },
   };
 })();

@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "node scripts/build-public.js",
+  "buildCommand": "node scripts/build-public.js && node scripts/build-extension-zip.js",
   "installCommand": "echo 'Interface statique : aucune dependance backend a installer'",
   "outputDirectory": "public",
   "redirects": [

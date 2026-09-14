@@ -1,81 +1,105 @@
 // Service worker (MV3) — fait le pont entre la page CYRUS (externally_connectable)
-// et l'onglet web.whatsapp.com (via content-relay.js + injected-bridge.js).
-// Un seul onglet WhatsApp Web géré, réutilisé pour tous les envois.
+// et l'onglet web.whatsapp.com / web.telegram.org (via content-relay.js +
+// injected-bridge*.js). Un seul onglet géré par canal, réutilisé pour tous
+// les envois de ce canal.
 
-let waTabId = null;
-let waState = 'UNKNOWN'; // reflète Socket.state de WhatsApp Web ('CONNECTED' = prêt)
-let bridgeReady = false;
-let pendingSend = null; // { resolve }
-let pendingGroups = null;
-let pendingGroupMembers = null;
+const CHANNELS = {
+  whatsapp: { openUrl: 'https://web.whatsapp.com/', tabMatch: 'https://web.whatsapp.com/*', pageTarget: 'cyrus-wa-page' },
+  telegram: { openUrl: 'https://web.telegram.org/k/', tabMatch: 'https://web.telegram.org/*', pageTarget: 'cyrus-tg-page' },
+};
+
+const SOURCE_TO_CHANNEL = { 'cyrus-wa-bridge': 'whatsapp', 'cyrus-tg-bridge': 'telegram' };
 
 const SEND_TIMEOUT_MS = 25_000;
 const GROUPS_TIMEOUT_MS = 15_000;
 
-function resetTabState() {
-  waTabId = null;
-  waState = 'UNKNOWN';
-  bridgeReady = false;
+function freshState() {
+  return { tabId: null, state: 'UNKNOWN', bridgeReady: false, pendingSend: null, pendingGroups: null, pendingGroupMembers: null };
+}
+
+const st = { whatsapp: freshState(), telegram: freshState() };
+
+function channelForTab(tabId) {
+  return Object.keys(st).find((ch) => st[ch].tabId === tabId) || null;
+}
+
+function resetChannelState(channel) {
+  st[channel].tabId = null;
+  st[channel].state = 'UNKNOWN';
+  st[channel].bridgeReady = false;
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (tabId === waTabId) resetTabState();
+  const ch = channelForTab(tabId);
+  if (ch) resetChannelState(ch);
 });
 
-async function ensureWaTab(activate) {
-  if (waTabId) {
+async function ensureTab(channel, activate) {
+  const s = st[channel];
+  if (s.tabId) {
     try {
-      const tab = await chrome.tabs.get(waTabId);
+      const tab = await chrome.tabs.get(s.tabId);
       if (tab && !tab.discarded) {
-        if (activate) await chrome.tabs.update(waTabId, { active: true });
-        return waTabId;
+        if (activate) await chrome.tabs.update(s.tabId, { active: true });
+        return s.tabId;
       }
     } catch (e) {
       // Onglet fermé entre-temps — on en recrée un.
     }
-    resetTabState();
+    resetChannelState(channel);
   }
-  const existing = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+  const existing = await chrome.tabs.query({ url: CHANNELS[channel].tabMatch });
   if (existing.length) {
-    waTabId = existing[0].id;
-    if (activate) await chrome.tabs.update(waTabId, { active: true });
-    return waTabId;
+    s.tabId = existing[0].id;
+    if (activate) await chrome.tabs.update(s.tabId, { active: true });
+    return s.tabId;
   }
-  const created = await chrome.tabs.create({ url: 'https://web.whatsapp.com/', active: !!activate });
-  waTabId = created.id;
-  return waTabId;
+  const created = await chrome.tabs.create({ url: CHANNELS[channel].openUrl, active: !!activate });
+  s.tabId = created.id;
+  return s.tabId;
 }
 
-function sendCommandToPage(type, payload) {
-  if (!waTabId) return;
-  chrome.tabs.sendMessage(waTabId, { target: 'cyrus-wa-page', type, payload }).catch(() => {
+function sendCommandToPage(channel, type, payload) {
+  const s = st[channel];
+  if (!s.tabId) return;
+  chrome.tabs.sendMessage(s.tabId, { target: CHANNELS[channel].pageTarget, type, payload }).catch(() => {
     // La page peut ne pas être prête (rechargement) — l'appelant a son propre timeout.
   });
 }
 
 // ---- Évènements remontés du pont (via content-relay.js) ----
 chrome.runtime.onMessage.addListener((msg, sender) => {
-  if (!msg || msg.source !== 'cyrus-wa-bridge') return;
-  if (sender.tab) waTabId = sender.tab.id;
+  const channel = msg && SOURCE_TO_CHANNEL[msg.source];
+  if (!channel) return;
+  const s = st[channel];
+  if (sender.tab) s.tabId = sender.tab.id;
 
   switch (msg.type) {
     case 'state':
-      waState = (msg.payload && msg.payload.state) || 'UNKNOWN';
+      // WhatsApp expose un état direct (Socket.state, ex. 'CONNECTED') ;
+      // Telegram expose seulement un booléen d'autorisation — normalisé ici
+      // vers le même vocabulaire pour que le reste du fichier (et le
+      // contrat côté CyrusEngine) ignore la différence entre les deux.
+      if (channel === 'whatsapp') {
+        s.state = (msg.payload && msg.payload.state) || 'UNKNOWN';
+      } else {
+        s.state = (msg.payload && msg.payload.authorized) ? 'CONNECTED' : 'UNPAIRED';
+      }
       break;
     case 'bridge-ready':
-      bridgeReady = true;
+      s.bridgeReady = true;
       break;
     case 'send-result':
-      if (pendingSend) { pendingSend.resolve(msg.payload); pendingSend = null; }
+      if (s.pendingSend) { s.pendingSend.resolve(msg.payload); s.pendingSend = null; }
       break;
     case 'groups':
-      if (pendingGroups) { pendingGroups.resolve((msg.payload && msg.payload.groups) || []); pendingGroups = null; }
+      if (s.pendingGroups) { s.pendingGroups.resolve((msg.payload && msg.payload.groups) || []); s.pendingGroups = null; }
       break;
     case 'group-members':
-      if (pendingGroupMembers) { pendingGroupMembers.resolve((msg.payload && msg.payload.members) || []); pendingGroupMembers = null; }
+      if (s.pendingGroupMembers) { s.pendingGroupMembers.resolve((msg.payload && msg.payload.members) || []); s.pendingGroupMembers = null; }
       break;
     case 'bridge-error':
-      console.warn('[cyrus-wa-bridge]', msg.payload);
+      console.warn('[cyrus-bridge:' + channel + ']', msg.payload);
       break;
     default:
       break;
@@ -92,53 +116,55 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 
 async function handleExternalMessage(message) {
   const action = message && message.action;
+  const channel = message && message.channel === 'telegram' ? 'telegram' : 'whatsapp';
+  const s = st[channel];
 
   if (action === 'ping') {
-    return { ok: true, installed: true, waState, bridgeReady, connected: waState === 'CONNECTED' };
+    return { ok: true, installed: true, waState: s.state, bridgeReady: s.bridgeReady, connected: s.state === 'CONNECTED' };
   }
 
-  if (action === 'openWhatsApp') {
-    await ensureWaTab(true);
+  if (action === 'open') {
+    await ensureTab(channel, true);
     return { ok: true };
   }
 
   if (action === 'getStatus') {
-    if (!waTabId) return { ok: true, connected: false, waState: 'UNKNOWN', bridgeReady: false };
-    return { ok: true, connected: waState === 'CONNECTED', waState, bridgeReady };
+    if (!s.tabId) return { ok: true, connected: false, waState: 'UNKNOWN', bridgeReady: false };
+    return { ok: true, connected: s.state === 'CONNECTED', waState: s.state, bridgeReady: s.bridgeReady };
   }
 
   if (action === 'sendMessage') {
-    await ensureWaTab(false);
-    if (pendingSend) return { ok: false, error: 'ENVOI_DEJA_EN_COURS' };
+    await ensureTab(channel, false);
+    if (s.pendingSend) return { ok: false, error: 'ENVOI_DEJA_EN_COURS' };
     const result = await new Promise((resolve) => {
-      pendingSend = { resolve };
-      sendCommandToPage('send', { to: message.to, text: message.text });
+      s.pendingSend = { resolve };
+      sendCommandToPage(channel, 'send', { to: message.to, text: message.text });
       setTimeout(() => {
-        if (pendingSend) { pendingSend.resolve({ ok: false, error: 'TIMEOUT' }); pendingSend = null; }
+        if (s.pendingSend) { s.pendingSend.resolve({ ok: false, error: 'TIMEOUT' }); s.pendingSend = null; }
       }, SEND_TIMEOUT_MS);
     });
     return Object.assign({ ok: !!result.ok }, result);
   }
 
   if (action === 'getGroups') {
-    await ensureWaTab(false);
+    await ensureTab(channel, false);
     const groups = await new Promise((resolve) => {
-      pendingGroups = { resolve };
-      sendCommandToPage('getGroups', {});
+      s.pendingGroups = { resolve };
+      sendCommandToPage(channel, 'getGroups', {});
       setTimeout(() => {
-        if (pendingGroups) { pendingGroups.resolve([]); pendingGroups = null; }
+        if (s.pendingGroups) { s.pendingGroups.resolve([]); s.pendingGroups = null; }
       }, GROUPS_TIMEOUT_MS);
     });
     return { ok: true, groups };
   }
 
   if (action === 'getGroupMembers') {
-    await ensureWaTab(false);
+    await ensureTab(channel, false);
     const members = await new Promise((resolve) => {
-      pendingGroupMembers = { resolve };
-      sendCommandToPage('getGroupMembers', { groupId: message.groupId });
+      s.pendingGroupMembers = { resolve };
+      sendCommandToPage(channel, 'getGroupMembers', { groupId: message.groupId });
       setTimeout(() => {
-        if (pendingGroupMembers) { pendingGroupMembers.resolve([]); pendingGroupMembers = null; }
+        if (s.pendingGroupMembers) { s.pendingGroupMembers.resolve([]); s.pendingGroupMembers = null; }
       }, GROUPS_TIMEOUT_MS);
     });
     return { ok: true, members };

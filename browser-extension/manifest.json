@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "CYRUS — Pont WhatsApp Web",
-  "version": "1.0.0",
-  "description": "Permet au mode Local de CYRUS SUPER ASSISTANT d'envoyer réellement des messages WhatsApp depuis le navigateur, sans clic manuel dans WhatsApp Web.",
+  "name": "CYRUS — Pont WhatsApp & Telegram Web",
+  "version": "1.1.0",
+  "description": "Permet au mode Local de CYRUS SUPER ASSISTANT d'envoyer réellement des messages WhatsApp et Telegram depuis le navigateur, sans clic manuel.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwSqI3WgniGiTK59dhYpWQxjip+rvMnXlBcEwKvvPzLZo00AmzOmwdauvP0f6Q4e+pXXYrjDQYeQGnTPjXrljoG8GkF7keuCzEHyDAH0fOVNb0ypLt0jkMJqbPra4lMTWVi35/+FaSHO4pkxWTpDUSBIlmpVlw+GGuFjwKWWW7uAgdXjxTnS9JEPuesmO7mcyYqnGSMeHQ8nCiW8g/HWuDlqqtGD/OKpgltEwJKABEVx/UkWmWw7mruuGhtnyh1ac/5p8KoBqQuNlHF1sgvt/Xg8ojDRgdA7p+T6N9ClecNDj9432oWpCpcume0Qqa9P7RKgwQBKtcBOBJsqL2g5qDQIDAQAB",
   "icons": {
     "16": "icons/icon16.png",
@@ -13,7 +13,7 @@
     "service_worker": "background.js"
   },
   "permissions": ["tabs", "scripting"],
-  "host_permissions": ["https://web.whatsapp.com/*"],
+  "host_permissions": ["https://web.whatsapp.com/*", "https://web.telegram.org/*"],
   "content_scripts": [
     {
       "matches": ["https://web.whatsapp.com/*"],
@@ -22,7 +22,13 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://web.whatsapp.com/*"],
+      "matches": ["https://web.telegram.org/*"],
+      "js": ["injected-bridge-telegram.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*", "https://web.telegram.org/*"],
       "js": ["content-relay.js"],
       "run_at": "document_idle"
     }

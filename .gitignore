@@ -26,6 +26,8 @@ ai_studio_sessions/
 public/dist/
 # Sortie de build (scripts/build-public.js) : générée à chaque déploiement Vercel.
 public/webapp/
+# Sortie de build (scripts/build-extension-zip.js) : idem.
+public/cyrus-extension.zip
 .vercel
 .env*
 firebase-service-account.json
