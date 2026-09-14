@@ -5,9 +5,14 @@
 // ici - la resolution necessite une session connectee).
 const { buildPersonalizationVars } = require('./personalization');
 
+// Un identifiant de groupe/canal Telegram (diffusion, pas DM individuel) est
+// un entier NÉGATIF (ex: -1001234567890, format supergroupe/canal) - le
+// signe doit être préservé, contrairement à un numéro de téléphone (toujours
+// positif) où seuls les chiffres comptent.
 function normalizeTelegramId(identifier) {
   const raw = String(identifier || '').trim();
   if (raw.startsWith('@')) return raw;
+  if (raw.startsWith('-')) return '-' + raw.slice(1).replace(/\D/g, '');
   return raw.replace(/\D/g, '');
 }
 

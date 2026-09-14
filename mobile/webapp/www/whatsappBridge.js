@@ -150,6 +150,110 @@
         }
       };
 
+      // Envoi de pièce jointe (image/vidéo/PDF) — port fidèle du chemin
+      // média de whatsapp-web.js (processMediaData + sendMessage, voir
+      // local-client/node_modules/whatsapp-web.js/src/util/Injected/Utils.js,
+      // seule référence utilisée pour ce portage, jamais testée sur cet
+      // appareil précis contrairement à l'envoi texte déjà validé
+      // ci-dessus — mêmes modules internes WA Web réels, pas une
+      // simulation). `data` : base64 brut (pas de préfixe data:...;base64,).
+      function mediaInfoToFile(data, mimetype, filename) {
+        const binary = window.atob(data);
+        const buffer = new ArrayBuffer(binary.length);
+        const view = new Uint8Array(buffer);
+        for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+        const blob = new Blob([buffer], { type: mimetype });
+        return new File([blob], filename || 'fichier', { type: mimetype, lastModified: Date.now() });
+      }
+
+      window.__cyrusSendMedia = async function (chatId, data, mimetype, filename, caption) {
+        let stage = 'init';
+        try {
+          const WidFactory = window.require('WAWebWidFactory');
+          const chatWid = WidFactory.createWid(chatId);
+
+          stage = 'findOrCreateLatestChat';
+          let chat = Collections.Chat.get(chatWid);
+          if (!chat) {
+            const found = await window.require('WAWebFindChatAction').findOrCreateLatestChat(chatWid);
+            chat = found && found.chat;
+          }
+          if (!chat) throw new Error('Chat introuvable: ' + chatId);
+
+          stage = 'resolveFrom';
+          const meUsers = window.require('WAWebUserPrefsMeUser');
+          let from = chat.id.isLid()
+            ? safeCall(function () { return meUsers.getMaybeMeLidUser(); })
+            : undefined;
+          if (!from) from = safeCall(function () { return meUsers.getMaybeMePnUser(); });
+          if (!from) throw new Error("Impossible de determiner l'identite expeditrice (from)");
+
+          stage = 'processMediaData';
+          const file = mediaInfoToFile(data, mimetype, filename);
+          const OpaqueData = window.require('WAWebMediaOpaqueData');
+          const opaqueData = await OpaqueData.createFromData(file, mimetype);
+          const mediaPrep = window.require('WAWebPrepRawMedia').prepRawMedia(opaqueData, {});
+          const mediaData = await mediaPrep.waitForPrep();
+          const mediaObject = window.require('WAWebMediaStorage').getOrCreateMediaObject(mediaData.filehash);
+          const mediaType = window.require('WAWebMmsMediaTypes').msgToMediaType({ type: mediaData.type, isGif: mediaData.isGif });
+          if (!mediaData.filehash) throw new Error('media-fault: filehash undefined');
+
+          if (!(mediaData.mediaBlob instanceof OpaqueData)) {
+            mediaData.mediaBlob = await OpaqueData.createFromData(mediaData.mediaBlob, mediaData.mediaBlob.type);
+          }
+          mediaData.renderableUrl = mediaData.mediaBlob.url();
+          mediaObject.consolidate(mediaData.toJSON());
+          mediaData.mediaBlob.autorelease();
+
+          stage = 'uploadMedia';
+          const { uploadMedia } = window.require('WAWebMediaMmsV4Upload');
+          const uploadedMedia = await uploadMedia({ mimetype: mediaData.mimetype, mediaObject: mediaObject, mediaType: mediaType });
+          const mediaEntry = uploadedMedia.mediaEntry;
+          if (!mediaEntry) throw new Error('upload failed: media entry was not created');
+
+          mediaData.set({
+            clientUrl: mediaEntry.mmsUrl,
+            deprecatedMms3Url: mediaEntry.deprecatedMms3Url,
+            directPath: mediaEntry.directPath,
+            mediaKey: mediaEntry.mediaKey,
+            mediaKeyTimestamp: mediaEntry.mediaKeyTimestamp,
+            filehash: mediaObject.filehash,
+            encFilehash: mediaEntry.encFilehash,
+            uploadhash: mediaEntry.uploadHash,
+            size: mediaObject.size,
+            streamingSidecar: mediaEntry.sidecar,
+            firstFrameSidecar: mediaEntry.firstFrameSidecar,
+          });
+
+          stage = 'buildMessage';
+          const MsgKey = window.require('WAWebMsgKey');
+          const newId = await MsgKey.newId();
+          const newMsgKey = new MsgKey({ from: from, to: chat.id, id: newId, selfDir: 'out' });
+
+          const message = Object.assign({
+            id: newMsgKey,
+            ack: 0,
+            body: caption || '',
+            caption: caption || '',
+            from: from,
+            to: chat.id,
+            local: true,
+            self: 'out',
+            t: parseInt(String(Date.now() / 1000), 10),
+            isNewMsg: true,
+            type: mediaType,
+          }, mediaData.toJSON ? mediaData.toJSON() : {});
+
+          stage = 'addAndSendMsgToChat';
+          const result = window.require('WAWebSendMsgChatAction').addAndSendMsgToChat(chat, message);
+          await result[0];
+
+          post('send-result', { ok: true, chatId: chatId });
+        } catch (e) {
+          post('send-result', { ok: false, chatId: chatId, error: '[' + stage + '] ' + String(e) });
+        }
+      };
+
       // Extraction : liste des groupes (Collections.Chat.isGroup()) puis,
       // sur demande, leurs membres (chat.groupMetadata.participants) - pour
       // le module "extraction de donnees" de la webapp (import de listes de

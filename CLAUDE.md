@@ -23,6 +23,15 @@ des exécutions en double des mêmes scripts) :
 - Pour forcer l'extraction et la sauvegarde immédiate d'une leçon depuis la
   session en cours (sans attendre la fin de session), invoquer `/learn`.
 
+**Chantier en cours (2026-09-14 soir)** : parité fonctionnelle Mode VPS ↔
+Mode Local (PC `.exe` + mobile APK). Suivi vivant, état détaillé et
+prochaines étapes exactes dans **`docs/PARITE-LOCAL.md`** — à lire avant de
+reprendre ce chantier. Résumé ultra-court : tout le code de parité est écrit
+et vérifié syntaxiquement (pièce jointe, ebook enrichi, Studio Média complet
+avec vidéo Ken Burns, multi-campagnes PC, etc.), mais **rien n'est encore
+compilé ni testé en conditions réelles** — bloqué ce soir par manque de RAM
+sur cette machine (4 Go, plusieurs sessions actives en parallèle).
+
 ## État actuel du projet (résumé)
 
 **CYRUS SUPER ASSISTANT** — plateforme Node.js/Express (`index.js`) déployée

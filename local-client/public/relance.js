@@ -204,4 +204,25 @@
     state.cursor += 1;
     renderCard();
   };
+
+  // Raccourcis clavier (parité dashboard.html) : Espace = Envoyer & Suivant,
+  // Flèche droite = Ignorer/Suivant — inactifs pendant la saisie dans un
+  // champ texte, et seulement quand l'onglet Relance est affiché et qu'une
+  // carte de relance est visible.
+  document.addEventListener('keydown', (e) => {
+    const tab = document.getElementById('tab-relance');
+    if (!tab || !tab.classList.contains('active')) return;
+    const activeTag = document.activeElement ? document.activeElement.tagName : '';
+    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+    const card = document.getElementById('relCard');
+    if (!card || card.style.display === 'none') return;
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      window.relanceLaunch();
+    } else if (e.code === 'ArrowRight') {
+      e.preventDefault();
+      window.relanceSkip();
+    }
+  });
 })();

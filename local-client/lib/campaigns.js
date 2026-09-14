@@ -73,10 +73,15 @@ function saveResults(id, results) {
 // recipients : tableau de chaînes ("2250700000000" ou déjà un JID) ou
 // d'objets { telephone, nom } — même format accepté que le backend
 // principal (voir lib/whatsappRecipients.js#normalizeRecipientEntry).
-function createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channel } = {}) {
+// `media` (optionnel) : { base64, mimetype, filename } — la pièce jointe est
+// stockée telle quelle dans config_json (comme le reste de la config de
+// campagne), envoyée en légende (`caption`) avec le texte personnalisé à
+// chaque destinataire plutôt qu'en message texte séparé.
+function createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channel, media, batchSize, batchPauseMs } = {}) {
   if (!name || !name.trim()) throw new Error('Nom de campagne manquant.');
   if (!Array.isArray(recipients) || recipients.length === 0) throw new Error('Liste de destinataires vide.');
   if (!text || !text.trim()) throw new Error('Message manquant.');
+  if (media && (!media.base64 || !media.mimetype)) throw new Error('Pièce jointe invalide (base64/mimetype requis).');
 
   const resolvedChannel = channel === 'telegram' ? 'telegram' : 'whatsapp';
   const normalizedAll = recipients.map((r) => normalizerFor(resolvedChannel)(r, getContactName));
@@ -92,6 +97,18 @@ function createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channe
   const results = normalized.map((r) => ({ to: r.to, nom: r.nom, status: 'pending', error: null, sentAt: null }));
   const id = crypto.randomUUID();
 
+  // Telegram impose un délai strict 30-60s entre chaque DM (limite
+  // anti-spam de la plateforme, pas un choix produit) — clampé ici quel que
+  // soit ce que l'appelant a demandé, même comportement que le VPS
+  // (public/dashboard.html, champs tg-dm-min-delay/tg-dm-max-delay bornés
+  // 30-60 côté UI ET revérifiés ici côté données persistées).
+  let effectiveMin = delayMinMs || 8000;
+  let effectiveMax = delayMaxMs || 20000;
+  if (resolvedChannel === 'telegram') {
+    effectiveMin = Math.min(60000, Math.max(30000, effectiveMin));
+    effectiveMax = Math.min(60000, Math.max(effectiveMin, effectiveMax));
+  }
+
   db.prepare(`
     INSERT INTO campaigns (id, name, status, config_json, results_json)
     VALUES (?, ?, 'draft', ?, ?)
@@ -99,7 +116,10 @@ function createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channe
     id,
     name.trim(),
     JSON.stringify({
-      text, channel: resolvedChannel, delayMinMs: delayMinMs || 8000, delayMaxMs: delayMaxMs || 20000, recipients: normalized,
+      text, channel: resolvedChannel, delayMinMs: effectiveMin, delayMaxMs: effectiveMax, recipients: normalized,
+      media: media ? { base64: media.base64, mimetype: media.mimetype, filename: media.filename || '' } : null,
+      batchSize: Math.max(1, batchSize || 0) || null,
+      batchPauseMs: Math.max(1000, batchPauseMs || 0) || null,
     }),
     JSON.stringify(results),
   );
@@ -116,6 +136,11 @@ function createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channe
 async function runLoop(id) {
   if (runningLoops.has(id)) return;
   runningLoops.add(id);
+  // Compteur de lot (voir createCampaign#batchSize/batchPauseMs) — reset à
+  // chaque (re)démarrage de la boucle (pause manuelle, reconnexion) plutôt
+  // que persisté : une repise redémarre simplement un nouveau lot, jamais un
+  // comportement incorrect, juste moins précis qu'un compteur en base.
+  let sentInBatch = 0;
   try {
     for (;;) {
       const campaign = getCampaign(id);
@@ -140,7 +165,17 @@ async function runLoop(id) {
       const recipient = campaign.config.recipients[nextIndex];
       const results = campaign.results;
       try {
-        await adapter.sendMessage(recipient.to, personalizeMessage(campaign.config.text, recipient.vars));
+        const caption = personalizeMessage(campaign.config.text, recipient.vars);
+        if (campaign.config.media) {
+          await adapter.sendMedia(recipient.to, {
+            buffer: Buffer.from(campaign.config.media.base64, 'base64'),
+            mimetype: campaign.config.media.mimetype,
+            filename: campaign.config.media.filename,
+            caption,
+          });
+        } else {
+          await adapter.sendMessage(recipient.to, caption);
+        }
         results[nextIndex] = { ...results[nextIndex], status: 'sent', sentAt: new Date().toISOString() };
       } catch (err) {
         results[nextIndex] = { ...results[nextIndex], status: 'error', error: err.message };
@@ -153,19 +188,52 @@ async function runLoop(id) {
       const fresh = getCampaign(id);
       if (!fresh || fresh.status !== 'running') break;
 
-      await new Promise((resolve) => {
-        setTimeout(resolve, randomDelay(campaign.config.delayMinMs, campaign.config.delayMaxMs));
-      });
+      sentInBatch += 1;
+      const { batchSize, batchPauseMs } = campaign.config;
+      const waitMs = (batchSize && sentInBatch >= batchSize)
+        ? Math.max(randomDelay(campaign.config.delayMinMs, campaign.config.delayMaxMs), batchPauseMs || 0)
+        : randomDelay(campaign.config.delayMinMs, campaign.config.delayMaxMs);
+      if (batchSize && sentInBatch >= batchSize) sentInBatch = 0;
+
+      await new Promise((resolve) => { setTimeout(resolve, waitMs); });
     }
   } finally {
     runningLoops.delete(id);
+    // File d'attente multi-campagnes (parité dashboard.html) : une seule
+    // campagne à la fois envoie réellement par canal - toute autre campagne
+    // démarrée pendant ce temps a été mise en 'queued' (voir startCampaign)
+    // plutôt que lancée en parallèle sur la même session WhatsApp/Telegram
+    // (concurrent = envois entrelacés non maîtrisés, jamais souhaitable).
+    advanceQueue(id);
   }
+}
+
+// Démarre la plus ancienne campagne 'queued' du même canal que `finishedId`
+// vient de libérer, s'il y en a une - no-op sinon. Appelé à la fin de
+// CHAQUE boucle (complétée, mise en pause, erreur, annulée), jamais
+// seulement en cas de succès : une campagne en pause doit libérer la place
+// pour la suivante en attente, pas la bloquer indéfiniment.
+function advanceQueue(finishedId) {
+  const finished = getCampaign(finishedId);
+  const channel = finished ? (finished.config.channel || 'whatsapp') : null;
+  if (!channel) return;
+  const next = listCampaigns()
+    .filter((c) => c.status === 'queued' && (c.config.channel || 'whatsapp') === channel)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+  if (next) startCampaign(next.id);
 }
 
 function startCampaign(id) {
   const campaign = getCampaign(id);
   if (!campaign) throw new Error('Campagne introuvable.');
   if (campaign.status === 'completed') throw new Error('Cette campagne est déjà terminée.');
+
+  const channel = campaign.config.channel || 'whatsapp';
+  const anotherActive = listCampaigns().some((c) => c.id !== id && c.status === 'running' && (c.config.channel || 'whatsapp') === channel);
+  if (anotherActive) {
+    setStatus(id, 'queued');
+    return;
+  }
 
   setStatus(id, 'running');
   runLoop(id).catch((err) => {
@@ -177,13 +245,17 @@ function startCampaign(id) {
 function pauseCampaign(id) {
   const campaign = getCampaign(id);
   if (!campaign) throw new Error('Campagne introuvable.');
+  const wasRunning = campaign.status === 'running';
   setStatus(id, 'paused');
+  if (wasRunning) advanceQueue(id);
 }
 
 function cancelCampaign(id) {
   const campaign = getCampaign(id);
   if (!campaign) throw new Error('Campagne introuvable.');
+  const wasRunning = campaign.status === 'running';
   setStatus(id, 'cancelled');
+  if (wasRunning) advanceQueue(id);
 }
 
 // Trace un envoi déclenché par la Relance Manuelle Express (deep link ouvert

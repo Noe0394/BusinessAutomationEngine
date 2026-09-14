@@ -227,6 +227,21 @@ async function listGroups() {
 
     row.appendChild(importBtn);
     row.appendChild(exportBtn);
+
+    // Diffusion directe dans le groupe/canal lui-même (un seul message pour
+    // tout le groupe), à distinguer de "Importer comme destinataires"
+    // ci-dessus (extrait chaque MEMBRE comme destinataire individuel).
+    if (channel === 'telegram') {
+      const broadcastBtn = document.createElement('button');
+      broadcastBtn.textContent = '📣 Diffuser dans ce groupe';
+      broadcastBtn.addEventListener('click', () => {
+        const textarea = document.getElementById('campRecipients');
+        const line = g.id + (g.name ? ',' + g.name : '');
+        textarea.value = textarea.value ? textarea.value + '\n' + line : line;
+        document.getElementById('campResult').textContent = 'Groupe ajouté aux destinataires — un seul envoi touchera tout le groupe.';
+      });
+      row.appendChild(broadcastBtn);
+    }
     li.appendChild(title);
     li.appendChild(row);
     el.appendChild(li);
@@ -268,6 +283,26 @@ async function exportGroupMembers(channel, groupId, groupName) {
 
 // ---------- Campagnes ----------
 
+// Lit le fichier choisi en base64 (sans le préfixe "data:...;base64,") -
+// c'est ce que lib/campaigns.js attend (media.base64) pour le repasser tel
+// quel à Buffer.from(..., 'base64') côté serveur.
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+document.getElementById('campMediaInput').addEventListener('change', () => {
+  const file = document.getElementById('campMediaInput').files[0];
+  const preview = document.getElementById('campMediaPreview');
+  if (!file) { preview.style.display = 'none'; preview.textContent = ''; return; }
+  preview.style.display = 'block';
+  preview.textContent = '📎 ' + file.name + ' (' + Math.round(file.size / 1024) + ' Ko)';
+});
+
 async function createCampaign() {
   const name = document.getElementById('campName').value;
   const channel = document.getElementById('campChannel').value;
@@ -276,16 +311,28 @@ async function createCampaign() {
   const text = document.getElementById('campText').value;
   const delayMinMs = Number(document.getElementById('campDelayMin').value) * 1000;
   const delayMaxMs = Number(document.getElementById('campDelayMax').value) * 1000;
+  const batchSize = Number(document.getElementById('campBatchSize').value) || null;
+  const batchPauseMs = Number(document.getElementById('campBatchPause').value) * 1000 || null;
+
+  const mediaFile = document.getElementById('campMediaInput').files[0];
+  let media = null;
+  if (mediaFile) {
+    media = { base64: await readFileAsBase64(mediaFile), mimetype: mediaFile.type, filename: mediaFile.name };
+  }
 
   const res = await fetch('/api/campaigns', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, recipients, text, delayMinMs, delayMaxMs, channel }),
+    body: JSON.stringify({ name, recipients, text, delayMinMs, delayMaxMs, channel, media, batchSize, batchPauseMs }),
   });
   const data = await res.json();
   document.getElementById('campResult').textContent = res.ok
     ? `Campagne créée (${data.results.length} destinataire(s))` + (data.blockedCount ? ` — ${data.blockedCount} exclu(s), liste noire.` : '.')
     : ('Erreur : ' + data.error);
+  if (res.ok) {
+    document.getElementById('campMediaInput').value = '';
+    document.getElementById('campMediaPreview').style.display = 'none';
+  }
   refreshCampaigns();
 }
 
@@ -294,9 +341,12 @@ async function campaignAction(id, action) {
   refreshCampaigns();
 }
 
+let lastCampaignsList = [];
+
 async function refreshCampaigns() {
   const res = await fetch('/api/campaigns');
   const list = await res.json();
+  lastCampaignsList = list;
   const el = document.getElementById('campaignsList');
   el.innerHTML = list.map((c) => {
     const sent = c.results.filter((r) => r.status === 'sent').length;
@@ -307,11 +357,36 @@ async function refreshCampaigns() {
     if (c.status === 'running') actions.push(`<button onclick="campaignAction('${c.id}','pause')">Pause</button>`);
     if (c.status !== 'completed' && c.status !== 'cancelled') actions.push(`<button onclick="campaignAction('${c.id}','cancel')">Annuler</button>`);
     const channelLabel = (c.config && c.config.channel === 'telegram') ? 'Telegram' : 'WhatsApp';
+    const statusLabels = { draft: 'brouillon', running: 'en cours', paused: 'en pause', queued: '⏳ en file d\'attente', completed: 'terminée', cancelled: 'annulée', error: 'erreur' };
+    actions.push(`<button onclick="toggleReport('${c.id}')">📊 Rapport</button>`);
     return `<li>
-      <strong>${c.name}</strong> [${channelLabel}] — ${c.status} (${sent}/${total} envoyés, ${errors} erreur(s))
+      <strong>${c.name}</strong> [${channelLabel}] — ${statusLabels[c.status] || c.status} (${sent}/${total} envoyés, ${errors} erreur(s))
       <div>${actions.join(' ')}</div>
+      <div id="report-${c.id}" style="display:none; margin-top:8px;"></div>
     </li>`;
   }).join('');
+}
+
+// Rapport final de campagne (équivalent de la fenêtre modale de
+// dashboard.html) : décompte par statut + liste des échecs avec leur cause -
+// entièrement calculé côté client à partir des données déjà chargées par
+// refreshCampaigns(), aucune route serveur dédiée nécessaire.
+function toggleReport(id) {
+  const el = document.getElementById('report-' + id);
+  if (!el) return;
+  if (el.style.display === 'block') { el.style.display = 'none'; return; }
+  const c = lastCampaignsList.find((x) => x.id === id);
+  if (!c) return;
+  const pending = c.results.filter((r) => r.status === 'pending').length;
+  const sent = c.results.filter((r) => r.status === 'sent').length;
+  const errors = c.results.filter((r) => r.status === 'error');
+  const rows = errors.map((r) => `<li>${escapeHtml(r.to)} — ${escapeHtml(r.error || 'échec')}</li>`).join('');
+  el.innerHTML = `
+    <div style="border:1px solid #e0e0e0; border-radius:8px; padding:10px; background:#fafafa;">
+      <div><b>${sent}</b> envoyé(s) · <b>${errors.length}</b> échec(s) · <b>${pending}</b> en attente</div>
+      ${errors.length ? '<ul style="margin-top:6px;">' + rows + '</ul>' : ''}
+    </div>`;
+  el.style.display = 'block';
 }
 
 // ---------- Liste noire ----------

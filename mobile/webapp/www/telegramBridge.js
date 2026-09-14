@@ -60,31 +60,61 @@
         }
       });
 
+      async function resolvePeerId(identifier) {
+        const trimmed = String(identifier || '').trim();
+        if (trimmed.startsWith('@')) {
+          const resolved = await managers.appUsersManager.resolveUsername(trimmed.slice(1));
+          return resolved && (resolved.id !== undefined ? resolved.id : resolved);
+        }
+        if (/^\d+$/.test(trimmed) && trimmed.length < 12) {
+          // Deja un peerId Telegram numerique (pas un numero de telephone).
+          return Number(trimmed);
+        }
+        const digits = trimmed.replace(/[^\d+]/g, '');
+        if (!managers.appUsersManager.importContact) {
+          throw new Error('importContact indisponible sur cette version de appUsersManager');
+        }
+        const imported = await managers.appUsersManager.importContact(digits, 'Contact', '');
+        return imported && (imported.id !== undefined ? imported.id : imported);
+      }
+
       window.__cyrusTgSend = async function (identifier, text) {
         let stage = 'init';
         try {
-          const trimmed = String(identifier || '').trim();
           stage = 'resolvePeer';
-          let peerId;
-
-          if (trimmed.startsWith('@')) {
-            const resolved = await managers.appUsersManager.resolveUsername(trimmed.slice(1));
-            peerId = resolved && (resolved.id !== undefined ? resolved.id : resolved);
-          } else if (/^\d+$/.test(trimmed) && trimmed.length < 12) {
-            // Deja un peerId Telegram numerique (pas un numero de telephone).
-            peerId = Number(trimmed);
-          } else {
-            const digits = trimmed.replace(/[^\d+]/g, '');
-            if (!managers.appUsersManager.importContact) {
-              throw new Error('importContact indisponible sur cette version de appUsersManager');
-            }
-            const imported = await managers.appUsersManager.importContact(digits, 'Contact', '');
-            peerId = imported && (imported.id !== undefined ? imported.id : imported);
-          }
+          const peerId = await resolvePeerId(identifier);
           if (!peerId) throw new Error('Peer introuvable pour: ' + identifier);
 
           stage = 'sendText';
           await managers.appMessagesManager.sendText({ peerId: peerId, text: text });
+
+          post('send-result', { ok: true, chatId: identifier });
+        } catch (e) {
+          post('send-result', { ok: false, chatId: identifier, error: '[' + stage + '] ' + String(e) });
+        }
+      };
+
+      // Pièce jointe (image/vidéo/PDF) — NON ÉPROUVÉ sur appareil, au même
+      // titre que le reste de ce fichier (voir statut en tête) : nom de
+      // méthode (`sendFile`) déduit de l'API interne observée en exploration
+      // live (window.rootScope.managers.appMessagesManager), jamais appelé
+      // réellement. `data` : base64 brut (sans préfixe data:...;base64,).
+      window.__cyrusTgSendMedia = async function (identifier, data, mimetype, filename, caption) {
+        let stage = 'init';
+        try {
+          stage = 'resolvePeer';
+          const peerId = await resolvePeerId(identifier);
+          if (!peerId) throw new Error('Peer introuvable pour: ' + identifier);
+
+          stage = 'buildFile';
+          const binary = window.atob(data);
+          const buffer = new ArrayBuffer(binary.length);
+          const view = new Uint8Array(buffer);
+          for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+          const file = new File([new Blob([buffer], { type: mimetype })], filename || 'fichier', { type: mimetype });
+
+          stage = 'sendFile';
+          await managers.appMessagesManager.sendFile({ peerId: peerId, file: file, caption: caption || '' });
 
           post('send-result', { ok: true, chatId: identifier });
         } catch (e) {

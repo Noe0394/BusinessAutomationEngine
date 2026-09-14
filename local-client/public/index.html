@@ -4,59 +4,78 @@
 <meta charset="utf-8">
 <title>CYRUS — Client local</title>
 <style>
-  :root {
-    --bg: #0A0E14;
-    --card: #131A24;
-    --border: #1F2A38;
-    --cyan: #22D3EE;
-    --cyan-dim: rgba(34, 211, 238, 0.12);
-    --green: #34D399;
-    --green-dim: rgba(52, 211, 153, 0.12);
-    --red: #F87171;
-    --red-dim: rgba(248, 113, 113, 0.12);
-    --text: #F1F5F9;
-    --text-dim: #7C8A9C;
-  }
+  /* Palette calquée sur public/dashboard.html (Mode VPS) — décision produit
+     explicite : c'est le Mode Local qui doit ressembler au VPS, pas
+     l'inverse (dashboard.html ne doit jamais être retouché pour "matcher"
+     un thème plus récent). Mêmes valeurs de couleur que le VPS, pas
+     d'approximation. */
   * { box-sizing: border-box; }
-  html, body { background: var(--bg); }
-  body { font-family: -apple-system, Roboto, system-ui, sans-serif; max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; color: var(--text); }
-  h1 { font-size: 1.4rem; font-weight: 800; margin: 0 0 18px; }
-  h1 .accent { color: var(--cyan); }
-  h2 { font-size: 1rem; margin: 0 0 10px; color: var(--text); }
-  nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
-  nav button {
-    padding: 8px 14px; border: 1px solid var(--cyan); background: var(--cyan-dim); color: var(--cyan);
-    border-radius: 10px; cursor: pointer; font-weight: 700; font-size: 13px;
+  html, body { background: #f2f2f3; }
+  body { font-family: sans-serif; margin: 0; padding: 0 0 40px; color: #1a1a1a; }
+  .header {
+    display: flex; justify-content: space-between; align-items: center; padding: 0.7rem 1.2rem; color: #fff; flex-wrap: wrap; gap: 0.5rem;
+    background: linear-gradient(120deg, #0b0b1a, #1a1244, #2d1b6e, #1a1244, #0b0b1a);
+    background-size: 300% 300%; animation: cyrus-flow 16s ease infinite;
   }
-  nav button.active { background: var(--cyan); color: #04141A; }
-  .tab { display: none; }
-  .tab.active { display: block; }
-  h2 { padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-top: 24px; }
+  @keyframes cyrus-flow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+  h1 { font-size: 1.1rem; font-weight: 800; margin: 0; letter-spacing: 0.03em; }
+  h1 .accent { color: #b9a6ff; }
+  h2 { font-size: 1rem; margin: 24px 0 10px; padding-bottom: 8px; border-bottom: 1px solid #e0e0e0; color: #1a1a1a; }
   h2:first-child { margin-top: 0; }
-  #status, #tg-status, #conn-wa-status, #conn-tg-status { display: inline-block; padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 13px; }
-  .connected { background: var(--green-dim) !important; color: var(--green); }
-  .disconnected { background: var(--red-dim) !important; color: var(--red); }
+  nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px; background: #f2f2f3; position: sticky; top: 0; z-index: 5; }
+  nav button {
+    padding: 0.45rem 0.7rem; border: none; background: #ddd; color: #1a1a1a;
+    border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 0.82rem;
+  }
+  nav button.active { background: #fff; color: #6c4fd6; box-shadow: inset 0 -3px 0 #6c4fd6; }
+  .tab { display: none; margin: 0 16px 24px; background: #fff; padding: 1.25rem; border-radius: 0 8px 8px 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .tab.active { display: block; }
+  #status, #tg-status, #conn-wa-status, #conn-tg-status { display: inline-block; padding: 0.4rem 1rem; border-radius: 999px; font-weight: bold; font-size: 13px; }
+  .connected { background: #d4f5dd !important; color: #1a7a3c; }
+  .disconnected { background: #fbdada !important; color: #c0392b; }
   #qr { text-align: center; margin-top: 12px; }
-  #qr img { border-radius: 10px; background: #fff; padding: 10px; }
-  input, textarea, select { font-size: 0.95rem; padding: 10px; margin: 4px 0; width: 100%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); }
+  #qr img { border-radius: 10px; background: #fff; padding: 10px; border: 1px solid #e0e0e0; }
+  input, textarea, select { font-size: 0.95rem; padding: 0.75rem; margin: 4px 0; width: 100%; box-sizing: border-box; background: #fff; border: 1px solid #ccc; border-radius: 6px; color: #1a1a1a; min-height: 44px; }
   textarea { min-height: 80px; }
-  button { cursor: pointer; width: auto; font-size: 0.9rem; padding: 9px 14px; background: var(--cyan); color: #04141A; border: none; border-radius: 8px; font-weight: 700; margin: 4px 4px 4px 0; }
+  button { cursor: pointer; width: auto; font-size: 0.9rem; padding: 0.6rem 1rem; background: #6c4fd6; color: #fff; border: none; border-radius: 6px; font-weight: bold; margin: 4px 4px 4px 0; min-height: 40px; }
   button:hover { filter: brightness(1.08); }
-  .row { display: flex; gap: 8px; }
-  .row > * { flex: 1; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row > * { flex: 1; min-width: 160px; }
   ul { padding-left: 0; list-style: none; margin: 0; }
-  li { border: 1px solid var(--border); background: var(--bg); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
-  small { color: var(--text-dim); display: block; margin-bottom: 4px; }
+  li { border: 1px solid #e0e0e0; background: #fafafa; border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  small { color: #777; display: block; margin-bottom: 4px; }
   #goalchat-messages { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; padding: 4px 2px; margin-top: 10px; }
   .goalchat-msg { max-width: 88%; padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; line-height: 1.45; font-size: 13px; }
-  .goalchat-msg.user { align-self: flex-end; background: var(--cyan); color: #04141A; }
-  .goalchat-msg.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--border); }
+  .goalchat-msg.user { align-self: flex-end; background: #6c4fd6; color: #fff; }
+  .goalchat-msg.assistant { align-self: flex-start; background: #fafafa; border: 1px solid #e0e0e0; }
   .goalchat-chips { display: flex; gap: 8px; flex-wrap: wrap; }
-  .goalchat-chips button { padding: 6px 12px; font-size: 12px; margin: 0; }
+  .goalchat-chips button { padding: 6px 12px; font-size: 12px; margin: 0; background: #fff; color: #6c4fd6; border: 1px solid #6c4fd6; }
+  /* Actions d'envoi réel (WhatsApp/Telegram/campagnes) : même vert/bleu
+     iconiques que dashboard.html (.send-button / .relance-launch-button),
+     pas le violet générique utilisé pour le reste. */
+  button.send-wa { background: #25D366; }
+  button.send-tg { background: #2AABEE; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: bold; background: #f0ecff; color: #6c4fd6; }
+
+  /* Studio Média Prédictif (media-studio.js, porté de public/dashboard.html
+     #studio-media-view) — mêmes valeurs de couleur que le VPS. */
+  .toggle-group { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 12px; }
+  .toggle-btn { background: #fff; border: 2px solid #6c4fd6; color: #6c4fd6; margin: 0; }
+  .toggle-btn.active { background: #6c4fd6; color: #fff; }
+  .warning-box { background: #fff3cd; border: 1px solid #ffcc00; color: #7a5c00; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; font-weight: bold; }
+  .media-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 12px 0; }
+  .media-card { border: 1px solid #e0e0e0; border-radius: 10px; overflow: hidden; background: #fff; }
+  .media-card canvas, .media-card video { width: 100%; height: auto; display: block; background: #111; }
+  .media-card-label { padding: 8px 10px 0; font-size: 0.82rem; font-weight: bold; color: #6c4fd6; }
+  .media-card-actions { display: flex; gap: 6px; padding: 8px 10px; flex-wrap: wrap; }
+  .media-card-actions button { flex: 1; font-size: 0.8rem; padding: 0.5rem; min-width: 100px; }
+  .fallback-badge { margin: 6px 10px 0; padding: 0.5rem 0.7rem; background: #fff3cd; border: 1px solid #ffcc00; color: #7a5c00; border-radius: 6px; font-size: 0.78rem; font-weight: bold; }
+  #media-canvas-frame { max-width: 380px; margin: 1rem 0; border-radius: 10px; overflow: hidden; border: 1px solid #e0e0e0; background: #111; }
+  #media-canvas, #media-video-preview { width: 100%; height: auto; display: block; }
 </style>
 </head>
 <body>
-  <h1>CYRUS <span class="accent">SUPER ASSISTANT</span> — Client local</h1>
+  <div class="header"><h1>CYRUS <span class="accent">SUPER ASSISTANT</span> — Client local</h1></div>
 
   <nav>
     <button id="nav-statut" class="active" onclick="showTab('statut')">WhatsApp</button>
@@ -66,6 +85,8 @@
     <button id="nav-campagnes" onclick="showTab('campagnes')">Campagnes</button>
     <button id="nav-relance" onclick="showTab('relance')">Relance Manuelle</button>
     <button id="nav-connexions" onclick="showTab('connexions')">Connexions</button>
+    <button id="nav-ia" onclick="showTab('ia')">🎨 Studio IA</button>
+    <button id="nav-media" onclick="showTab('media')">🖼️ Studio Média</button>
   </nav>
 
   <section id="tab-statut" class="tab active">
@@ -76,7 +97,7 @@
     <h2>Message test</h2>
     <input id="to" placeholder="Numéro (ex: 2250700000000)">
     <textarea id="text" placeholder="Message"></textarea>
-    <button onclick="sendTestMessage()">Envoyer</button>
+    <button class="send-wa" onclick="sendTestMessage()">Envoyer</button>
     <div id="sendResult"></div>
   </section>
 
@@ -117,7 +138,7 @@
     <h2>Message test</h2>
     <input id="tg-to" placeholder="@username ou numéro">
     <textarea id="tg-text" placeholder="Message"></textarea>
-    <button onclick="sendTgTestMessage()">Envoyer</button>
+    <button class="send-tg" onclick="sendTgTestMessage()">Envoyer</button>
     <div id="tg-sendResult"></div>
   </section>
 
@@ -148,6 +169,9 @@
     <small>Destinataires — une ligne par contact : "numéro" ou "numéro,nom" (utilisable dans le message via {nom}). Pour Telegram, "@username" ou "@username,nom".</small>
     <textarea id="campRecipients" placeholder="2250700000001,Awa&#10;2250700000002"></textarea>
     <textarea id="campText" placeholder="Message (ex: Bonjour {nom}, ...)"></textarea>
+    <small>Pièce jointe (optionnelle) — image, vidéo ou PDF, envoyée avec le message en légende.</small>
+    <input id="campMediaInput" type="file" accept="image/*,video/*,application/pdf">
+    <div id="campMediaPreview" style="display:none; margin-bottom:8px;"></div>
     <div class="row">
       <div>
         <small>Délai min (secondes)</small>
@@ -156,6 +180,16 @@
       <div>
         <small>Délai max (secondes)</small>
         <input id="campDelayMax" type="number" value="20">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <small>Destinataires par lot (optionnel)</small>
+        <input id="campBatchSize" type="number" placeholder="ex: 5" min="1">
+      </div>
+      <div>
+        <small>Pause après un lot (secondes)</small>
+        <input id="campBatchPause" type="number" placeholder="ex: 36" min="1">
       </div>
     </div>
     <button onclick="createCampaign()">Créer la campagne</button>
@@ -215,7 +249,7 @@
         <button onclick="relanceCopy()">Copier</button>
         <button onclick="relanceRegenerate()">Varier</button>
         <button onclick="relanceSkip()">Ignorer</button>
-        <button onclick="relanceLaunch()">Envoyer &amp; Suivant</button>
+        <button class="send-wa" onclick="relanceLaunch()">Envoyer &amp; Suivant</button>
       </div>
     </div>
   </section>
@@ -241,10 +275,163 @@
     <ul id="historyList"></ul>
   </section>
 
+  <!-- Studio IA : parité avec le Mode VPS/dashboard.html — les routes
+       /api/ai/text et /api/ai/image existaient déjà côté serveur (index.js)
+       mais n'avaient jamais eu d'onglet ici (public/ai.js, nouveau). -->
+  <section id="tab-ia" class="tab">
+    <h2>🎨 Génération de texte &amp; image</h2>
+    <textarea id="iaPrompt" placeholder="Décris ce que tu veux générer..."></textarea>
+    <div class="row">
+      <button onclick="iaGenerateText()">Texte</button>
+      <button onclick="iaGenerateImage()">Image</button>
+    </div>
+    <div id="iaError" style="color: #c0392b;"></div>
+    <div id="iaResult"></div>
+
+    <h2>📖 Génération d'ebook (PDF)</h2>
+    <small>Un sujet de chapitre par ligne (illimité), rédigés séquentiellement par l'IA.</small>
+    <input id="ebookTitle" placeholder="Titre principal">
+    <input id="ebookSubtitle" placeholder="Sous-titre (optionnel)">
+    <div class="row">
+      <input id="ebookAuthor" placeholder="Nom de l'auteur">
+      <input id="ebookDate" placeholder="Date (ex: 6 septembre 2026)">
+    </div>
+    <input id="ebookWatermark" placeholder="Filigrane (optionnel — ex: BROUILLON, EXTRAIT...)">
+    <small>Visuel de couverture (optionnel)</small>
+    <input id="ebookCoverFile" type="file" accept="image/*">
+    <small>Logo (optionnel)</small>
+    <input id="ebookLogoFile" type="file" accept="image/*">
+    <textarea id="ebookIntro" placeholder="Préface / Introduction (optionnel)"></textarea>
+    <textarea id="ebookTopics" placeholder="Sujet du chapitre 1&#10;Sujet du chapitre 2&#10;..."></textarea>
+    <textarea id="ebookConclusion" placeholder="Conclusion (optionnel)"></textarea>
+    <button onclick="ebookGenerate()">Générer le PDF</button>
+    <div id="ebookError" style="color: #c0392b;"></div>
+    <div id="ebookResult"></div>
+  </section>
+
+  <!-- CYRUS Predictive Media Engine — port fidèle de public/dashboard.html
+       #studio-media-view (voir media-studio.js). Fond photoréaliste via
+       /api/ai/image (même cascade fal.ai->Pollinations que le VPS, côté
+       serveur local plutôt qu'un appel direct à Pollinations depuis le
+       navigateur — voir le commentaire en tête de media-studio.js) +
+       calques Canvas 2D natifs (texte/badges/gradient). Export vidéo
+       (Ken Burns + sous-titres mot-à-mot) 100% client, comme le VPS.
+       La génération vidéo IA serveur (LTX-Video) et le storyboard
+       multi-scènes du VPS NE SONT PAS portés ici : ils dépendent d'un
+       hébergement de lien public (/v/:id, aperçu Open Graph WhatsApp/
+       Telegram) que ce serveur local ne peut pas fournir (pas d'URL
+       publique) — écart assumé et documenté, voir media-studio.js. -->
+  <section id="tab-media" class="tab">
+    <h2>🖼️ Studio Média Prédictif</h2>
+    <small>Décrivez le visuel souhaité, choisissez le format et générez 3 propositions de styles différents. Sélectionnez-en une, modifiez-la (texte instantané ou changement de style régénéré par l'IA), puis téléchargez l'image ou exportez la vidéo. Fond généré via /api/ai/image (fal.ai si configuré, sinon repli Pollinations gratuit — même mécanisme que le Studio IA texte/image).</small>
+
+    <label for="media-concept">Décrivez le visuel</label>
+    <textarea id="media-concept" placeholder='Ex : "Affiche promo -30% sur nos pâtisseries, livraison gratuite, contact WhatsApp 07 XX XX XX XX"'></textarea>
+
+    <button id="media-creative-director-btn">🧠 Diriger avec l'IA (secteur, accroche, prompt HD, script vidéo)</button>
+    <p id="media-creative-director-feedback" style="display:none;"></p>
+
+    <label for="media-sector">Secteur d'activité (optionnel — adapte le style photo du fond généré)</label>
+    <select id="media-sector">
+      <option value="">Général</option>
+      <option value="restauration">🍽️ Restauration</option>
+      <option value="immobilier">🏠 Immobilier</option>
+      <option value="ecommerce">🛍️ E-commerce</option>
+      <option value="hightech">💻 High-Tech</option>
+      <option value="formation">🎓 Formation</option>
+    </select>
+
+    <label>Format</label>
+    <div class="toggle-group" id="media-ratio-toggle">
+      <button type="button" class="toggle-btn" data-ratio="9:16">📱 Story 9:16</button>
+      <button type="button" class="toggle-btn" data-ratio="1:1">🔲 Post 1:1</button>
+      <button type="button" class="toggle-btn" data-ratio="16:9">🖥️ Paysage 16:9</button>
+      <button type="button" class="toggle-btn" data-ratio="4:5">📸 Portrait 4:5</button>
+    </div>
+
+    <label>Type de livrable</label>
+    <div class="toggle-group" id="media-deliverable-toggle">
+      <button type="button" class="toggle-btn" data-deliverable="IMAGE_PHOTO">🖼️ Photo pure</button>
+      <button type="button" class="toggle-btn" data-deliverable="FLYER_AFFICHE">🏷️ Affiche / Flyer</button>
+      <button type="button" class="toggle-btn" data-deliverable="VIDEO_SHORT">🎬 Vidéo courte</button>
+    </div>
+
+    <div id="media-flyer-fields" style="display:none;">
+      <div class="row">
+        <input type="text" id="media-title" placeholder="Titre — ex : PROMO -30%">
+        <input type="text" id="media-subtitle" placeholder="Sous-titre — ex : Sur toute la collection">
+      </div>
+      <div class="row">
+        <input type="text" id="media-price" placeholder="Prix (optionnel) — ex : 9 900 FCFA">
+        <input type="text" id="media-badge" placeholder="Badge (optionnel) — ex : LIVRAISON GRATUITE">
+      </div>
+      <input type="text" id="media-cta" placeholder="Appel à l'action / Contact — ex : Commandez sur WhatsApp 07 XX XX XX XX">
+    </div>
+
+    <div id="media-video-fields" style="display:none;">
+      <label for="media-script">Script de vente (sous-titres mot-à-mot)</label>
+      <textarea id="media-script" placeholder="Laissez vide pour réutiliser automatiquement la description ci-dessus comme script."></textarea>
+      <div class="row">
+        <div>
+          <small>Durée approximative</small>
+          <select id="media-video-duration">
+            <option value="8">Courte (~8s)</option>
+            <option value="15" selected>Standard (~15s)</option>
+            <option value="25">Longue (~25s)</option>
+          </select>
+        </div>
+        <div>
+          <small>Vitesse de la narration (aperçu)</small>
+          <select id="media-voice-rate">
+            <option value="0.85">🐢 Plus lente</option>
+            <option value="1" selected>Normale</option>
+            <option value="1.25">⚡ Plus rapide</option>
+          </select>
+        </div>
+      </div>
+      <div class="warning-box">⚠️ La narration (voix off) est audible en direct pendant la génération (synthèse vocale du navigateur), mais le fichier vidéo exporté est silencieux (limitation technique des navigateurs) — les sous-titres restent incrustés dans l'image pour rester compréhensible sans le son.</div>
+    </div>
+
+    <button id="media-generate-btn">✨ Générer 3 propositions</button>
+    <p id="media-feedback" style="display:none;"></p>
+
+    <div id="media-variants-grid" class="media-grid" style="display:none;"></div>
+
+    <div id="media-preview-wrap" style="display:none;">
+      <p><small>✅ Création sélectionnée — modifiez-la ci-dessous ou téléchargez-la.</small></p>
+      <p class="fallback-badge" id="media-current-fallback-warning" style="display:none;">⚠️ Cette création utilise le fond de secours local (génération IA indisponible au moment de la génération) — ce n'est PAS une image générée. Régénérez le fond ci-dessous avant de télécharger pour un rendu professionnel.</p>
+      <div id="media-canvas-frame"><canvas id="media-canvas"></canvas></div>
+      <div class="row">
+        <button id="media-download-png-btn">📥 Télécharger HD (PNG)</button>
+        <button id="media-export-video-btn" style="display:none;">🎬 Exporter en vidéo</button>
+        <button id="media-back-to-variants-btn">🔁 Nouvelles propositions</button>
+      </div>
+
+      <div id="media-video-preview-wrap" style="display:none;">
+        <p><small>🎬 Aperçu de la vidéo exportée :</small></p>
+        <video id="media-video-preview" controls autoplay muted loop playsinline></video>
+        <button id="media-video-download-btn">📥 Télécharger la vidéo</button>
+      </div>
+
+      <h2>✏️ Modifier cette création</h2>
+      <small>Changez directement le titre/sous-titre/prix/badge/CTA ci-dessus puis cliquez sur "Appliquer le texte" (instantané), ou décrivez un changement de style/ambiance pour régénérer le fond avec l'IA.</small>
+      <button id="media-apply-text-btn">🔄 Appliquer le texte</button>
+      <textarea id="media-style-note" placeholder='Ex : "fond noir néon", "ambiance plus chaleureuse", "angle différent"'></textarea>
+      <button id="media-regen-bg-btn">🎨 Régénérer le fond avec ce changement</button>
+
+      <h2>🎞️ Décliner dans tous les formats</h2>
+      <small>Regénère cette création dans les 3 formats restants en un clic.</small>
+      <button id="media-decline-formats-btn">🎞️ Décliner dans tous les formats</button>
+      <div id="media-declinations-grid" class="media-grid" style="display:none;"></div>
+    </div>
+  </section>
+
 <script src="/lib/xlsx.full.min.js"></script>
 <script src="/lib/smartTextGenerator.js"></script>
 <script src="/app.js"></script>
 <script src="/relance.js"></script>
 <script src="/intelligence.js"></script>
+<script src="/ai.js"></script>
+<script src="/media-studio.js"></script>
 </body>
 </html>

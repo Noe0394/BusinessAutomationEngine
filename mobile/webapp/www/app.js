@@ -325,6 +325,7 @@
   function showAiGenerateCard() {
     document.getElementById('ai-license-card').style.display = 'none';
     document.getElementById('ai-generate-card').style.display = 'block';
+    document.getElementById('ai-ebook-card').style.display = 'block';
   }
 
   (async function initAi() {
@@ -393,6 +394,79 @@
       resultEl.innerHTML = '<div class="result-provider">' + escapeHtml(data.provider) + '</div><img class="result-image" src="' + data.url + '" />';
     } catch (e) {
       errorEl.textContent = 'Erreur : ' + e;
+    }
+  });
+
+  // ---------- Génération d'ebook (PDF) ----------
+  // Parité avec local-client/public/ai.js#ebookGenerate et
+  // public/dashboard.html (Studio IA > Générateur de Livres). pdfkit est une
+  // bibliothèque Node.js (aucun portage navigateur viable sans bundler, hors
+  // périmètre "zéro framework" de ce projet) — la génération PDF elle-même
+  // tourne donc sur la Cloud Function generateEbookFallback (mêmes secrets/
+  // cascade texte que generateTextFallback, voir firebase-functions/index.js),
+  // pas dans cet onglet. Reste 100% hors VPS : uniquement Firebase, comme le
+  // reste de la Génération IA mobile.
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  document.getElementById('ebook-generate-btn').addEventListener('click', async () => {
+    const title = document.getElementById('ebook-title').value.trim();
+    const subtitle = document.getElementById('ebook-subtitle').value.trim();
+    const author = document.getElementById('ebook-author').value.trim();
+    const date = document.getElementById('ebook-date').value.trim();
+    const watermarkText = document.getElementById('ebook-watermark').value.trim();
+    const introduction = document.getElementById('ebook-intro').value.trim();
+    const conclusion = document.getElementById('ebook-conclusion').value.trim();
+    const topics = document.getElementById('ebook-topics').value.split('\n').map((s) => s.trim()).filter(Boolean);
+    const errorEl = document.getElementById('ebook-error');
+    const statusEl = document.getElementById('ebook-status');
+    errorEl.textContent = '';
+    statusEl.textContent = '';
+    if (topics.length === 0) { errorEl.textContent = 'Indique au moins un sujet de chapitre.'; return; }
+
+    const coverFile = document.getElementById('ebook-cover-file').files[0];
+    const logoFile = document.getElementById('ebook-logo-file').files[0];
+    const coverImageBase64 = coverFile ? await readFileAsBase64(coverFile) : undefined;
+    const logoImageBase64 = logoFile ? await readFileAsBase64(logoFile) : undefined;
+
+    statusEl.textContent = 'Rédaction en cours (' + topics.length + ' chapitre(s), séquentiel)...';
+    try {
+      const res = await fetch(FIREBASE_BASE + '/generateEbookFallback', {
+        method: 'POST',
+        headers: aiHeaders(),
+        body: JSON.stringify({
+          title, subtitle, author, date, watermarkText, introduction, conclusion,
+          chapterTopics: topics, coverImageBase64, logoImageBase64,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || ('HTTP ' + res.status));
+      }
+      // Pas de <a download> ici : une WebView Capacitor n'a pas d'accès
+      // direct au stockage utilisateur — même mécanisme que lib/fileExport.js
+      // (Filesystem.writeFile + Share.share), seul moyen réel de faire
+      // quelque chose du fichier depuis le stockage privé de l'app.
+      const buffer = await res.arrayBuffer();
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
+      const filename = (title || 'livre').replace(/[^a-z0-9]+/gi, '_').slice(0, 80) + '.pdf';
+      const Filesystem = window.Capacitor.Plugins.Filesystem;
+      const Share = window.Capacitor.Plugins.Share;
+      const written = await Filesystem.writeFile({ path: filename, data: base64, directory: 'DOCUMENTS' });
+      await Share.share({ title: filename, url: written.uri });
+      statusEl.textContent = '✅ PDF généré et prêt à partager/enregistrer.';
+    } catch (e) {
+      statusEl.textContent = '';
+      errorEl.textContent = 'Erreur : ' + e.message;
     }
   });
 

@@ -327,8 +327,8 @@ async function main() {
 
   app.post('/api/campaigns', (req, res) => {
     try {
-      const { name, recipients, text, delayMinMs, delayMaxMs, channel } = req.body || {};
-      const campaign = campaigns.createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channel });
+      const { name, recipients, text, delayMinMs, delayMaxMs, channel, media, batchSize, batchPauseMs } = req.body || {};
+      const campaign = campaigns.createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channel, media, batchSize, batchPauseMs });
       res.json(campaign);
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -401,6 +401,59 @@ async function main() {
     }
   });
 
+  // ---------- Creative Director (Studio Média Prédictif, voir
+  // public/media-studio.js) — parité avec POST /api/media/creative-direction
+  // côté VPS (index.js racine) : même prompt structuré JSON, réutilise
+  // aiGateway.generateText au lieu de dupliquer une cascade LLM ici.
+  const MEDIA_CREATIVE_SECTORS = ['restauration', 'immobilier', 'ecommerce', 'hightech', 'formation'];
+  const MEDIA_CREATIVE_FORMATS = ['9:16', '1:1', '16:9', '4:5'];
+
+  function extractJsonBlock(rawText) {
+    const match = String(rawText || '').match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function parseCreativeDirective(rawText) {
+    const parsed = extractJsonBlock(rawText);
+    if (!parsed) return null;
+    return {
+      detectedSector: MEDIA_CREATIVE_SECTORS.includes(parsed.detectedSector) ? parsed.detectedSector : '',
+      marketingHook: typeof parsed.marketingHook === 'string' ? parsed.marketingHook.trim().slice(0, 120) : '',
+      imagePromptEnglish: typeof parsed.imagePromptEnglish === 'string' ? parsed.imagePromptEnglish.trim().slice(0, 800) : '',
+      videoScript: typeof parsed.videoScript === 'string' ? parsed.videoScript.trim().slice(0, 600) : '',
+      suggestedFormats: Array.isArray(parsed.suggestedFormats)
+        ? parsed.suggestedFormats.filter((f) => MEDIA_CREATIVE_FORMATS.includes(f))
+        : [],
+    };
+  }
+
+  app.post('/api/media/creative-direction', async (req, res) => {
+    const concept = String((req.body || {}).concept || '').trim();
+    if (!concept) {
+      return res.status(400).json({ error: 'Décrivez le visuel avant de demander une direction créative IA.' });
+    }
+    const instructionPrompt = [
+      'Réponds UNIQUEMENT avec un objet JSON valide (aucun texte avant/après, aucun markdown), exactement dans ce format :',
+      `{"detectedSector":"une valeur parmi ${MEDIA_CREATIVE_SECTORS.join('|')}","marketingHook":"accroche courte et percutante en français pour une affiche","imagePromptEnglish":"prompt visuel photoréaliste ultra-détaillé en anglais avec éclairage et détails HD, pour un générateur d'image IA","videoScript":"script court en français pour une voix off vidéo (2 à 3 phrases)","suggestedFormats":["deux valeurs parmi ${MEDIA_CREATIVE_FORMATS.join(', ')}"]}`,
+      `Demande du client : "${concept}"`,
+    ].join('\n');
+
+    try {
+      const { text: llmText, provider } = await aiGateway.generateText(instructionPrompt, { mode: 'json' });
+      const directive = parseCreativeDirective(llmText);
+      if (!directive) throw new Error('Aucun JSON de directive créative exploitable dans la réponse du LLM.');
+      res.json({ directive, provider });
+    } catch (err) {
+      console.warn('Creative Director IA — cascade LLM indisponible :', err.message);
+      res.status(503).json({ error: 'Direction créative IA indisponible pour le moment — renseignez les champs manuellement.' });
+    }
+  });
+
   // Vidéo IA (image-to-video, job asynchrone — voir lib/aiGateway.js#startVideo/
   // pollVideo). Le client doit d'abord obtenir une image (voir /api/ai/image)
   // avant de soumettre son URL ici.
@@ -433,8 +486,17 @@ async function main() {
   // (déjà Firebase en premier) appelle l'extérieur.
   app.post('/api/ebook/generate', async (req, res) => {
     try {
-      const { title, chapterTopics } = req.body || {};
-      const topics = (Array.isArray(chapterTopics) ? chapterTopics : []).slice(0, 5);
+      // Parité avec public/dashboard.html (Studio IA > Générateur de Livres) :
+      // ebookGenerator.js (racine, copié à l'identique ici) supporte déjà
+      // tous ces champs (spec.subtitle/author/date/watermarkText/
+      // coverImageBuffer/logoImageBuffer/introduction/conclusion) — seule
+      // cette route ne les exposait pas encore. Plus de plafond à 5
+      // chapitres (le VPS n'en impose pas non plus).
+      const {
+        title, subtitle, author, date, watermarkText, introduction, conclusion,
+        chapterTopics, coverImageBase64, logoImageBase64,
+      } = req.body || {};
+      const topics = Array.isArray(chapterTopics) ? chapterTopics : [];
       if (topics.length === 0) {
         return res.status(400).json({ error: 'Aucun sujet de chapitre à rédiger.' });
       }
@@ -449,6 +511,14 @@ async function main() {
 
       const pdfBuffer = await ebookGenerator.generateEbookPdf({
         title: String(title || 'Livre généré par IA').slice(0, 150),
+        subtitle: subtitle ? String(subtitle).slice(0, 200) : undefined,
+        author: author ? String(author).slice(0, 150) : undefined,
+        date: date ? String(date).slice(0, 60) : undefined,
+        watermarkText: watermarkText ? String(watermarkText).slice(0, 60) : undefined,
+        introduction: introduction ? String(introduction).slice(0, 6000) : undefined,
+        conclusion: conclusion ? String(conclusion).slice(0, 6000) : undefined,
+        coverImageBuffer: coverImageBase64 ? Buffer.from(coverImageBase64, 'base64') : undefined,
+        logoImageBuffer: logoImageBase64 ? Buffer.from(logoImageBase64, 'base64') : undefined,
         chapters,
       });
       res.set('Content-Type', 'application/pdf');

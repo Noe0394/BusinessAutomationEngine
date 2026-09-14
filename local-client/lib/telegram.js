@@ -238,6 +238,18 @@ async function resolveRecipient(identifier) {
     }
   }
 
+  // Diffusion groupe/canal (pas un DM) : identifiant négatif, déjà connu du
+  // client GramJS (mis en cache après un appel à getGroups() dans cette même
+  // session — voir index.js#/api/telegram/groups) - jamais résolu via
+  // ImportContacts (réservé aux numéros de téléphone individuels).
+  if (/^-\d+$/.test(value)) {
+    try {
+      return await client.getEntity(value);
+    } catch (err) {
+      throw new Error('RECIPIENT_NOT_FOUND');
+    }
+  }
+
   const digits = value.replace(/[^\d+]/g, '');
   if (!digits.replace('+', '')) throw new Error('INVALID_RECIPIENT');
   const phone = digits.startsWith('+') ? digits : `+${digits}`;
@@ -267,6 +279,22 @@ async function sendMessage(to, text) {
   return result;
 }
 
+// Pièce jointe (image/vidéo/PDF) — GramJS envoie un Buffer directement via
+// sendFile, pas besoin d'un objet média dédié comme whatsapp-web.js
+// (MessageMedia). `filename` conditionne l'extension que Telegram affichera
+// pour un document (PDF, etc.) ; sans lui GramJS déduit un nom générique.
+async function sendMedia(to, { buffer, filename, caption }) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const entity = await resolveRecipient(to);
+  const result = await client.sendFile(entity, {
+    file: buffer,
+    caption: caption || '',
+    attributes: filename ? [new Api.DocumentAttributeFilename({ fileName: filename })] : undefined,
+  });
+  recordMessage({ jid: `tg:${to}`, direction: 'out', body: caption || `[média: ${filename || 'fichier'}]` });
+  return result;
+}
+
 module.exports = {
   isConfigured,
   isConnected,
@@ -280,4 +308,5 @@ module.exports = {
   getGroups,
   getGroupMembers,
   sendMessage,
+  sendMedia,
 };

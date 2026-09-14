@@ -5,63 +5,98 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>CYRUS SUPER ASSISTANT</title>
 <style>
-  :root {
-    --bg: #0A0E14;
-    --card: #131A24;
-    --border: #1F2A38;
-    --cyan: #22D3EE;
-    --cyan-dim: rgba(34, 211, 238, 0.12);
-    --green: #34D399;
-    --red: #F87171;
-    --text: #F1F5F9;
-    --text-dim: #7C8A9C;
-  }
+  /* Palette calquée sur public/dashboard.html (Mode VPS) — décision produit
+     explicite : c'est le Mode Local (PC ET mobile) qui doit ressembler au
+     VPS, pas l'inverse. Mêmes valeurs de couleur que le VPS, pas
+     d'approximation — voir aussi local-client/public/index.html, même
+     traitement. */
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, Roboto, sans-serif; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #f2f2f3; color: #1a1a1a; font-family: -apple-system, Roboto, sans-serif; }
   #app { display: flex; flex-direction: column; height: 100%; }
-  .header { padding: 16px; }
-  .brand { font-size: 22px; font-weight: 800; margin: 0 0 12px; }
-  .brand .accent { color: var(--cyan); }
-  .nav { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 16px 12px; }
+  .header {
+    padding: 16px; color: #fff;
+    background: linear-gradient(120deg, #0b0b1a, #1a1244, #2d1b6e, #1a1244, #0b0b1a);
+    background-size: 300% 300%; animation: cyrus-flow 16s ease infinite;
+  }
+  @keyframes cyrus-flow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+  .brand { font-size: 20px; font-weight: 800; margin: 0 0 12px; }
+  .brand .accent { color: #b9a6ff; }
+  .nav { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 16px 12px; }
   .nav button {
-    background: var(--cyan-dim); border: 1px solid var(--cyan); color: var(--cyan);
-    border-radius: 10px; padding: 8px 12px; font-size: 13px; font-weight: 700;
+    background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.35); color: #fff;
+    border-radius: 6px; padding: 0.45rem 0.7rem; font-size: 13px; font-weight: bold;
   }
   .screen { display: none; flex: 1; min-height: 0; flex-direction: column; }
   .screen.active { display: flex; }
-  .statusbar { padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--cyan); font-weight: 600; display: flex; align-items: center; gap: 8px; }
-  .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--text-dim); }
-  .dot.on { background: var(--green); }
-  .content { flex: 1; overflow-y: auto; padding: 16px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
-  label { display: block; color: var(--text-dim); font-size: 12px; margin: 10px 0 6px; }
+  .statusbar { padding: 10px 16px; background: #fff; border-bottom: 1px solid #e0e0e0; font-size: 12px; color: #6c4fd6; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 4px; background: #bbb; }
+  .dot.on { background: #25D366; }
+  .content { flex: 1; overflow-y: auto; padding: 16px; background: #f2f2f3; }
+  .card { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+  label { display: block; color: #555; font-size: 12px; margin: 10px 0 6px; font-weight: bold; }
   input, textarea {
-    width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
-    padding: 10px; color: var(--text); font-size: 14px;
+    width: 100%; background: #fff; border: 1px solid #ccc; border-radius: 6px;
+    padding: 10px; color: #1a1a1a; font-size: 14px; min-height: 44px;
   }
   textarea { min-height: 80px; resize: vertical; }
   button.primary {
-    background: var(--cyan); color: #04141A; border: none; border-radius: 10px;
-    padding: 12px; font-weight: 700; font-size: 14px; width: 100%; margin-top: 14px;
+    background: #6c4fd6; color: #fff; border: none; border-radius: 8px;
+    padding: 12px; font-weight: bold; font-size: 14px; width: 100%; margin-top: 14px; min-height: 48px;
   }
   button.primary:disabled { opacity: 0.4; }
-  .error { color: var(--red); font-size: 12px; margin-top: 10px; }
-  .chat-row { display: flex; align-items: center; gap: 12px; padding: 12px; border-bottom: 1px solid var(--border); }
-  .avatar { width: 40px; height: 40px; border-radius: 20px; background: var(--cyan-dim); border: 1px solid var(--cyan); display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--cyan); }
+  /* Envoi réel WhatsApp/Telegram : mêmes couleurs iconiques que
+     dashboard.html (.send-button vert / .relance-launch-button.telegram
+     bleu), pas le violet générique des autres actions. */
+  button.primary.send-wa { background: #25D366; }
+  button.primary.send-tg { background: #2AABEE; }
+  .error { color: #c0392b; font-size: 12px; margin-top: 10px; }
+  .chat-row { display: flex; align-items: center; gap: 12px; padding: 12px; border-bottom: 1px solid #e0e0e0; }
+  .avatar { width: 40px; height: 40px; border-radius: 20px; background: #f0ecff; border: 1px solid #6c4fd6; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #6c4fd6; }
   .chat-body { flex: 1; min-width: 0; }
   .chat-peer { font-weight: 600; font-size: 14px; }
-  .chat-preview { color: var(--text-dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chat-preview { color: #777; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .bubble-row { display: flex; margin: 4px 0; }
   .bubble-row.mine { justify-content: flex-end; }
   .bubble { max-width: 80%; border-radius: 14px; padding: 8px 12px; font-size: 14px; }
-  .bubble.mine { background: var(--cyan-dim); border-bottom-right-radius: 4px; }
-  .bubble.other { background: #1B2430; border-bottom-left-radius: 4px; }
-  .compose { display: flex; gap: 8px; padding: 10px 16px; background: var(--card); border-top: 1px solid var(--border); }
+  .bubble.mine { background: #f0ecff; border-bottom-right-radius: 4px; }
+  .bubble.other { background: #f5f5f5; border-bottom-left-radius: 4px; }
+  .compose { display: flex; gap: 8px; padding: 10px 16px; background: #fff; border-top: 1px solid #e0e0e0; }
   .compose input { flex: 1; }
-  .compose button { background: var(--cyan); border: none; border-radius: 10px; padding: 10px 16px; font-weight: 700; color: #04141A; }
-  .empty { color: var(--text-dim); font-size: 13px; text-align: center; padding: 24px; font-style: italic; }
-  .result-provider { color: var(--green); font-size: 11px; font-weight: 700; margin-bottom: 6px; }
+  .compose button { background: #6c4fd6; border: none; border-radius: 8px; padding: 10px 16px; font-weight: bold; color: #fff; }
+  /* Envoi réel : vert WhatsApp / bleu Telegram, comme dashboard.html. */
+  #wa-open-btn, #wa-send-btn { background: #25D366; }
+  #tg-open-btn, #tg-send-btn { background: #2AABEE; }
+  .empty { color: #777; font-size: 13px; text-align: center; padding: 24px; font-style: italic; }
+  .result-provider { color: #1a7a3c; font-size: 11px; font-weight: bold; margin-bottom: 6px; }
   .result-image { width: 100%; border-radius: 8px; margin-top: 6px; }
+  /* Chat Intelligent (chat-core.js, porté de webapp-core/) */
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: bold; background: #f0ecff; color: #6c4fd6; }
+  button.secondary {
+    background: #fff; border: 1px solid #6c4fd6; color: #6c4fd6;
+    border-radius: 8px; padding: 8px 12px; font-weight: bold; font-size: 13px; width: auto; margin-top: 0;
+  }
+  .goalchat-messages { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; padding: 4px 2px; }
+  .goalchat-msg { max-width: 88%; padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; line-height: 1.45; font-size: 13px; }
+  .goalchat-msg.user { align-self: flex-end; background: #6c4fd6; color: #fff; }
+  .goalchat-msg.assistant { align-self: flex-start; background: #fafafa; border: 1px solid #e0e0e0; }
+  .goalchat-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .goalchat-chips button { width: auto; margin: 0; padding: 6px 12px; font-size: 12px; }
+
+  /* Studio Média Prédictif (media-studio.js, porté de public/dashboard.html
+     #studio-media-view) — mêmes valeurs de couleur que le VPS. */
+  .toggle-group { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 12px; }
+  .toggle-btn { background: #fff; border: 2px solid #6c4fd6; color: #6c4fd6; margin: 0; width: auto; flex: 1 1 auto; }
+  .toggle-btn.active { background: #6c4fd6; color: #fff; }
+  .media-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 12px 0; }
+  .media-card { border: 1px solid #e0e0e0; border-radius: 10px; overflow: hidden; background: #fff; }
+  .media-card canvas, .media-card video { width: 100%; height: auto; display: block; background: #111; }
+  .media-card-label { padding: 8px 10px 0; font-size: 0.82rem; font-weight: bold; color: #6c4fd6; }
+  .media-card-actions { display: flex; gap: 6px; padding: 8px 10px; flex-wrap: wrap; }
+  .media-card-actions button { flex: 1; font-size: 0.78rem; padding: 0.5rem; min-width: 100px; margin: 0; }
+  .fallback-badge { margin: 6px 10px 0; padding: 0.5rem 0.7rem; background: #fff3cd; border: 1px solid #ffcc00; color: #7a5c00; border-radius: 6px; font-size: 0.78rem; font-weight: bold; }
+  .subsection { border-top: 2px solid #f0f0f0; margin-top: 1.25rem; padding-top: 1rem; }
+  #media-canvas-frame { max-width: 100%; margin: 1rem 0; border-radius: 10px; overflow: hidden; border: 1px solid #e0e0e0; background: #111; }
+  #media-canvas, #media-video-preview, #media-ai-video-preview { width: 100%; height: auto; display: block; }
 </style>
 </head>
 <body>
@@ -75,6 +110,8 @@
       <button data-screen="campaigns">📢 Campagnes</button>
       <button data-screen="relance">📇 Relance Manuelle</button>
       <button data-screen="connexions">🔌 Connexions</button>
+      <button data-screen="intelligence">🧠 Commandes</button>
+      <button data-screen="media">🖼️ Studio Média</button>
     </div>
   </div>
 
@@ -125,12 +162,33 @@
         <p class="error" id="ai-error"></p>
         <div id="ai-result" class="card" style="display:none; margin-top:14px;"></div>
       </div>
+
+      <div id="ai-ebook-card" class="card" style="display:none">
+        <label>📖 Génération d'ebook (PDF)</label>
+        <input id="ebook-title" placeholder="Titre principal">
+        <input id="ebook-subtitle" placeholder="Sous-titre (optionnel)">
+        <div style="display:flex; gap:10px;">
+          <input id="ebook-author" placeholder="Auteur" style="flex:1;">
+          <input id="ebook-date" placeholder="Date" style="flex:1;">
+        </div>
+        <input id="ebook-watermark" placeholder="Filigrane (optionnel)">
+        <label>Visuel de couverture (optionnel)</label>
+        <input type="file" id="ebook-cover-file" accept="image/*">
+        <label>Logo (optionnel)</label>
+        <input type="file" id="ebook-logo-file" accept="image/*">
+        <textarea id="ebook-intro" placeholder="Préface / Introduction (optionnel)"></textarea>
+        <textarea id="ebook-topics" placeholder="Sujet du chapitre 1&#10;Sujet du chapitre 2&#10;..."></textarea>
+        <textarea id="ebook-conclusion" placeholder="Conclusion (optionnel)"></textarea>
+        <button class="primary" id="ebook-generate-btn">Générer le PDF</button>
+        <p class="error" id="ebook-error"></p>
+        <p id="ebook-status" style="font-size:13px; color:#777;"></p>
+      </div>
     </div>
   </section>
 
   <section id="screen-campaigns" class="screen">
     <div class="statusbar">
-      <select id="camp-channel" style="background:var(--card); color:var(--cyan); border:1px solid var(--cyan); border-radius:8px; padding:4px 8px; font-size:12px; font-weight:700;">
+      <select id="camp-channel" style="background:#fff; color:#6c4fd6; border:1px solid #6c4fd6; border-radius:8px; padding:4px 8px; font-size:12px; font-weight:700;">
         <option value="whatsapp">🚀 WhatsApp</option>
         <option value="telegram">✈️ Telegram</option>
       </select>
@@ -161,7 +219,12 @@
         <label>3. Message (Spintax {option1|option2}, variables {first_name})</label>
         <textarea id="camp-message" placeholder="Bonjour {first_name|}, {Découvrez|Profitez de} notre offre..."></textarea>
         <button class="primary" id="camp-preview-btn" style="margin-top:8px;">Aperçu (3 exemples)</button>
-        <div id="camp-preview-result" style="margin-top:8px; font-size:13px; color:var(--text-dim);"></div>
+        <div id="camp-preview-result" style="margin-top:8px; font-size:13px; color:#777;"></div>
+      </div>
+
+      <div class="card">
+        <label>Pièce jointe (optionnelle) — image, vidéo ou PDF, envoyée avec le message en légende</label>
+        <input type="file" id="camp-media-input" accept="image/*,video/*,application/pdf" />
       </div>
 
       <div class="card">
@@ -172,17 +235,24 @@
         </div>
         <label>Démarrage programmé (optionnel)</label>
         <input type="datetime-local" id="camp-schedule" />
+        <label>Destinataires par lot (optionnel)</label>
+        <div style="display:flex; gap:10px;">
+          <input type="number" id="camp-batch-size" min="1" placeholder="ex: 5" />
+          <input type="number" id="camp-batch-pause" min="1" placeholder="Pause (sec), ex: 36" />
+        </div>
       </div>
 
       <div class="card">
         <div style="display:flex; gap:10px;">
           <button class="primary" id="camp-start-btn" style="margin-top:0">Démarrer</button>
-          <button class="primary" id="camp-pause-btn" style="margin-top:0; background:var(--card); color:var(--cyan); border:1px solid var(--cyan);">Pause</button>
+          <button class="primary" id="camp-pause-btn" style="margin-top:0; background:#fff; color:#6c4fd6; border:1px solid #6c4fd6;">Pause</button>
         </div>
-        <p id="camp-status" style="margin-top:10px; font-size:13px; color:var(--text-dim);">Aucune campagne en cours.</p>
-        <div id="camp-progress-bar" style="height:6px; background:var(--border); border-radius:3px; margin-top:8px; overflow:hidden;">
-          <div id="camp-progress-fill" style="height:100%; width:0%; background:var(--cyan);"></div>
+        <p id="camp-status" style="margin-top:10px; font-size:13px; color:#777;">Aucune campagne en cours.</p>
+        <div id="camp-progress-bar" style="height:6px; background:#e0e0e0; border-radius:3px; margin-top:8px; overflow:hidden;">
+          <div id="camp-progress-fill" style="height:100%; width:0%; background:#6c4fd6;"></div>
         </div>
+        <button class="secondary" id="camp-report-btn" style="margin-top:10px;">📊 Rapport de la dernière campagne</button>
+        <div id="camp-report" style="display:none; margin-top:8px; font-size:13px;"></div>
       </div>
     </div>
   </section>
@@ -195,7 +265,7 @@
        rapide sans repasser par l'envoi automatique. -->
   <section id="screen-relance" class="screen">
     <div class="statusbar">
-      <select id="relance-channel" style="background:var(--card); color:var(--cyan); border:1px solid var(--cyan); border-radius:8px; padding:4px 8px; font-size:12px; font-weight:700;">
+      <select id="relance-channel" style="background:#fff; color:#6c4fd6; border:1px solid #6c4fd6; border-radius:8px; padding:4px 8px; font-size:12px; font-weight:700;">
         <option value="whatsapp">🚀 WhatsApp</option>
         <option value="telegram">✈️ Telegram</option>
       </select>
@@ -220,7 +290,7 @@
 
       <div class="card">
         <button class="primary" id="relance-reload-btn" style="margin-top:0;">🔄 Charger la file d'attente</button>
-        <span id="relance-rhythm-counter" style="display:none; font-size:12px; color:var(--text-dim); margin-top:8px;"></span>
+        <span id="relance-rhythm-counter" style="display:none; font-size:12px; color:#777; margin-top:8px;"></span>
       </div>
 
       <div class="card">
@@ -236,7 +306,7 @@
         <label id="relance-series-tempo-field" style="display:none;">Tempo : <span id="relance-series-tempo-value">8s</span>
           <input type="range" id="relance-series-tempo" min="5" max="15" value="8" step="1" />
         </label>
-        <span id="relance-series-countdown" style="display:none; font-size:12px; color:var(--cyan); margin-top:6px;"></span>
+        <span id="relance-series-countdown" style="display:none; font-size:12px; color:#6c4fd6; margin-top:6px;"></span>
         <button id="relance-series-pause-btn" style="display:none; margin-top:10px;">⏸️ Pause la série</button>
       </div>
 
@@ -244,8 +314,8 @@
 
       <div class="card" id="relance-card" style="display:none;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <span id="relance-counter" style="font-size:12px; color:var(--text-dim);"></span>
-          <span id="relance-status-badge" style="font-size:11px; padding:2px 8px; border-radius:10px; background:var(--cyan-dim); color:var(--cyan); font-weight:700;"></span>
+          <span id="relance-counter" style="font-size:12px; color:#777;"></span>
+          <span id="relance-status-badge" style="font-size:11px; padding:2px 8px; border-radius:10px; background:#f0ecff; color:#6c4fd6; font-weight:700;"></span>
         </div>
         <p id="relance-contact-label" style="font-weight:700; margin:10px 0;"></p>
         <label for="relance-message-text">Message (personnalisé — modifiable avant l'envoi)</label>
@@ -257,7 +327,7 @@
           <button id="relance-call-btn">📞 Appeler</button>
           <button id="relance-skip-btn">⏭️ Ignorer</button>
         </div>
-        <button class="primary" id="relance-launch-btn">🚀 Envoyer &amp; Suivant</button>
+        <button class="primary send-wa" id="relance-launch-btn">🚀 Envoyer &amp; Suivant</button>
         <p class="empty" style="text-align:left; padding:6px 0 0;">Espace = Envoyer &amp; Suivant, Flèche droite = Ignorer (inactifs pendant la saisie dans un champ texte).</p>
       </div>
     </div>
@@ -293,6 +363,158 @@
       </div>
     </div>
   </section>
+
+  <!-- Chat Intelligent / Human Context - voir chat-core.js (copié tel quel
+       depuis webapp-core/) + lib/cyrusStoreShim.js pour le pont vers ce
+       projet. Auparavant totalement absent côté mobile. -->
+  <section id="screen-intelligence" class="screen">
+    <div class="statusbar"><span>🧠 Chat Intelligent</span></div>
+    <div class="content">
+      <div class="card">
+        <label style="margin:0 0 8px;">Exprime ton objectif en langage naturel — le système pose les questions nécessaires (cible, canaux) et prépare une file de Relance Manuelle Express, prête à valider.</label>
+        <div id="goalchat-messages" class="goalchat-messages"></div>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <input id="goalchat-input" placeholder='Ex: "Je veux vendre 50 produits aujourd&#39;hui"' style="flex:1;">
+          <button class="primary" id="goalchat-send-btn" style="width:auto; margin-top:0;">➤ Envoyer</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <label style="margin:0 0 8px;">🧠 Analyser une réponse client (Human Context)</label>
+        <input id="intel-msg" placeholder='Ex: "Je vais réfléchir"'>
+        <button class="secondary" id="intel-analyze-btn" style="margin-top:10px;">Analyser &amp; choisir une stratégie</button>
+        <div id="intel-analysis" style="margin-top:10px;"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Studio Média Prédictif - port fidèle de public/dashboard.html
+       #studio-media-view (voir media-studio.js). Fond photoréaliste (via
+       Firebase generateImageFallback, même cascade fal.ai->Pollinations que
+       le VPS) + calques Canvas 2D natifs (texte/badges/gradient). Exclu de
+       ce portage (hors périmètre local documenté) : partage par lien 1-clic
+       (nécessite un hébergement serveur dédié, /v/:id, absent ici), le
+       storyboard multi-scènes et le mixer vidéo perso (ffmpeg, jamais
+       envisagé hors VPS). -->
+  <section id="screen-media" class="screen">
+    <div class="statusbar"><span>🖼️ Studio Média Prédictif</span></div>
+    <div class="content">
+      <div class="card">
+        <p class="empty" style="padding:0 0 10px;">Décrivez le visuel souhaité, choisissez le format et générez 3 propositions de styles différents. Fond généré via l'API publique et gratuite Pollinations (ou fal.ai via Firebase) — sélectionnez une proposition puis modifiez-la autant que nécessaire avant de télécharger.</p>
+
+        <label>Décrivez le visuel</label>
+        <textarea id="media-concept" placeholder='Ex : "Affiche promo -30% sur nos pâtisseries, livraison gratuite, contact WhatsApp 07 XX XX XX XX"'></textarea>
+
+        <button class="secondary" id="media-creative-director-btn">🧠 Diriger avec l'IA (secteur, accroche, prompt HD, script vidéo)</button>
+        <p id="media-creative-director-feedback" style="display:none; font-size:12px; margin-top:6px;"></p>
+
+        <label>Secteur d'activité (optionnel)</label>
+        <select id="media-sector">
+          <option value="">Général</option>
+          <option value="restauration">🍽️ Restauration</option>
+          <option value="immobilier">🏠 Immobilier</option>
+          <option value="ecommerce">🛍️ E-commerce</option>
+          <option value="hightech">💻 High-Tech</option>
+          <option value="formation">🎓 Formation</option>
+        </select>
+
+        <label>Format</label>
+        <div class="toggle-group" id="media-ratio-toggle">
+          <button type="button" class="toggle-btn" data-ratio="9:16">📱 Story 9:16</button>
+          <button type="button" class="toggle-btn" data-ratio="1:1">🔲 Post 1:1</button>
+          <button type="button" class="toggle-btn" data-ratio="16:9">🖥️ Paysage 16:9</button>
+          <button type="button" class="toggle-btn" data-ratio="4:5">📸 Portrait 4:5</button>
+        </div>
+
+        <label>Type de livrable</label>
+        <div class="toggle-group" id="media-deliverable-toggle">
+          <button type="button" class="toggle-btn" data-deliverable="IMAGE_PHOTO">🖼️ Photo pure</button>
+          <button type="button" class="toggle-btn" data-deliverable="FLYER_AFFICHE">🏷️ Affiche / Flyer</button>
+          <button type="button" class="toggle-btn" data-deliverable="VIDEO_SHORT">🎬 Vidéo courte</button>
+        </div>
+
+        <div id="media-flyer-fields" style="display:none;">
+          <label>Titre</label>
+          <input type="text" id="media-title" placeholder="ex : PROMO -30%" />
+          <label>Sous-titre</label>
+          <input type="text" id="media-subtitle" placeholder="ex : Sur toute la collection" />
+          <div style="display:flex; gap:10px;">
+            <input type="text" id="media-price" placeholder="Prix (optionnel)" style="flex:1;" />
+            <input type="text" id="media-badge" placeholder="Badge (optionnel)" style="flex:1;" />
+          </div>
+          <label>Appel à l'action / Contact</label>
+          <input type="text" id="media-cta" placeholder="ex : Commandez sur WhatsApp 07 XX XX XX XX" />
+        </div>
+
+        <div id="media-video-fields" style="display:none;">
+          <label>Script de vente (sous-titres mot-à-mot)</label>
+          <textarea id="media-script" placeholder="Laissez vide pour réutiliser la description ci-dessus comme script."></textarea>
+          <div style="display:flex; gap:10px;">
+            <select id="media-video-duration" style="flex:1;">
+              <option value="8">Courte (~8s)</option>
+              <option value="15" selected>Standard (~15s)</option>
+              <option value="25">Longue (~25s)</option>
+            </select>
+            <select id="media-voice-rate" style="flex:1;">
+              <option value="0.85">🐢 Plus lente</option>
+              <option value="1" selected>Normale</option>
+              <option value="1.25">⚡ Plus rapide</option>
+            </select>
+          </div>
+          <div class="warning-box">⚠️ La narration (voix off) est audible en direct pendant la génération, mais le fichier vidéo exporté est silencieux (limitation technique navigateur) : les sous-titres restent incrustés dans l'image.</div>
+        </div>
+
+        <button class="primary" id="media-generate-btn">✨ Générer 3 propositions</button>
+        <p id="media-feedback" style="display:none; font-size:13px; margin-top:8px;"></p>
+
+        <div id="media-variants-grid" class="media-grid" style="display:none;"></div>
+
+        <div id="media-preview-wrap" style="display:none;">
+          <p class="empty">✅ Création sélectionnée — modifiez-la ci-dessous ou téléchargez-la.</p>
+          <p class="fallback-badge" id="media-current-fallback-warning" style="display:none;">⚠️ Cette création utilise le fond de secours local (génération IA indisponible) — régénérez le fond avant de télécharger.</p>
+          <div id="media-canvas-frame"><canvas id="media-canvas"></canvas></div>
+
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;">
+            <button class="secondary" id="media-download-png-btn">📥 Télécharger HD (PNG)</button>
+            <button class="secondary" id="media-export-video-btn" style="display:none;">🎬 Exporter en vidéo</button>
+            <button class="secondary" id="media-export-ai-video-btn" style="display:none;">🤖 Générer vidéo IA</button>
+            <button class="secondary" id="media-back-to-variants-btn">🔁 Nouvelles propositions</button>
+          </div>
+          <select id="media-ai-video-provider" style="display:none;">
+            <option value="auto" selected>Auto (Fal.ai/Replicate/HF)</option>
+          </select>
+
+          <div id="media-video-preview-wrap" style="display:none; margin-top:10px;">
+            <p class="empty">🎬 Aperçu de la vidéo exportée :</p>
+            <video id="media-video-preview" controls autoplay muted loop playsinline></video>
+            <button class="secondary" id="media-video-download-btn" style="margin-top:6px;">📥 Enregistrer la vidéo</button>
+          </div>
+
+          <div id="media-ai-video-preview-wrap" style="display:none; margin-top:10px;">
+            <p class="empty">🤖 Vidéo IA générée (image animée par IA — le fond seul, pas le texte incrusté) :</p>
+            <video id="media-ai-video-preview" controls autoplay muted loop playsinline></video>
+            <button class="secondary" id="media-ai-video-download-btn" style="margin-top:6px;">📥 Enregistrer la vidéo</button>
+          </div>
+
+          <div class="subsection" id="media-edit-panel" style="margin-top:14px;">
+            <label style="font-weight:bold;">✏️ Modifier cette création</label>
+            <p class="empty">Changez le titre/sous-titre/prix/badge/CTA ci-dessus puis "Appliquer le texte" (instantané), ou décrivez un changement de style pour régénérer le fond.</p>
+            <button class="secondary" id="media-apply-text-btn">🔄 Appliquer le texte</button>
+            <label style="margin-top:10px;">Changement de style/ambiance (optionnel)</label>
+            <textarea id="media-style-note" placeholder='Ex : "fond noir néon", "ambiance plus chaleureuse"'></textarea>
+            <button class="secondary" id="media-regen-bg-btn">🎨 Régénérer le fond avec ce changement</button>
+          </div>
+
+          <div class="subsection" style="margin-top:14px;">
+            <label style="font-weight:bold;">🎞️ Décliner dans tous les formats</label>
+            <p class="empty">Regénère cette création dans les 3 formats restants en un clic.</p>
+            <button class="secondary" id="media-decline-formats-btn">🎞️ Décliner dans tous les formats</button>
+            <div id="media-declinations-grid" class="media-grid" style="display:none;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 </div>
 <script src="lib/xlsx.full.min.js"></script>
 <script src="lib/spintax.js"></script>
@@ -302,9 +524,19 @@
 <script src="lib/contactsImport.js"></script>
 <script src="lib/fileExport.js"></script>
 <script src="lib/manualRelance.js"></script>
+<!-- Chat Intelligent / Human Context - portés depuis webapp-core/ (moteurs
+     UMD dual-env, zéro dépendance native), voir lib/cyrusStoreShim.js pour
+     le pont vers ce projet (window.Cyrus.db) et chat-core.js pour le détail
+     de ce qui est copié tel quel vs adapté. -->
+<script src="lib/intelligence/human-context-engine.js"></script>
+<script src="lib/intelligence/task-parser.js"></script>
+<script src="lib/intelligence/goal-chat.js"></script>
+<script src="lib/cyrusStoreShim.js"></script>
 <script src="app.js"></script>
 <script src="campaign.js"></script>
 <script src="relance.js"></script>
 <script src="connexions.js"></script>
+<script src="chat-core.js"></script>
+<script src="media-studio.js"></script>
 </body>
 </html>

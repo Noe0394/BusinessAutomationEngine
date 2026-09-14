@@ -25,11 +25,32 @@
     return document.getElementById('camp-channel').value;
   }
 
-  function sendScript(channelName, identifier, text) {
+  function sendScript(channelName, identifier, text, media) {
+    if (media) {
+      if (channelName === 'whatsapp') {
+        return 'window.__cyrusSendMedia && window.__cyrusSendMedia(' + JSON.stringify(identifier + '@c.us') + ', '
+          + JSON.stringify(media.data) + ', ' + JSON.stringify(media.mimetype) + ', ' + JSON.stringify(media.filename) + ', ' + JSON.stringify(text) + ');';
+      }
+      return 'window.__cyrusTgSendMedia && window.__cyrusTgSendMedia(' + JSON.stringify(identifier) + ', '
+        + JSON.stringify(media.data) + ', ' + JSON.stringify(media.mimetype) + ', ' + JSON.stringify(media.filename) + ', ' + JSON.stringify(text) + ');';
+    }
     if (channelName === 'whatsapp') {
       return 'window.__cyrusSend && window.__cyrusSend(' + JSON.stringify(identifier + '@c.us') + ', ' + JSON.stringify(text) + ');';
     }
     return 'window.__cyrusTgSend && window.__cyrusTgSend(' + JSON.stringify(identifier) + ', ' + JSON.stringify(text) + ');';
+  }
+
+  // Pièce jointe de campagne (optionnelle) — lue une seule fois au lancement
+  // (voir runCampaign), pas par message : la même image/vidéo/PDF est
+  // envoyée à tous les destinataires, seule la légende (texte personnalisé)
+  // change par contact.
+  function readFileAsBase64(file) {
+    return new Promise(function (resolve, reject) {
+      const reader = new FileReader();
+      reader.onload = function () { resolve(String(reader.result).split(',')[1] || ''); };
+      reader.onerror = function () { reject(reader.error); };
+      reader.readAsDataURL(file);
+    });
   }
 
   function refreshContactsCount() {
@@ -207,6 +228,18 @@
 
       row.appendChild(importBtn);
       row.appendChild(exportBtn);
+
+      // Diffusion directe dans le groupe/canal lui-même (un seul message
+      // pour tout le groupe), à distinguer de "Importer comme contacts"
+      // ci-dessus (extrait chaque MEMBRE comme contact individuel).
+      if (webviewId === 'telegram') {
+        const broadcastBtn = document.createElement('button');
+        broadcastBtn.textContent = '📣 Diffuser';
+        broadcastBtn.addEventListener('click', function () {
+          db.putAllContacts('telegram', [{ identifier: g.id, name: g.name || '' }]).then(refreshContactsCount);
+        });
+        row.appendChild(broadcastBtn);
+      }
       el.appendChild(row);
     });
   }
@@ -268,9 +301,16 @@
     return new Promise(function (resolve) { setTimeout(resolve, ms); });
   }
 
+  // Telegram impose un délai strict 30-60s entre chaque DM (limite
+  // anti-spam de la plateforme) — clampé ici quel que soit ce que
+  // l'utilisateur a saisi, même comportement que le VPS.
   function randomDelayMs() {
-    const min = Math.max(1, parseInt(document.getElementById('camp-delay-min').value, 10) || 8);
-    const max = Math.max(min, parseInt(document.getElementById('camp-delay-max').value, 10) || 20);
+    let min = Math.max(1, parseInt(document.getElementById('camp-delay-min').value, 10) || 8);
+    let max = Math.max(min, parseInt(document.getElementById('camp-delay-max').value, 10) || 20);
+    if (channel() === 'telegram') {
+      min = Math.min(60, Math.max(30, min));
+      max = Math.min(60, Math.max(min, max));
+    }
     return (min + Math.random() * (max - min)) * 1000;
   }
 
@@ -298,6 +338,16 @@
       }
     }
 
+    const mediaInput = document.getElementById('camp-media-input');
+    const mediaFile = mediaInput && mediaInput.files[0];
+    const media = mediaFile
+      ? { data: await readFileAsBase64(mediaFile), mimetype: mediaFile.type, filename: mediaFile.name }
+      : null;
+
+    const batchSize = parseInt(document.getElementById('camp-batch-size').value, 10) || 0;
+    const batchPauseMs = (parseInt(document.getElementById('camp-batch-pause').value, 10) || 0) * 1000;
+    let sentInBatch = 0;
+
     currentCampaignId = currentCampaignId || ('camp-' + Date.now());
     running = true;
     paused = false;
@@ -314,7 +364,7 @@
       const webviewId = channel();
 
       setStatus('Envoi à ' + contact.identifier + '... (' + (done + 1) + '/' + contacts.length + ')');
-      EmbeddedWebView.evaluate({ id: webviewId, script: sendScript(webviewId, contact.identifier, text) });
+      EmbeddedWebView.evaluate({ id: webviewId, script: sendScript(webviewId, contact.identifier, text, media) });
 
       // Attend l'accuse d'envoi (ou 15s de timeout) avant de passer au
       // suivant - evite d'empiler des envois plus vite que le pont ne peut
@@ -349,7 +399,12 @@
         status: 'running',
       });
 
-      if (done < contacts.length) await sleep(randomDelayMs());
+      sentInBatch += 1;
+      if (done < contacts.length) {
+        const useBatchPause = batchSize && sentInBatch >= batchSize;
+        if (useBatchPause) sentInBatch = 0;
+        await sleep(useBatchPause ? Math.max(randomDelayMs(), batchPauseMs) : randomDelayMs());
+      }
     }
 
     running = false;
@@ -373,6 +428,28 @@
   document.getElementById('camp-pause-btn').addEventListener('click', function () {
     paused = true;
     running = false;
+  });
+
+  // Rapport final de campagne (équivalent de la fenêtre modale de
+  // dashboard.html) : décompte par statut à partir de la dernière campagne
+  // persistée pour ce canal (db.getLatestCampaign) - même schéma sent/failed
+  // que campaign.js (voir lib/cyrusStoreShim.js pour le schéma canonique
+  // utilisé par chat-core.js, différent de celui-ci par conception).
+  document.getElementById('camp-report-btn').addEventListener('click', function () {
+    const el = document.getElementById('camp-report');
+    if (el.style.display === 'block') { el.style.display = 'none'; return; }
+    db.getLatestCampaign(channel()).then(function (c) {
+      if (!c) { el.innerHTML = '<p class="empty">Aucune campagne pour ce canal.</p>'; el.style.display = 'block'; return; }
+      const sentCount = (c.sent || []).length;
+      const failedCount = (c.failed || []).length;
+      const pendingCount = Math.max(0, (c.total || 0) - sentCount - failedCount);
+      const rows = (c.failed || []).map(function (id) { return '<li>' + escapeHtml(id) + '</li>'; }).join('');
+      el.innerHTML = '<div class="card" style="margin-bottom:0;">'
+        + '<div><b>' + sentCount + '</b> envoyé(s) · <b>' + failedCount + '</b> échec(s) · <b>' + pendingCount + '</b> en attente</div>'
+        + (failedCount ? '<ul style="margin-top:6px;">' + rows + '</ul>' : '')
+        + '</div>';
+      el.style.display = 'block';
+    });
   });
 
   function escapeHtml(s) {
