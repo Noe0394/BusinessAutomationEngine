@@ -42,8 +42,31 @@
     engine.mountConnectUI(channel, document.getElementById(channel === 'whatsapp' ? 'wa-connect-slot' : 'tg-connect-slot'));
   });
 
-  document.getElementById('wa-logout-btn').addEventListener('click', () => engine.logout('whatsapp'));
-  document.getElementById('tg-logout-btn').addEventListener('click', () => engine.logout('telegram'));
+  // En Mode Local sans extension, logout() n'a structurellement rien à
+  // déconnecter (aucune session réelle tenue par l'onglet) — sans retour
+  // visuel, le clic paraissait ne rien faire du tout (signalé par
+  // l'utilisateur : boutons "morts", tapés plusieurs fois de suite en vain).
+  // On affiche donc systématiquement une confirmation, même no-op.
+  function wireLogout(channel, btnId, feedbackId) {
+    const btn = document.getElementById(btnId);
+    const feedback = document.getElementById(feedbackId);
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      feedback.style.display = 'none';
+      try {
+        await engine.logout(channel);
+        feedback.textContent = '✅ Déconnecté.';
+      } catch (e) {
+        feedback.textContent = 'Erreur : ' + e;
+      }
+      feedback.style.display = 'block';
+      await refreshStatus(channel);
+      btn.disabled = false;
+      setTimeout(() => { feedback.style.display = 'none'; }, 4000);
+    });
+  }
+  wireLogout('whatsapp', 'wa-logout-btn', 'wa-logout-feedback');
+  wireLogout('telegram', 'tg-logout-btn', 'tg-logout-feedback');
 
   function formatRelative(ts) {
     const diffMs = Date.now() - new Date(ts).getTime();

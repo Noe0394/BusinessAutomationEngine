@@ -92,14 +92,31 @@
             btn.addEventListener('click', () => extBridge.openWhatsApp());
             box.appendChild(btn);
           } else {
-            box.textContent = '🟢 Mode local (SANS VPS) : sans l\'extension navigateur compagnon (non détectée), les envois passent par un lien wa.me — Mode Manuel Express (clic manuel requis dans WhatsApp). Voir browser-extension/README.md pour l\'installer et activer l\'envoi 100% automatique sur ce PC.';
+            box.innerHTML = '';
+            const status = document.createElement('div');
+            status.textContent = '🟢 Mode local (SANS VPS) : sans l\'extension navigateur compagnon (non détectée, ou indisponible sur mobile), les envois passent par un lien wa.me — Mode Manuel Express (clic manuel requis dans WhatsApp). Voir browser-extension/README.md pour l\'installer et activer l\'envoi 100% automatique sur PC.';
+            box.appendChild(status);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = '📱 Ouvrir WhatsApp Web';
+            btn.style.cssText = 'margin-top:8px;';
+            btn.addEventListener('click', () => { try { window.open('https://web.whatsapp.com', '_blank'); } catch (e) { /* ignore */ } });
+            box.appendChild(btn);
           }
         });
         containerEl.appendChild(box);
         return;
       }
 
-      box.textContent = '🟢 Mode local (SANS VPS) : aucune connexion Telegram automatique. Les envois passent par un lien t.me ouvrant votre Telegram — Mode Manuel Express.';
+      const status = document.createElement('div');
+      status.textContent = '🟢 Mode local (SANS VPS) : aucune connexion Telegram automatique. Les envois passent par un lien t.me ouvrant votre Telegram — Mode Manuel Express.';
+      box.appendChild(status);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = '✈️ Ouvrir Telegram Web';
+      btn.style.cssText = 'margin-top:8px;';
+      btn.addEventListener('click', () => { try { window.open('https://web.telegram.org', '_blank'); } catch (e) { /* ignore */ } });
+      box.appendChild(btn);
       containerEl.appendChild(box);
     },
     // Envoi WhatsApp : extension compagnon si installée+connectée (envoi RÉEL,
