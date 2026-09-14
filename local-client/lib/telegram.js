@@ -52,6 +52,12 @@ function onStateChange(callback) {
   stateListeners.push(callback);
 }
 
+// Voir lib/whatsapp.js#onIncomingMessage — même patron.
+const incomingMessageListeners = [];
+function onIncomingMessage(callback) {
+  incomingMessageListeners.push(callback);
+}
+
 function loadSessionString() {
   try {
     return fs.readFileSync(TELEGRAM_SESSION_PATH, 'utf8').trim();
@@ -74,6 +80,9 @@ function registerIncomingHandler() {
     } catch (err) {
       console.error('Erreur enregistrement message Telegram entrant (SQLite) :', err.message);
     }
+    incomingMessageListeners.forEach((cb) => {
+      try { cb(event.message); } catch (err) { console.error('Erreur dans un écouteur de message entrant Telegram :', err.message); }
+    });
   }, new NewMessage({}));
 }
 
@@ -299,6 +308,7 @@ module.exports = {
   isConfigured,
   isConnected,
   onStateChange,
+  onIncomingMessage,
   connect,
   startLogin,
   submitCode,

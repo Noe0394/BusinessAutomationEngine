@@ -83,6 +83,15 @@ function onStateChange(callback) {
   stateListeners.push(callback);
 }
 
+// Écouteurs "message entrant" (voir ai-engine/emotionalCloser.js côté
+// local-client, message-triage.js) — même patron que stateListeners
+// ci-dessus. Le SQLite recordMessage() déjà en place (voir client.on('message'))
+// reste inchangé, ceci est un DEUXIÈME abonné indépendant.
+const incomingMessageListeners = [];
+function onIncomingMessage(callback) {
+  incomingMessageListeners.push(callback);
+}
+
 function connect() {
   if (client) return Promise.resolve();
 
@@ -128,6 +137,9 @@ function connect() {
     } catch (err) {
       console.error('Erreur enregistrement message entrant (SQLite) :', err.message);
     }
+    incomingMessageListeners.forEach((cb) => {
+      try { cb(msg); } catch (err) { console.error('Erreur dans un écouteur de message entrant WhatsApp :', err.message); }
+    });
   });
 
   return client.initialize().catch((err) => {
@@ -211,5 +223,5 @@ async function logout() {
 }
 
 module.exports = {
-  connect, sendMessage, sendMedia, getQRCode, getQRCodeImage, isConnected, onStateChange, logout, getGroups, getGroupMembers,
+  connect, sendMessage, sendMedia, getQRCode, getQRCodeImage, isConnected, onStateChange, onIncomingMessage, logout, getGroups, getGroupMembers,
 };

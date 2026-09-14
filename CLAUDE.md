@@ -23,14 +23,75 @@ des exécutions en double des mêmes scripts) :
 - Pour forcer l'extraction et la sauvegarde immédiate d'une leçon depuis la
   session en cours (sans attendre la fin de session), invoquer `/learn`.
 
-**Chantier en cours (2026-09-14 soir)** : parité fonctionnelle Mode VPS ↔
-Mode Local (PC `.exe` + mobile APK). Suivi vivant, état détaillé et
-prochaines étapes exactes dans **`docs/PARITE-LOCAL.md`** — à lire avant de
-reprendre ce chantier. Résumé ultra-court : tout le code de parité est écrit
-et vérifié syntaxiquement (pièce jointe, ebook enrichi, Studio Média complet
-avec vidéo Ken Burns, multi-campagnes PC, etc.), mais **rien n'est encore
-compilé ni testé en conditions réelles** — bloqué ce soir par manque de RAM
-sur cette machine (4 Go, plusieurs sessions actives en parallèle).
+**Chantier en cours (2026-09-14, reprendre ICI)** : "Chat-Driven Agent
+Orchestrator" — rendre l'agent CYRUS **100% autonome** (objectif explicite
+de l'utilisateur : "aiguiser le système intelligent à agir de façon 100%
+autonome"). Suivi vivant complet, chantier par chantier, dans
+**`docs/PARITE-LOCAL.md`** (fichier au nom historique, contient en réalité
+TOUT le suivi de cette phase — à lire intégralement avant de reprendre,
+plusieurs sections empilées dans l'ordre chronologique). Résumé pour
+reprendre sans tout relire :
+
+1. **VPS (VM Google Cloud, voir section infra ci-dessous) : FAIT et
+   DÉPLOYÉ, vérifié en conditions réelles par l'utilisateur.**
+   `ai-engine/{chatOrchestrator,offerClarifier,personaManager,
+   emotionalCloser,voiceProcessor,platformOrchestrator,storageAdapter}.js` +
+   6 nouvelles actions dans `lib/intelligence/action-executor.js` + DeepSeek
+   dans la cascade IA. Branché sur LES DEUX tchats du dashboard
+   ("Copywriter Studio IA" ET "💬 Chat Intelligent" — piège réel rencontré :
+   le premier câblage n'avait touché QUE le premier, l'utilisateur a testé
+   le second et reçu une réponse robotique, corrigé depuis).
+   **2 bugs critiques trouvés en test réel et corrigés** (tous deux
+   déployés) : (a) l'onglet "Chat Intelligent" n'était pas branché sur le
+   nouveau moteur — corrigé dans `lib/intelligence/vps-bridge.js` ; (b) le
+   LLM **niait avoir accès à WhatsApp/Telegram** quand on lui demandait
+   comment il comptait contacter les clients (répondait comme un assistant
+   généraliste classique, "je n'ai pas accès à vos comptes externes") —
+   corrigé en ajoutant une consigne explicite d'accès réel dans
+   `lib/ai/llmFallbackEngine.js#SYSTEM_PROMPT` (source unique, utilisé
+   partout) ET `ai-engine/personaManager.js#personaSystemPrompt`. **Si un
+   comportement similaire de déni de capacité réapparaît ailleurs, c'est le
+   même type de correctif qu'il faut appliquer** (le LLM a besoin qu'on lui
+   affirme explicitement son accès réel, sinon il retombe sur son
+   comportement par défaut d'IA généraliste prudente).
+2. **PC (`local-client/`) : port COMPLET mais ⚠️ PAS ENCORE COMMITTÉ NI
+   POUSSÉ SUR GIT** — tout le code existe sur disque (`local-client/ai-engine/`,
+   `local-client/lib/ai/llmFallbackEngine.js`, `local-client/lib/intelligence/
+   runtimes/local-runtime.js`, hooks `onIncomingMessage` ajoutés à
+   `lib/whatsapp.js`/`lib/telegram.js`, route `/api/intelligence/goal-chat`
+   modifiée dans `index.js`), vérifié par `node --check` + tests de logique
+   en isolation, **jamais testé avec de vraies clés API ni un vrai compte
+   WhatsApp/Telegram local, jamais buildé en `.exe`**. Vérifier `git status`
+   dans `local-client/` avant toute chose en reprenant.
+3. **Mobile (`mobile/webapp/`) : PAS commencé.**
+4. **Nouveau chantier ouvert, pas encore débuté** : rendre l'agent capable
+   d'opérer des **plateformes BACK-OFFICE EXTERNES** (au-delà de CYRUS
+   lui-même) pour le compte du vendeur — ex. donné par l'utilisateur :
+   créer un compte/générer une clé/envoyer un lien d'accès sur SA PROPRE
+   plateforme externe (pas celle intégrée à CYRUS), avec "autorisation
+   consciente" du vendeur. Nature technique différente de tout ce qui
+   précède (API/tool-calling propre) : soit intégration OAuth/API pour les
+   plateformes qui en ont une (le projet a déjà des patterns OAuth
+   Facebook/YouTube à réutiliser comme modèle), soit automatisation de
+   navigateur (RPA) pour celles qui n'en ont pas — jugé trop risqué/vague
+   pour être construit "en général" sans une vraie cible. **Plateforme cible
+   concrète fournie par l'utilisateur pour prototyper** :
+   `https://riea-afrique-web.web.app/` (RIEA AFRIQUE — sa PROPRE application
+   séparée, marketplace/formation/communauté/certification, sur le MÊME
+   projet Firebase partagé `rien-afrique` que le failover CYRUS — voir
+   `preserve-existing-infrastructure` en mémoire globale, prudence maximale
+   déjà justifiée par un incident réel sur ce projet). Une reconnaissance en
+   lecture seule du site public a été tentée puis interrompue par une
+   limite de session Claude (pas un blocage technique réel, à refaire).
+   **Il restait à demander à l'utilisateur COMMENT partager l'accès au
+   back-office admin** (capture/démo plutôt que ses identifiants
+   principaux) — question posée, réponse pas encore reçue au moment de
+   cette note.
+5. **Ancien chantier "parité Mode VPS ↔ Local" (pièce jointe, ebook,
+   Studio Média...)** : toujours dans le même état qu'avant (code écrit,
+   jamais compilé/testé, RAM de la machine à revérifier) — voir la section
+   correspondante, plus bas dans `docs/PARITE-LOCAL.md`, pas prioritaire
+   tant que le chantier ci-dessus n'est pas avancé.
 
 ## ⚠️ CHANGEMENT D'INFRASTRUCTURE VPS (2026-09-14, à ne jamais oublier)
 

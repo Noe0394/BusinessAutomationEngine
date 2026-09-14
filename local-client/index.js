@@ -17,6 +17,26 @@ const taskParser = require('./lib/intelligence/task-parser');
 const humanContext = require('./lib/intelligence/human-context-engine');
 const goalChat = require('./lib/intelligence/goal-chat');
 
+// Chat-Driven Agent Orchestrator (portage local-client, voir docs/PARITE-LOCAL.md
+// et ai-engine/ à la racine du dépôt pour la version VPS de référence) —
+// mêmes modules, adaptés à un PC mono-poste (pas de multi-tenant, pas
+// d'automation-engine différé, voir les commentaires d'en-tête de chaque
+// fichier local-client/ai-engine/*.js).
+const { createLocalRuntime } = require('./lib/intelligence/runtimes/local-runtime');
+const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
+const chatOrchestrator = require('./ai-engine/chatOrchestrator');
+const platformOrchestrator = require('./ai-engine/platformOrchestrator');
+const messageTriage = require('./lib/intelligence/message-triage');
+const businessProfileStore = require('./ai-engine/storageAdapter');
+const emotionalCloser = require('./ai-engine/emotionalCloser');
+const voiceProcessor = require('./ai-engine/voiceProcessor');
+const AUTO_CLOSE_PROSPECTS = process.env.AUTO_CLOSE_PROSPECTS === 'true';
+
+const localRuntime = createLocalRuntime({
+  whatsapp, telegram, campaigns,
+  llm: (prompt, history, context) => llmFallbackEngine.generateAIResponse(prompt, history, context).then((r) => r.text),
+});
+
 const PORT = process.env.LOCAL_PORT || 4100;
 
 async function main() {
@@ -259,7 +279,14 @@ async function main() {
   // préréglé) plutôt que de réimplémenter un moteur d'envoi côté chat — le
   // vrai envoi passe toujours par POST /api/campaigns (lib/campaigns.js).
   const goalChatSessions = new Map();
-  app.post('/api/intelligence/goal-chat', (req, res) => {
+  // Continuation d'intention (offre/paiement/compte, voir
+  // ai-engine/chatOrchestrator.js#detectIntent) — équivalent local, en
+  // mémoire, de ce que aiStudioStore.js fournit côté VPS via l'historique de
+  // session persisté (ce tchat-ci reste stateless côté client par ailleurs,
+  // voir goalChatSessions ci-dessus pour le seul état vraiment nécessaire).
+  const lastAssistantBySession = new Map();
+
+  app.post('/api/intelligence/goal-chat', async (req, res) => {
     const { message, sessionId, action } = req.body || {};
     let state = sessionId ? goalChatSessions.get(sessionId) : null;
     if (!state) {
@@ -268,6 +295,7 @@ async function main() {
     }
     if (action === 'restart') {
       goalChatSessions.delete(state.sessionId);
+      lastAssistantBySession.delete(state.sessionId);
       const fresh = goalChat.createSession({});
       goalChatSessions.set(fresh.sessionId, fresh);
       return res.json({ ok: true, sessionId: fresh.sessionId, kind: 'question', reply: goalChat.WELCOME });
@@ -275,8 +303,43 @@ async function main() {
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Le champ "message" est requis (ou action:"restart").' });
     }
+
+    // Chat-Driven Agent Orchestrator — consulté EN PREMIER (offre/rapport/
+    // paiement/compte/campagne), avant le pipeline goal-chat brut existant.
+    // Retombe proprement dessus si aucune commande n'est détectée.
+    const lastAssistantMessage = lastAssistantBySession.get(state.sessionId) || null;
+    const orchestrated = await chatOrchestrator.handle(
+      { text: message, history: [], sessionId: state.sessionId, lastAssistantMessage },
+      { runtime: localRuntime, humanContext },
+    ).catch((err) => {
+      console.warn('Chat-Driven Agent Orchestrator (local) — échec, repli sur goal-chat brut :', err.message);
+      return null;
+    });
+
+    if (orchestrated) {
+      lastAssistantBySession.set(state.sessionId, {
+        isPlanningQuestion: !!orchestrated.isPlanningQuestion,
+        intent: orchestrated.intent || null,
+      });
+      return res.json({
+        ok: true,
+        sessionId: state.sessionId,
+        reply: { text: orchestrated.text },
+        kind: orchestrated.actionLog ? 'plan' : 'question',
+        actionLog: orchestrated.actionLog || null,
+      });
+    }
+
     const out = goalChat.step(state, { message, parser: taskParser, humanContext });
     res.json(Object.assign({ ok: true, sessionId: state.sessionId }, out));
+  });
+
+  // Notifications asynchrones (escalade prospect, feedback client, voir
+  // ai-engine/emotionalCloser.js + ai-engine/platformOrchestrator.js) —
+  // sondé périodiquement par le frontend (public/intelligence.js), vidé à
+  // chaque appel (affichage "une seule fois", comme un toast).
+  app.get('/api/notifications', (req, res) => {
+    res.json({ notifications: platformOrchestrator.drainNotifications() });
   });
 
   // ---------- Page Connexions : historique unifié WhatsApp + Telegram ----------
@@ -533,6 +596,74 @@ async function main() {
     console.log(`Interface locale disponible sur http://localhost:${PORT}`);
     open(`http://localhost:${PORT}`).catch(() => {
       console.warn('Impossible d\'ouvrir automatiquement le navigateur — ouvrez l\'URL ci-dessus manuellement.');
+    });
+  });
+
+  // Filtrage privé/pro + closing émotionnel auto (voir
+  // ai-engine/emotionalCloser.js, ai-engine/message-triage.js) — même
+  // prudence par défaut que le VPS : AUTO_CLOSE_PROSPECTS doit valoir
+  // exactement "true" pour activer l'envoi réel. Désactivé par défaut, un
+  // agent qui répondrait automatiquement à de vrais clients sans
+  // activation explicite serait une action à risque.
+  // Réponse toujours en TEXTE ici, même si le client a parlé — limitation
+  // ASSUMÉE : whatsapp-web.js/GramJS (lib/whatsapp.js, lib/telegram.js)
+  // n'exposent pas encore d'envoi de note vocale côté local-client
+  // (contrairement au VPS, voir adapters/whatsappEngineBaileys.js#sendVoiceNote/
+  // adapters/telegram.js#sendVoiceNote) — la transcription des notes
+  // vocales ENTRANTES fonctionne pleinement, seule la synthèse de réponses
+  // vocales SORTANTES reste à porter ici.
+  async function sendCustomerReply(channel, text, to) {
+    if (channel === 'WHATSAPP') return whatsapp.sendMessage(to, text);
+    return telegram.sendMessage(to, text);
+  }
+
+  async function handleIncomingCustomerMessage(channel, msg) {
+    let text = channel === 'WHATSAPP' ? String(msg.body || '') : String(msg.message || '');
+    const isVoice = channel === 'WHATSAPP' ? msg.type === 'ptt' : !!msg.voice;
+    const from = channel === 'WHATSAPP' ? msg.from : String(msg.chatId || msg.senderId || '');
+
+    if (!text.trim() && isVoice) {
+      try {
+        let buffer;
+        if (channel === 'WHATSAPP') {
+          const media = await msg.downloadMedia();
+          buffer = Buffer.from(media.data, 'base64');
+        } else {
+          buffer = await msg.downloadMedia();
+        }
+        const { text: raw, language } = await voiceProcessor.transcribeAudio(buffer, 'audio/ogg', 'voice.ogg');
+        text = (await voiceProcessor.translateToFrench(raw, language)).trim();
+      } catch (err) {
+        console.error(`voiceProcessor — échec de transcription d'une note vocale entrante (${channel}) :`, err.message);
+        return;
+      }
+    }
+    if (!text.trim() || !from) return;
+
+    const classification = messageTriage.classify(text);
+    if (classification.category === 'business') {
+      const profile = await businessProfileStore.get('business_profiles', 'local', { offers: [], faq: [] });
+      messageTriage.recordFaqSignal(profile, text);
+      businessProfileStore.set('business_profiles', 'local', profile);
+    }
+    if (!AUTO_CLOSE_PROSPECTS || classification.category !== 'business') return;
+
+    try {
+      const reply = await emotionalCloser.handleCustomerMessage({ tenantId: 'local', channel, from, text });
+      if (reply) await sendCustomerReply(channel, reply, from);
+    } catch (err) {
+      console.error(`emotionalCloser (local) — échec de traitement (${channel}) :`, err.message);
+    }
+  }
+
+  whatsapp.onIncomingMessage((msg) => {
+    handleIncomingCustomerMessage('WHATSAPP', msg).catch((err) => {
+      console.error('Erreur dans le traitement intelligent d\'un message WhatsApp entrant :', err.message);
+    });
+  });
+  telegram.onIncomingMessage((msg) => {
+    handleIncomingCustomerMessage('TELEGRAM', msg).catch((err) => {
+      console.error('Erreur dans le traitement intelligent d\'un message Telegram entrant :', err.message);
     });
   });
 

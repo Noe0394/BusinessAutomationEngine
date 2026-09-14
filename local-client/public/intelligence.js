@@ -70,6 +70,20 @@ async function goalChatPost(body) {
   return res.json();
 }
 
+// Cartes d'état (voir ai-engine/chatOrchestrator.js — icon/label/status) :
+// affichées comme une petite bulle système distincte, sous la réponse.
+function goalChatAppendActionLog(actionLog) {
+  if (!actionLog || !actionLog.length) return;
+  const container = document.getElementById('goalchat-messages');
+  const bubble = document.createElement('div');
+  bubble.className = 'goalchat-msg assistant';
+  bubble.style.fontSize = '12px';
+  bubble.style.opacity = '0.85';
+  bubble.textContent = actionLog.map((a) => `${a.icon || ''} ${a.label || ''}`.trim()).join('\n');
+  container.appendChild(bubble);
+  container.scrollTop = container.scrollHeight;
+}
+
 async function goalChatSend(message) {
   goalChatAppendBubble('user', message);
   try {
@@ -77,12 +91,29 @@ async function goalChatSend(message) {
     if (!data.ok) { goalChatAppendBubble('assistant', '⚠️ ' + (data.error || 'Erreur.')); return; }
     if (data.sessionId) goalChatSessionId = data.sessionId;
     if (data.reply && data.reply.text) goalChatAppendBubble('assistant', data.reply.text);
+    if (data.actionLog) goalChatAppendActionLog(data.actionLog);
     if (data.quick) goalChatAppendChips(data.quick, (label) => goalChatSend(label));
     if (data.kind === 'plan' && data.actions) goalChatAppendPlanActions(data.actions, data.ctx);
   } catch (err) {
     goalChatAppendBubble('assistant', '⚠️ Erreur de communication avec le système intelligent.');
   }
 }
+
+// Notifications asynchrones (escalade prospect, feedback client — voir
+// ai-engine/emotionalCloser.js + ai-engine/platformOrchestrator.js) :
+// sondées périodiquement, affichées comme un message assistant dès qu'un
+// onglet "Chat Intelligent" est ouvert au moins une fois.
+async function goalChatPollNotifications() {
+  try {
+    const res = await fetch('/api/notifications');
+    const data = await res.json();
+    (data.notifications || []).forEach((n) => {
+      goalChatAppendBubble('assistant', n.text);
+      if (n.actionLog) goalChatAppendActionLog(n.actionLog);
+    });
+  } catch (err) { /* silencieux — nouvelle tentative au prochain intervalle */ }
+}
+setInterval(goalChatPollNotifications, 8000);
 
 async function goalChatRestart() {
   try {

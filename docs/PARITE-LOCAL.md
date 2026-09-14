@@ -1,3 +1,106 @@
+## 🖥️ Portage `local-client/` du Chat-Driven Agent Orchestrator (session du 2026-09-14, suite)
+
+**Découverte critique en cours de route (signalée par l'utilisateur en test
+réel)** : le dashboard VPS a DEUX tchats séparés — "Copywriter Studio IA"
+(`/api/ai-studio/sessions/:id/messages`, où le moteur intelligent avait été
+câblé) et **"💬 Chat Intelligent"** (`/api/intelligence/goal-chat`, JAMAIS
+touché) — ce dernier renvoyait un plan robotique hors-sujet à une simple
+salutation. **Corrigé et déployé sur le VPS** : `lib/intelligence/vps-bridge.js`
+consulte désormais `chatOrchestrator.handle()` en premier sur cette route
+aussi, avec un vrai repli conversationnel LLM (pas le plan mécanique de
+goal-chat.js) quand aucun objectif business n'est détecté
+(`taskParser.detectGoals` ne renvoie que `'DEFAULT'`). **Ce même piège a été
+évité dès le départ côté local-client** (voir ci-dessous — un seul point
+d'entrée `/api/intelligence/goal-chat`, câblé correctement dès la première
+passe).
+
+**Fait** (fichiers `local-client/ai-engine/*.js` + adaptations) :
+- `lib/ai/llmFallbackEngine.js` (nouveau, shim) : MÊME signature exportée
+  que la version VPS mais délègue à `lib/aiGateway.js` déjà existant
+  (Firebase en priorité, VPS en repli) — permet de copier
+  `offerClarifier.js`/`personaManager.js`/`emotionalCloser.js` **verbatim**
+  depuis le VPS, aucune divergence de code à maintenir pour ces 3 fichiers.
+- `ai-engine/storageAdapter.js` (adapté) : JSON local uniquement (pas de
+  miroir GitHub — le disque de ce PC n'est pas éphémère comme celui du VPS),
+  sous `%APPDATA%\CyrusLocalClient\ai_engine_data\` (déjà le dossier de
+  données persistantes établi, voir `lib/paths.js`).
+- `ai-engine/platformOrchestrator.js` (adapté) : file de notifications EN
+  MÉMOIRE + `GET /api/notifications` (sondé par le frontend) au lieu de
+  `lib/aiStudioStore.js` (pas d'équivalent local — ce tchat reste stateless
+  côté serveur). Supervision anti-spam des campagnes (§1.1 du cahier des
+  charges "Orchestrateur Inter-Modules") **non câblée** : `lib/campaigns.js`
+  n'a pas d'équivalent du coupe-circuit `lib/circuitBreaker.js` du VPS.
+- `ai-engine/chatOrchestrator.js` (adapté) : même détection d'intention et
+  mêmes handlers offre/rapport/paiement/compte (verbatim dans l'esprit,
+  juste `tenantId` fixé à `'local'`, mono-poste). **'goal' (campagnes)
+  significativement adapté** : pas d'automation-engine local (pas de tâches
+  différées) — seules les étapes immédiates (extraction + envoi) sont
+  exécutées après confirmation ; relance/analyse/rapport différés restent
+  manuels (onglets Campagnes/Relance). Limitation de fond héritée de
+  task-parser.js (déjà présente côté VPS, pas introduite ici) : aucun
+  ciblage de groupe automatique à partir d'un simple "je veux vendre X" —
+  suppose un groupe déjà extrait au préalable.
+- `lib/intelligence/action-executor.js`, `lib/intelligence/message-triage.js`,
+  `ai-engine/emotionalCloser.js`, `ai-engine/voiceProcessor.js`,
+  `ai-engine/offerClarifier.js`, `ai-engine/personaManager.js` : copiés
+  **verbatim** depuis le VPS (dual-env, zéro dépendance VPS-spécifique une
+  fois les 2 adaptateurs ci-dessus en place).
+- `lib/intelligence/runtimes/local-runtime.js` (nouveau) : équivalent
+  mono-poste de `lib/intelligence/runtimes/vps-runtime.js` — beaucoup plus
+  simple (pas de multi-tenant), branche `EXTRACT_MEMBERS`/`SEND_CAMPAIGN`/
+  `sendMessage`/`PAUSE_CAMPAIGN`/`RESUME_CAMPAIGN` sur `lib/whatsapp.js`/
+  `lib/telegram.js`/`lib/campaigns.js` existants. `CREATE_USER_ACCOUNT`/
+  `GRANT_MODULE_ACCESS`/`GENERATE_ACCESS_KEY` fonctionnent SANS adaptation
+  (appellent directement Firebase, comme côté VPS). `SCHEDULE_FOLLOWUP`
+  reste `RUNTIME_MISSING` (pas de file de programmation différée locale).
+- `lib/whatsapp.js`/`lib/telegram.js` : ajout de `onIncomingMessage()`
+  (n'existait PAS du tout ici, contrairement au VPS) — même patron que
+  `onStateChange` déjà en place. Câblé dans `index.js` vers un pipeline
+  identique à `handleIncomingCustomerMessage` du VPS (classification privé/
+  pro + FAQ passive + closing auto derrière `AUTO_CLOSE_PROSPECTS`, défaut
+  `false`). Transcription des notes vocales entrantes fonctionnelle ;
+  réponse vocale SORTANTE non portée (`sendVoiceNote` manquant côté
+  whatsapp-web.js/GramJS local — texte en repli, jamais un échec silencieux).
+- `index.js#POST /api/intelligence/goal-chat` : consulte `chatOrchestrator.handle()`
+  en premier, retombe sur `goalChat.step()` brut si aucune commande
+  détectée — EXACTEMENT le correctif appliqué au VPS ci-dessus, présent dès
+  la première version ici (pas de régression à corriger après coup).
+  `GET /api/notifications` ajouté.
+- `public/intelligence.js` : affiche les cartes d'action (`actionLog`) sous
+  la réponse + sonde `/api/notifications` toutes les 8s.
+- `package.json` : `form-data` ajouté en dépendance directe (nécessaire à
+  `voiceProcessor.js`, résolvait déjà transitivement via axios mais pas
+  fiable pour l'empaquetage `pkg`).
+- `.env.example` local-client : `MAX_DISCOUNT_PERCENT`, `MOBILE_MONEY_*`,
+  `AUTO_CLOSE_PROSPECTS`, clés STT/TTS (voir note ci-dessous).
+
+**Testé** : `node --check` sur tous les fichiers touchés ; détection
+d'intention vérifiée identique au VPS (6 cas) ; chaîne d'erreur vérifiée
+(un échec réseau dans `planPayment` remonte proprement jusqu'au `.catch()`
+de la route, repli sur `goalChat.step()`, jamais un crash serveur). Aucun
+test avec de vraies clés API / vrai WhatsApp-Telegram local (cohérent avec
+la pratique déjà établie).
+
+**Écart de sécurité noté, PAS un problème** : `voiceProcessor.js` lit
+`GROQ_API_KEY`/`GEMINI_API_KEY`/`ELEVENLABS_API_KEY`/`GOOGLE_TTS_API_KEY`
+DIRECTEMENT depuis `.env` local (contrairement au reste de l'IA texte/image
+qui passe par `lib/aiGateway.js` → Firebase, jamais de clé de fournisseur
+détenue localement) — décision ASSUMÉE : aucun équivalent Firebase
+Cloud Function pour la transcription/synthèse audio n'existe encore, et ce
+`.env` est déjà le dépôt d'un autre secret utilisateur local
+(`TELEGRAM_API_ID`/`_HASH`) — cohérent avec la convention déjà en place
+pour ce client, pas une régression de sécurité introduite ici.
+
+**Non fait** : build/test réel (`.exe`, pas relancé — RAM de cette machine
+non re-vérifiée depuis la dernière fois) ; portage mobile (`mobile/webapp/`,
+chantier séparé, encore plus différent architecturalement — pas de backend
+Node du tout, wrapping API keys y serait un VRAI problème de sécurité
+contrairement à local-client, à traiter via Firebase Cloud Functions
+dédiées si demandé) ; réponse vocale sortante côté local-client ; onglet
+Connexions non mis à jour pour afficher le statut "closing auto" éventuel.
+
+---
+
 ## 🎙️ Chantier "Traitement Vocal Autonome" (`ai-engine/voiceProcessor.js`)
 
 **Fait** :
