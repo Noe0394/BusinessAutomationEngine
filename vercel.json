@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "echo 'Site 100% statique : aucun build requis (voir npm run build pour public/dist/dashboard.html, obfuscation manuelle hors deploiement)'",
   "installCommand": "echo 'Interface statique : aucune dependance backend a installer'",
   "outputDirectory": "public",
   "rewrites": [
