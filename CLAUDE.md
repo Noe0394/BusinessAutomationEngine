@@ -32,14 +32,105 @@ avec vidéo Ken Burns, multi-campagnes PC, etc.), mais **rien n'est encore
 compilé ni testé en conditions réelles** — bloqué ce soir par manque de RAM
 sur cette machine (4 Go, plusieurs sessions actives en parallèle).
 
+## ⚠️ CHANGEMENT D'INFRASTRUCTURE VPS (2026-09-14, à ne jamais oublier)
+
+**Le VPS de production n'est PLUS Render** — migré vers une VM Google Cloud
+Compute Engine, confirmé explicitement par l'utilisateur le 2026-09-14.
+Render reste configuré (webhook GitHub + auto-deploy actifs) mais le
+service y est **SUSPENDU** depuis au moins le 2026-09-08 (dernier déploiement
+Render réel : commit `11652f9f...`, ce jour-là) — **tout push sur `main`
+depuis n'atteint donc plus la production réelle** tant que le déploiement
+ne se fait pas manuellement sur la VM ci-dessous. Ne JAMAIS supposer qu'un
+`git push` suffit à déployer sur ce projet désormais.
+
+### Accès VM Google Cloud — production réelle
+```
+Instance      : instance-20260909-074745
+Projet GCP    : rien-afrique  (MÊME projet que le failover Firebase, voir
+                règle preserve-existing-infrastructure — prudence identique)
+Zone          : us-central1-a
+Utilisateur VM: deploy
+
+Connexion (fonctionne via Google Cloud Shell — l'ancienne clé SSH locale ne
+fonctionne plus) :
+  gcloud compute ssh deploy@instance-20260909-074745 --project=rien-afrique --zone=us-central1-a
+
+Conteneur Docker principal : cyrus-super-assistant-backend (port 3000->3000)
+URL publique   : https://34-135-20-27.sslip.io
+Health check   : https://34-135-20-27.sslip.io/health
+```
+### Mécanisme de déploiement RÉEL sur cette VM (confirmé et exécuté avec
+succès le 2026-09-14) — PAS de GitOps automatique, tout est manuel via SSH :
+```
+gcloud compute ssh deploy@instance-20260909-074745 --project=rien-afrique --zone=us-central1-a --command="<commande>"
+```
+Le checkout applicatif vit dans `/home/cyrus2026/BusinessAutomationEngine`
+(utilisateur Linux **`cyrus2026`**, PAS `deploy` — accéder aux fichiers via
+`sudo -u cyrus2026 ...` ou `sudo <commande>`). C'est un checkout git normal
+(`origin` = ce dépôt GitHub, branche `main`) :
+1. `git pull origin main` (en tant que `cyrus2026`) pour récupérer les
+   derniers commits.
+2. `sudo ./deploy.sh` (depuis ce même dossier) — rebuild l'image Docker
+   (`docker-compose up -d --build`) PUIS nettoie les images/couches
+   orphelines (le disque ne fait que 9,7 Go, voir le commentaire en tête du
+   script — un rebuild sans nettoyage l'a déjà rempli à 97% le 2026-09-09).
+   Le build installe des paquets système lourds (ffmpeg, g++, python3...) :
+   compter plusieurs minutes, PAS instantané — si une commande SSH interactive
+   semble ne rien afficher/se terminer sans output, ce n'est probablement pas
+   un échec mais un souci d'affichage du terminal SSH (voir piège ci-dessous),
+   pas le signe que le build a échoué.
+3. Vérifier : `sudo docker ps -a` (conteneur `cyrus-super-assistant-backend`
+   doit être "Up", `CREATED` récent) + `curl https://34-135-20-27.sslip.io/health`
+   + `sudo docker logs cyrus-super-assistant-backend --tail 50` (chercher
+   "Server listening on port 3000", pas de `MODULE_NOT_FOUND`/`SyntaxError`
+   — des erreurs Baileys "Connection Failure"/"PreKeyError"/"MessageCounterError"
+   dans les logs sont NORMALES, bruit habituel multi-tenant, pas un échec).
+
+**Pièges déjà rencontrés (2026-09-14), à éviter au prochain déploiement :**
+- **Fichiers root-owned dans le checkout** : `git pull` peut échouer avec
+  des `Permission denied` si des fichiers du dépôt appartiennent à `root`
+  (constaté sur 134 fichiers, cause exacte non identifiée — probablement un
+  `sudo git pull`/`sudo npm install` lancé par erreur une fois). Fix :
+  `sudo chown -R cyrus2026:cyrus2026 /home/cyrus2026/BusinessAutomationEngine`
+  avant de retenter le pull.
+- **Checkout localement modifié/désynchronisé de git** (constaté une fois :
+  des fichiers avaient été déposés directement sur le disque, hors git, sans
+  jamais faire avancer le HEAD local) : `git pull` refuse alors avec "local
+  changes would be overwritten". Diagnostic AVANT toute action destructive :
+  comparer le contenu réel (`md5sum`/`diff` après avoir neutralisé les fins
+  de ligne CRLF/LF, PAS un simple `diff` brut qui affiche tout comme
+  différent à cause de ça) pour confirmer qu'il n'y a pas de vrai travail
+  concurrent avant d'écraser quoi que ce soit. Remède SANS `git reset --hard`
+  (souvent bloqué par le mode auto de Claude Code, "Irreversible Local
+  Destruction") : `git update-ref refs/heads/main origin/main` (déplace HEAD
+  sans toucher à l'arbre de travail) puis `git reset` (sans argument —
+  resynchronise l'INDEX sur HEAD, ne touche PAS non plus l'arbre de travail)
+  puis `git checkout -- .` (restaure l'arbre de travail depuis l'index) —
+  3 commandes ciblées et réversibles à chaque étape, jamais un `--hard`.
+- **`gcloud compute ssh --command="... & ..."` avec backgrounding/nohup
+  inline** : silencieusement NE S'EXÉCUTE PAS DU TOUT sur Windows (aucune
+  sortie, aucune erreur, le process ne démarre jamais) — problème
+  d'échappement entre Git Bash → gcloud → plink.exe. Solution fiable : écrire
+  un petit script `.sh` sur la VM via `printf ... | sudo tee /tmp/script.sh`
+  (évite les guillemets imbriqués), puis le lancer en arrière-plan DÉTACHÉ de
+  la session SSH via `sudo systemd-run --unit=<nom> /tmp/script.sh` (fonctionne
+  de façon fiable, contrairement à `nohup ... &`), et sonder avec
+  `systemctl status <nom>` / lire le fichier de log qu'il écrit.
+
+---
+
 ## État actuel du projet (résumé)
 
-**CYRUS SUPER ASSISTANT** — plateforme Node.js/Express (`index.js`) déployée
-en continu (GitOps GitHub → Render) sur Render, service web Docker en plan
-**Free** (région Oregon). Dashboard servi en HTML/JS statique unique
-(`public/dashboard.html`), avec export PWA (`manifest.json`, `sw.js`,
-`icon.svg`) et un build d'obfuscation (`npm run build` →
-`public/dist/dashboard.html`).
+**CYRUS SUPER ASSISTANT** — plateforme Node.js/Express (`index.js`).
+**Historique de déploiement** (voir alerte tout en haut de ce fichier) :
+initialement en continu (GitOps GitHub → Render) sur Render, service web
+Docker en plan Free (région Oregon) — **CE MÉCANISME EST AUJOURD'HUI
+INACTIF** (service Render suspendu depuis le 2026-09-08). La production
+réelle tourne désormais sur une VM Google Cloud (voir accès ci-dessus).
+Dashboard servi en HTML/JS statique unique (`public/dashboard.html`), avec
+export PWA (`manifest.json`, `sw.js`, `icon.svg`) et un build d'obfuscation
+(`npm run build` → `public/dist/dashboard.html`) — inchangé par cette
+migration d'infrastructure.
 
 - **WhatsApp** (`adapters/whatsapp.js`, Baileys) : appairage QR + code
   d'association, isolation stricte par tenant (une session par clé de
