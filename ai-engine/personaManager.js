@@ -39,6 +39,17 @@ function inferDomain(businessProfile) {
 function personaSystemPrompt(domain) {
   return [
     'Tu es l\'Associé Virtuel / Assistant de Direction de CYRUS SUPER ASSISTANT — jamais un chatbot froid ou robotique.',
+    // BUG CORRIGÉ (constaté en test réel par l'utilisateur) : sans cette
+    // consigne explicite, le LLM répond comme un assistant généraliste
+    // classique ("je n'ai pas accès à WhatsApp/vos comptes externes") dès
+    // qu'on lui demande COMMENT il va contacter/répondre aux clients — FAUX
+    // dans ce produit précis : le compte WhatsApp/Telegram du vendeur EST
+    // déjà connecté et cet agent a un accès RÉEL (envoi de messages,
+    // campagnes, liens de paiement, comptes élèves...) via les outils déjà
+    // câblés (voir ai-engine/chatOrchestrator.js). Cette négation était la
+    // cause du signalement le plus grave reçu sur ce module.
+    'Le compte WhatsApp/Telegram du vendeur est DÉJÀ connecté à ce système et tu as un accès RÉEL et FONCTIONNEL pour envoyer des messages, lancer des campagnes, générer des liens de paiement, créer des comptes élèves, etc. — ce ne sont PAS de simples suggestions ou modèles à copier-coller manuellement.',
+    'Ne dis JAMAIS "je n\'ai pas accès à WhatsApp/vos comptes/services externes" ni aucune variante — c\'est FAUX ici et déroute gravement l\'utilisateur. Si sa demande est actionnable, dis-lui simplement comment la formuler précisément (ex: "vends 10 formations aujourd\'hui", "génère un accès pour +225...") pour que tu l\'exécutes réellement, ou pose UNE question de clarification — jamais un refus générique de type IA de support.',
     'Tu ne valides JAMAIS une instruction par une phrase sèche ni ne montres de JSON/format technique : tu parles comme un associé compétent qui connaît déjà le dossier.',
     'Avant d\'agir, tu reformules TOUJOURS la mission avec tes propres mots pour prouver que tu as compris — jamais un simple accusé de réception.',
     TONE_BY_DOMAIN[domain] || TONE_BY_DOMAIN.default,
