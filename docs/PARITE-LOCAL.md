@@ -1,3 +1,136 @@
+## 🎙️ Chantier "Traitement Vocal Autonome" (`ai-engine/voiceProcessor.js`)
+
+**Fait** :
+- `ai-engine/voiceProcessor.js` (nouveau) : `transcribeAudio()` (cascade
+  Groq Whisper → Gemini Audio, clés déjà existantes réutilisées, aucune
+  nouvelle clé requise pour le STT), `translateToFrench()` (réutilise la
+  cascade TEXTE existante `llmFallbackEngine.js`, heuristique de détection
+  rapide pour éviter un aller-retour inutile si déjà en français, testée sur
+  plusieurs cas), `synthesizeSpeech()` (cascade ElevenLabs → Google TTS,
+  AUCUN niveau gratuit-sans-clé garanti contrairement au texte — dégrade
+  proprement vers `null` si aucune clé configurée). File d'attente à
+  concurrence limitée (sémaphore, `MAX_CONCURRENT_VOICE_JOBS`, défaut 3)
+  pour absorber un pic de notes vocales pendant une grande campagne (§3).
+  **Écart assumé** vs. la formulation littérale du cahier des charges :
+  aucune garantie de latence "<2 secondes" n'est promise (dépend du
+  fournisseur LLM/réseau réellement utilisé, jamais garanti nulle part
+  ailleurs dans ce dépôt non plus) — un cache court (10 min,
+  anti-doublon exact) existe côté `emotionalCloser.js`, pas ici.
+- `adapters/whatsappEngineBaileys.js` : `sendVoiceNote()` (PTT réel) et
+  `downloadIncomingMedia()` (API canonique Baileys `downloadMediaMessage`).
+  `adapters/telegram.js` : `sendVoiceNote()` (GramJS `sendFile` +
+  `voiceNote:true`) — le téléchargement Telegram utilise directement
+  `msg.downloadMedia()`, natif à l'objet message GramJS, aucun wrapper
+  nécessaire.
+- `index.js#POST /api/ai-studio/sessions/:id/messages` (Copywriter Studio
+  IA — tchat vendeur) : une pièce jointe AUDIO remplace désormais le texte
+  par sa transcription+traduction (au lieu d'être traitée comme une image) ;
+  `userMessage.voiceTranscript` exposé pour l'affichage "🎙️ transcrit" côté
+  frontend (§2.2 du cahier des charges) — **frontend (dashboard.html) non
+  modifié**, cette valeur existe côté API mais n'est pas encore affichée
+  visuellement (pas demandé explicitement, `public/dashboard.html` reste la
+  référence de design à ne jamais retoucher sans consigne précise).
+- `index.js#handleIncomingCustomerMessage` : détection de note vocale
+  entrante (WhatsApp `audioMessage.ptt`, Telegram `.voice`) → téléchargement
+  → transcription/traduction → traitée EXACTEMENT comme un message texte
+  par le pipeline existant (message-triage/emotionalCloser/ANSWER_STUDENT_QUERY,
+  aucune logique dupliquée). Réponse dans la MÊME modalité que le client
+  (TTS best-effort si le client a parlé, repli texte propre sinon).
+- `.env.example` : `GROQ_WHISPER_MODEL`, `ELEVENLABS_API_KEY`/`_VOICE_ID`,
+  `GOOGLE_TTS_API_KEY`, `MAX_CONCURRENT_VOICE_JOBS`.
+
+**Testé** : heuristique de détection français (`looksLikelyFrench`) sur
+plusieurs cas (français/anglais/wolof-like) — correcte. Reste (STT/TTS
+réels, téléchargement Baileys/GramJS réel) **non testable dans cet
+environnement** (aucune note vocale WhatsApp/Telegram réelle disponible,
+aucune clé API audio configurée) — vérifié uniquement par relecture +
+`node --check`, conformément à la pratique déjà établie dans ce dépôt pour
+ce type d'intégration plateforme-spécifique.
+
+**Non fait** : conversion Opus locale côté mobile/PC pour économiser la
+donnée avant envoi au pipeline de transcription (§3, "Optimisation de Bande
+Passante") — nécessite du code natif/ffmpeg côté client, hors de portée
+d'une session VPS-only ; réplication local-client/mobile de tout ce
+chantier (même raison que les chantiers précédents) ; affichage visuel du
+micro/de la transcription dans `public/dashboard.html`.
+
+---
+
+## 🗣️ Chantiers "Human-like Dialogue" (`personaManager.js`) + "Closing Humanisé" (`emotionalCloser.js`)
+
+**`ai-engine/personaManager.js`** (nouveau) — élimine le ton robotique côté
+VENDEUR (Copywriter Studio IA) : `rephrase({kind, rawText, facts, domain})`
+repasse CHAQUE texte technique (question de brief, plan prêt, confirmation)
+par un appel LLM contraint par une consigne de personnalité fixe
+("Associé Virtuel", ton adaptatif e-commerce/service/formation via
+`inferDomain(businessProfile)`), sans jamais inventer de faits (`facts`
+toujours injecté tel quel). `detectAffirmative`/`detectDecline` (regex FR,
+zéro réseau) pilotent un vrai changement de comportement :
+
+- **`ai-engine/chatOrchestrator.js#handleGoal` restructuré** : le plan
+  ('goal', ex. campagne) n'est PLUS exécuté automatiquement dès qu'il est
+  prêt (comportement de la session précédente) — l'Agent reformule
+  chaleureusement et DEMANDE confirmation ; l'exécution ne démarre qu'au
+  message suivant si le vendeur confirme ("oui", "vas-y", "go"...), et
+  tourne alors EN ARRIÈRE-PLAN (`runGoalPlanInBackground`, fire-and-forget) —
+  réponse immédiate ("Fluid Streaming", §2 du cahier des charges), résultat
+  final poussé dans le tchat via `platformOrchestrator.notifyTenantChat` une
+  fois l'exécution terminée. Les actions "un coup" (paiement, compte élève)
+  restent exécutées dès que prêtes — coût/risque sans commune mesure avec
+  une campagne envoyée à de vrais contacts.
+- `offerClarifier.js#planOffer` et `chatOrchestrator.js#planPayment/planAccount` :
+  prompt LLM enrichi de `personaManager.personaSystemPrompt(domain)`.
+- **Testé de bout en bout avec mocks** (tenant/dossier temporaire) : le
+  scénario "vendre 10 formations" → question canal → **plan affiché SANS
+  exécution** → "oui vas-y" → **ack immédiat** → exécution réelle confirmée
+  ~1,5s plus tard en arrière-plan. Qualité du TEXTE dégradée dans cet
+  environnement de test (aucune clé API configurée, Pollinations à quota
+  dépassé) — mécanique 100% correcte, filet de repli sur texte brut vérifié
+  fonctionnel.
+
+**`ai-engine/emotionalCloser.js`** (nouveau) — répond aux messages entrants
+d'un PROSPECT/CLIENT final (WhatsApp/Telegram), posture Conseiller-Vendeur
+empathique. **Découverte clé** : `lib/intelligence/human-context-engine.js`
+avait déjà un moteur d'analyse émotionnelle très complet (sentiment/
+intention/objection PRICE·TRUST·TIME/hésitation/urgence, registre de
+stratégies avec angle+objectif par objection, cascade de décision à 4
+niveaux) — réutilisé tel quel (`analyzeMessage`, `selectStrategy`,
+`detectIntuition`) plutôt que dupliqué. Ce qui manquait et a été ajouté :
+- Les gabarits de stratégie existants ont des placeholders JAMAIS remplis
+  (`{valeur1}`, `{avantage1}`...) — `composeClosingReply` les remplace par
+  un appel LLM guidé par l'angle/objectif de la stratégie + les VRAIS faits
+  business (offre/prix/plafond de remise/statut paiement, jamais inventés).
+- **Alertes de Relais** (§2 cahier des charges) : `shouldEscalate` (signal
+  B2B/sur-mesure explicite OU `detectIntuition` renvoyant une hésitation
+  persistante malgré un intérêt élevé) → notifie le vendeur dans son tchat
+  (`platformOrchestrator.notifyTenantChat`, formulation reprise du cahier
+  des charges) et **arrête définitivement l'auto-réponse pour ce client**
+  (`session.escalated`, persisté) tant qu'aucune reprise manuelle n'existe
+  (non implémentée — TODO).
+- **Collecte de feedback sur décision** : intent DECLINE → question ouverte
+  chaleureuse, réponse du tour suivant capturée telle quelle et remontée au
+  vendeur (`profile.feedback[]` + notification tchat "💡 ...").
+- Cache court (10 min) anti-doublon de messages identiques — PAS une
+  garantie de latence <2s (dépend du fournisseur LLM réel, jamais promis
+  faussement ici malgré la formulation du cahier des charges).
+- **Testé de bout en bout** (tenant isolé) : escalade B2B → notification
+  vendeur avec le texte exact attendu → clients suivants correctement
+  ignorés ; déclin → question de feedback → réponse capturée et remontée.
+  Détection d'intention/objection/stratégie vérifiée sur plusieurs cas
+  (achat, objection prix, déclin, B2B) — tous corrects.
+- Câblé dans `index.js#handleIncomingCustomerMessage` derrière un NOUVEAU
+  flag `AUTO_CLOSE_PROSPECTS` (défaut `false`, même prudence que
+  `AUTO_ANSWER_STUDENT_QUERIES` — jamais d'envoi auto à de vrais clients
+  sans activation explicite), prioritaire sur `AUTO_ANSWER_STUDENT_QUERIES`
+  quand actif.
+
+**Non fait** : réplication local-client/mobile (mêmes raisons que les
+chantiers précédents) ; mécanisme de désescalade manuelle (reprise de
+l'auto-closing par le vendeur après une alerte) ; push/déploiement (pas
+redemandé explicitement pour ce tour, contrairement au tour précédent).
+
+---
+
 ## 🔗 Chantier "Orchestrateur Inter-Modules" (`ai-engine/platformOrchestrator.js`, suite immédiate du chantier ci-dessous)
 
 **§1.1 Anti-spam/basculement transparent** — `lib/circuitBreaker.js` détectait

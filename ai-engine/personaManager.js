@@ -1,0 +1,104 @@
+const llmFallbackEngine = require('../lib/ai/llmFallbackEngine');
+
+// PERSONA MANAGER — ai-engine/personaManager.js
+// ---------------------------------------------------------------------------
+// Couche de "voix" du Chat-Driven Agent Orchestrator : élimine le ton
+// robotique (validations sèches, JSON exposé, questions recopiées telles
+// quelles) en repassant CHAQUE réponse destinée à l'utilisateur par un appel
+// LLM contraint par une consigne de personnalité fixe — jamais en inventant
+// de faits (voir `facts`, toujours injecté tel quel, jamais reformulé par le
+// LLM au point de changer un chiffre/statut réel).
+//
+// NE remplace AUCUNE logique métier existante : goal-chat.js/task-parser.js
+// (extraction déterministe cible/canaux), ai-engine/chatOrchestrator.js
+// (décision d'exécuter), ai-engine/offerClarifier.js (clarification d'offre)
+// restent l'unique source de vérité sur CE QUI doit être demandé/fait — ce
+// module ne fait que reformuler COMMENT on le dit.
+
+const TONE_BY_DOMAIN = {
+  ecommerce: 'Ton enthousiaste et commercial, orienté conversion — comme un associé qui a hâte de vendre.',
+  service: 'Ton professionnel et posé, orienté conseil — comme un associé qui inspire confiance sur un engagement sérieux.',
+  training: 'Ton chaleureux et structuré, pédagogue — comme un associé qui prépare une vraie rentrée de formation.',
+  default: 'Ton chaleureux, direct et dynamique — comme un associé compétent qui connaît déjà le dossier.',
+};
+
+// Devine le domaine dominant depuis le profil business déjà clarifié (voir
+// offerClarifier.js) — JAMAIS depuis le message courant (trop instable d'un
+// message à l'autre) : le ton doit rester cohérent tout au long d'une
+// discussion, ancré sur les VRAIES offres du vendeur.
+function inferDomain(businessProfile) {
+  const offers = (businessProfile && businessProfile.offers) || [];
+  if (!offers.length) return 'default';
+  const counts = { physical: 0, service: 0, training: 0 };
+  offers.forEach((o) => { if (counts[o.category] !== undefined) counts[o.category] += 1; });
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  if (!top || top[1] === 0) return 'default';
+  return top[0] === 'physical' ? 'ecommerce' : (top[0] === 'service' ? 'service' : 'training');
+}
+
+function personaSystemPrompt(domain) {
+  return [
+    'Tu es l\'Associé Virtuel / Assistant de Direction de CYRUS SUPER ASSISTANT — jamais un chatbot froid ou robotique.',
+    'Tu ne valides JAMAIS une instruction par une phrase sèche ni ne montres de JSON/format technique : tu parles comme un associé compétent qui connaît déjà le dossier.',
+    'Avant d\'agir, tu reformules TOUJOURS la mission avec tes propres mots pour prouver que tu as compris — jamais un simple accusé de réception.',
+    TONE_BY_DOMAIN[domain] || TONE_BY_DOMAIN.default,
+    'Réponds en 2 à 5 phrases naturelles, parlées, jamais de liste à puces ni de titres — comme à l\'oral.',
+    'Ne mentionne QUE les faits fournis explicitement ci-dessous (contexte) — n\'invente JAMAIS un prix, un statut ou un chiffre qui n\'y figure pas.',
+    'Ces consignes de ton s\'appliquent UNIQUEMENT quand tu réponds en texte libre : si une instruction plus bas dans ce message te demande de répondre par un objet JSON strict, ce format JSON prime alors entièrement — jamais de prose ni de ton "associé" à l\'intérieur du JSON lui-même.',
+  ].join(' ');
+}
+
+function extractText(raw) {
+  return String(raw || '').trim().replace(/^["“]|["”]$/g, '');
+}
+
+// kind : 'question' (brief incomplet, reformule + repose la question),
+// 'confirm_plan' (prêt, PAS ENCORE exécuté — reformule + demande confirmation
+// avec assurance, éventuellement une question de nuance), 'executing'
+// (confirmation reçue — annonce le lancement avec assurance), 'declined'
+// (l'utilisateur a annulé).
+async function rephrase({ kind, rawText, facts, domain, history }) {
+  const instructionByKind = {
+    question: 'Le brief de la mission est encore incomplet. Reformule chaleureusement ce que tu as déjà compris, puis pose la question suivante de façon naturelle (ne recopie jamais la question technique telle quelle).',
+    confirm_plan: 'Le plan est prêt mais PAS ENCORE lancé. Reformule la mission avec tes mots pour prouver ta compréhension, mentionne les faits concrets du contexte s\'ils sont pertinents, pose éventuellement UNE question de nuance business utile, puis demande confirmation pour lancer — avec assurance, jamais timide.',
+    executing: 'L\'utilisateur vient de confirmer. Annonce avec assurance et enthousiasme que tu lances l\'exécution maintenant — 1 à 2 phrases, sans détail technique.',
+    declined: 'L\'utilisateur a annulé ou veut réfléchir. Réponds avec compréhension, sans insister, en laissant la porte ouverte.',
+  };
+
+  const prompt = [
+    personaSystemPrompt(domain),
+    `Contenu technique à reformuler humainement : ${rawText}`,
+    facts ? `Contexte factuel réel (n'invente rien au-delà) : ${facts}` : null,
+    instructionByKind[kind] || instructionByKind.question,
+  ].filter(Boolean).join('\n');
+
+  try {
+    const { text } = await llmFallbackEngine.generateAIResponse(prompt, history || [], null, undefined, null);
+    const clean = extractText(text);
+    return clean || rawText;
+  } catch (err) {
+    // Filet de sécurité : jamais bloquer la conversation si TOUTE la cascade
+    // LLM échoue (panne réseau totale) — le texte technique brut reste
+    // compréhensible, juste moins chaleureux.
+    console.warn('personaManager — cascade LLM indisponible, repli sur le texte brut :', err.message);
+    return rawText;
+  }
+}
+
+// Détection d'accord/annulation — volontairement PERMISSIVE côté positif
+// (l'utilisateur ne doit jamais avoir à répéter un "oui" formel) et
+// PRUDENTE côté négatif (en cas de doute, on continue d'attendre plutôt que
+// d'annuler une mission par erreur).
+const AFFIRMATIVE_RE = /^(oui|ouais|ok|okay|d'accord|dac|vas-?y|vas y|go|lance|c'est parti|allons-y|confirm[ée]?|parfait|top|nickel|carr[ée]ment)\b/i;
+const DECLINE_RE = /^(non|annule|annulation|attends?|pas\s+maintenant|stop|laisse\s+tomber|plus\s+tard)\b/i;
+
+function detectAffirmative(text) {
+  return AFFIRMATIVE_RE.test(String(text || '').trim());
+}
+function detectDecline(text) {
+  return DECLINE_RE.test(String(text || '').trim());
+}
+
+module.exports = {
+  inferDomain, personaSystemPrompt, rephrase, detectAffirmative, detectDecline,
+};

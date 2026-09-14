@@ -2,6 +2,8 @@ const llmFallbackEngine = require('../lib/ai/llmFallbackEngine');
 const taskParser = require('../lib/intelligence/task-parser');
 const goalChat = require('../lib/intelligence/goal-chat');
 const offerClarifier = require('./offerClarifier');
+const personaManager = require('./personaManager');
+const platformOrchestrator = require('./platformOrchestrator');
 
 // CHAT-DRIVEN AGENT ORCHESTRATOR — ai-engine/chatOrchestrator.js
 // ---------------------------------------------------------------------------
@@ -28,10 +30,19 @@ const offerClarifier = require('./offerClarifier');
 //     pour une action synchrone à répondre dans le tour de tchat courant.
 //
 // Contrairement à l'UI Goal Chat existante (bouton "🚀 Oui, lancer
-// maintenant"), ce module EXÉCUTE AUTOMATIQUEMENT dès que le plan/l'action
-// est prêt — l'autonomie explicitement demandée par le cahier des charges
-// ("Déclenche l'Agent de Campagne", "Appelle la fonction de création de
-// compte") pour CE point d'entrée précis.
+// maintenant"), ce module ne montre jamais de bouton — mais n'exécute plus
+// non plus AUTOMATIQUEMENT une campagne dès que le plan est prêt (revu suite
+// au cahier des charges "Human-like Dialogue", voir ai-engine/personaManager.js) :
+// pour 'goal' (une campagne, potentiellement coûteuse/visible par de vrais
+// clients), l'Agent reformule chaleureusement la mission et DEMANDE
+// confirmation avant de lancer — l'exécution ne démarre qu'au message
+// suivant si le vendeur confirme (voir personaManager.detectAffirmative),
+// et tourne alors EN ARRIÈRE-PLAN (réponse immédiate + notification de fin
+// via platformOrchestrator.notifyTenantChat, jamais de latence perçue —
+// "Fluid Streaming", §2 du cahier des charges). Les actions "un coup" plus
+// légères (paiement, remise, compte élève, accès module, rapport) restent
+// exécutées dès que prêtes : leur coût/risque est sans commune mesure avec
+// une campagne envoyée à de vrais contacts.
 
 function extractJsonBlock(rawText) {
   const match = String(rawText || '').match(/\{[\s\S]*\}/);
@@ -75,7 +86,8 @@ function detectIntent(text, lastAssistantMessage) {
 // clarification d'offre).
 // ---------------------------------------------------------------------------
 async function handleOffer(text, history, tenantId) {
-  const { raw, parsed } = await offerClarifier.planOffer(text, history);
+  const { domain } = await buildPersonaFacts(tenantId);
+  const { raw, parsed } = await offerClarifier.planOffer(text, history, domain);
   if (parsed && parsed.ready && parsed.offer) {
     const entry = await offerClarifier.saveOffer(tenantId, parsed.offer, parsed.category);
     const name = entry.name || parsed.offer.name || 'votre offre';
@@ -89,62 +101,134 @@ async function handleOffer(text, history, tenantId) {
 
 // ---------------------------------------------------------------------------
 // 'goal' — délègue à goal-chat (multi-tour tant qu'il manque une info REQUISE
-// — cible, canaux), puis exécute AUTOMATIQUEMENT le plan dès qu'il est prêt
-// via le MÊME automation-engine que /api/intelligence/goal-chat (deps.engineFor).
+// — cible, canaux). Une fois le plan prêt, DEMANDE confirmation (reformulée
+// chaleureusement par personaManager) au lieu d'exécuter — l'exécution ne
+// démarre qu'au tour SUIVANT si le vendeur confirme, et tourne alors en
+// arrière-plan (voir runGoalPlanInBackground) pendant qu'une réponse
+// immédiate est déjà renvoyée (Fluid Streaming, §2 du cahier des charges).
 // ---------------------------------------------------------------------------
 const goalSessions = new Map();
 
+// Faits réels à injecter dans la reformulation (JAMAIS inventés par le LLM,
+// voir personaManager.js) : offres déjà clarifiées (offerClarifier.js) +
+// statut du moyen de paiement configuré — permet une reformulation du style
+// "la formation est prête, le lien de paiement est actif" QUAND c'est
+// factuellement vrai, sans jamais l'affirmer par défaut.
+async function buildPersonaFacts(tenantId) {
+  const profile = await offerClarifier.getBusinessProfile(tenantId);
+  const domain = personaManager.inferDomain(profile);
+  const recentOffers = (profile.offers || []).slice(-3)
+    .map((o) => `${o.name || o.category}${o.price ? ` (${o.price})` : ''}`);
+  const paymentConfigured = ['MOBILE_MONEY_ORANGE', 'MOBILE_MONEY_MTN', 'MOBILE_MONEY_MOOV', 'MOBILE_MONEY_WAVE']
+    .some((k) => !!process.env[k]);
+  const parts = [];
+  if (recentOffers.length) parts.push(`Offres déjà configurées : ${recentOffers.join(', ')}.`);
+  parts.push(paymentConfigured
+    ? 'Le lien/l\'instruction de paiement Mobile Money est configuré et actif.'
+    : 'Aucun moyen de paiement Mobile Money n\'est configuré pour le moment.');
+  return { domain, facts: parts.join(' ') };
+}
+
 async function handleGoal(text, sessionKey, tenantId, deps) {
-  let state = goalSessions.get(sessionKey);
-  if (!state) {
-    state = goalChat.createSession({});
-    goalSessions.set(sessionKey, state);
+  const state = goalSessions.get(sessionKey);
+  const awaitingConfirmation = !!(state && state.phase === 'ready');
+  const { domain, facts } = await buildPersonaFacts(tenantId);
+
+  if (awaitingConfirmation) {
+    if (personaManager.detectDecline(text)) {
+      goalSessions.delete(sessionKey);
+      const warm = await personaManager.rephrase({
+        kind: 'declined', rawText: 'La mission est annulée pour l\'instant.', facts, domain,
+      });
+      return { text: warm };
+    }
+
+    if (!personaManager.detectAffirmative(text)) {
+      // Ni "oui" net ni refus net : traité comme une PRÉCISION business
+      // (ex: "avec 10% de remise pour les 3 premiers") — reconnue et
+      // reportée dans la reformulation, mais NON encodée dans le plan de
+      // tâches lui-même (task-parser/goal-chat n'ont pas de notion de
+      // remise) : limitation assumée, la nuance reste conversationnelle
+      // tant qu'un vrai champ dédié n'existe pas dans le plan de tâches.
+      const warm = await personaManager.rephrase({
+        kind: 'confirm_plan',
+        rawText: (state.doc && state.doc.summary) || 'Le plan est prêt.',
+        facts: `${facts} Précision du vendeur à prendre en compte : "${text}".`,
+        domain,
+      });
+      return { text: warm, isPlanningQuestion: true, intent: 'goal' };
+    }
+
+    // Confirmé : réponse IMMÉDIATE, exécution réelle lancée EN ARRIÈRE-PLAN.
+    const ackText = await personaManager.rephrase({
+      kind: 'executing', rawText: 'La campagne est lancée maintenant.', facts, domain,
+    });
+    const eng = deps.engineFor ? deps.engineFor(tenantId) : null;
+    goalSessions.delete(sessionKey);
+
+    if (!eng) {
+      return { text: ackText, actionLog: [{ icon: '⚠️', label: 'Exécution indisponible (moteur non injecté)', status: 'error' }] };
+    }
+
+    runGoalPlanInBackground(state, eng, tenantId); // fire-and-forget, voir plus bas
+    return { text: ackText, actionLog: [{ icon: '🚀', label: 'Exécution démarrée en arrière-plan', status: 'pending' }] };
   }
 
-  const out = goalChat.step(state, { message: text, parser: taskParser, humanContext: deps.humanContext || null });
+  const freshState = state || goalChat.createSession({});
+  goalSessions.set(sessionKey, freshState);
+  const out = goalChat.step(freshState, { message: text, parser: taskParser, humanContext: deps.humanContext || null });
 
   if (out.kind !== 'plan') {
-    const lastMsg = out.reply || (state.thread[state.thread.length - 1]);
-    return { text: (lastMsg && lastMsg.text) || 'Précisez votre objectif.', isPlanningQuestion: true, intent: 'goal' };
+    const rawQuestion = (out.reply && out.reply.text) || 'Précisez votre objectif.';
+    const warm = await personaManager.rephrase({ kind: 'question', rawText: rawQuestion, facts, domain });
+    return { text: warm, isPlanningQuestion: true, intent: 'goal' };
   }
 
-  if (!deps.engineFor) {
-    return { text: out.reply.text, actionLog: [{ icon: '⚠️', label: 'Exécution indisponible (moteur non injecté)', status: 'error' }] };
-  }
-
-  const eng = deps.engineFor(tenantId);
-  const runResult = await goalChat.runPlan(state, {
-    execute: async (tasks) => {
-      await eng.createTasks(tasks);
-      const runOut = await eng.runDue({ tenantId });
-      return {
-        runId: (tasks[0] && tasks[0].runId) || null,
-        executed: runOut.executed,
-        results: runOut.results,
-        error: runOut.failed > 0 ? `${runOut.failed} tâche(s) en échec` : null,
-      };
-    },
-  });
-
-  const results = (runResult.execution && runResult.execution.results) || [];
-  const actionLog = results.map((r) => ({
-    icon: r.ok ? '✅' : '⚠️',
-    label: `${r.type || r.action || 'Action'} — ${r.ok ? 'terminé' : (r.error || 'échec')}`,
-    status: r.ok ? 'done' : 'error',
-  }));
-
-  goalSessions.delete(sessionKey); // objectif traité : un nouveau message relance un nouvel objectif propre.
-
-  // Exécution AUTOMATIQUE ici (contrairement à l'UI Goal Chat existante, qui
-  // affiche un bouton "🚀 Oui, lancer maintenant") — la phrase d'invite à
-  // cliquer un bouton, encore présente dans le texte de goal-chat.js, n'a
-  // donc plus lieu d'être : retirée avant d'ajouter le vrai statut d'exécution.
+  // Prêt : reformulation + demande de confirmation — freshState.phase est
+  // déjà passé à 'ready' par goalChat.step() ci-dessus (persiste dans
+  // goalSessions), aucune exécution ici.
   const planText = out.reply.text.replace(/\n\nPrêt à exécuter \? Choisis une action ci-dessous\.$/, '');
+  const warm = await personaManager.rephrase({ kind: 'confirm_plan', rawText: planText, facts, domain });
+  return { text: warm, isPlanningQuestion: true, intent: 'goal' };
+}
 
-  return {
-    text: `${planText}\n\n${runResult.ok ? '🚀 Exécution lancée.' : `⚠️ Exécution partielle (${runResult.execution && runResult.execution.error}).`}`,
-    actionLog,
-  };
+// Exécution réelle du plan, hors du cycle requête/réponse HTTP courant
+// (voir handleGoal ci-dessus) — pousse le résultat final dans le tchat via
+// platformOrchestrator.notifyTenantChat une fois terminé, exactement comme
+// les notifications anti-spam déjà en place pour les campagnes.
+async function runGoalPlanInBackground(state, eng, tenantId) {
+  try {
+    const runResult = await goalChat.runPlan(state, {
+      execute: async (tasks) => {
+        await eng.createTasks(tasks);
+        const runOut = await eng.runDue({ tenantId });
+        return {
+          runId: (tasks[0] && tasks[0].runId) || null,
+          executed: runOut.executed,
+          results: runOut.results,
+          error: runOut.failed > 0 ? `${runOut.failed} tâche(s) en échec` : null,
+        };
+      },
+    });
+
+    const results = (runResult.execution && runResult.execution.results) || [];
+    const actionLog = results.map((r) => ({
+      icon: r.ok ? '✅' : '⚠️',
+      label: `${r.type || r.action || 'Action'} — ${r.ok ? 'terminé' : (r.error || 'échec')}`,
+      status: r.ok ? 'done' : 'error',
+    }));
+    const summaryText = runResult.ok
+      ? '✅ C\'est fait, la campagne tourne — je vous tiens au courant des résultats au fil de l\'eau.'
+      : `⚠️ Petit souci pendant l'exécution (${(runResult.execution && runResult.execution.error) || 'erreur inconnue'}) — j'y jette un œil.`;
+    await platformOrchestrator.notifyTenantChat(tenantId, summaryText, actionLog);
+  } catch (err) {
+    console.error(`chatOrchestrator — échec de l'exécution en arrière-plan (tenant "${tenantId}") :`, err.message);
+    await platformOrchestrator.notifyTenantChat(
+      tenantId,
+      `⚠️ L'exécution de la campagne a échoué (${err.message}).`,
+      [{ icon: '⚠️', label: 'Échec de la campagne', status: 'error' }],
+    ).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +243,8 @@ async function handleReport(text, tenantId, deps) {
   if (!out.ok) return { text: `Impossible de générer le rapport (${out.error}).` };
   const r = out.result;
   const text2 = [
-    `📊 Bilan du jour — ${r.totalMessages} message(s) analysé(s), ${r.conversions} conversion(s) détectée(s), chaleur ${r.heat}.`,
+    'Voici où on en est aujourd\'hui :',
+    `📊 ${r.totalMessages} message(s) analysé(s), ${r.conversions} conversion(s) détectée(s), chaleur ${r.heat}.`,
     r.recommendations && r.recommendations.length ? `Recommandations : ${r.recommendations.join(' ')}` : null,
   ].filter(Boolean).join('\n');
   return { text: text2, actionLog: [{ icon: '📊', label: 'Rapport généré', status: 'done' }] };
@@ -171,8 +256,9 @@ async function handleReport(text, tenantId, deps) {
 // Même patron qu'index.js#planOrAsk (planImage/planVideo/planBook) : un seul
 // appel LLM par tour, JSON "ready" ou question courte.
 // ---------------------------------------------------------------------------
-async function planPayment(text, history) {
+async function planPayment(text, history, domain) {
   const prompt = [
+    personaManager.personaSystemPrompt(domain || 'default'),
     `Nouveau message du vendeur : "${text}"`,
     'Le vendeur veut soit générer une instruction de paiement pour un client, soit négocier/accorder une remise. Détermine lequel.',
     'Informations nécessaires si paiement : le montant exact et la devise, le produit/offre concerné (facultatif, texte libre).',
@@ -187,7 +273,8 @@ async function planPayment(text, history) {
 }
 
 async function handlePayment(text, history, tenantId, deps) {
-  const { raw, parsed } = await planPayment(text, history);
+  const { domain } = await buildPersonaFacts(tenantId);
+  const { raw, parsed } = await planPayment(text, history, domain);
   if (!parsed || !parsed.ready) {
     return { text: raw, isPlanningQuestion: true, intent: 'payment' };
   }
@@ -224,8 +311,9 @@ async function handlePayment(text, history, tenantId, deps) {
 // 'account' — extraction LLM ciblée (contact, produit/formation, type d'accès)
 // puis CREATE_USER_ACCOUNT / GENERATE_ACCESS_KEY / GRANT_MODULE_ACCESS.
 // ---------------------------------------------------------------------------
-async function planAccount(text, history) {
+async function planAccount(text, history, domain) {
   const prompt = [
+    personaManager.personaSystemPrompt(domain || 'default'),
     `Nouveau message du vendeur : "${text}"`,
     'Le vendeur veut créer/débloquer l\'accès d\'un client à une formation déjà vendue.',
     'Informations nécessaires : le contact du client (téléphone ou email), et soit "action":"create_account" (nouveau client, génère aussi une clé d\'accès), soit "action":"grant_module" (client déjà créé, ajoute juste un module précis — nécessite moduleKey).',
@@ -239,7 +327,8 @@ async function planAccount(text, history) {
 }
 
 async function handleAccount(text, history, tenantId, deps) {
-  const { raw, parsed } = await planAccount(text, history);
+  const { domain } = await buildPersonaFacts(tenantId);
+  const { raw, parsed } = await planAccount(text, history, domain);
   if (!parsed || !parsed.ready) {
     return { text: raw, isPlanningQuestion: true, intent: 'account' };
   }

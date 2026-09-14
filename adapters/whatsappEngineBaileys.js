@@ -14,6 +14,7 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
+  downloadMediaMessage,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const githubStore = require('../githubStore');
@@ -537,6 +538,30 @@ function createSession(tenantId) {
     });
   }
 
+  // Note vocale (voir ai-engine/voiceProcessor.js) — `ptt:true` fait
+  // apparaître le message comme une VRAIE note vocale WhatsApp (forme d'onde,
+  // lecture inline) plutôt qu'une pièce jointe audio classique. WhatsApp
+  // n'accepte en PTT que de l'Opus/OGG encodé correctement — la conversion
+  // (ffmpeg) est à la charge de l'appelant (voir voiceProcessor.js), jamais
+  // faite ici.
+  async function sendVoiceNote(to, buffer) {
+    if (!sock) {
+      throw new Error('Adaptateur WhatsApp non initialisé.');
+    }
+    return sock.sendMessage(to, { audio: buffer, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+  }
+
+  // Téléchargement d'un média entrant (note vocale, voir
+  // ai-engine/voiceProcessor.js) — API canonique de Baileys, `reuploadRequest`
+  // gère le cas rare d'une clé média déjà expirée en redemandant l'envoi au
+  // téléphone source.
+  async function downloadIncomingMedia(msg) {
+    if (!sock) {
+      throw new Error('Adaptateur WhatsApp non initialisé.');
+    }
+    return downloadMediaMessage(msg, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
+  }
+
   // ---- Garde d'attente avant la demande d'un code d'appairage ----
   // Cause racine des "Connection Closed" / "Connection Failure" / "TIMEOUT"
   // constatés sur la génération du code (diagnostic du 2026-09-13) : le moteur
@@ -789,6 +814,8 @@ function createSession(tenantId) {
     restoreSessionFromRemote,
     sendMessage,
     sendMedia,
+    sendVoiceNote,
+    downloadIncomingMedia,
     getQRCode,
     isConnected,
     requestPairingCode,

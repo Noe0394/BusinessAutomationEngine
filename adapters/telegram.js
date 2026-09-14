@@ -595,6 +595,20 @@ function createSession(tenantId) {
     return client.sendFile(chatId, { file, caption });
   }
 
+  // Note vocale (voir ai-engine/voiceProcessor.js) — `voiceNote:true` fait
+  // apparaître le message comme une VRAIE note vocale Telegram (forme
+  // d'onde, lecture inline) plutôt qu'un fichier audio classique. Comme
+  // côté WhatsApp (adapters/whatsappEngineBaileys.js#sendVoiceNote),
+  // Telegram exige un Opus/OGG bien formé — conversion à la charge de
+  // l'appelant.
+  async function sendVoiceNote(chatId, buffer) {
+    if (!connected) {
+      throw new Error('TELEGRAM_NOT_CONNECTED');
+    }
+    const file = new CustomFile('voice.ogg', buffer.length, '', buffer);
+    return client.sendFile(chatId, { file, voiceNote: true });
+  }
+
   return {
     tenantId,
     isConfigured,
@@ -615,6 +629,7 @@ function createSession(tenantId) {
     resolveRecipient,
     sendMessage,
     sendMedia,
+    sendVoiceNote,
   };
 }
 

@@ -66,6 +66,7 @@ const humanContextEngine = require('./lib/intelligence/human-context-engine');
 // createVpsBridge) fournit le runtime/moteur RÉELS déjà branchés — jamais
 // dupliqués ici.
 const chatOrchestrator = require('./ai-engine/chatOrchestrator');
+const voiceProcessor = require('./ai-engine/voiceProcessor');
 let intelligenceBridge = null;
 
 const app = express();
@@ -4245,27 +4246,44 @@ async function executeGenerateBook(payload) {
 // serait pénalisant sans aucun bénéfice.
 app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('studio_video'), upload.single('attachment'), async (req, res) => {
   const tenantId = resolveTenantId(req);
-  const text = String((req.body || {}).text || '').trim();
-  if (!text) {
-    return res.status(400).json({ error: 'Message vide.' });
-  }
+  let text = String((req.body || {}).text || '').trim();
 
   const existing = await aiStudioStore.getSession(tenantId, req.params.id);
   if (!existing) {
     return res.status(404).json({ error: 'Discussion introuvable.' });
   }
 
-  // Pièce jointe optionnelle (logo/photo produit/clip vidéo) : hébergée
-  // immédiatement via imageLinkStore (même store que Image-to-Link) pour
-  // être réutilisable plus tard par une action (voir findRecentAttachment
-  // ci-dessus) sans garder de fichier en mémoire entre deux requêtes HTTP.
-  // Rôle deviné depuis le texte du message ("logo" -> logo, sinon -> photo)
-  // — heuristique simple, assumée comme telle.
+  // §2 du cahier des charges "Traitement Vocal Autonome" — Commandes
+  // vocales : une pièce jointe AUDIO (micro du tchat) remplace le texte par
+  // sa transcription+traduction (voir ai-engine/voiceProcessor.js), plutôt
+  // que d'être traitée comme une image/logo ci-dessous. `voiceTranscript`
+  // (affiché tel quel au vendeur, voir userMessage plus bas) répond à
+  // l'exigence "L'Agent retranscrit la note vocale en direct dans le tchat".
   let attachment = null;
-  if (req.file) {
+  let voiceTranscript = null;
+  if (req.file && req.file.mimetype && req.file.mimetype.startsWith('audio/')) {
+    try {
+      const { text: raw, language } = await voiceProcessor.transcribeAudio(req.file.buffer, req.file.mimetype, req.file.originalname);
+      voiceTranscript = await voiceProcessor.translateToFrench(raw, language);
+      text = voiceTranscript;
+    } catch (err) {
+      console.error('Chat-First — échec de la transcription vocale du vendeur :', err.message);
+      return res.status(502).json({ error: `Impossible de traiter la note vocale (${err.message}).` });
+    }
+  } else if (req.file) {
+    // Pièce jointe image/vidéo (logo/photo produit) : hébergée immédiatement
+    // via imageLinkStore (même store que Image-to-Link) pour être
+    // réutilisable plus tard par une action (voir findRecentAttachment
+    // ci-dessus) sans garder de fichier en mémoire entre deux requêtes HTTP.
+    // Rôle deviné depuis le texte du message ("logo" -> logo, sinon ->
+    // photo) — heuristique simple, assumée comme telle.
     const role = /\blogo\b/i.test(text) ? 'logo' : 'photo';
     const id = imageLinkStore.register(req.file.buffer, req.file.mimetype, { title: `Pièce jointe tchat (${role})` });
     attachment = { id, mimetype: req.file.mimetype, role };
+  }
+
+  if (!text) {
+    return res.status(400).json({ error: 'Message vide.' });
   }
 
   const isFirstMessage = !Array.isArray(existing.messages) || existing.messages.length === 0;
@@ -4279,7 +4297,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
   // normale de la conversation. Jamais un prix inventé : voir la même
   // philosophie dans ai-engine/offerClarifier.js.
   const saleIntent = SALE_SUFFIX_RE.test(text);
-  const userMessage = { role: 'user', text, createdAt: new Date().toISOString(), attachment, saleIntent };
+  const userMessage = { role: 'user', text, createdAt: new Date().toISOString(), attachment, saleIntent, voiceTranscript };
 
   // BUG CORRIGÉ (constaté en test réel : une conversation de planification
   // affiche/vidéo/livre "perdait le fil" dès la réponse aux questions de
@@ -4839,7 +4857,14 @@ app.use('/', requireAccess, intelligenceBridge.router);
 // l'utilisateur serait une action à risque, pas seulement une fonctionnalité.
 const messageTriage = require('./lib/intelligence/message-triage');
 const businessProfileStore = require('./ai-engine/storageAdapter');
+const emotionalCloser = require('./ai-engine/emotionalCloser');
 const AUTO_ANSWER_STUDENT_QUERIES = process.env.AUTO_ANSWER_STUDENT_QUERIES === 'true';
+// Moteur de Closing Humanisé (voir ai-engine/emotionalCloser.js) — quand
+// activé, prend le pas sur AUTO_ANSWER_STUDENT_QUERIES pour les messages
+// classés 'business' (Q&A factuelle + closing/objections, plus complet).
+// Même prudence par défaut (false) : jamais d'envoi automatique à de vrais
+// clients WhatsApp/Telegram sans activation explicite de l'utilisateur.
+const AUTO_CLOSE_PROSPECTS = process.env.AUTO_CLOSE_PROSPECTS === 'true';
 
 function extractIncomingText(channel, msg) {
   if (channel === 'WHATSAPP') {
@@ -4850,8 +4875,67 @@ function extractIncomingText(channel, msg) {
   return (msg && msg.message) || '';
 }
 
+// §1 "Traitement Vocal Autonome" — une note vocale ENTRANTE n'a jamais de
+// texte (extractIncomingText renvoie ''), voir ai-engine/voiceProcessor.js
+// pour la transcription. WhatsApp (Baileys) : message.audioMessage avec
+// ptt:true (Push-To-Talk = vraie note vocale, PAS un fichier audio envoyé en
+// pièce jointe classique, qui lui n'a jamais besoin d'être auto-transcrit).
+// Telegram (GramJS) : accesseur `.voice` sur l'objet message (présent
+// uniquement pour une note vocale, jamais un fichier audio/musique classique).
+function isVoiceNote(channel, msg) {
+  if (channel === 'WHATSAPP') return !!(msg && msg.message && msg.message.audioMessage && msg.message.audioMessage.ptt);
+  return !!(msg && msg.voice);
+}
+
+// Identifiant stable de l'expéditeur, pour la session par-client de
+// ai-engine/emotionalCloser.js — WhatsApp : JID complet ; Telegram (GramJS) :
+// chatId (senderId absent sur certains messages de canal/groupe, chatId
+// toujours présent).
+function extractFromId(channel, msg) {
+  if (channel === 'WHATSAPP') return msg && msg.key && msg.key.remoteJid;
+  return msg && (msg.chatId ? String(msg.chatId) : (msg.senderId ? String(msg.senderId) : null));
+}
+
+// Répond dans la MÊME modalité que le client (§1.2 du cahier des charges :
+// "si le client a initié l'échange par audio") — TTS best-effort : un échec
+// (ou aucune clé TTS configurée, voir ai-engine/voiceProcessor.js) dégrade
+// proprement vers une réponse texte, jamais un silence.
+async function sendCustomerReply(channel, session, msg, text, { asVoice } = {}) {
+  if (asVoice) {
+    const audio = await voiceProcessor.synthesizeSpeech(text).catch((err) => {
+      console.warn(`voiceProcessor — synthèse vocale échouée, repli texte (tenant, ${channel}) :`, err.message);
+      return null;
+    });
+    if (audio) {
+      if (channel === 'WHATSAPP') return session.sendVoiceNote(msg.key.remoteJid, audio.buffer);
+      if (typeof session.sendVoiceNote === 'function') return session.sendVoiceNote(msg.chatId, audio.buffer);
+    }
+    // Pas d'audio synthétisé : repli texte ci-dessous, volontairement SANS
+    // "return" avant pour partager le même chemin d'envoi.
+  }
+  if (channel === 'WHATSAPP') {
+    await session.sendMessage(msg.key.remoteJid, text);
+  } else if (typeof msg.reply === 'function') {
+    await msg.reply({ message: text });
+  }
+}
+
 async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }) {
-  const text = extractIncomingText(channel, msg).trim();
+  let text = extractIncomingText(channel, msg).trim();
+  const wasVoice = isVoiceNote(channel, msg);
+
+  if (!text && wasVoice) {
+    try {
+      const buffer = channel === 'WHATSAPP'
+        ? await session.downloadIncomingMedia(msg)
+        : await msg.downloadMedia();
+      const { text: raw, language } = await voiceProcessor.transcribeAudio(buffer, 'audio/ogg', 'voice.ogg');
+      text = (await voiceProcessor.translateToFrench(raw, language)).trim();
+    } catch (err) {
+      console.error(`voiceProcessor — échec de transcription d'une note vocale entrante (tenant "${tenantId}", ${channel}) :`, err.message);
+      return; // pas de texte exploitable : on n'alimente ni la FAQ ni le closer sur du vide.
+    }
+  }
   if (!text) return;
 
   const classification = messageTriage.classify(text);
@@ -4864,7 +4948,21 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     businessProfileStore.set('business_profiles', tenantId, profile);
   }
 
-  if (!AUTO_ANSWER_STUDENT_QUERIES || classification.category !== 'business') return;
+  if (classification.category !== 'business') return;
+
+  if (AUTO_CLOSE_PROSPECTS) {
+    const from = extractFromId(channel, msg);
+    if (!from) return;
+    try {
+      const reply = await emotionalCloser.handleCustomerMessage({ tenantId, channel, from, text });
+      if (reply) await sendCustomerReply(channel, session, msg, reply, { asVoice: wasVoice });
+    } catch (err) {
+      console.error(`emotionalCloser — échec de traitement (tenant "${tenantId}", ${channel}) :`, err.message);
+    }
+    return;
+  }
+
+  if (!AUTO_ANSWER_STUDENT_QUERIES) return;
   if (!intelligenceBridge || !intelligenceBridge.runtime || !intelligenceBridge.runtime.actionExecutor) return;
 
   const profile = await businessProfileStore.get('business_profiles', tenantId, { offers: [] });
@@ -4876,11 +4974,7 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
   if (!out.ok || !out.result || !out.result.answer) return;
 
   try {
-    if (channel === 'WHATSAPP') {
-      await session.sendMessage(msg.key.remoteJid, out.result.answer);
-    } else if (typeof msg.reply === 'function') {
-      await msg.reply({ message: out.result.answer });
-    }
+    await sendCustomerReply(channel, session, msg, out.result.answer, { asVoice: wasVoice });
   } catch (err) {
     console.error(`Échec d'envoi de la réponse auto tuteur (tenant "${tenantId}", ${channel}) :`, err.message);
   }

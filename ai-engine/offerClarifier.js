@@ -1,5 +1,6 @@
 const llmFallbackEngine = require('../lib/ai/llmFallbackEngine');
 const storageAdapter = require('./storageAdapter');
+const personaManager = require('./personaManager');
 
 // MODULE DE CLARIFICATION D'OFFRE — ai-engine/offerClarifier.js
 // ---------------------------------------------------------------------------
@@ -56,8 +57,12 @@ const QUESTION_SETS = [
   '— Si c\'est une FORMATION / CONTENU NUMÉRIQUE : (1) Objectif : que va apprendre l\'élève à la fin du programme ? (2) Format & Délivrance : comment le cours est-il dispensé (vidéos, Telegram, PDF) et quel est le prix ? (3) Accès : faut-il générer une clé d\'accès ou un compte élève automatique ?',
 ].join('\n');
 
-async function planOffer(text, history) {
+// domain (facultatif) : voir personaManager.js#inferDomain — ajuste le ton
+// des questions posées (chaleureux/dynamique par défaut pour une toute
+// nouvelle offre, puisque le domaine n'est souvent pas encore connu).
+async function planOffer(text, history, domain) {
   const prompt = [
+    personaManager.personaSystemPrompt(domain || 'default'),
     `Nouveau message du vendeur dans cette discussion : "${text}"`,
     'Le vendeur vient d\'annoncer une nouvelle offre (produit, service ou formation) que CYRUS SUPER ASSISTANT doit désormais connaître pour prospecter/vendre/répondre aux clients à sa place. NE DEVINE JAMAIS les détails commerciaux — pose des questions précises tant qu\'il en manque.',
     'D\'ABORD, si la catégorie de l\'offre n\'est pas encore claire depuis l\'historique, demande-la en premier (une seule question courte : "Est-ce un produit physique, un service, ou une formation ?").',
