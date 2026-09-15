@@ -4921,6 +4921,46 @@ const recurringTasksInterval = setInterval(() => {
 }, 60 * 1000);
 if (recurringTasksInterval.unref) recurringTasksInterval.unref();
 
+// ---------- Diagnostic + test d'envoi ADMIN (comptes réels sous clé de licence) ----------
+// Réservé à l'admin (mot de passe). Permet de VOIR quels tenants WhatsApp/
+// Telegram sont réellement connectés (au-delà du seul tenant admin) et de
+// déclencher un ENVOI VÉRIFIÉ de test vers le PROPRE numéro du compte
+// (self-message, non intrusif) afin de valider la chaîne réelle
+// lecture→envoi→confirmation sur les comptes du concepteur.
+app.get('/api/admin/diag/tenants', requireAccess, (req, res) => {
+  if (!req.isAdmin) return res.status(403).json({ error: 'Réservé à l\'administrateur.' });
+  const wa = whatsappManager.listActiveEntries().map((e) => ({
+    tenantId: e.session.tenantId,
+    connected: typeof e.session.isConnected === 'function' ? e.session.isConnected() : null,
+    paired: typeof e.session.isPaired === 'function' ? e.session.isPaired() : null,
+    number: typeof e.session.getConnectedNumber === 'function' ? e.session.getConnectedNumber() : null,
+  }));
+  const tg = telegramManager.listActiveEntries().map((e) => ({
+    tenantId: e.session.tenantId,
+    connected: typeof e.session.isConnected === 'function' ? e.session.isConnected() : null,
+    paired: typeof e.session.isPaired === 'function' ? e.session.isPaired() : null,
+  }));
+  res.json({ whatsapp: wa, telegram: tg });
+});
+
+app.post('/api/admin/diag/send-test', requireAccess, async (req, res) => {
+  if (!req.isAdmin) return res.status(403).json({ error: 'Réservé à l\'administrateur.' });
+  const { tenantId, channel } = req.body || {};
+  const ch = String(channel || 'WHATSAPP').toUpperCase();
+  if (!tenantId) return res.status(400).json({ error: 'tenantId requis (la clé de licence du compte à tester).' });
+  const entry = ch === 'TELEGRAM' ? telegramManager.getOrCreate(tenantId) : whatsappManager.getOrCreate(tenantId);
+  const session = entry && entry.session;
+  const connected = session && typeof session.isConnected === 'function' && session.isConnected();
+  const number = session && typeof session.getConnectedNumber === 'function' ? session.getConnectedNumber() : null;
+  if (!connected) return res.json({ status: 'FAILED', reason: 'NOT_CONNECTED', tenantId, channel: ch, number });
+  const to = ch === 'WHATSAPP' ? (number ? `${number}@s.whatsapp.net` : null) : (req.body.to || null);
+  if (!to) return res.status(400).json({ error: ch === 'WHATSAPP' ? 'Numéro du compte introuvable.' : 'Pour Telegram, fournir "to" (chatId/username).' });
+  const out = await intelligenceBridge.runtime.sendMessageVerified({
+    channel: ch, to, text: `✅ Test CYRUS (envoi vérifié) — ${new Date().toISOString()}`, tenantId,
+  });
+  res.json(Object.assign({ tenantId, channel: ch, to, number }, out));
+});
+
 // Filtrage privé/pro + tuteur pédagogique auto (§3/§4 du cahier des charges
 // "Chat-Driven Agent Orchestrator", voir lib/intelligence/message-triage.js
 // et docs/PARITE-LOCAL.md). Câblé sur CHAQUE message WhatsApp/Telegram
