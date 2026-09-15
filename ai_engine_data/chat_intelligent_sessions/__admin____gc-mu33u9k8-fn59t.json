@@ -1,0 +1,15 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu33u9k8-fn59t",
+  "messages": [
+    {
+      "role": "user",
+      "text": "Quel est le prix de ma formation Épicerie et Bouillon ?"
+    },
+    {
+      "role": "assistant",
+      "text": "Je vois que vous voulez connaître le tarif de votre formation « Épicerie et Bouillon ». D’après les informations que vous avez saisies, le prix de cette formation est de 8 000 FCFA. Si vous avez besoin d’autres précisions ou d’un lien de paiement, dites‑le moi."
+    }
+  ],
+  "updatedAt": "2026-09-15T20:08:50.689Z"
+}
