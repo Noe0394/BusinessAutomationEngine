@@ -4883,6 +4883,7 @@ const messageTriage = require('./lib/intelligence/message-triage');
 const businessProfileStore = require('./ai-engine/storageAdapter');
 const emotionalCloser = require('./ai-engine/emotionalCloser');
 const manualPaymentValidator = require('./ai-engine/manualPaymentValidator');
+const contactCrm = require('./ai-engine/contactCrm');
 const AUTO_ANSWER_STUDENT_QUERIES = process.env.AUTO_ANSWER_STUDENT_QUERIES === 'true';
 // Validation de paiement manuel (Human-in-the-Loop, voir
 // ai-engine/manualPaymentValidator.js) : une preuve de paiement entrante est
@@ -5014,6 +5015,19 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     const profile = await businessProfileStore.get('business_profiles', tenantId, { tenantId, offers: [], faq: [] });
     messageTriage.recordFaqSignal(profile, text);
     businessProfileStore.set('business_profiles', tenantId, profile);
+
+    // CRM : mémorise le contact + l'étiquette (nouveau_contact/prospect à la
+    // 1re vue). Purement interne (stockage), aucun message envoyé ici — permet
+    // de relancer/segmenter plus tard (voir ai-engine/contactCrm.js). Le nom
+    // public est capté si disponible (WhatsApp pushName ; Telegram sender).
+    const from = extractFromId(channel, msg);
+    if (from) {
+      const senderName = channel === 'WHATSAPP'
+        ? (msg && msg.pushName) || null
+        : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
+      contactCrm.recordSeen(tenantId, { channel, from, name: senderName })
+        .catch((err) => console.error(`contactCrm.recordSeen (tenant "${tenantId}", ${channel}) :`, err.message));
+    }
   }
 
   if (classification.category !== 'business') return;

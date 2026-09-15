@@ -6,6 +6,7 @@ const personaManager = require('./personaManager');
 const platformOrchestrator = require('./platformOrchestrator');
 const connectorManager = require('./connectors/connectorManager');
 const manualPaymentValidator = require('./manualPaymentValidator');
+const contactCrm = require('./contactCrm');
 
 // CHAT-DRIVEN AGENT ORCHESTRATOR — ai-engine/chatOrchestrator.js
 // ---------------------------------------------------------------------------
@@ -70,7 +71,10 @@ const ACCOUNT_RE = /(compte\s+(?:[ée]l[eè]ve|[ée]tudiant|client)|cl[ée]\s+d.
 // task-parser.js. Le handler ne propose au LLM que les outils réellement
 // autorisés pour ce tenant (getToolsForTenant) — s'il n'y en a aucun, il
 // retombe sur le flux compte interne classique.
-const CONNECTOR_RE = /(contact|\btag(?:ue|uer|s)?\b|system\.?io|systeme\.?io|crm|factur|enregistre?\s+(?:la|une|cette)\s+vente|journal\s+des\s+ventes)/i;
+// NB : "contact" seul est volontairement EXCLU (trop générique — "prospecter
+// 100 contacts" est un objectif, pas une action connecteur) ; on exige un
+// verbe/contexte explicite (ajoute … contact / system.io / crm / tag / facture).
+const CONNECTOR_RE = /(ajoute[rz]?\s+(?:ce\s+|le\s+|un\s+|mon\s+)?contact|\btague?r?\b|\btags?\b|system\.?io|systeme\.?io|\bcrm\b|factur|enregistre?\s+(?:la|une|cette)\s+vente|journal\s+des\s+ventes)/i;
 // Lecture de la boîte de réception (prouver la connexion réelle + citer un
 // vrai message/expéditeur). Volontairement placé AVANT 'goal' dans
 // detectIntent : "dernier message reçu" ne doit pas être happé par le moteur
@@ -81,6 +85,10 @@ const INBOX_RE = /(derniers?\s+messages?|messages?\s+re[çc]us?|qui\s+m.?a\s+(?:
 // groupes ne doit pas lancer le moteur d'objectifs. La véritable exécution
 // ("écris aux membres du groupe X …") reste gérée par 'goal' (à enrichir).
 const GROUPS_RE = /(mes\s+groupes?|liste[rz]?\s+(?:mes\s+)?groupes?|quels?\s+(?:sont\s+)?(?:mes\s+)?groupes?|combien\s+de\s+groupes?|groupes?\s+(?:dont|o[ùu])\s+je\s+suis\s+admin|groupes?\s+que\s+j.?administre|mes\s+groupes?\s+admin)/i;
+// Consultation du CRM (contacts étiquetés prospect/client, comptages).
+// AVANT 'goal' (GOAL_RE capte "prospect") : une question sur les contacts
+// étiquetés ne doit pas lancer le moteur d'objectifs.
+const CRM_RE = /(mes\s+(?:prospects?|clients?|contacts?)|combien\s+de\s+(?:prospects?|clients?|contacts?)|contacts?\s+[ée]tiquet|contacts?\s+tagg?[ée]s?|liste[rz]?\s+(?:mes\s+)?(?:prospects?|clients?|contacts?)|qui\s+sont\s+mes\s+(?:prospects?|clients?)|mes\s+[ée]tiquettes)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
 
 // Détection d'intention (Command Parsing, §1.1 du cahier des charges) —
@@ -97,6 +105,7 @@ function detectIntent(text, lastAssistantMessage) {
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
   if (INBOX_RE.test(text)) return 'inbox';
   if (GROUPS_RE.test(text)) return 'groups';
+  if (CRM_RE.test(text)) return 'crm';
   if (REPORT_RE.test(text)) return 'report';
   if (PAYMENT_RE.test(text)) return 'payment';
   // 'account' et 'connector' partagent le même handler (handleConnector) :
@@ -387,6 +396,46 @@ async function handleGroups(text, tenantId, deps) {
 }
 
 // ---------------------------------------------------------------------------
+// 'crm' — consultation du CRM de contacts (ai-engine/contactCrm.js) : liste par
+// étiquette (prospect/client/personnalisée) + comptages. Lecture pure
+// (stockage), fonctionne même WhatsApp/Telegram déconnecté.
+// ---------------------------------------------------------------------------
+async function handleCrm(text, tenantId) {
+  let tag = null;
+  if (/\bclients?\b/i.test(text)) tag = 'client';
+  else if (/\bprospects?\b/i.test(text)) tag = 'prospect';
+  else if (/nouveau|nouvelle|nouveaux/i.test(text)) tag = 'nouveau_contact';
+  const m = text.match(/(?:tagg?[ée]s?|[ée]tiquet[ée]s?)\s+["']?([\p{L}\d_-]{2,30})/iu);
+  if (m) tag = m[1].trim().toLowerCase();
+  const channel = /telegram/i.test(text) ? 'TELEGRAM' : (/whatsapp/i.test(text) ? 'WHATSAPP' : null);
+
+  const c = await contactCrm.counts(tenantId);
+  const items = await contactCrm.list(tenantId, { tag, channel });
+  const recap = Object.entries(c.byTag || {}).map(([t, n]) => `${t}: ${n}`).join(', ');
+
+  if (!items.length) {
+    return {
+      text: tag
+        ? `Aucun contact avec l'étiquette « ${tag} »${channel ? ' sur ' + channel : ''}.${recap ? `\n(Récap : ${recap})` : ''}`
+        : `Aucun contact enregistré pour l'instant. Dès qu'une personne t'écrit, je l'ajoute et l'étiquette automatiquement.`,
+    };
+  }
+  const top = items.slice(0, 20);
+  const lines = top.map((x) => {
+    const who = x.name || x.from;
+    const tags = (x.tags || []).length ? ` — ${x.tags.join(', ')}` : '';
+    const buys = (x.purchases || []).length ? ` · ${x.purchases.length} achat(s)` : '';
+    return `• ${who}${tags}${buys}`;
+  });
+  const header = tag ? `Contacts « ${tag} » (${items.length}) :` : `Tes contacts (${items.length}) :`;
+  const more = items.length > top.length ? `\n… et ${items.length - top.length} autre(s).` : '';
+  return {
+    text: [header, ...lines].join('\n') + more,
+    actionLog: [{ icon: '🏷️', label: `${items.length} contact(s)${tag ? ' « ' + tag + ' »' : ''}`, status: 'done' }],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 'payment' — extraction LLM ciblée (montant, destinataire, produit, remise
 // demandée) puis exécution directe GENERATE_PAYMENT_LINK / NEGOTIATE_DISCOUNT.
 // Même patron qu'index.js#planOrAsk (planImage/planVideo/planBook) : un seul
@@ -614,6 +663,7 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'report': return handleReport(text, tenantId, d);
     case 'inbox': return handleInbox(text, tenantId, d);
     case 'groups': return handleGroups(text, tenantId, d);
+    case 'crm': return handleCrm(text, tenantId);
     case 'payment': return handlePayment(text, history, tenantId, d);
     case 'connector': return handleConnector(text, history, tenantId, d);
     default: return null;

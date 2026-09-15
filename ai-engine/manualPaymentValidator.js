@@ -1,6 +1,7 @@
 const storageAdapter = require('./storageAdapter');
 const platformOrchestrator = require('./platformOrchestrator');
 const connectorManager = require('./connectors/connectorManager');
+const contactCrm = require('./contactCrm');
 
 // VALIDATION DE PAIEMENT MANUEL (HUMAN-IN-THE-LOOP) — ai-engine/manualPaymentValidator.js
 // ---------------------------------------------------------------------------
@@ -194,6 +195,12 @@ async function resolveAdminDecision(tenantId, text, deps) {
   target.courseId = courseId;
   target.approvedAt = new Date().toISOString();
   saveRecord(tenantId, target.channel, target.from, target);
+
+  // CRM : l'acheteur devient `client` (retire `nouveau_contact`) et son achat
+  // est historisé — pour lui proposer d'autres offres plus tard (voir
+  // ai-engine/contactCrm.js). Best-effort, jamais bloquant.
+  contactCrm.markPurchase(tenantId, target.channel, target.from, { sku: courseId, email: target.email })
+    .catch((err) => console.error(`contactCrm.markPurchase (tenant "${tenantId}") :`, err.message));
 
   const link = exec.result && exec.result.passwordResetLink;
   const accessLine = link
