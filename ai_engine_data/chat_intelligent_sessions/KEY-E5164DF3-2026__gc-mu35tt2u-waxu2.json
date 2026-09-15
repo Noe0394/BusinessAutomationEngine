@@ -1,0 +1,82 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "sessionId": "gc-mu35tt2u-waxu2",
+  "title": "Salut fais moi le point des conversations WhatsApp de 3 dern",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu35tue38fgs",
+      "role": "user",
+      "content": "Salut fais moi le point des conversations WhatsApp de 3 dernièrs jours",
+      "text": "Salut fais moi le point des conversations WhatsApp de 3 dernièrs jours",
+      "ts": "2026-09-15T21:04:29.211Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu35tue3nf6q",
+      "role": "assistant",
+      "content": "Voici le point des échanges WhatsApp des 3 derniers jours : nous avons reçu 5 messages, dont deux de vos contacts (un « Bonjour ! Puis-je en savoir plus à ce sujet ? » et un « Fonctionne » de CYRUS LEGRAND) et trois messages sortants que nous avons envoyés en test (« Test CYRUS — tool call verifie », « Test CYRUS — tool call verifie via le registre d’outils » et « CYRUS ✅ Test WhatsApp réel via le système intelligent… »). Aucun autre échange n’est apparu pendant cette période.",
+      "text": "Voici le point des échanges WhatsApp des 3 derniers jours : nous avons reçu 5 messages, dont deux de vos contacts (un « Bonjour ! Puis-je en savoir plus à ce sujet ? » et un « Fonctionne » de CYRUS LEGRAND) et trois messages sortants que nous avons envoyés en test (« Test CYRUS — tool call verifie », « Test CYRUS — tool call verifie via le registre d’outils » et « CYRUS ✅ Test WhatsApp réel via le système intelligent… »). Aucun autre échange n’est apparu pendant cette période.",
+      "ts": "2026-09-15T21:04:29.211Z",
+      "metadata": {
+        "intent": null,
+        "toolCall": {
+          "name": "getMessagesByDate",
+          "state": "SUCCESS",
+          "result": {
+            "channel": "WHATSAPP",
+            "sinceDays": 3,
+            "count": 5,
+            "messages": [
+              {
+                "direction": "in",
+                "name": null,
+                "party": "203787759272159@lid",
+                "text": "Bonjour ! Puis-je en savoir plus à ce sujet ?",
+                "ts": 1789474563
+              },
+              {
+                "direction": "out",
+                "name": null,
+                "party": "22506650471",
+                "text": "Test CYRUS — tool call verifie (auto-envoi)",
+                "ts": 1789505437
+              },
+              {
+                "direction": "out",
+                "name": null,
+                "party": "22664977093",
+                "text": "Test CYRUS — tool call verifie via le registre d outils",
+                "ts": 1789505638
+              },
+              {
+                "direction": "out",
+                "name": null,
+                "party": "22664977093",
+                "text": "CYRUS ✅ Test WhatsApp reel via le systeme intelligent (tool call verifie). Si tu lis ceci, l envoi WhatsApp fonctionne.",
+                "ts": 1789505682
+              },
+              {
+                "direction": "in",
+                "name": "CYRUS LEGRAND",
+                "party": "192595040981062@lid",
+                "text": "Fonctionne",
+                "ts": 1789505737
+              }
+            ]
+          },
+          "error": null,
+          "confirmationId": null
+        },
+        "actionLog": [
+          {
+            "icon": "✅",
+            "label": "getMessagesByDate → SUCCESS",
+            "status": "done"
+          }
+        ]
+      }
+    }
+  ],
+  "updatedAt": "2026-09-15T21:04:29.211Z"
+}
