@@ -1,0 +1,21 @@
+{
+  "tenantId": "KEY-FB6EF0A6-2026",
+  "channel": "TELEGRAM",
+  "messages": [
+    {
+      "channel": "TELEGRAM",
+      "direction": "in",
+      "party": "-1001811103894",
+      "number": "-1001811103894",
+      "name": "yohanredoxsignaux",
+      "text": "🎉🍏🍏",
+      "hasMedia": true,
+      "chatId": "-1001811103894",
+      "ts": 1789490396,
+      "tsMs": 1789490396000,
+      "confirmationId": null,
+      "at": "2026-09-15T16:39:56.930Z"
+    }
+  ],
+  "updatedAt": "2026-09-15T16:39:56.930Z"
+}
