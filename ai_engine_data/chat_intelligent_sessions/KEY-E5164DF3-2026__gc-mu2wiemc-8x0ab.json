@@ -1,0 +1,15 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "sessionId": "gc-mu2wiemc-8x0ab",
+  "messages": [
+    {
+      "role": "user",
+      "text": "Le service métier"
+    },
+    {
+      "role": "assistant",
+      "text": "Je comprends que vous faites référence à votre « service métier » et que vous souhaitez que je vous aide à le détailler ou à le mettre en action. Pouvez‑vous préciser ce que vous attendez exactement ? Par exemple, avez‑vous besoin d’un aperçu des fonctionnalités, d’un message à envoyer à vos clients, ou de lancer une campagne liée à ce service ? Dites‑moi ce qui vous conviendrait le mieux pour que je passe à l’action."
+    }
+  ],
+  "updatedAt": "2026-09-15T16:43:40.539Z"
+}
