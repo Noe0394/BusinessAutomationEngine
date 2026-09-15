@@ -1,0 +1,44 @@
+{
+  "tenantId": "__admin__",
+  "contacts": {
+    "WHATSAPP:2250102030405": {
+      "key": "WHATSAPP:2250102030405",
+      "channel": "WHATSAPP",
+      "from": "2250102030405",
+      "name": "Awa",
+      "tags": [
+        "importé",
+        "prospect"
+      ],
+      "stage": "new",
+      "purchases": [],
+      "firstSeen": "2026-09-15T20:53:59.037Z",
+      "lastSeen": null,
+      "messageCount": 0,
+      "source": "import_fichier",
+      "fields": {
+        "pays": "CI"
+      }
+    },
+    "WHATSAPP:22611223344": {
+      "key": "WHATSAPP:22611223344",
+      "channel": "WHATSAPP",
+      "from": "22611223344",
+      "name": "Koffi",
+      "tags": [
+        "importé",
+        "prospect"
+      ],
+      "stage": "new",
+      "purchases": [],
+      "firstSeen": "2026-09-15T20:53:59.037Z",
+      "lastSeen": null,
+      "messageCount": 0,
+      "source": "import_fichier",
+      "fields": {
+        "pays": "BF"
+      }
+    }
+  },
+  "updatedAt": "2026-09-15T20:53:59.037Z"
+}
