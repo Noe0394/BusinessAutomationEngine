@@ -1,25 +1,7 @@
 {
   "tenant": "__admin__",
   "sessionId": "gc-mu35iemq-kn71d",
-  "title": "Bonjour, retiens que mon projet test est la formation cuisin",
+  "messages": [],
   "context": {},
-  "messages": [
-    {
-      "id": "m_mu35ig6caurc",
-      "role": "user",
-      "content": "Bonjour, retiens que mon projet test est la formation cuisine.",
-      "text": "Bonjour, retiens que mon projet test est la formation cuisine.",
-      "ts": "2026-09-15T20:55:37.572Z",
-      "metadata": {}
-    },
-    {
-      "id": "m_mu35ig6cumrj",
-      "role": "assistant",
-      "content": "Je comprends que je suis ton Associé Virtuel, déjà connecté à ton compte WhatsApp/Telegram, et que je peux créer ou suspendre des comptes élèves, lancer des campagnes ou générer des liens de paiement pour le service « RIEA AFRIQUE (test reel VPS) », qui est une formation cuisine à 15 000 FCFA. Je suis prêt à exécuter immédiatement la première action que tu souhaites : créer un accès pour un élève, suspendre un compte, ou préparer un lien de paiement, selon ton besoin. Dis‑moi simplement ce que tu veux mettre en place maintenant.",
-      "text": "Je comprends que je suis ton Associé Virtuel, déjà connecté à ton compte WhatsApp/Telegram, et que je peux créer ou suspendre des comptes élèves, lancer des campagnes ou générer des liens de paiement pour le service « RIEA AFRIQUE (test reel VPS) », qui est une formation cuisine à 15 000 FCFA. Je suis prêt à exécuter immédiatement la première action que tu souhaites : créer un accès pour un élève, suspendre un compte, ou préparer un lien de paiement, selon ton besoin. Dis‑moi simplement ce que tu veux mettre en place maintenant.",
-      "ts": "2026-09-15T20:55:37.572Z",
-      "metadata": {}
-    }
-  ],
-  "updatedAt": "2026-09-15T20:55:37.572Z"
+  "updatedAt": "2026-09-15T20:55:37.613Z"
 }
