@@ -8,6 +8,8 @@ const connectorManager = require('./connectors/connectorManager');
 const manualPaymentValidator = require('./manualPaymentValidator');
 const contactCrm = require('./contactCrm');
 const recurringTasks = require('../queues/recurringTasks');
+const messageHistory = require('./messageHistory');
+const actionLedger = require('./actionLedger');
 
 // ADAPTATEUR local-client de ai-engine/chatOrchestrator.js (VPS) — MÊME modèle
 // intelligent, mono-poste (tenant fixe 'local'). Le moteur d'objectif 'goal'
@@ -33,15 +35,19 @@ const INBOX_RE = /(derniers?\s+messages?|messages?\s+re[çc]us?|qui\s+m.?a\s+(?:
 const GROUPS_RE = /(mes\s+groupes?|liste[rz]?\s+(?:mes\s+)?groupes?|quels?\s+(?:sont\s+)?(?:mes\s+)?groupes?|combien\s+de\s+groupes?|groupes?\s+(?:dont|o[ùu])\s+je\s+suis\s+admin|groupes?\s+que\s+j.?administre|mes\s+groupes?\s+admin)/i;
 const RECURRING_RE = /(chaque\s+(?:matin|jour|soir|semaine|nuit|midi|\d{1,2}\s*h)|tous\s+les\s+(?:matins|jours|soirs)|chaque\s+jour|t[âa]ches?\s+r[ée]curren|r[ée]currente?s?\b|automatiser?\b|programme[rz]?\s+(?:un\s+)?(?:message|envoi)\s+quotidien)/i;
 const GROUPPOST_RE = /(poste|publie|partage|diffuse|balance|envoi[e]?)\w*[^]{0,80}?(groupe|groupes|canal|canaux)/i;
+const REPLY_RE = /(r[ée]ponds?(?:\s|-)?(?:lui|leur|[àa]\b)|r[ée]pondre\s+[àa]\b|dis(?:\s|-)?lui|renvoie(?:\s|-)?lui|r[ée]pond(?:s|re)\s+(?:au|à|a)\b)/i;
+const ACTIONS_RE = /(qu.?as-?tu\s+fait|tes\s+actions|actions\s+r[ée]centes|statut\s+de[s]?\s+actions|rapport\s+de[s]?\s+(?:tes\s+)?(?:actions|envois)|historique\s+de[s]?\s+actions)/i;
 const CRM_RE = /(mes\s+(?:prospects?|clients?|contacts?)|combien\s+de\s+(?:prospects?|clients?|contacts?)|contacts?\s+[ée]tiquet|contacts?\s+tagg?[ée]s?|liste[rz]?\s+(?:mes\s+)?(?:prospects?|clients?|contacts?)|qui\s+sont\s+mes\s+(?:prospects?|clients?)|mes\s+[ée]tiquettes)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
 
 function detectIntent(text, lastAssistantMessage) {
-  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost'];
+  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
     return lastAssistantMessage.intent;
   }
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
+  if (REPLY_RE.test(text)) return 'reply';
+  if (ACTIONS_RE.test(text)) return 'actionsreport';
   if (INBOX_RE.test(text)) return 'inbox';
   if (RECURRING_RE.test(text)) return 'recurring';
   if (GROUPPOST_RE.test(text) && !/membre/i.test(text)) return 'grouppost';
@@ -191,6 +197,63 @@ async function handleInbox(text, deps) {
   const fmtBody = (m) => (m.text ? `"${m.text}"` : (m.hasMedia ? '[média]' : '[message vide]'));
   const lines = messages.slice(0, 5).map((m, i) => `${i === 0 ? '➡️ ' : '• '}${fmtWho(m)}${m.isGroup ? ' [groupe]' : ''} — ${fmtBody(m)}${fmtWhen(m) ? ` · ${fmtWhen(m)}` : ''}`);
   return { text: [`Voici tes derniers messages ${label}${numLine} :`, ...lines].join('\n'), actionLog: [{ icon: '📥', label: `Dernier : ${fmtWho(messages[0])}`, status: 'done' }] };
+}
+
+// ---------------- 'reply' (réponse RÉELLE au dernier message, vérifiée) ----------------
+function sendReport({ status, label, who, replyText, confirmationId, error }) {
+  const head = `📤 ACTION CYRUS\nCanal : ${label}\nDestinataire : ${who}\nAction : Réponse au message\nTexte : « ${replyText} »`;
+  if (status === 'SUCCESS') return { text: `${head}\n\n✅ ACTION CONFIRMÉE — le message a réellement été envoyé (réf. ${confirmationId}).`, actionLog: [{ icon: '✅', label: `Envoyé à ${who}`, status: 'done' }] };
+  if (status === 'PENDING') return { text: `${head}\n\n⏳ ACTION EN ATTENTE — l'envoi n'a pas encore été confirmé par ${label}.`, actionLog: [{ icon: '⏳', label: `En attente — ${who}`, status: 'warning' }] };
+  return { text: `${head}\n\n❌ ACTION ÉCHOUÉE — le message n'a PAS été envoyé (${error || 'non confirmé'}).`, actionLog: [{ icon: '❌', label: `Échec — ${who}`, status: 'error' }] };
+}
+
+async function composeReplyText(instruction, last, domain) {
+  let context = '';
+  try {
+    const conv = await messageHistory.getConversation(TENANT, last.channel, last.number, 12);
+    if (conv && conv.length) context = conv.map((m) => `${m.direction === 'in' ? 'Client' : 'Moi'}: ${m.text}`).join('\n');
+  } catch (e) { context = ''; }
+  const prompt = [
+    personaManager.personaSystemPrompt(domain || 'default'),
+    `Dernier message reçu de ${last.name || last.number} : "${last.text}"`,
+    context ? `Contexte récent de la conversation :\n${context}` : '',
+    `Le vendeur te demande : "${instruction}"`,
+    'Rédige UNIQUEMENT le message EXACT à envoyer au client, dans le style habituel du vendeur, sans guillemets ni préambule ni explication. Si le vendeur dicte le contenu (ex : "réponds-lui que je vais bien"), reformule fidèlement (ex : "Je vais bien.").',
+  ].filter(Boolean).join('\n');
+  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, []);
+  return String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1500);
+}
+
+async function handleReply(text, deps) {
+  if (!deps.runtime || typeof deps.runtime.sendMessageVerified !== 'function') return { text: 'Envoi indisponible (moteur non injecté).' };
+  let channel = /telegram/i.test(text) ? 'TELEGRAM' : (/whatsapp/i.test(text) ? 'WHATSAPP' : null);
+  const lastWA = await messageHistory.getLastIncoming(TENANT, 'WHATSAPP').catch(() => null);
+  const lastTG = await messageHistory.getLastIncoming(TENANT, 'TELEGRAM').catch(() => null);
+  let last;
+  if (channel === 'TELEGRAM') last = lastTG;
+  else if (channel === 'WHATSAPP') last = lastWA;
+  else { if (lastWA && lastTG) last = (lastWA.ts >= lastTG.ts) ? lastWA : lastTG; else last = lastWA || lastTG; channel = last ? last.channel : 'WHATSAPP'; }
+  const label = channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+  if (!last) return { text: `Je n'ai aucun message reçu récemment sur ${label} auquel répondre.` };
+  const who = last.name ? `${last.name} (${last.number})` : last.number;
+  const { domain } = await buildPersonaFacts();
+  const replyText = await composeReplyText(text, last, domain);
+  if (!replyText) return { text: 'Dicte-moi la réponse exacte à envoyer.', isPlanningQuestion: true, intent: 'reply' };
+  const to = last.chatId || last.party;
+  const out = await deps.runtime.sendMessageVerified({ channel, to, text: replyText, tenantId: TENANT });
+  return sendReport({ status: out.status, label, who, replyText, confirmationId: out.confirmationId, error: out.error });
+}
+
+async function handleActionsReport() {
+  const actions = await actionLedger.listRecent(TENANT, 10).catch(() => []);
+  if (!actions.length) return { text: 'Je n\'ai encore exécuté aucune action traçable.' };
+  const icon = (s) => (s === 'SUCCESS' ? '✅' : s === 'FAILED' ? '❌' : s === 'PENDING' ? '⏳' : '•');
+  const lines = actions.map((a) => {
+    const when = a.finishedAt || a.startedAt || a.requestedAt;
+    const ref = a.confirmation && a.confirmation.confirmationId ? ` (réf. ${a.confirmation.confirmationId})` : (a.error ? ` (${a.error})` : '');
+    return `${icon(a.status)} ${a.type} ${a.channel || ''} → ${a.target || ''} : ${a.status}${ref} · ${new Date(when).toLocaleString('fr-FR')}`;
+  });
+  return { text: ['📊 Mes dernières actions (statut réel) :', ...lines].join('\n'), actionLog: [{ icon: '📊', label: `${actions.length} action(s)`, status: 'done' }] };
 }
 
 // ---------------- 'groups' ----------------
@@ -468,6 +531,8 @@ async function handle({ text, history, sessionId, lastAssistantMessage }, deps) 
     case 'goal': return handleGoal(text, sessionKey, d);
     case 'report': return handleReport(d);
     case 'inbox': return handleInbox(text, d);
+    case 'reply': return handleReply(text, d);
+    case 'actionsreport': return handleActionsReport();
     case 'groups': return handleGroups(text, d);
     case 'grouppost': return handleGroupPost(text, history, sessionKey, d);
     case 'recurring': return handleRecurring(text, history);

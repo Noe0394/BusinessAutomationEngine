@@ -8,6 +8,8 @@ const connectorManager = require('./connectors/connectorManager');
 const manualPaymentValidator = require('./manualPaymentValidator');
 const contactCrm = require('./contactCrm');
 const recurringTasks = require('../queues/recurringTasks');
+const messageHistory = require('./messageHistory');
+const actionLedger = require('./actionLedger');
 
 // CHAT-DRIVEN AGENT ORCHESTRATOR — ai-engine/chatOrchestrator.js
 // ---------------------------------------------------------------------------
@@ -98,6 +100,10 @@ const RECURRING_RE = /(chaque\s+(?:matin|jour|soir|semaine|nuit|midi|\d{1,2}\s*h
 // à tous mes groupes admin). Exclut "membre" (là c'est un envoi aux MEMBRES en
 // DM = 'goal'/campagne, pas une publication dans le groupe).
 const GROUPPOST_RE = /(poste|publie|partage|diffuse|balance|envoi[e]?)\w*[^]{0,80}?(groupe|groupes|canal|canaux)/i;
+// Réponse RÉELLE au dernier message (ou à un contact nommé), avec vérification.
+const REPLY_RE = /(r[ée]ponds?(?:\s|-)?(?:lui|leur|[àa]\b)|r[ée]pondre\s+[àa]\b|dis(?:\s|-)?lui|renvoie(?:\s|-)?lui|r[ée]pond(?:s|re)\s+(?:au|à|a)\b)/i;
+// Supervision : "qu'as-tu fait / statut de tes actions / rapport de tes envois".
+const ACTIONS_RE = /(qu.?as-?tu\s+fait|tes\s+actions|actions\s+r[ée]centes|statut\s+de[s]?\s+actions|rapport\s+de[s]?\s+(?:tes\s+)?(?:actions|envois)|historique\s+de[s]?\s+actions)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
 
 // Détection d'intention (Command Parsing, §1.1 du cahier des charges) —
@@ -107,11 +113,15 @@ const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcon
 // intention en cours sur toute reclassification par mots-clés du nouveau
 // message, exactement comme pour image/vidéo/livre.
 function detectIntent(text, lastAssistantMessage) {
-  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost'];
+  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
     return lastAssistantMessage.intent;
   }
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
+  // 'reply' (répondre réellement au dernier message) AVANT 'inbox' : "réponds-lui"
+  // est une action d'envoi, pas une lecture. AVANT 'report' aussi (répond ≠ rapport).
+  if (REPLY_RE.test(text)) return 'reply';
+  if (ACTIONS_RE.test(text)) return 'actionsreport';
   if (INBOX_RE.test(text)) return 'inbox';
   // Ordre important : une programmation récurrente ("chaque matin envoie au
   // groupe…") l'emporte sur une publication ponctuelle ; une publication (verbe
@@ -355,6 +365,86 @@ async function handleInbox(text, tenantId, deps) {
     text: [`Voici tes derniers messages ${label}${numLine} :`, ...lines].join('\n'),
     actionLog: [{ icon: '📥', label: `Dernier message : ${fmtWho(last)}`, status: 'done' }],
   };
+}
+
+// ---------------------------------------------------------------------------
+// 'reply' — répond RÉELLEMENT au dernier message reçu (ou à un contact nommé)
+// et VÉRIFIE l'envoi. Chaîne complète : identifie l'expéditeur/canal réels
+// (historique persistant) -> rédige la réponse (style du vendeur) -> envoi
+// vérifié (runtime.sendMessageVerified, registre d'actions) -> rapport de
+// VÉRITÉ (SUCCESS confirmé / FAILED / PENDING, jamais un faux positif).
+// ---------------------------------------------------------------------------
+function sendReport({ status, label, who, replyText, confirmationId, error }) {
+  const head = `📤 ACTION CYRUS\nCanal : ${label}\nDestinataire : ${who}\nAction : Réponse au message\nTexte : « ${replyText} »`;
+  if (status === 'SUCCESS') {
+    return { text: `${head}\n\n✅ ACTION CONFIRMÉE — le message a réellement été envoyé (réf. ${confirmationId}).`, actionLog: [{ icon: '✅', label: `Envoyé à ${who}`, status: 'done' }] };
+  }
+  if (status === 'PENDING') {
+    return { text: `${head}\n\n⏳ ACTION EN ATTENTE — l'envoi n'a pas encore été confirmé par ${label}.`, actionLog: [{ icon: '⏳', label: `En attente — ${who}`, status: 'warning' }] };
+  }
+  return { text: `${head}\n\n❌ ACTION ÉCHOUÉE — le message n'a PAS été envoyé (${error || 'non confirmé'}).`, actionLog: [{ icon: '❌', label: `Échec — ${who}`, status: 'error' }] };
+}
+
+async function composeReplyText(instruction, last, tenantId, domain) {
+  let context = '';
+  try {
+    const conv = await messageHistory.getConversation(tenantId, last.channel, last.number, 12);
+    if (conv && conv.length) context = conv.map((m) => `${m.direction === 'in' ? 'Client' : 'Moi'}: ${m.text}`).join('\n');
+  } catch (e) { context = ''; }
+  const prompt = [
+    personaManager.personaSystemPrompt(domain || 'default'),
+    `Dernier message reçu de ${last.name || last.number} : "${last.text}"`,
+    context ? `Contexte récent de la conversation :\n${context}` : '',
+    `Le vendeur te demande : "${instruction}"`,
+    'Rédige UNIQUEMENT le message EXACT à envoyer au client, dans le style habituel du vendeur, sans guillemets ni préambule ni explication. Si le vendeur dicte le contenu (ex : "réponds-lui que je vais bien"), reformule fidèlement (ex : "Je vais bien.").',
+  ].filter(Boolean).join('\n');
+  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, []);
+  return String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1500);
+}
+
+async function handleReply(text, tenantId, deps) {
+  if (!deps.runtime || typeof deps.runtime.sendMessageVerified !== 'function') {
+    return { text: 'Envoi indisponible pour le moment (moteur non injecté).' };
+  }
+  let channel = /telegram/i.test(text) ? 'TELEGRAM' : (/whatsapp/i.test(text) ? 'WHATSAPP' : null);
+  const lastWA = await messageHistory.getLastIncoming(tenantId, 'WHATSAPP').catch(() => null);
+  const lastTG = await messageHistory.getLastIncoming(tenantId, 'TELEGRAM').catch(() => null);
+  let last;
+  if (channel === 'TELEGRAM') last = lastTG;
+  else if (channel === 'WHATSAPP') last = lastWA;
+  else {
+    if (lastWA && lastTG) last = (lastWA.ts >= lastTG.ts) ? lastWA : lastTG;
+    else last = lastWA || lastTG;
+    channel = last ? last.channel : 'WHATSAPP';
+  }
+  const label = channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+  if (!last) {
+    return { text: `Je n'ai aucun message reçu récemment sur ${label} auquel répondre. Demande-moi d'abord « quel est le dernier message reçu ? ».` };
+  }
+  const who = last.name ? `${last.name} (${last.number})` : last.number;
+  const { domain } = await buildPersonaFacts(tenantId);
+  const replyText = await composeReplyText(text, last, tenantId, domain);
+  if (!replyText) return { text: 'Je n\'ai pas compris quel message envoyer — dicte-moi la réponse exacte.', isPlanningQuestion: true, intent: 'reply' };
+  const to = last.chatId || last.party;
+  const out = await deps.runtime.sendMessageVerified({ channel, to, text: replyText, tenantId });
+  return sendReport({ status: out.status, label, who, replyText, confirmationId: out.confirmationId, error: out.error });
+}
+
+// ---------------------------------------------------------------------------
+// 'actionsreport' — supervision : ce que l'agent a RÉELLEMENT fait (registre
+// d'actions), avec le statut réel de chacune. Empêche le "c'est fait" abstrait.
+// ---------------------------------------------------------------------------
+async function handleActionsReport(tenantId) {
+  const actions = await actionLedger.listRecent(tenantId, 10).catch(() => []);
+  if (!actions.length) return { text: 'Je n\'ai encore exécuté aucune action traçable.' };
+  const icon = (s) => (s === 'SUCCESS' ? '✅' : s === 'FAILED' ? '❌' : s === 'PENDING' ? '⏳' : '•');
+  const lines = actions.map((a) => {
+    const when = a.finishedAt || a.startedAt || a.requestedAt;
+    const target = a.target || '';
+    const ref = a.confirmation && a.confirmation.confirmationId ? ` (réf. ${a.confirmation.confirmationId})` : (a.error ? ` (${a.error})` : '');
+    return `${icon(a.status)} ${a.type} ${a.channel || ''} → ${target} : ${a.status}${ref} · ${new Date(when).toLocaleString('fr-FR')}`;
+  });
+  return { text: ['📊 Mes dernières actions (statut réel) :', ...lines].join('\n'), actionLog: [{ icon: '📊', label: `${actions.length} action(s)`, status: 'done' }] };
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +914,8 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'goal': return handleGoal(text, sessionKey, tenantId, d);
     case 'report': return handleReport(text, tenantId, d);
     case 'inbox': return handleInbox(text, tenantId, d);
+    case 'reply': return handleReply(text, tenantId, d);
+    case 'actionsreport': return handleActionsReport(tenantId);
     case 'groups': return handleGroups(text, tenantId, d);
     case 'grouppost': return handleGroupPost(text, history, sessionKey, tenantId, d);
     case 'recurring': return handleRecurring(text, history, tenantId, d);

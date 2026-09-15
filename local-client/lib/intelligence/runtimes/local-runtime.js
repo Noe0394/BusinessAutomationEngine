@@ -8,6 +8,17 @@
 // de lever une erreur qui ferait planter l'appelant.
 'use strict';
 
+const actionLedger = require('../../../ai-engine/actionLedger');
+const messageHistory = require('../../../ai-engine/messageHistory');
+
+function extractConfirmationId(result) {
+  if (!result) return null;
+  if (result.key && result.key.id) return String(result.key.id);
+  if (result.id && result.id._serialized) return String(result.id._serialized);
+  if (result.id != null) return String(result.id);
+  return null;
+}
+
 function createLocalRuntime({ whatsapp, telegram, campaigns, llm }) {
   async function extractMembers(channel, groupId) {
     const ch = String(channel || 'WHATSAPP').toUpperCase();
@@ -63,7 +74,8 @@ function createLocalRuntime({ whatsapp, telegram, campaigns, llm }) {
     return String(channel || 'WHATSAPP').toUpperCase() === 'TELEGRAM' ? telegram : whatsapp;
   }
 
-  // Lecture de la boîte de réception (parité vps-runtime).
+  // Lecture de la boîte de réception (parité vps-runtime) — historique
+  // PERSISTANT en priorité, repli sur le tampon live de l'adaptateur.
   async function getRecentMessages(payload) {
     const p = payload || {};
     const ch = String(p.channel || 'WHATSAPP').toUpperCase();
@@ -72,9 +84,46 @@ function createLocalRuntime({ whatsapp, telegram, campaigns, llm }) {
       const connected = typeof s.isConnected === 'function' ? s.isConnected() : null;
       const paired = typeof s.isPaired === 'function' ? s.isPaired() : null;
       const connectedNumber = typeof s.getConnectedNumber === 'function' ? s.getConnectedNumber() : null;
-      if (typeof s.getRecentMessages !== 'function') return { ok: false, error: 'RUNTIME_MISSING:getRecentMessages', connected, paired, connectedNumber };
-      return { ok: true, channel: ch, connected, paired, connectedNumber, messages: s.getRecentMessages(p.limit || 10) || [] };
+      let messages = [];
+      try {
+        const persisted = await messageHistory.getRecent('local', ch, p.limit || 10);
+        messages = (persisted || []).map((m) => ({
+          from: m.chatId || m.party, number: m.number, name: m.name, text: m.text,
+          hasMedia: m.hasMedia, isGroup: String(m.chatId || m.party).endsWith('@g.us'), ts: m.ts, direction: m.direction,
+        }));
+      } catch (e) { messages = []; }
+      if (!messages.length && typeof s.getRecentMessages === 'function') messages = s.getRecentMessages(p.limit || 10) || [];
+      return { ok: true, channel: ch, connected, paired, connectedNumber, messages };
     } catch (err) { return { ok: false, error: err.message }; }
+  }
+
+  // Envoi VÉRIFIÉ (parité vps-runtime) — SUCCESS uniquement sur confirmation
+  // réelle, sinon FAILED/PENDING ; trace au registre + historique sortant.
+  async function sendMessageVerified(payload) {
+    const p = payload || {};
+    const ch = String(p.channel || 'WHATSAPP').toUpperCase();
+    const to = p.to;
+    const text = p.text;
+    const action = await actionLedger.create('local', { type: 'SEND_MESSAGE', channel: ch, target: to, payload: { text } });
+    await actionLedger.markInProgress('local', action.id);
+    try {
+      if (!to) { await actionLedger.markFailed('local', action.id, 'MISSING_RECIPIENT'); return { ok: false, status: 'FAILED', actionId: action.id, error: 'MISSING_RECIPIENT' }; }
+      const s = sessionFor(ch);
+      if (!s || typeof s.sendMessage !== 'function') { await actionLedger.markFailed('local', action.id, 'RUNTIME_MISSING:' + ch); return { ok: false, status: 'FAILED', actionId: action.id, error: 'RUNTIME_MISSING:' + ch }; }
+      if (typeof s.isConnected === 'function' && !s.isConnected()) { await actionLedger.markFailed('local', action.id, 'NOT_CONNECTED'); return { ok: false, status: 'FAILED', actionId: action.id, error: 'NOT_CONNECTED', channel: ch, to }; }
+      const result = await s.sendMessage(to, text);
+      const confirmationId = extractConfirmationId(result);
+      if (confirmationId) {
+        await actionLedger.markSuccess('local', action.id, { confirmationId, channel: ch });
+        await messageHistory.record('local', { channel: ch, direction: 'out', party: to, text, ts: Math.floor(Date.now() / 1000), confirmationId });
+        return { ok: true, status: 'SUCCESS', actionId: action.id, confirmationId, channel: ch, to };
+      }
+      await actionLedger.markPending('local', action.id, 'aucun identifiant de confirmation renvoyé');
+      return { ok: false, status: 'PENDING', actionId: action.id, channel: ch, to };
+    } catch (e) {
+      await actionLedger.markFailed('local', action.id, e.message);
+      return { ok: false, status: 'FAILED', actionId: action.id, error: e.message, channel: ch, to };
+    }
   }
 
   async function listGroups(payload) {
@@ -168,7 +217,7 @@ function createLocalRuntime({ whatsapp, telegram, campaigns, llm }) {
 
   const methods = {
     extractMembers, sendCampaign, sendMessage, pauseCampaign, resumeCampaign,
-    getRecentMessages, listGroups, resolveGroups, sendToGroups,
+    getRecentMessages, sendMessageVerified, listGroups, resolveGroups, sendToGroups,
   };
 
   const registryMod = require('../action-executor.js');

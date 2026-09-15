@@ -4937,6 +4937,7 @@ const businessProfileStore = require('./ai-engine/storageAdapter');
 const emotionalCloser = require('./ai-engine/emotionalCloser');
 const manualPaymentValidator = require('./ai-engine/manualPaymentValidator');
 const contactCrm = require('./ai-engine/contactCrm');
+const conversationHistory = require('./ai-engine/messageHistory');
 const AUTO_ANSWER_STUDENT_QUERIES = process.env.AUTO_ANSWER_STUDENT_QUERIES === 'true';
 // Validation de paiement manuel (Human-in-the-Loop, voir
 // ai-engine/manualPaymentValidator.js) : une preuve de paiement entrante est
@@ -5043,6 +5044,26 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     }
   }
   if (!text) return;
+
+  // Historique PERSISTANT (>= 7 jours) — enregistre CHAQUE message entrant
+  // (tous types), pour la mémoire opérationnelle du contexte, la lecture de
+  // l'inbox et la réponse au dernier message (voir ai-engine/messageHistory.js).
+  {
+    const histFrom = extractFromId(channel, msg);
+    if (histFrom) {
+      const senderName = channel === 'WHATSAPP'
+        ? (msg && msg.pushName) || null
+        : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
+      const tsRaw = channel === 'WHATSAPP'
+        ? (typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp))
+        : Number(msg && msg.date);
+      conversationHistory.record(tenantId, {
+        channel, direction: 'in', party: histFrom, name: senderName, text,
+        ts: Number.isFinite(tsRaw) && tsRaw > 0 ? tsRaw : Math.floor(Date.now() / 1000),
+        chatId: histFrom, hasMedia: hasIncomingAttachment(channel, msg),
+      });
+    }
+  }
 
   // Preuve de paiement manuel entrante (Human-in-the-Loop) — priorité sur le
   // closing/tuteur : un client qui envoie son email + un reçu déclenche une

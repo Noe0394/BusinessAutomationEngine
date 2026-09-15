@@ -35,6 +35,7 @@ const AUTO_CLOSE_PROSPECTS = process.env.AUTO_CLOSE_PROSPECTS === 'true';
 const AUTO_ENGAGE_NEW_CONTACTS = process.env.AUTO_ENGAGE_NEW_CONTACTS === 'true';
 const AUTO_PAYMENT_VALIDATION = process.env.AUTO_PAYMENT_VALIDATION === 'true';
 const contactCrm = require('./ai-engine/contactCrm');
+const conversationHistory = require('./ai-engine/messageHistory');
 const manualPaymentValidator = require('./ai-engine/manualPaymentValidator');
 const recurringTasks = require('./queues/recurringTasks');
 
@@ -699,6 +700,17 @@ async function main() {
       }
     }
     if (!text.trim() || !from) return;
+
+    // Historique PERSISTANT (>= 7 jours) — enregistre chaque message entrant
+    // pour la mémoire opérationnelle + la réponse au dernier message.
+    const senderNameHist = channel === 'WHATSAPP'
+      ? (msg._data && msg._data.notifyName) || null
+      : (msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
+    conversationHistory.record('local', {
+      channel, direction: 'in', party: from, name: senderNameHist, text,
+      ts: channel === 'WHATSAPP' ? (msg.timestamp || Math.floor(Date.now() / 1000)) : (Number(msg.date) > 0 ? Number(msg.date) : Math.floor(Date.now() / 1000)),
+      chatId: from, hasMedia: channel === 'WHATSAPP' ? !!msg.hasMedia : !!(msg.media || msg.photo),
+    });
 
     // Preuve de paiement manuel entrante (Human-in-the-Loop) — priorité sur le
     // closing. handleClientProof n'accorde jamais d'accès (enregistre + fiche
