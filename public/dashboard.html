@@ -513,7 +513,7 @@
         <div id="goalchat-messages" class="studio-messages"></div>
         <p id="goalchat-feedback" hidden></p>
         <div class="studio-input-row">
-          <textarea id="goalchat-input" placeholder="Ex. « Je veux vendre 50 produits aujourd'hui » (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"></textarea>
+          <textarea id="goalchat-input" placeholder="Ex. « Je veux vendre 50 produits aujourd'hui » (Ctrl+Entrée pour envoyer, Entrée pour une nouvelle ligne)"></textarea>
           <button type="button" id="goalchat-send-btn" title="Envoyer" aria-label="Envoyer">➤</button>
         </div>
       </div>
@@ -1563,7 +1563,7 @@
               <label class="image-link-uploader-label" for="studio-attachment-input" title="Joindre un média (image, vidéo ou PDF)">
                 ➕<input type="file" id="studio-attachment-input" accept="image/*,video/*,application/pdf" hidden>
               </label>
-              <textarea id="studio-input" placeholder="Écrivez votre message... (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"></textarea>
+              <textarea id="studio-input" placeholder="Écrivez votre message... (Ctrl+Entrée pour envoyer, Entrée pour une nouvelle ligne)"></textarea>
               <button type="button" id="studio-send-btn" title="Envoyer" aria-label="Envoyer">➤</button>
             </div>
           </div>
@@ -2793,7 +2793,9 @@
       goalChatSend(message);
     });
     document.getElementById('goalchat-input').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // ENTER = nouvelle ligne (comportement naturel du textarea) ;
+      // Ctrl+Entrée (ou Cmd+Entrée sur Mac) = envoi. Le bouton Envoyer reste.
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         document.getElementById('goalchat-send-btn').click();
       }
@@ -7666,7 +7668,8 @@
 
     document.getElementById('studio-send-btn').addEventListener('click', studioSendMessage);
     document.getElementById('studio-input').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // ENTER = nouvelle ligne ; Ctrl+Entrée (ou Cmd+Entrée) = envoi.
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         studioSendMessage();
       }
