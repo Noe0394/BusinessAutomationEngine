@@ -1,0 +1,21 @@
+{
+  "tenantId": "KEY-E5164DF3-2026",
+  "actions": [
+    {
+      "id": "act_mu2ubz9u8uzfvi",
+      "tenantId": "KEY-E5164DF3-2026",
+      "type": "SEND_MESSAGE",
+      "channel": "WHATSAPP",
+      "target": "22506650471@s.whatsapp.net",
+      "payload": {
+        "text": "✅ Test CYRUS (envoi vérifié) — 2026-09-15T15:42:39.603Z"
+      },
+      "status": "REQUESTED",
+      "requestedAt": "2026-09-15T15:42:39.954Z",
+      "startedAt": null,
+      "finishedAt": null,
+      "confirmation": null,
+      "error": null
+    }
+  ]
+}
