@@ -1,0 +1,15 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu33uadz-a7vmp",
+  "messages": [
+    {
+      "role": "user",
+      "text": "quels sont mes objectifs ?"
+    },
+    {
+      "role": "assistant",
+      "text": "Je vois que, d'après tes paramètres, ton seul objectif défini est de vendre 10 formations chaque semaine pour le service « Formations Cuisine ». Aucun autre objectif n’est renseigné dans tes données actuelles. Si tu souhaites en ajouter d’autres, pense à les consigner dans l’onglet Services Métiers."
+    }
+  ],
+  "updatedAt": "2026-09-15T20:08:51.603Z"
+}
