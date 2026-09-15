@@ -1,0 +1,21 @@
+{
+  "tenantId": "KEY-E5164DF3-2026",
+  "contacts": {
+    "WHATSAPP:22678610498_s.whatsapp.net": {
+      "key": "WHATSAPP:22678610498_s.whatsapp.net",
+      "channel": "WHATSAPP",
+      "from": "22678610498@s.whatsapp.net",
+      "name": null,
+      "tags": [
+        "nouveau_contact",
+        "prospect"
+      ],
+      "stage": "new",
+      "purchases": [],
+      "firstSeen": "2026-09-15T10:14:47.210Z",
+      "lastSeen": "2026-09-15T10:14:47.210Z",
+      "messageCount": 1
+    }
+  },
+  "updatedAt": "2026-09-15T10:14:47.210Z"
+}
