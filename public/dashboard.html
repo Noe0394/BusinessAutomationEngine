@@ -508,24 +508,52 @@
          serveur via POST /api/intelligence/goal-chat) — zéro simulation. Le
          plan proposé ne s'exécute que sur confirmation explicite de l'utilisateur. -->
     <section class="panel" id="panel-goalchat">
-      <h2>💬 Chat Intelligent <button type="button" id="goalchat-new-btn" style="float:right;font-size:.8rem;padding:4px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit;cursor:pointer">🆕 Nouvelle conversation</button></h2>
-      <p class="empty">Exprimez votre objectif en langage naturel — le système intelligent pose les questions nécessaires, construit un plan d'actions réel et l'exécute sur votre confirmation. La conversation est mémorisée : au retour, vous continuez là où vous en étiez.</p>
-      <div id="autoreply-box" style="border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px 12px;margin:8px 0 14px;background:rgba(255,255,255,.03)">
-        <strong>🤖 Réponse automatique</strong>
-        <span style="opacity:.7;font-size:.85rem"> — quand c'est activé, CYRUS répond seul aux messages entrants (mémoire + IA + envoi vérifié), sans que tu rouvres ce chat.</span>
-        <div style="margin-top:8px;display:flex;gap:18px;flex-wrap:wrap">
-          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="autoreply-wa" style="width:auto"> WhatsApp</label>
-          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="autoreply-tg" style="width:auto"> Telegram</label>
-          <span id="autoreply-status" style="opacity:.7;font-size:.85rem"></span>
+      <style>
+        /* Interface de chat plein écran, façon messagerie (refonte demandée). */
+        #panel-goalchat.active{display:flex;flex-direction:column;height:calc(100dvh - 172px);min-height:420px;padding:0}
+        #panel-goalchat .gc-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-bottom:1px solid rgba(0,0,0,.08);background:#fff;border-radius:12px 12px 0 0}
+        #panel-goalchat .gc-title{font-weight:700;font-size:1.05rem;display:flex;align-items:center;gap:8px}
+        #panel-goalchat .gc-actions{display:flex;gap:6px}
+        #panel-goalchat .gc-iconbtn{width:38px;height:38px;border-radius:50%;border:1px solid rgba(0,0,0,.12);background:#fff;font-size:1.1rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+        #panel-goalchat .gc-iconbtn.on{background:#eae4ff;border-color:#6c4fd6}
+        #panel-goalchat .gc-autopanel{padding:12px 14px;border-bottom:1px solid rgba(0,0,0,.08);background:#faf9ff}
+        #panel-goalchat .gc-autopanel .gc-auto-title{font-weight:600;margin-bottom:2px}
+        #panel-goalchat .gc-autopanel .gc-auto-desc{font-size:.82rem;opacity:.7;margin-bottom:8px}
+        #panel-goalchat .gc-switch{display:inline-flex;align-items:center;gap:6px;margin-right:16px;font-size:.92rem}
+        #panel-goalchat .gc-switch input{width:auto}
+        #panel-goalchat .gc-auto-status{font-size:.82rem;opacity:.7}
+        #panel-goalchat #goalchat-messages{flex:1;overflow-y:auto;padding:16px 14px;display:flex;flex-direction:column;gap:10px;background:#f4f5f8}
+        #panel-goalchat .studio-msg{max-width:82%;padding:10px 14px;border-radius:16px;line-height:1.4;white-space:pre-wrap;word-break:break-word;box-shadow:0 1px 1px rgba(0,0,0,.05);font-size:.95rem}
+        #panel-goalchat .studio-msg.assistant{align-self:flex-start;background:#fff;border:1px solid rgba(0,0,0,.06);border-bottom-left-radius:5px;color:#1a1a1a}
+        #panel-goalchat .studio-msg.user{align-self:flex-end;background:#6c4fd6;color:#fff;border-bottom-right-radius:5px}
+        #panel-goalchat .studio-msg-actions{display:flex;flex-wrap:wrap;gap:8px;align-self:flex-start;max-width:100%}
+        #panel-goalchat .studio-msg-actions button{background:#fff;border:1px solid #6c4fd6;color:#6c4fd6;border-radius:20px;padding:8px 14px;font-size:.88rem;cursor:pointer}
+        #panel-goalchat .studio-msg-actions button:active{background:#eae4ff}
+        #panel-goalchat .gc-feedback{margin:0;padding:6px 14px;font-size:.85rem}
+        #panel-goalchat .gc-inputbar{display:flex;align-items:flex-end;gap:8px;padding:10px 12px;background:#fff;border-top:1px solid rgba(0,0,0,.08);border-radius:0 0 12px 12px}
+        #panel-goalchat .gc-input{flex:1;min-height:44px;max-height:140px;border:1px solid rgba(0,0,0,.15);border-radius:22px;padding:11px 16px;resize:none;font:inherit;outline:none;background:#f7f7fa}
+        #panel-goalchat .gc-send{flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:none;background:#6c4fd6;color:#fff;font-size:1.3rem;line-height:1;cursor:pointer}
+        #panel-goalchat .gc-send:active{background:#5a3fc0}
+      </style>
+      <div class="gc-head">
+        <div class="gc-title">💬 Chat Intelligent</div>
+        <div class="gc-actions">
+          <button type="button" id="goalchat-auto-btn" class="gc-iconbtn" title="Réponse automatique" aria-label="Réponse automatique">🤖</button>
+          <button type="button" id="goalchat-new-btn" class="gc-iconbtn" title="Nouvelle conversation" aria-label="Nouvelle conversation">🆕</button>
         </div>
       </div>
-      <div class="studio-chat">
-        <div id="goalchat-messages" class="studio-messages"></div>
-        <p id="goalchat-feedback" hidden></p>
-        <div class="studio-input-row">
-          <textarea id="goalchat-input" placeholder="Ex. « Je veux vendre 50 produits aujourd'hui » (Ctrl+Entrée pour envoyer, Entrée pour une nouvelle ligne)"></textarea>
-          <button type="button" id="goalchat-send-btn" title="Envoyer" aria-label="Envoyer">➤</button>
-        </div>
+      <div id="gc-autopanel" class="gc-autopanel" hidden>
+        <div class="gc-auto-title">🤖 Réponse automatique</div>
+        <div class="gc-auto-desc">Quand c'est activé, CYRUS répond seul aux messages entrants (mémoire + IA + envoi vérifié), sans que tu rouvres ce chat.</div>
+        <label class="gc-switch"><input type="checkbox" id="autoreply-wa"> WhatsApp</label>
+        <label class="gc-switch"><input type="checkbox" id="autoreply-tg"> Telegram</label>
+        <span id="autoreply-status" class="gc-auto-status"></span>
+      </div>
+      <div id="goalchat-messages"></div>
+      <p id="goalchat-feedback" class="gc-feedback" hidden></p>
+      <div class="gc-inputbar">
+        <textarea id="goalchat-input" class="gc-input" rows="1" placeholder="Écris ton message…  (Ctrl+Entrée = envoyer)"></textarea>
+        <button type="button" id="goalchat-send-btn" class="gc-send" title="Envoyer" aria-label="Envoyer">➤</button>
       </div>
     </section>
 
@@ -2906,6 +2934,24 @@
 
     async function goalChatInit() {
       autoReplyInit();
+      // Bouton « Réponse automatique » (🤖) : ouvre/ferme le panneau de réglages.
+      const autoBtn = document.getElementById('goalchat-auto-btn');
+      if (autoBtn && !autoBtn.dataset.wired) {
+        autoBtn.dataset.wired = '1';
+        autoBtn.addEventListener('click', () => {
+          const panel = document.getElementById('gc-autopanel');
+          const open = panel.hidden;
+          panel.hidden = !open;
+          autoBtn.classList.toggle('on', open);
+        });
+      }
+      // Zone de saisie qui grandit avec le texte (façon messagerie).
+      const input = document.getElementById('goalchat-input');
+      if (input && !input.dataset.grow) {
+        input.dataset.grow = '1';
+        const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; };
+        input.addEventListener('input', grow);
+      }
       if (goalChatState.welcomed) return;
       goalChatState.welcomed = true;
       const btn = document.getElementById('goalchat-new-btn');
