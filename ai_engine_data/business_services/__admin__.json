@@ -1,0 +1,53 @@
+{
+  "tenant": "__admin__",
+  "services": [
+    {
+      "id": "svc_mu2w7jzlpwun7",
+      "name": "RIEA AFRIQUE (test reel VPS)",
+      "type": "formation",
+      "project": "Formation en ligne",
+      "connection": {
+        "kind": "api",
+        "connectorType": "platform_gateway",
+        "baseUrl": "https://riea-afrique-web.web.app",
+        "authHeader": "X-API-Key",
+        "endpoints": {
+          "enroll": "/api/v1/agent-gateway/enroll-student",
+          "suspend": "/api/v1/agent-gateway/suspend-student"
+        },
+        "apiKeyRef": null
+      },
+      "scopes": [
+        "students:create",
+        "students:suspend"
+      ],
+      "commercial": {
+        "price": 15000,
+        "promoPrice": null,
+        "currency": "FCFA",
+        "description": "Formation test",
+        "advantages": "",
+        "objections": "",
+        "responses": "",
+        "paymentTerms": "",
+        "accessTerms": "",
+        "target": ""
+      },
+      "products": [],
+      "rules": [],
+      "objectives": [],
+      "capabilities": [],
+      "status": "DRAFT",
+      "lastTest": null,
+      "history": [
+        {
+          "at": "2026-09-15T16:35:12.753Z",
+          "event": "Service créé"
+        }
+      ],
+      "createdAt": "2026-09-15T16:35:12.753Z",
+      "updatedAt": "2026-09-15T16:35:12.753Z"
+    }
+  ],
+  "updatedAt": "2026-09-15T16:35:12.753Z"
+}
