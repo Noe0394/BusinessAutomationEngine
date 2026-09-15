@@ -1,0 +1,15 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu33ub39-ny0rf",
+  "messages": [
+    {
+      "role": "user",
+      "text": "Quel est le prix de ma formation Mécanique automobile ?"
+    },
+    {
+      "role": "assistant",
+      "text": "Je ne vois aucune formation intitulée « Mécanique automobile » dans les services que tu as configurés, donc je n’ai pas de prix à te communiquer pour le moment. Si tu souhaites ajouter cette formation, tu peux le faire dans l’onglet « Services Métiers », où tu pourras préciser son prix et ses détails. N’hésite pas à me dire quand c’est fait, et je pourrai alors t’en donner la valeur exacte."
+    }
+  ],
+  "updatedAt": "2026-09-15T20:08:52.446Z"
+}
