@@ -1,0 +1,21 @@
+{
+  "tenantId": "KEY-E5164DF3-2026",
+  "channel": "TELEGRAM",
+  "messages": [
+    {
+      "channel": "TELEGRAM",
+      "direction": "out",
+      "party": "me",
+      "number": "me",
+      "name": null,
+      "text": "✅ Test CYRUS (envoi vérifié) — 2026-09-15T15:42:40.381Z",
+      "hasMedia": false,
+      "chatId": "me",
+      "ts": 1789486960,
+      "tsMs": 1789486960000,
+      "confirmationId": "8047",
+      "at": "2026-09-15T15:42:40.813Z"
+    }
+  ],
+  "updatedAt": "2026-09-15T15:42:40.813Z"
+}
