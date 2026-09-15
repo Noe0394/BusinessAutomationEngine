@@ -1,0 +1,12 @@
+{
+  "tenant": "__admin__",
+  "secrets": {
+    "service_svc_mu2w7jzlpwun7": {
+      "updatedAt": "2026-09-15T16:35:13.246Z",
+      "v": 1,
+      "iv": "SHEQcXR6u3TjiWcY",
+      "tag": "oP/8YetSKGIgZl5tTm9/pg==",
+      "ct": "Rvo4K6CAFdWQa1W5ST/eE9KDpKX5NM8AOH+InwFbJXRqUbAkcrPMWq7dxgZ1eg64bg88scIqyKP01YydxuHp1iz4kA1w4KmI"
+    }
+  }
+}
