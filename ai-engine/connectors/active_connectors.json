@@ -1,0 +1,30 @@
+{
+  "_comment": "Configuration PAR DÉFAUT des connecteurs du moteur intelligent. Ne contient JAMAIS de secret : uniquement des NOMS de variables d'environnement (apiKeyEnv), lues depuis .env à l'exécution. Un tenant peut surcharger ceci via storageAdapter (namespace 'connectors'). 'enabled' active/désactive un connecteur ; 'scopes' liste les permissions accordées (un outil n'est exposé que si son scope y figure).",
+  "connectors": {
+    "platform_gateway": {
+      "enabled": true,
+      "label": "Plateforme de formation du vendeur",
+      "baseUrl": "https://riea-afrique-web.web.app",
+      "apiKeyEnv": "CYRUS_PLATFORM_API_KEY",
+      "authHeader": "X-API-Key",
+      "endpoints": {
+        "enroll": "/api/v1/agent-gateway/enroll-student",
+        "suspend": "/api/v1/agent-gateway/suspend-student"
+      },
+      "scopes": ["students:create", "courses:enroll", "students:suspend"]
+    },
+    "accounting": {
+      "enabled": true,
+      "label": "Journal des ventes local",
+      "scopes": ["accounting:write"]
+    },
+    "systemio": {
+      "enabled": false,
+      "label": "System.io",
+      "baseUrl": "https://api.systeme.io/api",
+      "apiKeyEnv": "SYSTEME_IO_API_KEY",
+      "firstNameSlug": "first_name",
+      "scopes": ["contacts:write", "tags:write"]
+    }
+  }
+}

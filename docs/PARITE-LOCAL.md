@@ -1,3 +1,96 @@
+## 🔌 Chantier "Connecteurs de plateforme + validation de paiement manuel" (session du 2026-09-15, EN COURS — reprendre ICI)
+
+**Objectif utilisateur** : rendre le moteur intelligent de CYRUS capable d'agir
+sur les **plateformes externes du vendeur** pour lui, avec autonomie totale,
+**piloté par les permissions**. Précision explicite de l'utilisateur : CYRUS
+n'est PAS limité à sa plateforme de formation (RIEA) — ce n'est qu'un exemple ;
+les fonctions de l'agent doivent **varier et s'adapter à chaque utilisateur et
+aux permissions qui lui sont accordées**.
+
+**RÈGLE ABSOLUE reconfirmée par l'utilisateur (2026-09-15)** : ne JAMAIS toucher
+quoi que ce soit de déployé pour RIEA AFRIQUE côté Firestore (données, règles,
+fonctions). CYRUS agit sur RIEA UNIQUEMENT via l'API HTTP `agentGateway` que
+l'utilisateur a lui-même déployée sur son projet (endpoints
+`/api/v1/agent-gateway/{enroll,suspend}-student`, auth en-tête `X-API-Key`,
+clés hachées côté RIEA dans la collection `rieaApiKeys`, scopes
+`students:create`/`courses:enroll`/`students:suspend`). Voir aussi la mémoire
+globale épinglée `riea-afrique-read-only-api-only`. Le code source RIEA a été
+lu en local (`C:\Users\HP\Downloads\RIEA AFRIQUE\riea-afrique-site\functions\
+agentGateway.js` + `apiKeyAuth.js`) UNIQUEMENT pour connaître le contrat d'API —
+rien n'y a été modifié ni déployé.
+
+### Fait (VPS uniquement, vérifié : `node --check` + 7 tests isolés `test/connectors.test.js` verts ; JAMAIS testé en réseau réel)
+Cadre GÉNÉRIQUE et EXTENSIBLE sous `ai-engine/connectors/` (Node-only, comme
+tout `ai-engine/`) :
+- `connectorManager.js` : cœur piloté par les permissions. Connaît les
+  définitions de connecteurs, charge la config PAR TENANT (défaut committé
+  `active_connectors.json`, surchargeable par tenant via `storageAdapter`
+  namespace `connectors`), n'expose au LLM (`getToolsForTenant`) QUE les outils
+  des connecteurs **activés** ET dont le scope est **accordé**. `executeTool`
+  re-vérifie la permission (défense en profondeur) puis injecte config + secret
+  (lu depuis `.env` par NOM de variable, jamais stocké dans la config) + HTTP +
+  store. **Garde-fou anti-suppression STRUCTUREL** : tout outil dont le nom
+  contient un verbe destructif (delete/supprim/purge/drop…) est refusé, en plus
+  de l'absence volontaire de tels outils.
+- `platformConnector.js` (le fichier nommé par le cahier des charges) :
+  connecteur GÉNÉRIQUE de passerelle `X-API-Key`. Outils `creer_compte_eleve`
+  (perm `students:create`) et `suspendre_compte_eleve` (perm `students:suspend`,
+  réversible — jamais de delete). La plateforme RIEA n'est qu'UNE config par
+  défaut (baseUrl/endpoints/apiKeyEnv dans `active_connectors.json`).
+- `systemIoConnector.js` : System.io réel (API publique confirmée :
+  `https://api.systeme.io/api`, `X-API-Key`, `POST /contacts`,
+  `GET /contacts?email=`, `GET|POST /tags`, `POST /contacts/{id}/tags`
+  `{tagId}` → 204). Outils `ajouter_contact` (find-or-create) + `attribuer_tag`
+  (find-or-create tag + assignation). Désactivé par défaut (l'utilisateur
+  l'active + fournit `SYSTEME_IO_API_KEY` quand il en a besoin).
+- `accountingConnector.js` : journal des ventes LOCAL par tenant (via
+  storageAdapter, pas de faux SaaS comptable). Outils `enregistrer_vente` +
+  `generer_facture` (numérotation `FCT-AAAA-NNNNN`).
+- `active_connectors.json` : config par défaut — NOMS de variables d'env
+  seulement, jamais de secret. platform_gateway (RIEA) + accounting activés ;
+  systemio désactivé.
+- `manualPaymentValidator.js` : workflow Human-in-the-Loop paiements manuels
+  (Mobile Money/virement/espèces). Phase 1 client (`handleClientProof` : détecte
+  email+reçu → état `PENDING_ADMIN_APPROVAL`, notifie l'admin, accuse réception
+  — NE DÉBLOQUE JAMAIS). Phase 3 admin (`resolveAdminDecision` : "VALIDER"/
+  "REFUSER" dans le Chat Intelligent → exécute `creer_compte_eleve` via le
+  connecteur, pousse l'accès au client). Étanchéité anti-injection : un client
+  qui se prétend admin ne déclenche jamais de déblocage (test dédié vert).
+
+Branchements dans l'existant (VPS) :
+- `ai-engine/chatOrchestrator.js` : nouvelle intention `connector` (fusionne
+  l'ancienne `account`) → `handleConnector` : le LLM choisit UN outil parmi
+  `getToolsForTenant(tenant)` seulement, exécuté via connectorManager ; repli
+  sur l'ancien `handleAccount` (Cloud Function `cyrus_students`) si aucun
+  connecteur externe. Plus : `resolveAdminDecision` appelé en tête de `handle()`
+  (traite "VALIDER"/"REFUSER" avant toute intention).
+- `index.js` : passe `deliverToClient` (pousse l'accès au client après validation
+  admin) + `executeOptions:{env:process.env}` à `chatOrchestrator.handle` ;
+  `handleIncomingCustomerMessage` détecte une preuve de paiement entrante
+  (`looksLikePaymentProof`) → `handleClientProof` (accusé client seulement si
+  `AUTO_PAYMENT_VALIDATION=true`, sinon fiche admin seule — même prudence que
+  AUTO_CLOSE/AUTO_ANSWER). Nouveau helper `hasIncomingAttachment`.
+- `.env` (local, gitignored) : `CYRUS_PLATFORM_API_KEY` renseignée avec la clé
+  `sk_live_…` fournie par l'utilisateur. `.env.example` documente
+  `CYRUS_PLATFORM_API_KEY`, `SYSTEME_IO_API_KEY`, `AUTO_PAYMENT_VALIDATION`.
+
+### Reste à faire
+1. **Test réseau réel** (action utilisateur) : envoyer "VALIDER" dans le Chat
+   Intelligent avec un vrai paiement en attente → vérifier que l'appel réel à
+   `enroll-student` sur RIEA crée bien l'accès (jusqu'ici : mocks uniquement).
+   ⚠️ La clé `sk_live_…` a transité en clair dans le tchat — envisager de la
+   régénérer côté back-office RIEA une fois les tests concluants.
+2. **Réplication local-client/ et mobile** : le cadre `ai-engine/connectors/`
+   est VPS-only pour l'instant (comme le reste de `ai-engine/`). local-client a
+   déjà son `ai-engine/` porté (voir section ci-dessous) — y ajouter les
+   connecteurs. Mobile (`mobile/webapp/`) : pas de backend Node ; un connecteur
+   `X-API-Key` y exposerait la clé côté client → à ne faire que via une Cloud
+   Function proxy dédiée si demandé (jamais la clé en clair dans la webapp).
+3. **Autres connecteurs** à la demande (le cadre est prêt : ajouter un module
+   `xxxConnector.js` + une entrée dans `active_connectors.json`).
+
+---
+
 ## 🖥️ Portage `local-client/` du Chat-Driven Agent Orchestrator (session du 2026-09-14, suite)
 
 **Découverte critique en cours de route (signalée par l'utilisateur en test

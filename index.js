@@ -4338,6 +4338,22 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
       runtime: intelligenceBridge.runtime,
       engineFor: intelligenceBridge.engineFor,
       humanContext: humanContextEngine,
+      // Validation de paiement manuel : après un "VALIDER" de l'admin,
+      // pousse le message d'accès au client sur SON canal (WhatsApp/Telegram
+      // du tenant courant) — conséquence directe de la commande admin.
+      deliverToClient: async ({ channel, from, text: clientText }) => {
+        if (!from) return;
+        if (channel === 'TELEGRAM') {
+          const { session } = telegramManager.getOrCreate(tenantId);
+          if (session && typeof session.sendMessage === 'function') await session.sendMessage(from, clientText);
+        } else {
+          const { session } = whatsappManager.getOrCreate(tenantId);
+          if (session && typeof session.sendMessage === 'function') await session.sendMessage(from, clientText);
+        }
+      },
+      // Secrets (clés de plateforme) lus depuis l'environnement du serveur,
+      // jamais depuis la config committée ni la conversation.
+      executeOptions: { env: process.env },
     }).catch((err) => {
       console.warn('Chat-Driven Agent Orchestrator — échec, repli sur le pipeline existant :', err.message);
       return null;
@@ -4858,7 +4874,17 @@ app.use('/', requireAccess, intelligenceBridge.router);
 const messageTriage = require('./lib/intelligence/message-triage');
 const businessProfileStore = require('./ai-engine/storageAdapter');
 const emotionalCloser = require('./ai-engine/emotionalCloser');
+const manualPaymentValidator = require('./ai-engine/manualPaymentValidator');
 const AUTO_ANSWER_STUDENT_QUERIES = process.env.AUTO_ANSWER_STUDENT_QUERIES === 'true';
+// Validation de paiement manuel (Human-in-the-Loop, voir
+// ai-engine/manualPaymentValidator.js) : une preuve de paiement entrante est
+// TOUJOURS enregistrée et signalée à l'admin dans le Chat Intelligent (interne,
+// sans risque). L'ACCUSÉ DE RÉCEPTION automatique AU CLIENT n'est envoyé que si
+// ce drapeau vaut "true" (même prudence que AUTO_ANSWER/AUTO_CLOSE : jamais de
+// message auto à un vrai client sans activation explicite). Le message d'accès
+// envoyé APRÈS la validation admin, lui, part toujours : c'est la conséquence
+// directe d'une commande explicite de l'administrateur.
+const AUTO_PAYMENT_VALIDATION = process.env.AUTO_PAYMENT_VALIDATION === 'true';
 // Moteur de Closing Humanisé (voir ai-engine/emotionalCloser.js) — quand
 // activé, prend le pas sur AUTO_ANSWER_STUDENT_QUERIES pour les messages
 // classés 'business' (Q&A factuelle + closing/objections, plus complet).
@@ -4885,6 +4911,17 @@ function extractIncomingText(channel, msg) {
 function isVoiceNote(channel, msg) {
   if (channel === 'WHATSAPP') return !!(msg && msg.message && msg.message.audioMessage && msg.message.audioMessage.ptt);
   return !!(msg && msg.voice);
+}
+
+// Détecte une pièce jointe (image/document) sur un message entrant — utilisé
+// par la validation de paiement manuel (un reçu est souvent une capture
+// d'écran). Best-effort, jamais bloquant si le format diffère.
+function hasIncomingAttachment(channel, msg) {
+  if (channel === 'WHATSAPP') {
+    const m = msg && msg.message;
+    return !!(m && (m.imageMessage || m.documentMessage || m.documentWithCaptionMessage));
+  }
+  return !!(msg && (msg.media || msg.photo || msg.document));
 }
 
 // Identifiant stable de l'expéditeur, pour la session par-client de
@@ -4937,6 +4974,29 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     }
   }
   if (!text) return;
+
+  // Preuve de paiement manuel entrante (Human-in-the-Loop) — priorité sur le
+  // closing/tuteur : un client qui envoie son email + un reçu déclenche une
+  // demande de validation. handleClientProof NE DÉBLOQUE JAMAIS d'accès (il
+  // enregistre + prévient l'admin dans le Chat Intelligent) ; l'accusé de
+  // réception au client n'est renvoyé automatiquement que si
+  // AUTO_PAYMENT_VALIDATION=true (sinon le vendeur voit la fiche et répond).
+  {
+    const proofFrom = extractFromId(channel, msg);
+    if (proofFrom && manualPaymentValidator.looksLikePaymentProof(text, hasIncomingAttachment(channel, msg))) {
+      const ack = await manualPaymentValidator.handleClientProof({
+        tenantId, channel, from: proofFrom, text, hasAttachment: hasIncomingAttachment(channel, msg),
+      }).catch((err) => {
+        console.error(`manualPaymentValidator — échec du traitement d'une preuve (tenant "${tenantId}", ${channel}) :`, err.message);
+        return null;
+      });
+      if (ack && AUTO_PAYMENT_VALIDATION) {
+        await sendCustomerReply(channel, session, msg, ack, { asVoice: wasVoice })
+          .catch((err) => console.error(`manualPaymentValidator — échec d'envoi de l'accusé de réception (tenant "${tenantId}") :`, err.message));
+      }
+      return; // une preuve de paiement ne passe pas par le closing/tuteur.
+    }
+  }
 
   const classification = messageTriage.classify(text);
 

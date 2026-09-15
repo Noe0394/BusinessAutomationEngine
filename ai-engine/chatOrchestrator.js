@@ -4,6 +4,8 @@ const goalChat = require('../lib/intelligence/goal-chat');
 const offerClarifier = require('./offerClarifier');
 const personaManager = require('./personaManager');
 const platformOrchestrator = require('./platformOrchestrator');
+const connectorManager = require('./connectors/connectorManager');
+const manualPaymentValidator = require('./manualPaymentValidator');
 
 // CHAT-DRIVEN AGENT ORCHESTRATOR — ai-engine/chatOrchestrator.js
 // ---------------------------------------------------------------------------
@@ -59,7 +61,16 @@ function extractJsonBlock(rawText) {
 // bloquées à tort (ex: /\bvend\b/ ne matche jamais "vendre").
 const REPORT_RE = /(o[uù]\s+en\s+(?:est|sont)|bilan\s+du\s+jour|statut\s+de|rapport\s+de|comment\s+(?:vont|se\s+portent)|combien\s+de\s+ventes|r[ée]sultats?\s+du\s+jour)/i;
 const PAYMENT_RE = /(lien\s+de\s+paiement|\bpayer\b|\bpaiement\b|encaiss|mobile\s?money|orange\s?money|mtn\s?money|moov\s?money|\bwave\b|\bremise\b|r[ée]duction|\brabais\b|n[ée]goci)/i;
-const ACCOUNT_RE = /(compte\s+(?:[ée]l[eè]ve|[ée]tudiant|client)|cl[ée]\s+d.?acc[èe]s|acc[èe]s\s+(?:[ée]l[eè]ve|module|au\s+module)|g[ée]n[èe]re?\s+un\s+acc[èe]s|d[ée]bloque)/i;
+const ACCOUNT_RE = /(compte\s+(?:[ée]l[eè]ve|[ée]tudiant|client)|cl[ée]\s+d.?acc[èe]s|acc[èe]s\s+(?:[ée]l[eè]ve|module|au\s+module)|g[ée]n[èe]re?\s+un\s+acc[èe]s|d[ée]bloque|inscri(?:s|re|t)|enr[ôo]le|suspend|d[ée]sactive)/i;
+// Actions "plateforme externe" (connecteurs pilotés par les permissions du
+// vendeur, voir ai-engine/connectors/) : ajout de contact/tag CRM, inscription
+// sur une plateforme tierce, comptabilité... CYRUS n'est PAS limité à une
+// plateforme précise — les mots-clés ci-dessous sont volontairement TRONQUÉS
+// (contact/tag/inscri/factur/vente) pour capter leurs formes dérivées, comme
+// task-parser.js. Le handler ne propose au LLM que les outils réellement
+// autorisés pour ce tenant (getToolsForTenant) — s'il n'y en a aucun, il
+// retombe sur le flux compte interne classique.
+const CONNECTOR_RE = /(contact|\btag(?:ue|uer|s)?\b|system\.?io|systeme\.?io|crm|factur|enregistre?\s+(?:la|une|cette)\s+vente|journal\s+des\s+ventes)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
 
 // Détection d'intention (Command Parsing, §1.1 du cahier des charges) —
@@ -69,14 +80,17 @@ const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcon
 // intention en cours sur toute reclassification par mots-clés du nouveau
 // message, exactement comme pour image/vidéo/livre.
 function detectIntent(text, lastAssistantMessage) {
-  const continuation = ['offer', 'payment', 'account', 'goal'];
+  const continuation = ['offer', 'payment', 'account', 'connector', 'goal'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
     return lastAssistantMessage.intent;
   }
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
   if (REPORT_RE.test(text)) return 'report';
   if (PAYMENT_RE.test(text)) return 'payment';
-  if (ACCOUNT_RE.test(text)) return 'account';
+  // 'account' et 'connector' partagent le même handler (handleConnector) :
+  // action d'administration sur une plateforme (interne cyrus_students en
+  // repli, ou plateforme externe du vendeur via connecteur autorisé).
+  if (ACCOUNT_RE.test(text) || CONNECTOR_RE.test(text)) return 'connector';
   if (GOAL_RE.test(text)) return 'goal';
   return null;
 }
@@ -359,22 +373,125 @@ async function handleAccount(text, history, tenantId, deps) {
 }
 
 // ---------------------------------------------------------------------------
+// 'connector' — action d'administration sur une plateforme. CYRUS n'est PAS
+// limité à une plateforme : `connectorManager.getToolsForTenant` ne renvoie
+// que les outils des connecteurs ACTIVÉS par CE vendeur et dont la PERMISSION
+// est accordée (voir ai-engine/connectors/). Le LLM choisit l'outil pertinent
+// et extrait ses arguments parmi CETTE liste seulement ; s'il n'y a aucun
+// connecteur externe (ou aucun outil applicable), on retombe sur le flux de
+// compte interne classique (handleAccount, Cloud Function cyrus_students).
+// ---------------------------------------------------------------------------
+function describeToolsForPrompt(tools) {
+  return tools.map((t) => {
+    const params = Object.keys(t.parameters || {}).map((k) => {
+      const p = t.parameters[k];
+      return `${k}${p && p.required ? ' (requis)' : ''}: ${(p && p.description) || ''}`;
+    }).join(' ; ');
+    return `- ${t.name} [${t.connectorLabel}] : ${t.description}\n  Paramètres : ${params || '(aucun)'}`;
+  }).join('\n');
+}
+
+function formatConnectorResult(toolName, result) {
+  const r = result || {};
+  if (toolName === 'creer_compte_eleve') {
+    const link = r.passwordResetLink ? `\n🔗 Lien de définition du mot de passe : ${r.passwordResetLink}` : '';
+    return {
+      text: `🎓 Accès créé sur la plateforme pour ${r.email} (formation « ${r.courseId} »).${link}`,
+      actionLog: [{ icon: '🎓', label: `Compte plateforme — ${r.email}`, status: 'done' }],
+    };
+  }
+  if (toolName === 'suspendre_compte_eleve') {
+    return { text: `⛔ Accès suspendu pour ${r.email} (réversible).`, actionLog: [{ icon: '⛔', label: `Accès suspendu — ${r.email}`, status: 'done' }] };
+  }
+  if (toolName === 'ajouter_contact') {
+    return { text: `📇 Contact ${r.created ? 'créé' : 'retrouvé'} sur ${r.provider || 'la plateforme'} : ${r.email}.`, actionLog: [{ icon: '📇', label: `Contact — ${r.email}`, status: 'done' }] };
+  }
+  if (toolName === 'attribuer_tag') {
+    return { text: `🏷️ Tag « ${r.tag} » attribué au contact.`, actionLog: [{ icon: '🏷️', label: `Tag « ${r.tag} » attribué`, status: 'done' }] };
+  }
+  if (toolName === 'enregistrer_vente') {
+    const e = r.entry || {};
+    return { text: `📒 Vente enregistrée : ${e.amount} ${e.currency}${e.product ? ` — ${e.product}` : ''}.`, actionLog: [{ icon: '📒', label: 'Vente enregistrée', status: 'done' }] };
+  }
+  if (toolName === 'generer_facture') {
+    const inv = r.invoice || {};
+    return { text: `🧾 Facture ${inv.number} générée : ${inv.amount} ${inv.currency}${inv.customer ? ` — ${inv.customer}` : ''}.`, actionLog: [{ icon: '🧾', label: `Facture ${inv.number}`, status: 'done' }] };
+  }
+  return { text: '✅ Action effectuée sur la plateforme.', actionLog: [{ icon: '✅', label: `Action « ${toolName} » effectuée`, status: 'done' }] };
+}
+
+async function handleConnector(text, history, tenantId, deps) {
+  const tools = await connectorManager.getToolsForTenant(tenantId).catch(() => []);
+  // Aucun connecteur externe autorisé -> flux compte interne classique.
+  if (!tools.length) return handleAccount(text, history, tenantId, deps);
+
+  const { domain } = await buildPersonaFacts(tenantId);
+  const prompt = [
+    personaManager.personaSystemPrompt(domain || 'default'),
+    'Tu disposes des OUTILS d\'administration suivants (et AUCUN autre — n\'invente jamais un outil ni un accès) :',
+    describeToolsForPrompt(tools),
+    `Message de l'administrateur : "${text}"`,
+    'Choisis AU PLUS un outil réellement pertinent et extrais ses arguments depuis le message et l\'historique. N\'exécute jamais d\'action de suppression.',
+    'Si un argument requis manque, réponds UNIQUEMENT par 1 à 2 questions courtes (texte simple, jamais de JSON).',
+    'Si aucun outil ne correspond, réponds UNIQUEMENT {"tool":null}.',
+    'Sinon réponds UNIQUEMENT avec cet objet JSON (aucun texte avant/après) : {"tool":"nom_exact_de_l_outil","args":{ ... }}',
+  ].join('\n');
+
+  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history);
+  const trimmed = String(raw || '').trim();
+  const parsed = extractJsonBlock(trimmed);
+
+  // Pas de JSON exploitable : le LLM a (probablement) posé une question de
+  // clarification — on la renvoie telle quelle en gardant l'intention active.
+  if (!parsed || !('tool' in parsed)) {
+    return { text: trimmed, isPlanningQuestion: true, intent: 'connector' };
+  }
+  // Aucun outil applicable -> repli sur le flux compte interne classique.
+  if (!parsed.tool) return handleAccount(text, history, tenantId, deps);
+
+  const available = tools.some((t) => t.name === parsed.tool);
+  if (!available) return handleAccount(text, history, tenantId, deps);
+
+  const out = await connectorManager.executeTool(tenantId, parsed.tool, parsed.args || {}, deps.executeOptions || {});
+  if (!out.ok) {
+    return { text: `Impossible d'exécuter « ${parsed.tool} » (${out.error}).${out.detail ? ' ' + out.detail : ''}` };
+  }
+  return formatConnectorResult(parsed.tool, out.result);
+}
+
+// ---------------------------------------------------------------------------
 // Point d'entrée unique — appelé par index.js AVANT le pipeline chat/média
 // existant (image/vidéo/livre, réponse générique). `deps` = { runtime,
 // engineFor, humanContext } injectés depuis la même instance que
 // lib/intelligence/vps-bridge.js (voir index.js, zéro moteur dupliqué).
 // ---------------------------------------------------------------------------
 async function handle({ text, history, tenantId, sessionId, lastAssistantMessage }, deps) {
+  const d = deps || {};
+
+  // Décision de validation de paiement manuel (Human-in-the-Loop) — un
+  // "VALIDER"/"REFUSER" tapé par l'admin dans SON tchat ne correspond à aucune
+  // intention ci-dessous ; il est traité en priorité. resolveAdminDecision
+  // renvoie null (2 tests regex) si ce n'est pas une décision, sans jamais lire
+  // le disque — aucun surcoût sur un message normal.
+  const decision = await manualPaymentValidator.resolveAdminDecision(tenantId, text, {
+    deliverToClient: d.deliverToClient || null,
+    executeOptions: d.executeOptions || {},
+  }).catch((err) => {
+    console.warn('chatOrchestrator — échec resolveAdminDecision, repli :', err.message);
+    return null;
+  });
+  if (decision) return { text: decision.text, actionLog: decision.actionLog || null };
+
   const intent = detectIntent(text, lastAssistantMessage);
   if (!intent) return null; // laisse l'appelant retomber sur image/vidéo/livre/chat générique.
 
   const sessionKey = `${tenantId || 'default'}:${sessionId || 'default'}`;
   switch (intent) {
     case 'offer': return handleOffer(text, history, tenantId);
-    case 'goal': return handleGoal(text, sessionKey, tenantId, deps || {});
-    case 'report': return handleReport(text, tenantId, deps || {});
-    case 'payment': return handlePayment(text, history, tenantId, deps || {});
-    case 'account': return handleAccount(text, history, tenantId, deps || {});
+    case 'goal': return handleGoal(text, sessionKey, tenantId, d);
+    case 'report': return handleReport(text, tenantId, d);
+    case 'payment': return handlePayment(text, history, tenantId, d);
+    case 'connector': return handleConnector(text, history, tenantId, d);
     default: return null;
   }
 }

@@ -23,10 +23,12 @@ des exécutions en double des mêmes scripts) :
 - Pour forcer l'extraction et la sauvegarde immédiate d'une leçon depuis la
   session en cours (sans attendre la fin de session), invoquer `/learn`.
 
-**Chantier en cours (2026-09-14, reprendre ICI)** : "Chat-Driven Agent
-Orchestrator" — rendre l'agent CYRUS **100% autonome** (objectif explicite
-de l'utilisateur : "aiguiser le système intelligent à agir de façon 100%
-autonome"). Suivi vivant complet, chantier par chantier, dans
+**Chantier en cours (2026-09-15, reprendre ICI)** : rendre l'agent CYRUS
+**100% autonome** (objectif explicite de l'utilisateur : "aiguiser le système
+intelligent à agir de façon 100% autonome"). Dernière avancée =
+**connecteurs de plateforme externes pilotés par les permissions** (point 4
+ci-dessous, section en tête de `docs/PARITE-LOCAL.md`). Suivi vivant complet,
+chantier par chantier, dans
 **`docs/PARITE-LOCAL.md`** (fichier au nom historique, contient en réalité
 TOUT le suivi de cette phase — à lire intégralement avant de reprendre,
 plusieurs sections empilées dans l'ordre chronologique). Résumé pour
@@ -54,39 +56,39 @@ reprendre sans tout relire :
    même type de correctif qu'il faut appliquer** (le LLM a besoin qu'on lui
    affirme explicitement son accès réel, sinon il retombe sur son
    comportement par défaut d'IA généraliste prudente).
-2. **PC (`local-client/`) : port COMPLET mais ⚠️ PAS ENCORE COMMITTÉ NI
-   POUSSÉ SUR GIT** — tout le code existe sur disque (`local-client/ai-engine/`,
+2. **PC (`local-client/`) : port COMPLET, désormais COMMITTÉ ET POUSSÉ**
+   (commit `52f3231`, 2026-09-15) — tout le code existe (`local-client/ai-engine/`,
    `local-client/lib/ai/llmFallbackEngine.js`, `local-client/lib/intelligence/
    runtimes/local-runtime.js`, hooks `onIncomingMessage` ajoutés à
    `lib/whatsapp.js`/`lib/telegram.js`, route `/api/intelligence/goal-chat`
    modifiée dans `index.js`), vérifié par `node --check` + tests de logique
    en isolation, **jamais testé avec de vraies clés API ni un vrai compte
-   WhatsApp/Telegram local, jamais buildé en `.exe`**. Vérifier `git status`
-   dans `local-client/` avant toute chose en reprenant.
+   WhatsApp/Telegram local, jamais buildé en `.exe`**.
 3. **Mobile (`mobile/webapp/`) : PAS commencé.**
-4. **Nouveau chantier ouvert, pas encore débuté** : rendre l'agent capable
-   d'opérer des **plateformes BACK-OFFICE EXTERNES** (au-delà de CYRUS
-   lui-même) pour le compte du vendeur — ex. donné par l'utilisateur :
-   créer un compte/générer une clé/envoyer un lien d'accès sur SA PROPRE
-   plateforme externe (pas celle intégrée à CYRUS), avec "autorisation
-   consciente" du vendeur. Nature technique différente de tout ce qui
-   précède (API/tool-calling propre) : soit intégration OAuth/API pour les
-   plateformes qui en ont une (le projet a déjà des patterns OAuth
-   Facebook/YouTube à réutiliser comme modèle), soit automatisation de
-   navigateur (RPA) pour celles qui n'en ont pas — jugé trop risqué/vague
-   pour être construit "en général" sans une vraie cible. **Plateforme cible
-   concrète fournie par l'utilisateur pour prototyper** :
-   `https://riea-afrique-web.web.app/` (RIEA AFRIQUE — sa PROPRE application
-   séparée, marketplace/formation/communauté/certification, sur le MÊME
-   projet Firebase partagé `rien-afrique` que le failover CYRUS — voir
-   `preserve-existing-infrastructure` en mémoire globale, prudence maximale
-   déjà justifiée par un incident réel sur ce projet). Une reconnaissance en
-   lecture seule du site public a été tentée puis interrompue par une
-   limite de session Claude (pas un blocage technique réel, à refaire).
-   **Il restait à demander à l'utilisateur COMMENT partager l'accès au
-   back-office admin** (capture/démo plutôt que ses identifiants
-   principaux) — question posée, réponse pas encore reçue au moment de
-   cette note.
+4. **Chantier "plateformes BACK-OFFICE EXTERNES" : CADRE CONSTRUIT côté VPS
+   (2026-09-15), pas encore testé en réseau réel.** Rendre l'agent capable
+   d'opérer les plateformes du vendeur pour lui, **piloté par les permissions**
+   et NON limité à une plateforme précise (précision explicite de
+   l'utilisateur : la formation n'est qu'un exemple). Réalisé : cadre générique
+   de connecteurs `ai-engine/connectors/` (connectorManager piloté par les
+   scopes, platformConnector `X-API-Key`, systemIoConnector, accountingConnector,
+   `active_connectors.json`) + validation de paiement Human-in-the-Loop
+   (`ai-engine/manualPaymentValidator.js`) + branchements chatOrchestrator/
+   index.js. **Détail complet et reste-à-faire : voir `docs/PARITE-LOCAL.md`,
+   section tout en haut "Connecteurs de plateforme…".**
+   - **Cible concrète = RIEA AFRIQUE** (`https://riea-afrique-web.web.app/`, sa
+     PROPRE app, MÊME projet Firebase partagé `rien-afrique`). **RÉSOLU : la
+     manière de donner l'accès = une clé API `X-API-Key`.** L'utilisateur a
+     lui-même déployé sur RIEA une Cloud Function `agentGateway` (endpoints
+     `/api/v1/agent-gateway/{enroll,suspend}-student`, clés hachées dans
+     `rieaApiKeys`, back-office admin RIEA `/admin` pour générer/révoquer). Il a
+     fourni une clé `sk_live_…` (dans `.env` local sous `CYRUS_PLATFORM_API_KEY`).
+   - ⚠️ **RÈGLE ABSOLUE reconfirmée (2026-09-15) + mémoire globale épinglée
+     `riea-afrique-read-only-api-only`** : ne JAMAIS toucher quoi que ce soit de
+     déployé pour RIEA (Firestore/règles/fonctions). CYRUS agit sur RIEA
+     EXCLUSIVEMENT via cette API HTTP. Le code source RIEA est lisible en local
+     (`C:\Users\HP\Downloads\RIEA AFRIQUE\riea-afrique-site\`) POUR CONNAÎTRE LE
+     CONTRAT UNIQUEMENT — ne rien y modifier ni redéployer.
 5. **Ancien chantier "parité Mode VPS ↔ Local" (pièce jointe, ebook,
    Studio Média...)** : toujours dans le même état qu'avant (code écrit,
    jamais compilé/testé, RAM de la machine à revérifier) — voir la section
