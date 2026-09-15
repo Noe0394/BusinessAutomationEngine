@@ -1,0 +1,21 @@
+{
+  "tenantId": "__admin__",
+  "actions": [
+    {
+      "id": "act_mu2tauogf8swy1",
+      "tenantId": "__admin__",
+      "type": "SEND_MESSAGE",
+      "channel": "WHATSAPP",
+      "target": "22600000000@c.us",
+      "payload": {
+        "text": "Je vais bien."
+      },
+      "status": "IN_PROGRESS",
+      "requestedAt": "2026-09-15T15:13:47.728Z",
+      "startedAt": "2026-09-15T15:13:47.729Z",
+      "finishedAt": null,
+      "confirmation": null,
+      "error": null
+    }
+  ]
+}
