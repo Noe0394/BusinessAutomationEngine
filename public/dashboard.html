@@ -510,6 +510,15 @@
     <section class="panel" id="panel-goalchat">
       <h2>💬 Chat Intelligent <button type="button" id="goalchat-new-btn" style="float:right;font-size:.8rem;padding:4px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit;cursor:pointer">🆕 Nouvelle conversation</button></h2>
       <p class="empty">Exprimez votre objectif en langage naturel — le système intelligent pose les questions nécessaires, construit un plan d'actions réel et l'exécute sur votre confirmation. La conversation est mémorisée : au retour, vous continuez là où vous en étiez.</p>
+      <div id="autoreply-box" style="border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px 12px;margin:8px 0 14px;background:rgba(255,255,255,.03)">
+        <strong>🤖 Réponse automatique</strong>
+        <span style="opacity:.7;font-size:.85rem"> — quand c'est activé, CYRUS répond seul aux messages entrants (mémoire + IA + envoi vérifié), sans que tu rouvres ce chat.</span>
+        <div style="margin-top:8px;display:flex;gap:18px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="autoreply-wa" style="width:auto"> WhatsApp</label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="autoreply-tg" style="width:auto"> Telegram</label>
+          <span id="autoreply-status" style="opacity:.7;font-size:.85rem"></span>
+        </div>
+      </div>
       <div class="studio-chat">
         <div id="goalchat-messages" class="studio-messages"></div>
         <p id="goalchat-feedback" hidden></p>
@@ -2866,7 +2875,31 @@
       goalChatShowWelcome();
     }
 
+    async function autoReplyInit() {
+      const wa = document.getElementById('autoreply-wa');
+      const tg = document.getElementById('autoreply-tg');
+      const status = document.getElementById('autoreply-status');
+      if (!wa || wa.dataset.wired) return;
+      wa.dataset.wired = '1';
+      async function save() {
+        try {
+          const res = await apiFetch('/api/auto-responder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ whatsapp: wa.checked, telegram: tg.checked }) });
+          const d = await res.json();
+          if (d && d.ok) status.textContent = 'Enregistré ✓';
+          setTimeout(() => { status.textContent = ''; }, 2000);
+        } catch (e) { if (e.message !== 'unauthorized') status.textContent = 'Erreur'; }
+      }
+      wa.addEventListener('change', save);
+      tg.addEventListener('change', save);
+      try {
+        const res = await apiFetch('/api/auto-responder');
+        const d = await res.json();
+        if (d && d.settings) { wa.checked = !!d.settings.whatsapp; tg.checked = !!d.settings.telegram; }
+      } catch (e) { /* silencieux */ }
+    }
+
     async function goalChatInit() {
+      autoReplyInit();
       if (goalChatState.welcomed) return;
       goalChatState.welcomed = true;
       const btn = document.getElementById('goalchat-new-btn');

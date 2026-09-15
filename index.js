@@ -5042,6 +5042,39 @@ app.get('/api/contacts/summary', requireAccess, async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// AUTONOMIE CONVERSATIONNELLE — réglage d'auto-réponse par compte + canal
+// (opt-in). Quand activé, CYRUS répond seul aux messages entrants (voir
+// ai-engine/autoResponder.js + le handler handleIncomingCustomerMessage).
+app.get('/api/auto-responder', requireAccess, async (req, res) => {
+  try { res.json({ ok: true, settings: await autoResponder.getSettings(resolveTenantId(req)) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/auto-responder', requireAccess, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const patch = {};
+    if (typeof b.whatsapp === 'boolean') patch.whatsapp = b.whatsapp;
+    if (typeof b.telegram === 'boolean') patch.telegram = b.telegram;
+    res.json({ ok: true, settings: await autoResponder.setSettings(resolveTenantId(req), patch) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+// DIAG (admin) : injecte un message entrant SYNTHÉTIQUE dans la VRAIE chaîne
+// d'auto-réponse (compose avec l'IA réelle + envoi VÉRIFIÉ réel + sauvegarde)
+// pour un tenant/canal/contact donnés — sert à vérifier l'autonomie de bout en
+// bout sur un compte réel. Seul le déclencheur est synthétique ; la réponse est
+// réelle et vérifiée. Force l'activation le temps du test (override settings).
+app.post('/api/admin/diag/auto-reply-test', requireAccess, async (req, res) => {
+  if (!req.isAdmin) return res.status(403).json({ error: 'Réservé à l\'administrateur.' });
+  const b = req.body || {};
+  if (!b.tenantId || !b.from || !b.text) return res.status(400).json({ error: 'tenantId, from et text requis.' });
+  const channel = /telegram/i.test(b.channel || '') ? 'TELEGRAM' : 'WHATSAPP';
+  const out = await autoResponder.handleIncoming(
+    { tenantId: b.tenantId, channel, from: String(b.from), name: b.name || null, text: String(b.text), messageId: 'diag-' + Date.now() },
+    { runtime: intelligenceBridge && intelligenceBridge.runtime, settings: { whatsapp: true, telegram: true } },
+  ).catch((err) => ({ skipped: 'ERROR', error: err.message }));
+  res.json({ ok: !!(out && out.sent), result: out });
+});
+
 // CENTRE D'AIDE / DOCUMENTATION — base de connaissances embarquée
 // (ai-engine/knowledgeBase.js), servie à l'onglet « Centre d'aide » du
 // dashboard. Le Chat Intelligent y accède aussi via l'outil getDocumentation.
@@ -5074,6 +5107,7 @@ const manualPaymentValidator = require('./ai-engine/manualPaymentValidator');
 const contactCrm = require('./ai-engine/contactCrm');
 const conversationHistory = require('./ai-engine/messageHistory');
 const businessServices = require('./ai-engine/businessServices');
+const autoResponder = require('./ai-engine/autoResponder');
 const AUTO_ANSWER_STUDENT_QUERIES = process.env.AUTO_ANSWER_STUDENT_QUERIES === 'true';
 // Validation de paiement manuel (Human-in-the-Loop, voir
 // ai-engine/manualPaymentValidator.js) : une preuve de paiement entrante est
@@ -5137,6 +5171,13 @@ function hasIncomingAttachment(channel, msg) {
 function extractFromId(channel, msg) {
   if (channel === 'WHATSAPP') return msg && msg.key && msg.key.remoteJid;
   return msg && (msg.chatId ? String(msg.chatId) : (msg.senderId ? String(msg.senderId) : null));
+}
+
+// Identifiant unique du message entrant (idempotence de l'auto-réponse) :
+// Baileys expose msg.key.id ; GramJS expose msg.id.
+function extractMessageId(channel, msg) {
+  if (channel === 'WHATSAPP') return msg && msg.key && msg.key.id ? String(msg.key.id) : null;
+  return msg && msg.id != null ? String(msg.id) : null;
 }
 
 // Répond dans la MÊME modalité que le client (§1.2 du cahier des charges :
@@ -5222,6 +5263,30 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       }
       return; // une preuve de paiement ne passe pas par le closing/tuteur.
     }
+  }
+
+  // AUTONOMIE CONVERSATIONNELLE (priorité absolue) : si l'auto-réponse est
+  // activée pour ce compte+canal, CYRUS tient la conversation tout seul —
+  // mémoire du contact -> IA ancrée sur les Services Métiers réels -> envoi
+  // VÉRIFIÉ -> sauvegarde -> attente du prochain message. Idempotent par
+  // messageId. C'est le handler prioritaire quand il est activé (opt-in) ;
+  // sinon on retombe sur les flux d'accueil/closer/tuteur ci-dessous.
+  {
+    const from = extractFromId(channel, msg);
+    const messageId = extractMessageId(channel, msg);
+    const senderName = channel === 'WHATSAPP'
+      ? (msg && msg.pushName) || null
+      : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
+    const autoOut = await autoResponder.handleIncoming(
+      { tenantId, channel, from, name: senderName, text, messageId },
+      { runtime: intelligenceBridge && intelligenceBridge.runtime },
+    ).catch((err) => {
+      console.error(`autoResponder (tenant "${tenantId}", ${channel}) :`, err.message);
+      return { skipped: 'ERROR' };
+    });
+    // Activé (donc pris en charge par l'auto-réponse) : on ne double pas avec
+    // les flux legacy. On ne retombe dessus que si l'auto-réponse est DÉSACTIVÉE.
+    if (!autoOut || autoOut.skipped !== 'DISABLED') return;
   }
 
   const classification = messageTriage.classify(text);
