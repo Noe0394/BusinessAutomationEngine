@@ -174,11 +174,25 @@ function createSession(tenantId) {
   // connecté au numéro X". null si non connecté.
   function getConnectedNumber() {
     try {
-      const id = sock && sock.user && sock.user.id;
+      const id = (sock && sock.user && sock.user.id)
+        || (authState && authState.creds && authState.creds.me && authState.creds.me.id);
       if (!id) return null;
       return String(id).split(':')[0].split('@')[0] || null;
     } catch (err) {
       return null;
+    }
+  }
+
+  // Le compte est-il APPAIRÉ (creds enregistrées), indépendamment de l'état
+  // live du socket ? Permet de distinguer "appairé mais reconnexion en cours"
+  // (fréquent : coupures 428 côté WhatsApp sur IP cloud) de "jamais appairé".
+  // Survit aux flaps de connexion (authState.creds persiste tant qu'on ne fait
+  // pas logout()), ce que isConnected() ne fait pas.
+  function isPaired() {
+    try {
+      return !!(authState && authState.creds && authState.creds.registered);
+    } catch (err) {
+      return false;
     }
   }
 
@@ -893,6 +907,7 @@ function createSession(tenantId) {
     getContactName,
     getRecentMessages,
     getConnectedNumber,
+    isPaired,
     onIncomingMessage,
     onAccountReset,
     logout,

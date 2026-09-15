@@ -4857,6 +4857,14 @@ intelligenceBridge = createVpsBridge({
     logger: (msg) => console.error('[intelligence-runtime]', msg),
   }),
   stateFile: process.env.INTELLIGENCE_STATE_FILE || undefined,
+  // Résolution du tenant à partir de l'identité AUTHENTIFIÉE de la requête
+  // (mot de passe admin -> __admin__, sinon la clé de licence) — EXACTEMENT
+  // comme whatsappManager.getSessionForRequest / resolveTenantId ailleurs.
+  // Sans ça, l'onglet "Chat Intelligent" lisait tenantId depuis le corps de
+  // la requête (défaut 'default' -> tenant admin), donc regardait une session
+  // WhatsApp différente de celle réellement appairée par l'utilisateur sous sa
+  // clé de licence — d'où "je ne suis pas connecté" alors que le compte l'est.
+  resolveTenant: (req) => resolveTenantId(req),
 });
 app.use('/', requireAccess, intelligenceBridge.router);
 

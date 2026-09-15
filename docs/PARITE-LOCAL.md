@@ -1,3 +1,40 @@
+## 👁️ Chantier "Reconnaissance / lecture réelle de la boîte de réception" (2026-09-15, reprendre ICI)
+
+**Problème signalé (2 symptômes successifs, même racine)** : l'agent affirmait
+avoir accès à WhatsApp mais (a) répondait à vide à "quel est le dernier message
+reçu ?", puis (b) affirmait "pas connecté" alors que le compte était appairé.
+
+**Cause racine trouvée via les logs de la VM** :
+1. Aucune capacité de lecture d'inbox n'existait — corrigé : tampon glissant des
+   messages reçus dans `adapters/whatsappEngineBaileys.js` + `adapters/telegram.js`
+   (`getRecentMessages`), action `READ_RECENT_MESSAGES` (action-executor.js),
+   méthode runtime (vps-runtime.js), intention `inbox` + `handleInbox`
+   (chatOrchestrator.js). Commit `753a0d7`.
+2. **Mauvais tenant** : le compte de l'utilisateur est appairé sous une CLÉ DE
+   LICENCE (`KEY-…`), PAS sous `__admin__`. Or la route `/api/intelligence/goal-chat`
+   ("Chat Intelligent") lisait `tenantId` depuis le CORPS de requête (défaut
+   `'default'` → tenant admin, NON appairé) au lieu de l'identité AUTHENTIFIÉE.
+   L'agent regardait donc la mauvaise session. **Corrigé** : `index.js` injecte
+   `resolveTenant: (req)=>resolveTenantId(req)` dans `createVpsBridge` ;
+   `vps-bridge.js#tenantForRequest(req, body)` privilégie l'identité authentifiée
+   (`__admin__`/clé de licence) pour `/goal-chat` ET `/chat`. Désormais le tchat
+   agit sur LA session que l'utilisateur voit dans le dashboard.
+3. **Flapping 428** ("Connection Terminated by Server") sur les sessions
+   appairées = blocage anti-abus des IP cloud partagées (déjà documenté). Rendu
+   HONNÊTE plutôt que trompeur : `isPaired()` ajouté aux 2 adaptateurs
+   (survit aux coupures via `authState.creds.registered` / session sauvegardée),
+   `getConnectedNumber()` lit aussi `authState.creds.me` (numéro dispo même
+   socket coupé). `handleInbox` distingue 3 états : connecté (montre messages +
+   numéro) / **appairé mais reconnexion en cours** (ne dit plus "pas connecté" à
+   sec) / jamais appairé (QR à scanner). Le flapping lui-même n'est PAS résolu
+   (fix durable = IP dédiée/proxy, décision coût de l'utilisateur).
+
+Tests : `test/inbox.test.js` (7 cas, mocks). Déployé sur la VM.
+**Reste à faire** : réduire le flapping 428 (proxy/IP dédiée) ; répercuter le
+tampon d'inbox sur `local-client/`/mobile si demandé.
+
+---
+
 ## 🔌 Chantier "Connecteurs de plateforme + validation de paiement manuel" (session du 2026-09-15, EN COURS — reprendre ICI)
 
 **Objectif utilisateur** : rendre le moteur intelligent de CYRUS capable d'agir

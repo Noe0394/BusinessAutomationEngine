@@ -144,6 +144,16 @@ function createSession(tenantId) {
     return connected;
   }
 
+  // Compte appairé (session sauvegardée) même si le socket n'est pas connecté
+  // à l'instant T — parité avec adapters/whatsappEngineBaileys.js#isPaired.
+  function isPaired() {
+    try {
+      return connected || Boolean(loadSessionString());
+    } catch (err) {
+      return connected;
+    }
+  }
+
   function onIncomingMessage(callback) {
     incomingMessageListeners.push(callback);
   }
@@ -655,6 +665,7 @@ function createSession(tenantId) {
     tenantId,
     isConfigured,
     isConnected,
+    isPaired,
     onIncomingMessage,
     onAccountReset,
     restoreSessionFromRemote,

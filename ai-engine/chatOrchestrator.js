@@ -289,13 +289,23 @@ async function handleInbox(text, tenantId, deps) {
     return { text: `Je n'ai pas pu lire ${label} (${out.error}).` };
   }
   const r = out.result || {};
+  const numLine = r.connectedNumber ? ` (numéro : ${r.connectedNumber})` : '';
+  // Trois états distincts, honnêtes (voir la distinction connecté/appairé
+  // ajoutée dans les adaptateurs) : appairé mais reconnexion en cours (coupures
+  // 428 fréquentes sur IP cloud) ≠ jamais appairé. On ne dit "pas connecté" à
+  // sec que si le compte n'est PAS appairé du tout.
   if (r.connected === false) {
+    if (r.paired) {
+      return {
+        text: `Ton compte ${label}${numLine} est bien appairé, mais la connexion est momentanément coupée (WhatsApp ferme parfois la session sur les serveurs cloud) et se rétablit automatiquement. Réessaie dans quelques instants — dès que c'est reconnecté je pourrai lire tes messages.`,
+        actionLog: [{ icon: '🔄', label: `${label} appairé — reconnexion en cours`, status: 'warning' }],
+      };
+    }
     return {
-      text: `⚠️ Je ne suis pas connecté à ${label} pour l'instant — il faut d'abord appairer le compte dans l'onglet ${label} du tableau de bord.`,
-      actionLog: [{ icon: '🔌', label: `${label} non connecté`, status: 'warning' }],
+      text: `⚠️ Je ne suis pas connecté à ${label} pour l'instant, et aucun compte n'y est appairé — il faut d'abord scanner le QR / saisir le code dans l'onglet ${label} du tableau de bord.`,
+      actionLog: [{ icon: '🔌', label: `${label} non appairé`, status: 'warning' }],
     };
   }
-  const numLine = r.connectedNumber ? ` (numéro connecté : ${r.connectedNumber})` : '';
   const messages = Array.isArray(r.messages) ? r.messages : [];
   if (!messages.length) {
     return {

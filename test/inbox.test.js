@@ -69,12 +69,23 @@ test('handle(inbox) : connecté mais tampon vide -> message honnête, jamais vid
   assert.ok(/aucun message/i.test(res.text), 'explique honnêtement l\'absence de message bufferisé');
 });
 
-test('handle(inbox) : non connecté -> le dit clairement', async () => {
+test('handle(inbox) : non appairé -> le dit clairement (QR à scanner)', async () => {
   const res = await chatOrchestrator.handle(
     { text: 'es-tu connecté à mon whatsapp ?', history: [], tenantId: '__admin__', sessionId: 's3' },
-    mockDeps({ connected: false, connectedNumber: null, messages: [] }),
+    mockDeps({ connected: false, paired: false, connectedNumber: null, messages: [] }),
   );
   assert.ok(/pas connecté/i.test(res.text));
+  assert.ok(/appair/i.test(res.text), 'invite à appairer');
+});
+
+test('handle(inbox) : appairé mais reconnexion en cours -> ne dit PAS "pas connecté à sec"', async () => {
+  const res = await chatOrchestrator.handle(
+    { text: 'quel est le dernier message reçu ?', history: [], tenantId: 'KEY-123', sessionId: 's4' },
+    mockDeps({ connected: false, paired: true, connectedNumber: '22664977093', messages: [] }),
+  );
+  assert.ok(/appair/i.test(res.text), 'reconnaît que le compte est appairé');
+  assert.ok(/22664977093/.test(res.text), 'donne le numéro même hors-ligne');
+  assert.ok(/reconnex|rétablit|r[ée]essaie/i.test(res.text), 'explique la reconnexion en cours');
 });
 
 test('action READ_RECENT_MESSAGES route vers runtime.getRecentMessages', async () => {
