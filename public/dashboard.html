@@ -394,6 +394,7 @@
       <button type="button" class="tab-btn" data-tab="relance">📇 Relance Manuelle Express</button>
       <button type="button" class="tab-btn" data-tab="studio">🧠 Studio IA</button>
       <button type="button" class="tab-btn" data-tab="services-metiers">🏢 Services Métiers</button>
+      <button type="button" class="tab-btn" data-tab="aide">📚 Centre d'aide</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -2038,6 +2039,26 @@
       <div id="svc-list"><p style="opacity:.6">Chargement…</p></div>
     </section>
 
+    <!-- Onglet : Centre d'aide / Documentation (base de connaissances
+         ai-engine/knowledgeBase.js, servie par GET /api/docs). Le Chat
+         Intelligent puise dans la même source via l'outil getDocumentation. -->
+    <section class="panel" id="panel-aide">
+      <style>
+        #panel-aide .aide-search{width:100%;max-width:520px;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.25);color:inherit;font:inherit;margin:8px 0 16px}
+        #panel-aide .aide-cat{margin:18px 0 6px;font-weight:700;opacity:.9}
+        #panel-aide details{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px 12px;margin:8px 0;background:rgba(255,255,255,.03)}
+        #panel-aide summary{cursor:pointer;font-weight:600}
+        #panel-aide .aide-steps{margin:8px 0 0 18px}
+        #panel-aide .aide-faq{margin-top:24px}
+        #panel-aide .aide-faq-item{border-bottom:1px solid rgba(255,255,255,.08);padding:10px 0}
+        #panel-aide .aide-faq-q{font-weight:600}
+      </style>
+      <h2>📚 Centre d'aide</h2>
+      <p class="empty">Toute la documentation de CYRUS : tutoriels pas-à-pas et FAQ. Tu peux aussi poser tes questions « comment… ? » directement au Chat Intelligent — il puise dans cette même documentation.</p>
+      <input type="search" id="aide-search" class="aide-search" placeholder="Rechercher (ex. « configurer service métier », « importer contacts »)…" />
+      <div id="aide-content"><p style="opacity:.6">Chargement de la documentation…</p></div>
+    </section>
+
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -2662,6 +2683,7 @@
         if (btn.dataset.tab === 'studio') { studioLoadSessionsList(); }
         if (btn.dataset.tab === 'goalchat') { goalChatInit(); }
         if (btn.dataset.tab === 'services-metiers') { svcMetiersInit(); }
+        if (btn.dataset.tab === 'aide') { aideInit(); }
       });
     });
 
@@ -9626,6 +9648,69 @@
         document.getElementById('svc-conn-kind').addEventListener('change', svcToggleApiFields);
       }
       svcLoadList();
+    }
+
+    // ===================== CENTRE D'AIDE =====================
+    let aideLoaded = false;
+    let aideDoc = null;
+    function aideEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+    function aideRenderArticle(a) {
+      const steps = (a.steps && a.steps.length)
+        ? '<ol class="aide-steps">' + a.steps.map((s) => '<li>' + aideEsc(s) + '</li>').join('') + '</ol>'
+        : '';
+      return '<details><summary>' + aideEsc(a.title) + '</summary>'
+        + '<p style="opacity:.85;margin:8px 0">' + aideEsc(a.summary) + '</p>'
+        + '<p style="margin:8px 0">' + aideEsc(a.body) + '</p>' + steps + '</details>';
+    }
+    function aideRenderAll() {
+      const box = document.getElementById('aide-content');
+      if (!aideDoc) { box.innerHTML = '<p class="error">Documentation indisponible.</p>'; return; }
+      let html = '';
+      aideDoc.categories.forEach((cat) => {
+        const arts = aideDoc.articles.filter((a) => a.category === cat.id);
+        if (!arts.length) return;
+        html += '<div class="aide-cat">' + aideEsc(cat.label) + '</div>';
+        arts.forEach((a) => { html += aideRenderArticle(a); });
+      });
+      if (aideDoc.faq && aideDoc.faq.length) {
+        html += '<div class="aide-faq"><div class="aide-cat">❓ FAQ</div>';
+        aideDoc.faq.forEach((f) => {
+          html += '<div class="aide-faq-item"><div class="aide-faq-q">' + aideEsc(f.q) + '</div><div style="opacity:.85">' + aideEsc(f.a) + '</div></div>';
+        });
+        html += '</div>';
+      }
+      box.innerHTML = html;
+    }
+    function aideRenderSearch(results) {
+      const box = document.getElementById('aide-content');
+      if (!results.length) { box.innerHTML = '<p style="opacity:.7">Aucun article ne correspond. Essaie d\'autres mots, ou pose ta question au Chat Intelligent.</p>'; return; }
+      box.innerHTML = '<div class="aide-cat">Résultats</div>' + results.map(aideRenderArticle).join('');
+    }
+    async function aideInit() {
+      const input = document.getElementById('aide-search');
+      if (input && !input.dataset.wired) {
+        input.dataset.wired = '1';
+        let t = null;
+        input.addEventListener('input', () => {
+          clearTimeout(t);
+          const q = input.value.trim();
+          t = setTimeout(async () => {
+            if (!q) { aideRenderAll(); return; }
+            try { const r = await apiFetch('/api/docs?q=' + encodeURIComponent(q)); const d = await r.json(); aideRenderSearch(d.results || []); }
+            catch (e) { if (e.message !== 'unauthorized') aideRenderAll(); }
+          }, 200);
+        });
+      }
+      if (aideLoaded) return;
+      try {
+        const r = await apiFetch('/api/docs');
+        const d = await r.json();
+        aideDoc = d.doc;
+        aideLoaded = true;
+        aideRenderAll();
+      } catch (e) {
+        if (e.message !== 'unauthorized') document.getElementById('aide-content').innerHTML = '<p class="error">Impossible de charger la documentation.</p>';
+      }
     }
 
     // PWA : installation optionnelle sous le nom "CYRUS SUPER ASSISTANT"

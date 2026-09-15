@@ -16,6 +16,7 @@
 const businessServices = require('./businessServices');
 const contactCrm = require('./contactCrm');
 const messageHistory = require('./messageHistory');
+const knowledgeBase = require('./knowledgeBase');
 
 const STATE = {
   PENDING: 'PENDING', RUNNING: 'RUNNING', SUCCESS: 'SUCCESS',
@@ -79,6 +80,20 @@ const TOOLS = {
     async execute(args, ctx) {
       const text = await businessServices.getEngineContextText(ctx.tenant);
       return { ok: true, result: { text, hasData: !!text } };
+    },
+  },
+
+  // ---- Documentation / centre d'aide (source de vérité produit) -----------
+  getDocumentation: {
+    description: 'Cherche dans la documentation officielle de CYRUS comment faire quelque chose (configurer un Service Métier, importer des contacts, connecter WhatsApp, etc.). À utiliser pour toute question « comment… ? » sur le fonctionnement du produit.',
+    permission: null,
+    inputSchema: { query: { type: 'string', required: true, description: 'La question ou le sujet (ex. « configurer un service métier », « importer contacts »).' } },
+    resultSchema: { found: 'boolean', articles: 'array<{title,summary,steps,body}>' },
+    errorSchema: { code: 'string' },
+    async execute(args) {
+      const hits = knowledgeBase.search(args.query, 2);
+      if (!hits.length) return { ok: true, result: { found: false, query: args.query } };
+      return { ok: true, result: { found: true, articles: hits.map((a) => ({ id: a.id, title: a.title, summary: a.summary, steps: a.steps || null, body: a.body })) } };
     },
   },
 

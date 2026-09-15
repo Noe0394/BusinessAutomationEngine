@@ -104,7 +104,10 @@ test('handle(reply) : rapport de vérité SUCCESS avec le vrai destinataire', as
     { text: 'réponds-lui que je vais bien', history: [], tenantId: t, sessionId: 's' },
     { runtime: { sendMessageVerified: async (p) => { assert.equal(p.to, '22664@c.us'); return { ok: true, status: 'SUCCESS', confirmationId: 'CONF1' }; } } },
   );
-  assert.ok(/CONFIRMÉE/.test(res.text), res.text);
+  // Rapport HUMANISÉ mais VRAI : cite le destinataire réel, le texte envoyé et
+  // la référence réelle de confirmation ; confirme l'envoi (« remis »).
+  assert.ok(/CONF1/.test(res.text), res.text); // la vraie référence est citée
+  assert.ok(/remis|envoy|écrit/i.test(res.text), res.text); // envoi confirmé
   assert.ok(/Koffi/.test(res.text));
   assert.ok(/Je vais bien/.test(res.text));
 });
@@ -116,8 +119,9 @@ test('handle(reply) : échec réel -> ACTION ÉCHOUÉE (jamais "c\'est fait")', 
     { text: 'réponds-lui que je vais bien', history: [], tenantId: t, sessionId: 's2' },
     { runtime: { sendMessageVerified: async () => ({ ok: false, status: 'FAILED', error: 'NOT_CONNECTED' }) } },
   );
-  assert.ok(/ÉCHOUÉE/.test(res.text), res.text);
-  assert.ok(!/CONFIRMÉE/.test(res.text));
+  // Échec dit HONNÊTEMENT (« pas parti / pas réussi »), jamais un faux « c'est fait ».
+  assert.ok(/pas parti|pas réussi|échou|n'est pas/i.test(res.text), res.text);
+  assert.ok(!/c'est fait|bien remis|message bien/i.test(res.text), res.text);
 });
 
 test.after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {} });

@@ -389,15 +389,17 @@ async function handleInbox(text, tenantId, deps) {
 // vérifié (runtime.sendMessageVerified, registre d'actions) -> rapport de
 // VÉRITÉ (SUCCESS confirmé / FAILED / PENDING, jamais un faux positif).
 // ---------------------------------------------------------------------------
+// Compte rendu d'envoi rédigé de façon HUMAINE (pas de bloc « Canal:/Action:/
+// Statut: » robotique) tout en restant strictement VRAI : on ne dit « envoyé »
+// que si l'envoi est confirmé, et on cite la référence réelle comme preuve.
 function sendReport({ status, label, who, replyText, confirmationId, error }) {
-  const head = `📤 ACTION CYRUS\nCanal : ${label}\nDestinataire : ${who}\nAction : Réponse au message\nTexte : « ${replyText} »`;
   if (status === 'SUCCESS') {
-    return { text: `${head}\n\n✅ ACTION CONFIRMÉE — le message a réellement été envoyé (réf. ${confirmationId}).`, actionLog: [{ icon: '✅', label: `Envoyé à ${who}`, status: 'done' }] };
+    return { text: `C'est parti, j'ai écrit à ${who} sur ${label} : « ${replyText} ». Message bien remis ✅ (réf. ${confirmationId}).`, actionLog: [{ icon: '✅', label: `Envoyé à ${who}`, status: 'done' }] };
   }
   if (status === 'PENDING') {
-    return { text: `${head}\n\n⏳ ACTION EN ATTENTE — l'envoi n'a pas encore été confirmé par ${label}.`, actionLog: [{ icon: '⏳', label: `En attente — ${who}`, status: 'warning' }] };
+    return { text: `J'ai lancé le message pour ${who} sur ${label}, mais je n'ai pas encore la confirmation de remise — je garde un œil dessus et je te dis dès que c'est bon.`, actionLog: [{ icon: '⏳', label: `En attente — ${who}`, status: 'warning' }] };
   }
-  return { text: `${head}\n\n❌ ACTION ÉCHOUÉE — le message n'a PAS été envoyé (${error || 'non confirmé'}).`, actionLog: [{ icon: '❌', label: `Échec — ${who}`, status: 'error' }] };
+  return { text: `Aïe, je n'ai pas réussi à joindre ${who} sur ${label} (${error || 'envoi non confirmé'}). Le message n'est PAS parti — on peut réessayer dès que le canal est reconnecté.`, actionLog: [{ icon: '❌', label: `Échec — ${who}`, status: 'error' }] };
 }
 
 async function composeReplyText(instruction, last, tenantId, domain) {

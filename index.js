@@ -5042,6 +5042,20 @@ app.get('/api/contacts/summary', requireAccess, async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// CENTRE D'AIDE / DOCUMENTATION — base de connaissances embarquée
+// (ai-engine/knowledgeBase.js), servie à l'onglet « Centre d'aide » du
+// dashboard. Le Chat Intelligent y accède aussi via l'outil getDocumentation.
+const knowledgeBase = require('./ai-engine/knowledgeBase');
+app.get('/api/docs', requireAccess, (req, res) => {
+  if (req.query.q) return res.json({ ok: true, results: knowledgeBase.search(req.query.q, 5) });
+  res.json({ ok: true, doc: knowledgeBase.all() });
+});
+app.get('/api/docs/:id', requireAccess, (req, res) => {
+  const a = knowledgeBase.get(req.params.id);
+  if (!a) return res.status(404).json({ error: 'Article introuvable.' });
+  res.json({ ok: true, article: a });
+});
+
 // Filtrage privé/pro + tuteur pédagogique auto (§3/§4 du cahier des charges
 // "Chat-Driven Agent Orchestrator", voir lib/intelligence/message-triage.js
 // et docs/PARITE-LOCAL.md). Câblé sur CHAQUE message WhatsApp/Telegram
