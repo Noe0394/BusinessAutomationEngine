@@ -117,6 +117,71 @@ function createSession(tenantId) {
   // instance.
   const contactNames = new Map();
 
+  // Tampon glissant des derniers messages RÉELLEMENT reçus (isolé par tenant,
+  // en mémoire, cycle de vie du process). Permet à la couche intelligence de
+  // répondre à "quel est le dernier message reçu / qui m'a écrit ?" avec des
+  // données réelles plutôt qu'une réponse vide (voir lib/intelligence/
+  // action-executor.js#READ_RECENT_MESSAGES). Vidé à la déconnexion (comme
+  // contactNames) pour ne jamais faire fuiter les messages d'un compte vers le
+  // suivant sur cette même instance. NON persistant : après un redémarrage du
+  // serveur il repart vide et se remplit à chaque nouveau message entrant.
+  const RECENT_MESSAGES_MAX = 50;
+  const recentMessages = [];
+
+  function extractMessageText(msg) {
+    const m = msg && msg.message;
+    if (!m) return '';
+    return m.conversation
+      || (m.extendedTextMessage && m.extendedTextMessage.text)
+      || (m.imageMessage && m.imageMessage.caption)
+      || (m.videoMessage && m.videoMessage.caption)
+      || (m.documentMessage && m.documentMessage.caption)
+      || '';
+  }
+
+  function recordIncomingMessage(msg) {
+    try {
+      const from = msg.key && msg.key.remoteJid;
+      if (!from) return;
+      const hasMedia = !!(msg.message && (msg.message.imageMessage || msg.message.videoMessage
+        || msg.message.audioMessage || msg.message.documentMessage || msg.message.stickerMessage));
+      const tsRaw = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp);
+      recentMessages.push({
+        from,
+        number: String(from).split('@')[0],
+        name: msg.pushName || contactNames.get(from) || null,
+        text: extractMessageText(msg) || '',
+        hasMedia,
+        isGroup: String(from).endsWith('@g.us'),
+        ts: (Number.isFinite(tsRaw) && tsRaw > 0) ? tsRaw : Math.floor(Date.now() / 1000),
+      });
+      if (recentMessages.length > RECENT_MESSAGES_MAX) {
+        recentMessages.splice(0, recentMessages.length - RECENT_MESSAGES_MAX);
+      }
+    } catch (err) {
+      // jamais bloquant : un message non enregistré ne doit rien casser.
+    }
+  }
+
+  // Derniers messages reçus, du plus récent au plus ancien (limite bornée).
+  function getRecentMessages(limit) {
+    const n = Math.max(1, Math.min(RECENT_MESSAGES_MAX, Number(limit) || 10));
+    return recentMessages.slice(-n).reverse().map((r) => Object.assign({}, r));
+  }
+
+  // Numéro du compte WhatsApp réellement connecté (sans le suffixe d'appareil
+  // ni le domaine), pour permettre à l'agent de confirmer "oui, je suis bien
+  // connecté au numéro X". null si non connecté.
+  function getConnectedNumber() {
+    try {
+      const id = sock && sock.user && sock.user.id;
+      if (!id) return null;
+      return String(id).split(':')[0].split('@')[0] || null;
+    } catch (err) {
+      return null;
+    }
+  }
+
   // Écouteurs "message entrant" (voir onIncomingMessage plus bas) : le moteur
   // de campagne (queues/campaignEngine.js) s'y abonne pour mettre la file
   // d'attente en pause dès qu'un contact répond pendant l'envoi d'une
@@ -400,6 +465,7 @@ function createSession(tenantId) {
           );
           fs.rmSync(AUTH_DIR, { recursive: true, force: true });
           contactNames.clear();
+          recentMessages.length = 0;
           authStore.clearRemote().catch(() => {});
           // Le prochain appairage réussi sous ce tenant peut concerner un
           // numéro totalement différent (l'ancien lien étant révoqué) — voir
@@ -464,6 +530,7 @@ function createSession(tenantId) {
         // d'envoyer) et hors diffusion "statut" (status@broadcast, qui n'est
         // jamais une réponse d'un contact précis).
         if (m.type === 'notify' && msg.key && !msg.key.fromMe && msg.key.remoteJid !== 'status@broadcast') {
+          recordIncomingMessage(msg);
           notifyIncomingMessage(msg);
         }
       });
@@ -764,6 +831,7 @@ function createSession(tenantId) {
       authState = null;
       sock = null;
       contactNames.clear();
+      recentMessages.length = 0;
 
       fs.rmSync(AUTH_DIR, { recursive: true, force: true });
       await authStore.clearRemote();
@@ -823,6 +891,8 @@ function createSession(tenantId) {
     getGroups,
     getGroupParticipants,
     getContactName,
+    getRecentMessages,
+    getConnectedNumber,
     onIncomingMessage,
     onAccountReset,
     logout,

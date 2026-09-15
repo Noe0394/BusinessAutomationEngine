@@ -71,6 +71,11 @@ const ACCOUNT_RE = /(compte\s+(?:[ée]l[eè]ve|[ée]tudiant|client)|cl[ée]\s+d.
 // autorisés pour ce tenant (getToolsForTenant) — s'il n'y en a aucun, il
 // retombe sur le flux compte interne classique.
 const CONNECTOR_RE = /(contact|\btag(?:ue|uer|s)?\b|system\.?io|systeme\.?io|crm|factur|enregistre?\s+(?:la|une|cette)\s+vente|journal\s+des\s+ventes)/i;
+// Lecture de la boîte de réception (prouver la connexion réelle + citer un
+// vrai message/expéditeur). Volontairement placé AVANT 'goal' dans
+// detectIntent : "dernier message reçu" ne doit pas être happé par le moteur
+// d'objectifs.
+const INBOX_RE = /(derniers?\s+messages?|messages?\s+re[çc]us?|qui\s+m.?a\s+(?:écrit|ecrit|envoy[ée]|contact[ée])|num[ée]ro\s+de\s+l.?exp[ée]diteur|\bexp[ée]diteur\b|bo[îi]te\s+de\s+r[ée]ception|\binbox\b|(?:es|est)-?\s*tu\s+(?:vraiment\s+)?connect[ée]|connect[ée]\s+[àa]\s+mon\s+(?:whatsapp|telegram)|montre(?:-|\s+)(?:moi\s+)?mes\s+messages)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
 
 // Détection d'intention (Command Parsing, §1.1 du cahier des charges) —
@@ -85,6 +90,7 @@ function detectIntent(text, lastAssistantMessage) {
     return lastAssistantMessage.intent;
   }
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
+  if (INBOX_RE.test(text)) return 'inbox';
   if (REPORT_RE.test(text)) return 'report';
   if (PAYMENT_RE.test(text)) return 'payment';
   // 'account' et 'connector' partagent le même handler (handleConnector) :
@@ -262,6 +268,53 @@ async function handleReport(text, tenantId, deps) {
     r.recommendations && r.recommendations.length ? `Recommandations : ${r.recommendations.join(' ')}` : null,
   ].filter(Boolean).join('\n');
   return { text: text2, actionLog: [{ icon: '📊', label: 'Rapport généré', status: 'done' }] };
+}
+
+// ---------------------------------------------------------------------------
+// 'inbox' — lecture réelle des derniers messages reçus (READ_RECENT_MESSAGES).
+// Répond à "quel est le dernier message reçu / qui m'a écrit / es-tu connecté à
+// mon WhatsApp ?" avec des DONNÉES RÉELLES (expéditeur + contenu + numéro
+// connecté), plutôt qu'une réponse vide du chat générique. Distingue les 3 cas
+// honnêtement : non connecté / connecté mais tampon vide (après redémarrage) /
+// messages disponibles.
+// ---------------------------------------------------------------------------
+async function handleInbox(text, tenantId, deps) {
+  if (!deps.runtime || !deps.runtime.actionExecutor) {
+    return { text: 'Je ne peux pas lire les messages pour le moment (moteur non disponible).' };
+  }
+  const channel = /telegram/i.test(text) ? 'TELEGRAM' : 'WHATSAPP';
+  const label = channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+  const out = await deps.runtime.actionExecutor.execute('READ_RECENT_MESSAGES', { channel, limit: 10, tenantId }, { tenantId });
+  if (!out.ok) {
+    return { text: `Je n'ai pas pu lire ${label} (${out.error}).` };
+  }
+  const r = out.result || {};
+  if (r.connected === false) {
+    return {
+      text: `⚠️ Je ne suis pas connecté à ${label} pour l'instant — il faut d'abord appairer le compte dans l'onglet ${label} du tableau de bord.`,
+      actionLog: [{ icon: '🔌', label: `${label} non connecté`, status: 'warning' }],
+    };
+  }
+  const numLine = r.connectedNumber ? ` (numéro connecté : ${r.connectedNumber})` : '';
+  const messages = Array.isArray(r.messages) ? r.messages : [];
+  if (!messages.length) {
+    return {
+      text: `Je suis bien connecté à ${label}${numLine}, mais je n'ai encore aucun message en mémoire depuis mon dernier redémarrage. Demande à un contact de t'écrire (ou envoie-toi un message depuis un autre numéro), puis redemande-moi : je te donnerai l'expéditeur et le contenu exact.`,
+      actionLog: [{ icon: '🔌', label: `${label} connecté${r.connectedNumber ? ' — ' + r.connectedNumber : ''}`, status: 'done' }],
+    };
+  }
+  const fmtWho = (m) => (m.name ? `${m.name} (${m.number || m.username || m.from})` : (m.number || m.username || m.from));
+  const fmtWhen = (m) => (m.ts ? new Date(m.ts * 1000).toLocaleString('fr-FR') : '');
+  const fmtBody = (m) => (m.text ? `"${m.text}"` : (m.hasMedia ? '[média]' : '[message vide]'));
+  const lines = messages.slice(0, 5).map((m, i) => {
+    const when = fmtWhen(m);
+    return `${i === 0 ? '➡️ ' : '• '}${fmtWho(m)}${m.isGroup ? ' [groupe]' : ''} — ${fmtBody(m)}${when ? ` · ${when}` : ''}`;
+  });
+  const last = messages[0];
+  return {
+    text: [`Voici tes derniers messages ${label}${numLine} :`, ...lines].join('\n'),
+    actionLog: [{ icon: '📥', label: `Dernier message : ${fmtWho(last)}`, status: 'done' }],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +543,7 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'offer': return handleOffer(text, history, tenantId);
     case 'goal': return handleGoal(text, sessionKey, tenantId, d);
     case 'report': return handleReport(text, tenantId, d);
+    case 'inbox': return handleInbox(text, tenantId, d);
     case 'payment': return handlePayment(text, history, tenantId, d);
     case 'connector': return handleConnector(text, history, tenantId, d);
     default: return null;

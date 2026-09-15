@@ -99,6 +99,43 @@ function createSession(tenantId) {
   // principe que connectGeneration dans adapters/whatsapp.js.
   let sessionGeneration = 0;
 
+  // Tampon glissant des derniers messages reçus (isolé par tenant, en mémoire).
+  // Équivalent Telegram de adapters/whatsappEngineBaileys.js#recentMessages —
+  // permet à la couche intelligence de répondre à "quel est le dernier message
+  // reçu ?" avec des données réelles. Vidé à la déconnexion. NON persistant.
+  const RECENT_MESSAGES_MAX = 50;
+  const recentMessages = [];
+
+  function recordIncomingMessage(m) {
+    try {
+      if (!m) return;
+      const senderId = m.senderId != null ? String(m.senderId) : null;
+      const chatId = m.chatId != null ? String(m.chatId) : null;
+      const from = senderId || chatId;
+      if (!from) return;
+      const sender = m.sender || null;
+      const name = sender ? (sender.firstName || sender.username || null) : null;
+      const username = sender && sender.username ? sender.username : null;
+      let isGroup = false;
+      try { isGroup = !!(m.isGroup || m.isChannel); } catch (e) { isGroup = false; }
+      const ts = Number.isFinite(Number(m.date)) && Number(m.date) > 0 ? Number(m.date) : Math.floor(Date.now() / 1000);
+      recentMessages.push({
+        from, number: null, name, username,
+        text: m.message || '', hasMedia: !!m.media, isGroup, ts,
+      });
+      if (recentMessages.length > RECENT_MESSAGES_MAX) {
+        recentMessages.splice(0, recentMessages.length - RECENT_MESSAGES_MAX);
+      }
+    } catch (err) {
+      // jamais bloquant.
+    }
+  }
+
+  function getRecentMessages(limit) {
+    const n = Math.max(1, Math.min(RECENT_MESSAGES_MAX, Number(limit) || 10));
+    return recentMessages.slice(-n).reverse().map((r) => Object.assign({}, r));
+  }
+
   function isConfigured() {
     return Boolean(API_ID && API_HASH);
   }
@@ -128,6 +165,9 @@ function createSession(tenantId) {
   }
 
   function notifyAccountReset() {
+    // Le compte connecté change (logout/startLogin) : purge les messages
+    // bufferisés de l'ancien compte pour ne jamais les exposer sous le nouveau.
+    recentMessages.length = 0;
     accountResetListeners.forEach((callback) => {
       try {
         callback();
@@ -148,6 +188,7 @@ function createSession(tenantId) {
       // propre campagne, ou une réponse manuelle de l'utilisateur) — seul un
       // message reçu d'un contact doit mettre la file d'attente en pause.
       if (event.message && !event.message.out) {
+        recordIncomingMessage(event.message);
         incomingMessageListeners.forEach((callback) => {
           try {
             callback(event.message);
@@ -336,6 +377,7 @@ function createSession(tenantId) {
 
     client = null;
     connected = false;
+    recentMessages.length = 0;
   }
 
   // À appeler au démarrage du serveur : restaure une session déjà autorisée
@@ -626,6 +668,7 @@ function createSession(tenantId) {
     getLoginError,
     getGroups,
     getGroupMembers,
+    getRecentMessages,
     resolveRecipient,
     sendMessage,
     sendMedia,
