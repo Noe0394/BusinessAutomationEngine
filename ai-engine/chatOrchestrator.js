@@ -5,6 +5,7 @@ const offerClarifier = require('./offerClarifier');
 const personaManager = require('./personaManager');
 const platformOrchestrator = require('./platformOrchestrator');
 const connectorManager = require('./connectors/connectorManager');
+const businessServices = require('./businessServices');
 const manualPaymentValidator = require('./manualPaymentValidator');
 const contactCrm = require('./contactCrm');
 const recurringTasks = require('../queues/recurringTasks');
@@ -105,6 +106,15 @@ const REPLY_RE = /(r[ée]ponds?(?:\s|-)?(?:lui|leur|[àa]\b)|r[ée]pondre\s+[àa
 // Supervision : "qu'as-tu fait / statut de tes actions / rapport de tes envois".
 const ACTIONS_RE = /(qu.?as-?tu\s+fait|tes\s+actions|actions\s+r[ée]centes|statut\s+de[s]?\s+actions|rapport\s+de[s]?\s+(?:tes\s+)?(?:actions|envois)|historique\s+de[s]?\s+actions)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
+// Question FACTUELLE sur l'activité configurée dans l'onglet Services Métiers
+// (prix, tarif, produit, formation, offre, catalogue, règle, objectif). Le
+// chat doit y répondre depuis les VRAIES données (businessServices), jamais en
+// inventant — c'est le maillon "DONNÉES → INTELLIGENCE" qui manquait. Exige un
+// cue de CONSULTATION (quel/combien/liste/montre/rappelle… OU « prix de … »)
+// pour ne PAS happer un ordre d'action ("présente ma formation à ce client" =
+// action, pas une question). Placé APRÈS toutes les intentions d'action et
+// juste AVANT 'goal' : une vraie commande garde la priorité.
+const BUSINESSINFO_RE = /((?:\bquel(?:le|s|les)?\b|\bcombien\b|c(?:'|’)?est\s+(?:quoi|combien)|\bliste[rz]?\b|\bmontre|\baffiche|\brappelle|\bdonne(?:-|\s)moi|\bc'est\s+quoi)[^]{0,40}(?:prix|tarif|co[ûu]te?|produits?|formations?|offres?|services?|catalogue|r[èe]gles?|objectifs?))|((?:prix|tarif)\s+(?:de|d'|du|de\s+la|de\s+ma|de\s+mon)\b)|(mes\s+(?:produits?|offres?|formations?|r[èe]gles?|objectifs?|tarifs?)\b)|(mon\s+catalogue\b)/i;
 
 // Détection d'intention (Command Parsing, §1.1 du cahier des charges) —
 // zéro appel réseau, comme index.js#detectStudioIntent dont ce module étend
@@ -137,6 +147,10 @@ function detectIntent(text, lastAssistantMessage) {
   // action d'administration sur une plateforme (interne cyrus_students en
   // repli, ou plateforme externe du vendeur via connecteur autorisé).
   if (ACCOUNT_RE.test(text) || CONNECTOR_RE.test(text)) return 'connector';
+  // Question factuelle sur l'activité (prix/produits/règles/objectifs) —
+  // APRÈS les actions, AVANT 'goal' : "analyse mes ventes" reste un objectif,
+  // "quel est le prix de ma formation ?" devient une consultation de données.
+  if (BUSINESSINFO_RE.test(text)) return 'businessinfo';
   if (GOAL_RE.test(text)) return 'goal';
   return null;
 }
@@ -883,6 +897,44 @@ async function handleConnector(text, history, tenantId, deps) {
 }
 
 // ---------------------------------------------------------------------------
+// 'businessinfo' — répond à une question FACTUELLE du vendeur sur son activité
+// (prix, produits, formations, règles, objectifs, capacités) en s'appuyant
+// EXCLUSIVEMENT sur ce qu'il a réellement configuré dans l'onglet Services
+// Métiers (businessServices.getEngineContextText). C'est le maillon
+// "DONNÉES → INTELLIGENCE" : le chat lit la vraie donnée au lieu de l'inventer.
+// Si rien n'est configuré, il le dit franchement (jamais un prix fictif).
+// ---------------------------------------------------------------------------
+async function handleBusinessInfo(text, history, tenantId) {
+  const ctxText = await businessServices.getEngineContextText(tenantId).catch(() => '');
+  if (!ctxText) {
+    return {
+      text: "Je n'ai encore aucune information sur tes produits ou services. Ajoute-les dans l'onglet « Services Métiers » (activité, produits, prix, règles, objectifs) et je pourrai répondre précisément à ce genre de question.",
+      actionLog: [{ icon: '📋', label: 'Aucun Service Métier configuré', status: 'warning' }],
+    };
+  }
+  const { domain } = await buildPersonaFacts(tenantId);
+  const prompt = [
+    personaManager.personaSystemPrompt(domain || 'default'),
+    "Voici les informations RÉELLES et à jour de l'activité du vendeur, telles qu'il les a configurées (source de vérité) :",
+    ctxText,
+    `Question du vendeur : "${text}"`,
+    "Réponds à sa question en t'appuyant UNIQUEMENT sur ces données. Cite le chiffre / le fait EXACT (ex. le prix précis). N'invente JAMAIS un prix, un produit, une règle ou un objectif absent de ces données — si l'information demandée n'y figure pas, dis-le franchement et invite-le à la renseigner dans l'onglet Services Métiers.",
+  ].join('\n');
+  try {
+    const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history || []);
+    const answer = String(raw || '').trim();
+    return {
+      text: answer || "Je n'ai pas trouvé cette information dans ta configuration actuelle.",
+      actionLog: [{ icon: '📋', label: 'Réponse basée sur tes Services Métiers', status: 'done' }],
+    };
+  } catch (err) {
+    // Repli honnête si toute la cascade LLM est indisponible : on renvoie le
+    // contexte brut plutôt que rien (jamais une valeur inventée).
+    return { text: `Voici ce que j'ai sur ton activité :\n${ctxText}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Point d'entrée unique — appelé par index.js AVANT le pipeline chat/média
 // existant (image/vidéo/livre, réponse générique). `deps` = { runtime,
 // engineFor, humanContext } injectés depuis la même instance que
@@ -922,6 +974,7 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'crm': return handleCrm(text, tenantId);
     case 'payment': return handlePayment(text, history, tenantId, d);
     case 'connector': return handleConnector(text, history, tenantId, d);
+    case 'businessinfo': return handleBusinessInfo(text, history, tenantId);
     default: return null;
   }
 }

@@ -251,6 +251,37 @@ async function getEngineContext(tenant) {
   }));
 }
 
+// Rendu TEXTE compact et lisible du contexte ci-dessus, prêt à être injecté
+// dans un prompt LLM (le chat intelligent y répond aux questions factuelles du
+// vendeur — prix, produits, règles, objectifs, capacités — SANS rien inventer).
+// C'est le maillon "DONNÉES → INTELLIGENCE" : sans lui, le chat ne peut pas
+// lire ce que le vendeur a configuré dans l'onglet Services Métiers. Renvoie
+// une chaîne vide s'il n'y a aucun service (le chat le dit alors franchement).
+async function getEngineContextText(tenant) {
+  const ctx = await getEngineContext(tenant);
+  if (!ctx.length) return '';
+  return ctx.map((s) => {
+    const c = s.commercial || {};
+    const cur = c.currency || '';
+    const lines = [`• Service « ${s.name} » (${s.type}${s.project ? `, projet : ${s.project}` : ''})${s.connected ? ' — plateforme connectée' : ''}`];
+    if (c.description) lines.push(`  Description : ${c.description}`);
+    if (c.price != null) lines.push(`  Prix : ${c.price} ${cur}`.trim() + (c.promoPrice != null ? ` (promo : ${c.promoPrice} ${cur})`.replace(/\s+\)/, ')') : ''));
+    if (c.target) lines.push(`  Cible : ${c.target}`);
+    const products = (s.products || []).map((p) => {
+      const name = p && (p.name || p);
+      const price = p && p.price != null ? ` : ${p.price} ${cur}`.trim() : '';
+      return `${name}${price}`;
+    });
+    if (products.length) lines.push(`  Produits : ${products.join(' ; ')}`);
+    if (c.advantages) lines.push(`  Avantages : ${c.advantages}`);
+    if (c.objections) lines.push(`  Objections & réponses : ${c.objections}`);
+    if ((s.rules || []).length) lines.push(`  Règles commerciales : ${s.rules.join(' | ')}`);
+    if ((s.objectives || []).length) lines.push(`  Objectifs : ${s.objectives.join(' | ')}`);
+    if ((s.scopes || []).length) lines.push(`  Capacités autorisées (outils réels) : ${s.scopes.join(', ')}`);
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
 // Miroir des infos commerciales vers le profil business persistant que le
 // moteur de closing/campagne lit déjà (ai-engine/emotionalCloser.js,
 // offerClarifier.js). Ne touche PAS aux offres saisies via le chat (source
@@ -309,5 +340,5 @@ async function syncToConnectors(tenant) {
 
 module.exports = {
   STATUS, list, get, create, update, remove, connectApi, testConnection,
-  setPermissions, summary, getEngineContext, syncOffersToProfile, syncToConnectors, NAMESPACE,
+  setPermissions, summary, getEngineContext, getEngineContextText, syncOffersToProfile, syncToConnectors, NAMESPACE,
 };
