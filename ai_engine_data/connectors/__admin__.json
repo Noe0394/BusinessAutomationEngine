@@ -1,0 +1,19 @@
+{
+  "connectors": {
+    "platform_gateway": {
+      "enabled": true,
+      "label": "RIEA AFRIQUE (test reel VPS)",
+      "baseUrl": "https://riea-afrique-web.web.app",
+      "apiKeyRef": "service_svc_mu2w7jzlpwun7",
+      "authHeader": "X-API-Key",
+      "endpoints": {
+        "enroll": "/api/v1/agent-gateway/enroll-student",
+        "suspend": "/api/v1/agent-gateway/suspend-student"
+      },
+      "scopes": [
+        "students:create",
+        "students:suspend"
+      ]
+    }
+  }
+}
