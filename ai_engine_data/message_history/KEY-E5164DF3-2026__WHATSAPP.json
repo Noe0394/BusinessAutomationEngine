@@ -1,0 +1,21 @@
+{
+  "tenantId": "KEY-E5164DF3-2026",
+  "channel": "WHATSAPP",
+  "messages": [
+    {
+      "channel": "WHATSAPP",
+      "direction": "in",
+      "party": "203787759272159@lid",
+      "number": "203787759272159",
+      "name": null,
+      "text": "Bonjour ! Puis-je en savoir plus à ce sujet ?",
+      "hasMedia": false,
+      "chatId": "203787759272159@lid",
+      "ts": 1789474563,
+      "tsMs": 1789474563000,
+      "confirmationId": null,
+      "at": "2026-09-15T15:13:03.550Z"
+    }
+  ],
+  "updatedAt": "2026-09-15T15:13:03.550Z"
+}
