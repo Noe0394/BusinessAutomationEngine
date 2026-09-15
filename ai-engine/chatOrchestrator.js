@@ -6,6 +6,7 @@ const personaManager = require('./personaManager');
 const platformOrchestrator = require('./platformOrchestrator');
 const connectorManager = require('./connectors/connectorManager');
 const businessServices = require('./businessServices');
+const toolAgent = require('./toolAgent');
 const manualPaymentValidator = require('./manualPaymentValidator');
 const contactCrm = require('./contactCrm');
 const recurringTasks = require('../queues/recurringTasks');
@@ -958,7 +959,23 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
   if (decision) return { text: decision.text, actionLog: decision.actionLog || null };
 
   const intent = detectIntent(text, lastAssistantMessage);
-  if (!intent) return null; // laisse l'appelant retomber sur image/vidéo/livre/chat générique.
+  if (!intent) {
+    // Aucune intention à motif connu : l'AGENT À OUTILS prend le relais — le LLM
+    // choisit dynamiquement un outil RÉEL du registre (toolRegistry), l'exécute
+    // de façon vérifiée et répond en s'appuyant sur le résultat réel. C'est la
+    // boucle « Chat → sélection d'outil → tool call → vérification → réponse ».
+    // S'il n'y a aucun outil pertinent, il renvoie null et le chat générique
+    // (image/vidéo/livre/conversation) reprend la main.
+    const agent = await toolAgent.runToolAgent(
+      { text, history, tenantId },
+      { runtime: d.runtime || null, permissions: d.toolPermissions || undefined },
+    ).catch((err) => {
+      console.warn('chatOrchestrator — toolAgent indisponible, repli :', err.message);
+      return null;
+    });
+    if (agent) return agent;
+    return null;
+  }
 
   const sessionKey = `${tenantId || 'default'}:${sessionId || 'default'}`;
   switch (intent) {

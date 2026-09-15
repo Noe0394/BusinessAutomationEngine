@@ -107,6 +107,48 @@ async function markPurchase(tenantId, channel, from, purchase) {
   return contact;
 }
 
+// Normalise un numéro vers son identité CANONIQUE : chiffres seuls (le « + »
+// est retiré — il ferait diverger la clé de contact, car sanitize() convertit
+// « + » en « _ », d'où deux clés distinctes pour le même numéro). Renvoie null
+// si invalide (< 8 chiffres) — ces lignes sont rejetées à l'import.
+function normalizePhone(raw) {
+  if (raw == null) return null;
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length < 8) return null;
+  return digits;
+}
+
+// Import RÉEL de contacts (depuis un fichier Excel/CSV déjà parsé et mappé côté
+// client). Chaque entrée : { phone, name?, fields? }. Déduplication par
+// (canal, numéro normalisé) — au sein du lot ET contre l'existant. Les lignes
+// sans numéro valide sont rejetées (comptées). Retourne un RAPPORT réel.
+async function importContacts(tenantId, contacts, opts) {
+  const o = opts || {};
+  const channel = String(o.channel || 'WHATSAPP').toUpperCase();
+  const source = o.source || 'import';
+  const doc = await load(tenantId);
+  const seenInBatch = new Set();
+  let imported = 0; let updated = 0; let duplicates = 0; let invalid = 0;
+  for (const entry of (Array.isArray(contacts) ? contacts : [])) {
+    const phone = normalizePhone(entry && (entry.phone || entry.number || entry.telephone));
+    if (!phone) { invalid += 1; continue; }
+    const key = contactKey(channel, phone);
+    if (seenInBatch.has(key)) { duplicates += 1; continue; }
+    seenInBatch.add(key);
+    const existed = !!doc.contacts[key];
+    const contact = ensureContact(doc, channel, phone);
+    if (entry.name && !contact.name) contact.name = String(entry.name).slice(0, 120);
+    contact.source = contact.source || source;
+    if (entry.fields && typeof entry.fields === 'object') {
+      contact.fields = Object.assign({}, contact.fields || {}, entry.fields);
+    }
+    addTagsTo(contact, ['importé', TAG_PROSPECT]);
+    if (existed) { updated += 1; } else { imported += 1; }
+  }
+  save(tenantId, doc);
+  return { total: (Array.isArray(contacts) ? contacts.length : 0), imported, updated, duplicates, invalid, source, channel };
+}
+
 // Liste des contacts (filtrable par tag et/ou canal), du plus récemment vu au
 // plus ancien.
 async function list(tenantId, opts) {
@@ -137,5 +179,6 @@ async function counts(tenantId) {
 
 module.exports = {
   recordSeen, addTags, setStage, markPurchase, list, counts,
+  importContacts, normalizePhone,
   TAG_NEW, TAG_PROSPECT, TAG_CLIENT, NAMESPACE,
 };

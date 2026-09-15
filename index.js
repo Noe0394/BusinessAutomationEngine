@@ -5008,6 +5008,40 @@ app.post('/api/business-services/:id/permissions', requireAccess, async (req, re
   res.json({ service: s });
 });
 
+// IMPORT DE CONTACTS DANS LE CRM (Excel/CSV) — distinct de /api/contacts/import
+// (qui, lui, alimente une CAMPAGNE). Ici le fichier est parsé côté serveur
+// (même parseur XLSX/CSV), puis chaque ligne est normalisée, dédupliquée (dans
+// le lot ET contre l'existant) et PERSISTÉE dans le CRM. Les contacts
+// deviennent alors interrogeables par le Chat Intelligent (outils
+// searchContacts / countContacts du registre). Renvoie un RAPPORT réel.
+app.post('/api/contacts/import-crm', requireAccess, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Aucun fichier fourni (champ "file").' });
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet);
+    const contacts = rows.map((row) => {
+      const name = String(row.nom || row.Nom || row.prenom || row.Prenom || row.name || row.Name || '').trim();
+      const phone = String(row.telephone || row.Telephone || row.phone || row.Phone || row.numero || row.Numero || row.tel || row.Tel || '').trim();
+      const fields = {};
+      ['entreprise', 'Entreprise', 'company', 'pays', 'Pays', 'country', 'ville', 'Ville', 'city', 'categorie', 'Categorie', 'category', 'source', 'Source', 'notes', 'Notes'].forEach((k) => {
+        if (row[k] != null && row[k] !== '') fields[k.toLowerCase()] = String(row[k]).slice(0, 300);
+      });
+      return { phone, name, fields };
+    });
+    const report = await contactCrm.importContacts(resolveTenantId(req), contacts, { source: 'import_fichier', channel: (req.body && req.body.channel) || 'WHATSAPP' });
+    res.json({ ok: true, report });
+  } catch (err) {
+    console.error('Import CRM contacts:', err.message);
+    res.status(400).json({ error: 'Fichier invalide. Utilisez un .xlsx/.csv avec une colonne "telephone" (et éventuellement "nom").' });
+  }
+});
+// Aperçu CRM (comptages) — pour l'onglet Contacts et le suivi.
+app.get('/api/contacts/summary', requireAccess, async (req, res) => {
+  try { res.json({ ok: true, summary: await contactCrm.counts(resolveTenantId(req)) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Filtrage privé/pro + tuteur pédagogique auto (§3/§4 du cahier des charges
 // "Chat-Driven Agent Orchestrator", voir lib/intelligence/message-triage.js
 // et docs/PARITE-LOCAL.md). Câblé sur CHAQUE message WhatsApp/Telegram

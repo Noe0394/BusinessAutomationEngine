@@ -156,6 +156,41 @@ const TOOLS = {
     },
   },
 
+  searchMessages: {
+    description: 'Recherche un mot/expression dans l\'historique persistant des messages d\'un canal.',
+    permission: null,
+    inputSchema: {
+      query: { type: 'string', required: true, description: 'Mot ou expression à chercher.' },
+      channel: { type: 'string', required: false, description: 'WHATSAPP (défaut) ou TELEGRAM.' },
+      sinceDays: { type: 'number', required: false, description: 'Fenêtre en jours (défaut 30).' },
+    },
+    resultSchema: { count: 'number', matches: 'array' },
+    errorSchema: { code: 'string' },
+    async execute(args, ctx) {
+      const channel = /telegram/i.test(args.channel || '') ? 'TELEGRAM' : 'WHATSAPP';
+      const q = norm(args.query);
+      const all = await messageHistory.getSince(ctx.tenant, channel, args.sinceDays || 30);
+      const matches = (all || []).filter((m) => norm(m.text).includes(q));
+      return { ok: true, result: { channel, count: matches.length, matches: matches.slice(-50).map((m) => ({ direction: m.direction, name: m.name || null, party: m.party, text: m.text || null, ts: m.ts || null })) } };
+    },
+  },
+
+  getMessagesByDate: {
+    description: 'Renvoie les messages d\'un canal reçus/envoyés sur les N derniers jours (ex. avant-hier = 2).',
+    permission: null,
+    inputSchema: {
+      sinceDays: { type: 'number', required: true, description: 'Nombre de jours en arrière (1 = aujourd\'hui, 2 = hier inclus…).' },
+      channel: { type: 'string', required: false, description: 'WHATSAPP (défaut) ou TELEGRAM.' },
+    },
+    resultSchema: { count: 'number', messages: 'array' },
+    errorSchema: { code: 'string' },
+    async execute(args, ctx) {
+      const channel = /telegram/i.test(args.channel || '') ? 'TELEGRAM' : 'WHATSAPP';
+      const msgs = await messageHistory.getSince(ctx.tenant, channel, args.sinceDays || 2);
+      return { ok: true, result: { channel, sinceDays: args.sinceDays, count: (msgs || []).length, messages: (msgs || []).slice(-100).map((m) => ({ direction: m.direction, name: m.name || null, party: m.party, text: m.text || null, ts: m.ts || null })) } };
+    },
+  },
+
   // ---- Actions sortantes VÉRIFIÉES ----------------------------------------
   sendWhatsAppMessage: {
     description: 'Envoie un message WhatsApp et VÉRIFIE l\'envoi (identifiant réel). SUCCESS seulement si confirmé.',
