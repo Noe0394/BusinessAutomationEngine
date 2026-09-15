@@ -63,10 +63,17 @@ async function composeReply({ tenant, channel, from, name, text, llm }) {
   const prompt = [
     personaManager.personaSystemPrompt('default'),
     'Tu réponds DIRECTEMENT à un client/prospect qui vient d\'écrire au vendeur — tu réponds EN SON NOM, comme le vendeur lui-même. Sois chaleureux, humain et utile.',
-    bizCtx ? `Informations RÉELLES de l'activité (produits, prix, règles — n'invente jamais au-delà de ceci) :\n${bizCtx}` : 'Aucune offre n\'est encore configurée : reste chaleureux et pose une question pour comprendre le besoin.',
+    bizCtx
+      ? `Informations RÉELLES de l'activité (produits, prix, règles — SEULE source autorisée, n'invente jamais au-delà de ceci) :\n${bizCtx}`
+      : 'AUCUNE offre n\'est configurée pour ce vendeur. Tu ne connais donc PAS ses produits, services, prix ni domaine d\'activité.',
     history ? `Historique récent avec ce client :\n${history}` : '',
     `Nouveau message du client ${name ? '(' + name + ')' : ''} : "${text}"`,
-    'Rédige UNIQUEMENT le message de réponse à lui envoyer (1 à 4 phrases naturelles, parlées), sans préambule ni guillemets. Ne présente JAMAIS une action (paiement reçu, accès débloqué) comme déjà faite — propose-la. Si tu ne sais pas, dis que tu transmets au vendeur.',
+    // Garde-fou anti-invention RENFORCÉ (un vrai client est en face) :
+    'RÈGLE ABSOLUE : n\'invente JAMAIS un produit, un service, une formation, un domaine d\'activité, un prix ou une promesse. Ne cite QUE ce qui figure explicitement dans les informations ci-dessus.',
+    bizCtx
+      ? 'Rédige la réponse en t\'appuyant uniquement sur ces informations réelles.'
+      : 'Comme aucune offre n\'est renseignée, NE CITE AUCUN produit/service/domaine : réponds chaleureusement et demande simplement au client ce qu\'il recherche (ou dis que le vendeur va lui préciser) — sans jamais deviner ce qui est vendu.',
+    'Rédige UNIQUEMENT le message à lui envoyer (1 à 4 phrases naturelles, parlées), sans préambule ni guillemets. Ne présente JAMAIS une action (paiement reçu, accès débloqué) comme déjà faite — propose-la.',
   ].filter(Boolean).join('\n');
   const raw = await gen(prompt);
   return String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1500);

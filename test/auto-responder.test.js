@@ -84,4 +84,12 @@ test('composeReply s\'appuie sur le contexte métier réel', async () => {
   assert.equal(txt, 'Réponse test');
 });
 
+test('sans offre configurée : le prompt INTERDIT d\'inventer un produit/domaine', async () => {
+  let captured = '';
+  await autoResponder.composeReply({ tenant: 'tenantSansOffre', channel: 'WHATSAPP', from: '22600000003', text: 'vous vendez quoi ?', llm: async (p) => { captured = p; return 'ok'; } });
+  assert.match(captured, /AUCUNE offre n'est configurée/i);
+  assert.match(captured, /n'invente JAMAIS un produit/i);
+  assert.match(captured, /NE CITE AUCUN produit/i);
+});
+
 test.after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {} });
