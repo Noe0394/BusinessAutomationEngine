@@ -2315,8 +2315,14 @@
       // module "studio_video" : un clic dessus affiche l'écran d'activation
       // (voir applyStudioLockState) plutôt que de cacher complètement la
       // fonctionnalité — meilleure incitation à l'achat qu'un onglet absent.
+      // 'services-metiers' (console de configuration métier) et 'aide' (centre
+      // d'aide/documentation) restent TOUJOURS visibles, comme 'connections' /
+      // 'goalchat' / 'studio' : ils n'envoient rien par eux-mêmes (le filtrage
+      // par module s'applique là où une action réelle part) et sont utiles quel
+      // que soit le module de la licence. Sans cette exclusion, ils étaient
+      // masqués pour toute licence à modules restreints (bug signalé).
       const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'))
-        .filter((btn) => !['connections', 'goalchat', 'scheduler', 'prospects', 'share', 'studio'].includes(btn.dataset.tab));
+        .filter((btn) => !['connections', 'goalchat', 'scheduler', 'prospects', 'share', 'studio', 'services-metiers', 'aide'].includes(btn.dataset.tab));
 
       applyStudioLockState();
 
