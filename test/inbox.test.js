@@ -106,4 +106,51 @@ test('action READ_RECENT_MESSAGES sans runtime -> RUNTIME_MISSING (jamais un cra
   assert.equal(out.error, 'RUNTIME_MISSING:getRecentMessages');
 });
 
+test('detectIntent reconnaît une demande sur les groupes', () => {
+  assert.equal(chatOrchestrator.detectIntent('quels sont mes groupes ?', null), 'groups');
+  assert.equal(chatOrchestrator.detectIntent('liste mes groupes où je suis admin', null), 'groups');
+  assert.equal(chatOrchestrator.detectIntent('combien de groupes j\'ai sur telegram', null), 'groups');
+});
+
+function mockGroupsDeps(listResult) {
+  return {
+    runtime: {
+      actionExecutor: {
+        execute: async (action) => {
+          assert.equal(action, 'LIST_GROUPS');
+          return { ok: true, result: listResult };
+        },
+      },
+    },
+  };
+}
+
+test('handle(groups) liste et filtre les groupes admin', async () => {
+  const groups = [
+    { id: 'g1@g.us', name: 'Clients VIP', size: 120, isAdmin: true },
+    { id: 'g2@g.us', name: 'Discussion libre', size: 40, isAdmin: false },
+    { id: 'g3@g.us', name: 'Formation Cuisine', size: 88, isAdmin: true },
+  ];
+  const all = await chatOrchestrator.handle(
+    { text: 'quels sont mes groupes ?', history: [], tenantId: '__admin__', sessionId: 'g-a' },
+    mockGroupsDeps({ connected: true, paired: true, groups }),
+  );
+  assert.ok(/Clients VIP/.test(all.text) && /Discussion libre/.test(all.text), 'liste tous les groupes');
+
+  const adminOnly = await chatOrchestrator.handle(
+    { text: 'mes groupes où je suis admin', history: [], tenantId: '__admin__', sessionId: 'g-b' },
+    mockGroupsDeps({ connected: true, paired: true, groups }),
+  );
+  assert.ok(/Clients VIP/.test(adminOnly.text) && /Formation Cuisine/.test(adminOnly.text), 'garde les groupes admin');
+  assert.ok(!/Discussion libre/.test(adminOnly.text), 'exclut les groupes non-admin');
+});
+
+test('handle(groups) : appairé mais déconnecté -> statut honnête', async () => {
+  const res = await chatOrchestrator.handle(
+    { text: 'mes groupes whatsapp', history: [], tenantId: 'KEY-1', sessionId: 'g-c' },
+    mockGroupsDeps({ connected: false, paired: true, groups: [] }),
+  );
+  assert.ok(/appair/i.test(res.text) && /reconnex|rétablit|réessaie/i.test(res.text));
+});
+
 test.after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {} });

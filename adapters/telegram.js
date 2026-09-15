@@ -526,6 +526,25 @@ function createSession(tenantId) {
     return loginError ? (loginError.message || String(loginError)) : null;
   }
 
+  // isAdmin/creator + taille depuis l'entité du dialogue (best-effort : selon
+  // le type de groupe/canal, certains champs peuvent manquer — on ne lève
+  // jamais pour autant). `creator` = compte propriétaire ; `adminRights` non
+  // nul = droits d'admin délégués. Parité avec
+  // adapters/whatsappEngineBaileys.js#getGroupsSummary.
+  function dialogGroupSummary(d) {
+    const e = d.entity || {};
+    const isAdmin = !!(e.creator || e.adminRights);
+    return {
+      id: d.id ? d.id.toString() : null,
+      name: d.title || d.name || 'Sans nom',
+      isChannel: Boolean(d.isChannel),
+      size: e.participantsCount || 0,
+      isAdmin,
+      channel: 'TELEGRAM',
+      unreadCount: d.unreadCount || 0,
+    };
+  }
+
   async function getGroups() {
     if (!connected) {
       throw new Error('TELEGRAM_NOT_CONNECTED');
@@ -535,13 +554,21 @@ function createSession(tenantId) {
 
     return dialogs
       .filter((d) => d.isGroup || d.isChannel)
-      .map((d) => ({
-        id: d.id ? d.id.toString() : null,
-        name: d.title || d.name || 'Sans nom',
-        isChannel: Boolean(d.isChannel),
-        unreadCount: d.unreadCount || 0,
-      }))
+      .map(dialogGroupSummary)
       .filter((g) => g.id);
+  }
+
+  // Même liste que getGroups() mais garantie non-lançante (renvoie [] si non
+  // connecté) — utilisée par la couche intelligence (LIST_GROUPS).
+  async function getGroupsSummary() {
+    if (!connected) return [];
+    try {
+      const dialogs = await client.getDialogs({ limit: 200 });
+      return dialogs.filter((d) => d.isGroup || d.isChannel).map(dialogGroupSummary).filter((g) => g.id);
+    } catch (err) {
+      console.error(`getGroupsSummary Telegram (tenant "${tenantId}") :`, err.message);
+      return [];
+    }
   }
 
   /**
@@ -678,6 +705,7 @@ function createSession(tenantId) {
     submitPassword,
     getLoginError,
     getGroups,
+    getGroupsSummary,
     getGroupMembers,
     getRecentMessages,
     resolveRecipient,

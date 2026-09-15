@@ -76,6 +76,11 @@ const CONNECTOR_RE = /(contact|\btag(?:ue|uer|s)?\b|system\.?io|systeme\.?io|crm
 // detectIntent : "dernier message reçu" ne doit pas être happé par le moteur
 // d'objectifs.
 const INBOX_RE = /(derniers?\s+messages?|messages?\s+re[çc]us?|qui\s+m.?a\s+(?:écrit|ecrit|envoy[ée]|contact[ée])|num[ée]ro\s+de\s+l.?exp[ée]diteur|\bexp[ée]diteur\b|bo[îi]te\s+de\s+r[ée]ception|\binbox\b|(?:es|est)-?\s*tu\s+(?:vraiment\s+)?connect[ée]|connect[ée]\s+[àa]\s+mon\s+(?:whatsapp|telegram)|montre(?:-|\s+)(?:moi\s+)?mes\s+messages)/i;
+// Consultation des groupes (liste, "où je suis admin", filtre par sujet).
+// Placé AVANT 'goal' (GOAL_RE capte "groupes"/"membres") : une QUESTION sur les
+// groupes ne doit pas lancer le moteur d'objectifs. La véritable exécution
+// ("écris aux membres du groupe X …") reste gérée par 'goal' (à enrichir).
+const GROUPS_RE = /(mes\s+groupes?|liste[rz]?\s+(?:mes\s+)?groupes?|quels?\s+(?:sont\s+)?(?:mes\s+)?groupes?|combien\s+de\s+groupes?|groupes?\s+(?:dont|o[ùu])\s+je\s+suis\s+admin|groupes?\s+que\s+j.?administre|mes\s+groupes?\s+admin)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
 
 // Détection d'intention (Command Parsing, §1.1 du cahier des charges) —
@@ -91,6 +96,7 @@ function detectIntent(text, lastAssistantMessage) {
   }
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
   if (INBOX_RE.test(text)) return 'inbox';
+  if (GROUPS_RE.test(text)) return 'groups';
   if (REPORT_RE.test(text)) return 'report';
   if (PAYMENT_RE.test(text)) return 'payment';
   // 'account' et 'connector' partagent le même handler (handleConnector) :
@@ -328,6 +334,59 @@ async function handleInbox(text, tenantId, deps) {
 }
 
 // ---------------------------------------------------------------------------
+// 'groups' — liste réelle des groupes du compte (LIST_GROUPS), avec le rôle
+// (admin) et la taille. Sait filtrer "où je suis admin" et par sujet (mot-clé).
+// Base concrète pour cibler ensuite une campagne (extraction + envoi), qui
+// passe par le moteur de campagne existant sur confirmation.
+// ---------------------------------------------------------------------------
+async function handleGroups(text, tenantId, deps) {
+  if (!deps.runtime || !deps.runtime.actionExecutor) {
+    return { text: 'Je ne peux pas lister les groupes pour le moment (moteur non disponible).' };
+  }
+  const channel = /telegram/i.test(text) ? 'TELEGRAM' : 'WHATSAPP';
+  const label = channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+  const out = await deps.runtime.actionExecutor.execute('LIST_GROUPS', { channel, tenantId }, { tenantId });
+  if (!out.ok) return { text: `Je n'ai pas pu récupérer tes groupes ${label} (${out.error}).` };
+  const r = out.result || {};
+  if (r.connected === false) {
+    return {
+      text: r.paired
+        ? `Ton compte ${label} est appairé mais la connexion se rétablit — réessaie dans un instant pour que je liste tes groupes.`
+        : `Je ne suis pas connecté à ${label} — appaire d'abord le compte dans l'onglet ${label}.`,
+      actionLog: [{ icon: '🔄', label: `${label} ${r.paired ? 'reconnexion' : 'non appairé'}`, status: 'warning' }],
+    };
+  }
+  let groups = Array.isArray(r.groups) ? r.groups : [];
+  const total = groups.length;
+  const adminOnly = /(admin|administre|dont\s+je\s+suis|o[ùu]\s+je\s+suis)/i.test(text);
+  if (adminOnly) groups = groups.filter((g) => g.isAdmin);
+  const subj = text.match(/(?:sur|contenant|th[èe]me|[àa]\s+propos\s+de|parlant\s+de)\s+["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
+  if (subj) {
+    const kw = subj[1].trim().toLowerCase();
+    groups = groups.filter((g) => (g.name || '').toLowerCase().includes(kw));
+  }
+  if (!groups.length) {
+    return {
+      text: adminOnly
+        ? `Je ne trouve aucun groupe ${label} dont tu es admin (sur ${total} groupe(s) au total).`
+        : `Aucun groupe ${label} trouvé${subj ? ' pour ce sujet' : ''} (${total} au total).`,
+      actionLog: [{ icon: '👥', label: `0 groupe ${label}`, status: 'done' }],
+    };
+  }
+  const sorted = groups.slice().sort((a, b) => (b.size || 0) - (a.size || 0));
+  const top = sorted.slice(0, 20);
+  const lines = top.map((g) => `• ${g.name}${g.isAdmin ? ' 👑 (admin)' : ''} — ${g.size || 0} membre(s)`);
+  const header = adminOnly
+    ? `Tes groupes ${label} où tu es admin (${groups.length}) :`
+    : `Tes groupes ${label} (${groups.length}${subj ? ' correspondant au sujet' : ''}) :`;
+  const more = groups.length > top.length ? `\n… et ${groups.length - top.length} autre(s).` : '';
+  return {
+    text: [header, ...lines].join('\n') + more,
+    actionLog: [{ icon: '👥', label: `${groups.length} groupe(s) ${label}`, status: 'done' }],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 'payment' — extraction LLM ciblée (montant, destinataire, produit, remise
 // demandée) puis exécution directe GENERATE_PAYMENT_LINK / NEGOTIATE_DISCOUNT.
 // Même patron qu'index.js#planOrAsk (planImage/planVideo/planBook) : un seul
@@ -554,6 +613,7 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'goal': return handleGoal(text, sessionKey, tenantId, d);
     case 'report': return handleReport(text, tenantId, d);
     case 'inbox': return handleInbox(text, tenantId, d);
+    case 'groups': return handleGroups(text, tenantId, d);
     case 'payment': return handlePayment(text, history, tenantId, d);
     case 'connector': return handleConnector(text, history, tenantId, d);
     default: return null;

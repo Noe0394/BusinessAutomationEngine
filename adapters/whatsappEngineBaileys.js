@@ -808,6 +808,41 @@ function createSession(tenantId) {
     return metadata.participants;
   }
 
+  // Résumé de TOUS les groupes du compte, avec le rôle du compte connecté
+  // (isAdmin) + la taille — permet à l'agent de cibler "les groupes dont je
+  // suis admin", "les groupes contenant tel mot", etc. (voir
+  // lib/intelligence/action-executor.js#LIST_GROUPS). Best-effort : renvoie []
+  // si non connecté plutôt que de lever.
+  async function getGroupsSummary() {
+    if (!sock) return [];
+    try {
+      const meNum = getConnectedNumber();
+      const groups = await sock.groupFetchAllParticipating();
+      return Object.values(groups || {}).map((g) => {
+        const participants = g.participants || [];
+        let isAdmin = false;
+        if (meNum) {
+          const mine = participants.find((p) => {
+            const idNum = String(p.id || '').split('@')[0].split(':')[0];
+            const jidNum = String(p.jid || '').split('@')[0].split(':')[0];
+            return idNum === meNum || jidNum === meNum;
+          });
+          isAdmin = !!(mine && (mine.admin === 'admin' || mine.admin === 'superadmin'));
+        }
+        return {
+          id: g.id,
+          name: g.subject || 'Sans nom',
+          size: participants.length,
+          isAdmin,
+          channel: 'WHATSAPP',
+        };
+      });
+    } catch (err) {
+      console.error(`getGroupsSummary WhatsApp (tenant "${tenantId}") :`, err.message);
+      return [];
+    }
+  }
+
   // Déconnexion manuelle demandée par l'utilisateur (bouton "Se déconnecter" du
   // dashboard) : contrairement à une coupure réseau (voir connection.update /
   // DisconnectReason.loggedOut), il faut ici explicitement effacer les
@@ -903,6 +938,7 @@ function createSession(tenantId) {
     requestPairingCode,
     getGroupMetadata,
     getGroups,
+    getGroupsSummary,
     getGroupParticipants,
     getContactName,
     getRecentMessages,
