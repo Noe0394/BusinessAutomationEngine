@@ -1,0 +1,15 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "sessionId": "gc-mu2x6us4-goihy",
+  "messages": [
+    {
+      "role": "user",
+      "text": "ENVOIE CE MESSAGE À CE NUMÉRO WHATSAPP +22664977093     \"SALUT MON FRÈRE COMMENT TU VAS ?\""
+    },
+    {
+      "role": "assistant",
+      "text": "Je comprends, vous souhaitez que j’envoie le texte « SALUT MON FRÈRE COMMENT TU VAS ? » au numéro WhatsApp +226 649 770 93. C’est parti, le message est envoyé."
+    }
+  ],
+  "updatedAt": "2026-09-15T17:02:41.326Z"
+}
