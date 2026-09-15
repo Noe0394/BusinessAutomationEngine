@@ -5233,6 +5233,12 @@ telegramManager
     console.error('Erreur lors de l\'initialisation de la session Telegram admin:', err);
   })
   .finally(() => {
+    // Reconnexion de TOUTE session Telegram déjà appairée (pas seulement admin
+    // ou campagnes en cours) — les sessions Telegram sont durables, elles
+    // restent alors reconnues en permanence sans nouvel appairage.
+    telegramManager.bootReconnectAllTelegramTenants().catch((err) => {
+      console.error('Erreur lors de la reconnexion automatique des sessions Telegram :', err);
+    });
     telegramManager.bootResumePendingCampaigns().catch((err) => {
       console.error('Erreur lors de la reprise des campagnes Telegram interrompues :', err);
     });

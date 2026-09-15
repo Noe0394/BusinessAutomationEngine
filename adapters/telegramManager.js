@@ -199,6 +199,71 @@ async function bootResumePendingCampaigns() {
   }
 }
 
+const GITHUB_TELEGRAM_SESSION_DIR = process.env.GITHUB_TELEGRAM_SESSION_DIR || 'telegram_sessions';
+
+// Liste tous les tenants ayant une session Telegram déjà sauvegardée (fichier
+// local <tenant>.txt non vide et/ou fichier distant sur GitHub) — équivalent
+// Telegram de whatsappManager.listTenantsWithSavedSession, sert à reconnecter
+// au démarrage TOUTE clé déjà appairée (voir bootReconnectAllTelegramTenants).
+async function listTenantsWithSavedSession() {
+  const local = [];
+  try {
+    const entries = fs.readdirSync(telegram.SESSION_DIR_BASE);
+    for (const f of entries) {
+      if (!f.endsWith('.txt')) continue;
+      try {
+        if (fs.statSync(path.join(telegram.SESSION_DIR_BASE, f)).size > 0) local.push(f.replace(/\.txt$/, ''));
+      } catch (err) { /* fichier illisible : ignoré */ }
+    }
+  } catch (err) {
+    // Dossier absent (disque éphémère fraîchement démarré) : on tente GitHub.
+  }
+
+  if (!githubStore.enabled) return local;
+
+  const known = new Set(local);
+  const remote = [];
+  try {
+    const remoteFiles = await githubStore.listDirectory(GITHUB_TELEGRAM_SESSION_DIR);
+    for (const filename of remoteFiles) {
+      if (!/\.(json|txt)$/.test(filename)) continue;
+      const tenantId = filename.replace(/\.(json|txt)$/, '');
+      if (known.has(tenantId)) continue;
+      try {
+        const store = githubStore.createStore(`${GITHUB_TELEGRAM_SESSION_DIR}/${filename}`);
+        const r = await store.fetchRemote();
+        if (r && r.content) remote.push(tenantId);
+      } catch (err) {
+        console.error(`Session Telegram distante illisible pour le tenant "${tenantId}" :`, err.message);
+      }
+    }
+  } catch (err) {
+    // Listing GitHub indisponible : on se contente des sessions locales.
+  }
+  return [...local, ...remote];
+}
+
+// À appeler une fois au démarrage (après initAdminSession) : reconnecte TOUTE
+// clé de licence ayant déjà une session Telegram sauvegardée — pas seulement
+// l'admin ou les tenants avec campagne en cours. Sans ça, une clé Telegram
+// bien appairée restait affichée "déconnectée" jusqu'à ce que son propriétaire
+// recharge le dashboard (reconnexion paresseuse, voir ensureConnected).
+// Les sessions Telegram (MTProto) sont durables : une fois reconnectées au
+// boot, elles restent reconnues en permanence, sans nouvel appairage.
+// Idempotent (ensureConnected ne relance qu'un seul init par tenant).
+async function bootReconnectAllTelegramTenants() {
+  const tenantIds = await listTenantsWithSavedSession();
+  let reconnected = 0;
+  for (const tenantId of tenantIds) {
+    if (tenantId === ADMIN_TENANT_ID) continue; // déjà fait par initAdminSession
+    ensureConnected(getOrCreate(tenantId));
+    reconnected += 1;
+  }
+  if (reconnected > 0) {
+    console.log(`Reconnexion automatique de ${reconnected} session(s) Telegram déjà appairée(s) après redémarrage.`);
+  }
+}
+
 // Panneau admin (/api/admin/storage-status) : même forme agrégée que
 // whatsappManager.getStorageStatus().
 function getStorageStatus() {
@@ -233,6 +298,8 @@ module.exports = {
   getSessionForRequest,
   initAdminSession,
   bootResumePendingCampaigns,
+  bootReconnectAllTelegramTenants,
+  listTenantsWithSavedSession,
   listActiveEntries,
   getStorageStatus,
   setIncomingMessageHandler,
