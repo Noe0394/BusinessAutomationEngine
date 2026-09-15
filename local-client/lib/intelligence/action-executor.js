@@ -37,7 +37,8 @@
     'ANALYZE_RESPONSES', 'REPLY_COMMENT', 'GENERATE_VIDEO', 'PAUSE_CAMPAIGN',
     'RESUME_CAMPAIGN', 'GENERATE_REPORT', 'CREATE_USER_ACCOUNT', 'GENERATE_ACCESS_KEY',
     'SCHEDULE_FOLLOWUP', 'GENERATE_PAYMENT_LINK', 'NEGOTIATE_DISCOUNT',
-    'GRANT_MODULE_ACCESS', 'ANSWER_STUDENT_QUERY', 'DELIVER_LESSON_CONTENT'];
+    'GRANT_MODULE_ACCESS', 'ANSWER_STUDENT_QUERY', 'DELIVER_LESSON_CONTENT',
+    'READ_RECENT_MESSAGES', 'LIST_GROUPS'];
   const DEFAULT_FIREBASE_BASE = 'https://us-central1-rien-afrique.cloudfunctions.net';
 
   function uuid(prefix) {
@@ -449,6 +450,32 @@
       if (!runtime.sendMessage) return { ok: false, error: 'RUNTIME_MISSING:sendMessage' };
       const out = await runtime.sendMessage(channel, to, content).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
       return { ok: !!(out && out.ok), error: (out && out.error) || null, result: { to, moduleKey: payload.moduleKey || null, channel } };
+    };
+
+    // -------- 19. READ_RECENT_MESSAGES : lecture de la boîte de réception -----
+    // Prouve que l'agent est réellement connecté au WhatsApp/Telegram du
+    // vendeur et lui donne les derniers messages reçus (expéditeur + contenu).
+    // Délègue à runtime.getRecentMessages (tampon en mémoire de l'adaptateur) —
+    // jamais implémenté ici en dur, comme les autres actions "plateforme".
+    registry.READ_RECENT_MESSAGES = async (payload, meta) => {
+      const channel = (payload && payload.channel) || (meta && meta.channel) || 'WHATSAPP';
+      if (!runtime.getRecentMessages) return { ok: false, error: 'RUNTIME_MISSING:getRecentMessages' };
+      const out = await runtime.getRecentMessages(Object.assign({ channel }, payload));
+      if (!out || out.ok === false) {
+        return { ok: false, error: (out && out.error) || 'getRecentMessages failed', result: out || null };
+      }
+      return { ok: true, result: out };
+    };
+
+    // -------- 20. LIST_GROUPS : groupes du compte (rôle admin + taille) ------
+    registry.LIST_GROUPS = async (payload, meta) => {
+      const channel = (payload && payload.channel) || (meta && meta.channel) || 'WHATSAPP';
+      if (!runtime.listGroups) return { ok: false, error: 'RUNTIME_MISSING:listGroups' };
+      const out = await runtime.listGroups(Object.assign({ channel }, payload));
+      if (!out || out.ok === false) {
+        return { ok: false, error: (out && out.error) || 'listGroups failed', result: out || null };
+      }
+      return { ok: true, result: out };
     };
 
     // -------------------------------------------------------------------------

@@ -4,6 +4,8 @@
 // adapters/whatsapp-wwebjs.js (whatsapp-web.js/Puppeteer, args bridés RAM),
 // adapté ici en session unique et branché sur la base SQLite locale
 // (lib/db.js) au lieu du disque JSON/GitHub du backend multi-tenant.
+const fs = require('fs');
+const path = require('path');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
@@ -92,6 +94,47 @@ function onIncomingMessage(callback) {
   incomingMessageListeners.push(callback);
 }
 
+// Tampon glissant des derniers messages reçus — parité avec
+// adapters/whatsappEngineBaileys.js#getRecentMessages (VPS). Permet à la couche
+// intelligence de répondre à "quel est le dernier message reçu ?". En mémoire,
+// vidé au logout.
+const RECENT_MESSAGES_MAX = 50;
+const recentMessages = [];
+function recordIncomingMessage(msg) {
+  try {
+    const from = msg && msg.from;
+    if (!from) return;
+    const isGroup = String(from).endsWith('@g.us');
+    const number = String((isGroup ? (msg.author || '') : from)).split('@')[0];
+    recentMessages.push({
+      from,
+      number,
+      name: (msg._data && msg._data.notifyName) || null,
+      text: msg.body || '',
+      hasMedia: !!msg.hasMedia,
+      isGroup,
+      ts: msg.timestamp || Math.floor(Date.now() / 1000),
+    });
+    if (recentMessages.length > RECENT_MESSAGES_MAX) recentMessages.splice(0, recentMessages.length - RECENT_MESSAGES_MAX);
+  } catch (err) { /* jamais bloquant */ }
+}
+function getRecentMessages(limit) {
+  const n = Math.max(1, Math.min(RECENT_MESSAGES_MAX, Number(limit) || 10));
+  return recentMessages.slice(-n).reverse().map((r) => Object.assign({}, r));
+}
+function getConnectedNumber() {
+  try {
+    return (client && client.info && client.info.wid && client.info.wid.user) || null;
+  } catch (err) { return null; }
+}
+// Appairé si connecté OU si une session whatsapp-web.js est déjà persistée sur
+// le disque (LocalAuth : dossier session-<clientId>). Distingue "appairé mais
+// pas encore reconnecté" de "jamais appairé".
+function isPaired() {
+  if (connected) return true;
+  try { return fs.existsSync(path.join(WHATSAPP_AUTH_DIR, 'session-local-pc')); } catch (err) { return false; }
+}
+
 function connect() {
   if (client) return Promise.resolve();
 
@@ -137,6 +180,7 @@ function connect() {
     } catch (err) {
       console.error('Erreur enregistrement message entrant (SQLite) :', err.message);
     }
+    recordIncomingMessage(msg);
     incomingMessageListeners.forEach((cb) => {
       try { cb(msg); } catch (err) { console.error('Erreur dans un écouteur de message entrant WhatsApp :', err.message); }
     });
@@ -190,6 +234,28 @@ async function getGroupMembers(groupId) {
   return (chat.participants || []).map((p) => ({ id: p.id._serialized, isAdmin: !!p.isAdmin }));
 }
 
+// Résumé de tous les groupes avec le rôle du compte connecté (isAdmin) + la
+// taille — parité avec adapters/whatsappEngineBaileys.js#getGroupsSummary (VPS).
+async function getGroupsSummary() {
+  if (!client || !connected) return [];
+  try {
+    const meId = (client.info && client.info.wid && client.info.wid._serialized) || null;
+    const chats = await client.getChats();
+    return chats.filter((c) => c.isGroup).map((c) => {
+      const participants = c.participants || [];
+      let isAdmin = false;
+      if (meId) {
+        const mine = participants.find((p) => p.id && p.id._serialized === meId);
+        isAdmin = !!(mine && (mine.isAdmin || mine.isSuperAdmin));
+      }
+      return { id: c.id._serialized, name: c.name || 'Sans nom', size: participants.length, isAdmin, channel: 'WHATSAPP' };
+    });
+  } catch (err) {
+    console.error('getGroupsSummary WhatsApp (local-client) :', err.message);
+    return [];
+  }
+}
+
 function getQRCode() {
   return latestQR;
 }
@@ -219,9 +285,11 @@ async function logout() {
   client = null;
   connected = false;
   latestQR = null;
+  recentMessages.length = 0;
   notifyState();
 }
 
 module.exports = {
   connect, sendMessage, sendMedia, getQRCode, getQRCodeImage, isConnected, onStateChange, onIncomingMessage, logout, getGroups, getGroupMembers,
+  getRecentMessages, getGroupsSummary, getConnectedNumber, isPaired,
 };

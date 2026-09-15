@@ -6,6 +6,7 @@ const open = require('open');
 
 const { verifyLicense } = require('./lib/license');
 const { checkAndSelfUpdate } = require('./lib/selfUpdate');
+const axios = require('axios');
 const whatsapp = require('./lib/whatsapp');
 const telegram = require('./lib/telegram');
 const aiGateway = require('./lib/aiGateway');
@@ -31,6 +32,11 @@ const businessProfileStore = require('./ai-engine/storageAdapter');
 const emotionalCloser = require('./ai-engine/emotionalCloser');
 const voiceProcessor = require('./ai-engine/voiceProcessor');
 const AUTO_CLOSE_PROSPECTS = process.env.AUTO_CLOSE_PROSPECTS === 'true';
+const AUTO_ENGAGE_NEW_CONTACTS = process.env.AUTO_ENGAGE_NEW_CONTACTS === 'true';
+const AUTO_PAYMENT_VALIDATION = process.env.AUTO_PAYMENT_VALIDATION === 'true';
+const contactCrm = require('./ai-engine/contactCrm');
+const manualPaymentValidator = require('./ai-engine/manualPaymentValidator');
+const recurringTasks = require('./queues/recurringTasks');
 
 const localRuntime = createLocalRuntime({
   whatsapp, telegram, campaigns,
@@ -286,6 +292,49 @@ async function main() {
   // voir goalChatSessions ci-dessus pour le seul état vraiment nécessaire).
   const lastAssistantBySession = new Map();
 
+  // Mémoire de conversation PERSISTANTE et effaçable par discussion (parité VPS,
+  // voir lib/intelligence/vps-bridge.js) — l'agent ne repart plus de zéro. Un
+  // document par sessionId (storageAdapter local) + cache mémoire. Effacée via
+  // l'action 'restart'.
+  const CHAT_MEMORY_NAMESPACE = 'chat_intelligent_sessions';
+  const sessionHistoryCache = new Map();
+  async function getChatHistory(sid) {
+    if (sessionHistoryCache.has(sid)) return sessionHistoryCache.get(sid);
+    const doc = await businessProfileStore.get(CHAT_MEMORY_NAMESPACE, sid, { messages: [] });
+    const messages = Array.isArray(doc.messages) ? doc.messages : [];
+    sessionHistoryCache.set(sid, messages);
+    return messages;
+  }
+  function recordChatTurn(sid, userText, assistantText) {
+    const h = sessionHistoryCache.get(sid) || [];
+    h.push({ role: 'user', text: String(userText || '') });
+    if (assistantText) h.push({ role: 'assistant', text: String(assistantText).slice(0, 2000) });
+    while (h.length > 40) h.shift();
+    sessionHistoryCache.set(sid, h);
+    businessProfileStore.set(CHAT_MEMORY_NAMESPACE, sid, { sessionId: sid, messages: h, updatedAt: new Date().toISOString() });
+  }
+  function clearChatHistory(sid) {
+    sessionHistoryCache.delete(sid);
+    businessProfileStore.set(CHAT_MEMORY_NAMESPACE, sid, { sessionId: sid, messages: [], updatedAt: new Date().toISOString() });
+  }
+
+  // Génère une image et la rapatrie en buffer (aiGateway renvoie une URL) pour
+  // que handleGroupPost puisse la publier comme média dans un groupe.
+  async function generateImageBuffer(prompt) {
+    const r = await aiGateway.generateImage(String(prompt || '').slice(0, 600), { width: 1024, height: 1024 });
+    if (r && r.url) {
+      const resp = await axios.get(r.url, { responseType: 'arraybuffer', timeout: 60000 });
+      return { buffer: Buffer.from(resp.data), mimetype: resp.headers['content-type'] || 'image/jpeg' };
+    }
+    return null;
+  }
+  // Pousse un message au client sur son canal (après validation de paiement).
+  async function deliverToClientLocal({ channel, from, text }) {
+    if (!from) return;
+    if (channel === 'TELEGRAM') { if (telegram.isConnected()) await telegram.sendMessage(from, text); }
+    else if (whatsapp.isConnected()) await whatsapp.sendMessage(from, text);
+  }
+
   app.post('/api/intelligence/goal-chat', async (req, res) => {
     const { message, sessionId, action } = req.body || {};
     let state = sessionId ? goalChatSessions.get(sessionId) : null;
@@ -296,6 +345,7 @@ async function main() {
     if (action === 'restart') {
       goalChatSessions.delete(state.sessionId);
       lastAssistantBySession.delete(state.sessionId);
+      clearChatHistory(state.sessionId);
       const fresh = goalChat.createSession({});
       goalChatSessions.set(fresh.sessionId, fresh);
       return res.json({ ok: true, sessionId: fresh.sessionId, kind: 'question', reply: goalChat.WELCOME });
@@ -304,13 +354,21 @@ async function main() {
       return res.status(400).json({ error: 'Le champ "message" est requis (ou action:"restart").' });
     }
 
+    const orchestratorDeps = {
+      runtime: localRuntime,
+      humanContext,
+      generateImage: generateImageBuffer,
+      deliverToClient: deliverToClientLocal,
+      executeOptions: { env: process.env },
+    };
+
     // Chat-Driven Agent Orchestrator — consulté EN PREMIER (offre/rapport/
-    // paiement/compte/campagne), avant le pipeline goal-chat brut existant.
-    // Retombe proprement dessus si aucune commande n'est détectée.
+    // paiement/compte/campagne/inbox/groupes/récurrence/CRM), avant le pipeline
+    // goal-chat brut existant. Retombe proprement dessus si rien n'est détecté.
     const lastAssistantMessage = lastAssistantBySession.get(state.sessionId) || null;
     const orchestrated = await chatOrchestrator.handle(
-      { text: message, history: [], sessionId: state.sessionId, lastAssistantMessage },
-      { runtime: localRuntime, humanContext },
+      { text: message, history: await getChatHistory(state.sessionId), sessionId: state.sessionId, lastAssistantMessage },
+      orchestratorDeps,
     ).catch((err) => {
       console.warn('Chat-Driven Agent Orchestrator (local) — échec, repli sur goal-chat brut :', err.message);
       return null;
@@ -321,6 +379,7 @@ async function main() {
         isPlanningQuestion: !!orchestrated.isPlanningQuestion,
         intent: orchestrated.intent || null,
       });
+      recordChatTurn(state.sessionId, message, orchestrated.text);
       return res.json({
         ok: true,
         sessionId: state.sessionId,
@@ -331,6 +390,7 @@ async function main() {
     }
 
     const out = goalChat.step(state, { message, parser: taskParser, humanContext });
+    recordChatTurn(state.sessionId, message, out && out.reply && out.reply.text);
     res.json(Object.assign({ ok: true, sessionId: state.sessionId }, out));
   });
 
@@ -640,11 +700,39 @@ async function main() {
     }
     if (!text.trim() || !from) return;
 
+    // Preuve de paiement manuel entrante (Human-in-the-Loop) — priorité sur le
+    // closing. handleClientProof n'accorde jamais d'accès (enregistre + fiche
+    // admin) ; l'accusé auto au client n'est envoyé que si AUTO_PAYMENT_VALIDATION.
+    const hasAttachment = channel === 'WHATSAPP' ? !!msg.hasMedia : !!(msg.media || msg.photo || msg.document);
+    if (manualPaymentValidator.looksLikePaymentProof(text, hasAttachment)) {
+      const ack = await manualPaymentValidator.handleClientProof({ tenantId: 'local', channel, from, text, hasAttachment })
+        .catch((err) => { console.error('manualPaymentValidator (local) :', err.message); return null; });
+      if (ack && AUTO_PAYMENT_VALIDATION) await sendCustomerReply(channel, ack, from).catch(() => {});
+      return;
+    }
+
     const classification = messageTriage.classify(text);
     if (classification.category === 'business') {
       const profile = await businessProfileStore.get('business_profiles', 'local', { offers: [], faq: [] });
       messageTriage.recordFaqSignal(profile, text);
       businessProfileStore.set('business_profiles', 'local', profile);
+
+      // CRM : mémorise + auto-étiquette le contact ; message d'accueil au 1er
+      // contact (gated AUTO_ENGAGE_NEW_CONTACTS), puis on laisse la suite au closer.
+      const senderName = channel === 'WHATSAPP'
+        ? (msg._data && msg._data.notifyName) || null
+        : (msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
+      try {
+        const seen = await contactCrm.recordSeen('local', { channel, from, name: senderName });
+        if (seen.isNew && AUTO_ENGAGE_NEW_CONTACTS) {
+          const welcome = (profile && profile.welcomeMessage) || process.env.WELCOME_MESSAGE
+            || 'Bonjour 👋 Merci de nous avoir écrit ! Dites-moi ce qui vous intéresse, je vous réponds tout de suite.';
+          await sendCustomerReply(channel, welcome, from).catch((err) => console.error('Message d\'accueil (local) :', err.message));
+          return;
+        }
+      } catch (err) {
+        console.error(`contactCrm.recordSeen (local, ${channel}) :`, err.message);
+      }
     }
     if (!AUTO_CLOSE_PROSPECTS || classification.category !== 'business') return;
 
@@ -666,6 +754,32 @@ async function main() {
       console.error('Erreur dans le traitement intelligent d\'un message Telegram entrant :', err.message);
     });
   });
+
+  // Tick des TÂCHES RÉCURRENTES (mono-poste 'local') — parité VPS. Chaque
+  // minute : exécute les tâches dues du jour via localRuntime.sendToGroups
+  // (markRun avant envoi = idempotent).
+  let recurringTickRunning = false;
+  async function runRecurringTasksTickLocal() {
+    if (recurringTickRunning) return;
+    recurringTickRunning = true;
+    try {
+      const now = new Date();
+      const tasks = await recurringTasks.list('local');
+      for (const task of tasks) {
+        if (!recurringTasks.isDue(task, now)) continue;
+        await recurringTasks.markRun('local', task.id, now);
+        localRuntime.sendToGroups({ channel: task.channel, target: task.target, text: task.message, tenantId: 'local' })
+          .then((out) => { if (!out || out.ok === false) console.warn(`Tâche récurrente ${task.id} : envoi non abouti (${(out && out.error) || 'inconnu'}).`); })
+          .catch((err) => console.error(`Tâche récurrente ${task.id} (local) :`, err.message));
+      }
+    } catch (err) {
+      console.error('Cycle des tâches récurrentes (local) :', err.message);
+    } finally {
+      recurringTickRunning = false;
+    }
+  }
+  const recurringInterval = setInterval(() => { runRecurringTasksTickLocal(); }, 60 * 1000);
+  if (recurringInterval.unref) recurringInterval.unref();
 
   whatsapp.connect().catch((err) => {
     console.error('Erreur lors de la connexion WhatsApp :', err.message);

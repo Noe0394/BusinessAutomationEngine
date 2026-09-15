@@ -58,6 +58,37 @@ function onIncomingMessage(callback) {
   incomingMessageListeners.push(callback);
 }
 
+// Tampon glissant des derniers messages reçus — parité avec le VPS/PC WhatsApp.
+const RECENT_MESSAGES_MAX = 50;
+const recentMessages = [];
+function recordIncomingMessage(m) {
+  try {
+    if (!m) return;
+    const senderId = m.senderId != null ? String(m.senderId) : null;
+    const chatId = m.chatId != null ? String(m.chatId) : null;
+    const from = senderId || chatId;
+    if (!from) return;
+    const sender = m.sender || null;
+    let isGroup = false;
+    try { isGroup = !!(m.isGroup || m.isChannel); } catch (e) { isGroup = false; }
+    const ts = Number.isFinite(Number(m.date)) && Number(m.date) > 0 ? Number(m.date) : Math.floor(Date.now() / 1000);
+    recentMessages.push({
+      from, number: null,
+      name: sender ? (sender.firstName || sender.username || null) : null,
+      username: sender && sender.username ? sender.username : null,
+      text: m.message || '', hasMedia: !!m.media, isGroup, ts,
+    });
+    if (recentMessages.length > RECENT_MESSAGES_MAX) recentMessages.splice(0, recentMessages.length - RECENT_MESSAGES_MAX);
+  } catch (err) { /* jamais bloquant */ }
+}
+function getRecentMessages(limit) {
+  const n = Math.max(1, Math.min(RECENT_MESSAGES_MAX, Number(limit) || 10));
+  return recentMessages.slice(-n).reverse().map((r) => Object.assign({}, r));
+}
+function isPaired() {
+  try { return connected || Boolean(loadSessionString()); } catch (err) { return connected; }
+}
+
 function loadSessionString() {
   try {
     return fs.readFileSync(TELEGRAM_SESSION_PATH, 'utf8').trim();
@@ -80,6 +111,7 @@ function registerIncomingHandler() {
     } catch (err) {
       console.error('Erreur enregistrement message Telegram entrant (SQLite) :', err.message);
     }
+    recordIncomingMessage(event.message);
     incomingMessageListeners.forEach((cb) => {
       try { cb(event.message); } catch (err) { console.error('Erreur dans un écouteur de message entrant Telegram :', err.message); }
     });
@@ -194,6 +226,7 @@ async function logout() {
   }
   client = null;
   connected = false;
+  recentMessages.length = 0;
   try { fs.unlinkSync(TELEGRAM_SESSION_PATH); } catch (err) { /* ignore */ }
   notifyState();
 }
@@ -209,6 +242,29 @@ async function getGroups() {
       isChannel: Boolean(d.isChannel),
     }))
     .filter((g) => g.id);
+}
+
+// Résumé des groupes avec rôle (isAdmin via creator/adminRights) + taille —
+// parité avec adapters/telegram.js#getGroupsSummary (VPS). Non-lançant.
+async function getGroupsSummary() {
+  if (!connected) return [];
+  try {
+    const dialogs = await client.getDialogs({ limit: 200 });
+    return dialogs.filter((d) => d.isGroup || d.isChannel).map((d) => {
+      const e = d.entity || {};
+      return {
+        id: d.id ? d.id.toString() : null,
+        name: d.title || d.name || 'Sans nom',
+        isChannel: Boolean(d.isChannel),
+        size: e.participantsCount || 0,
+        isAdmin: !!(e.creator || e.adminRights),
+        channel: 'TELEGRAM',
+      };
+    }).filter((g) => g.id);
+  } catch (err) {
+    console.error('getGroupsSummary Telegram (local-client) :', err.message);
+    return [];
+  }
 }
 
 // Membres d'un groupe/canal (feuille de route "extraction + export Excel") -
@@ -316,7 +372,10 @@ module.exports = {
   getLoginError,
   logout,
   getGroups,
+  getGroupsSummary,
   getGroupMembers,
+  getRecentMessages,
+  isPaired,
   sendMessage,
   sendMedia,
 };
