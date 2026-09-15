@@ -1,0 +1,15 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "sessionId": "gc-mu2jjkhc-3j7pk",
+  "messages": [
+    {
+      "role": "user",
+      "text": "Salut.."
+    },
+    {
+      "role": "assistant",
+      "text": "Salut ! J’ai bien capté que tu es en ligne et que tu veux que je passe à l’action, que ce soit un message, une campagne ou un lien de paiement. Dis‑moi exactement ce que tu souhaites lancer maintenant, et je m’en occupe tout de suite."
+    }
+  ],
+  "updatedAt": "2026-09-15T10:40:38.977Z"
+}
