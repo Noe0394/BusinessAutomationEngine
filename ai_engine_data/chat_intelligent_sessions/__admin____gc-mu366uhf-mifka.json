@@ -1,0 +1,75 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu366uhf-mifka",
+  "title": "comment je configure mon service métier ?",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu366w2ab3pp",
+      "role": "user",
+      "content": "comment je configure mon service métier ?",
+      "text": "comment je configure mon service métier ?",
+      "ts": "2026-09-15T21:14:37.906Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu366w2aojxp",
+      "role": "assistant",
+      "content": "Je te résume les étapes : va dans l’onglet « 🏢 Services Métiers », clique « + Ajouter un Service Métier », saisis le nom et le type d’activité, puis remplis les infos commerciales (prix, devise, description, cible, avantages, objections). Ajoute tes produits ligne par ligne au format « Nom | Prix », définis les règles commerciales (ex. remise max) et les objectifs (ex. 10 ventes/semaine). Choisis « Aucune » si tu n’as pas d’API, ou « API » en indiquant l’URL, l’en‑tête et la clé, puis coche les permissions nécessaires. Enfin, enregistre le service et lance « Tester la connexion » pour vérifier que tout est bien connecté.",
+      "text": "Je te résume les étapes : va dans l’onglet « 🏢 Services Métiers », clique « + Ajouter un Service Métier », saisis le nom et le type d’activité, puis remplis les infos commerciales (prix, devise, description, cible, avantages, objections). Ajoute tes produits ligne par ligne au format « Nom | Prix », définis les règles commerciales (ex. remise max) et les objectifs (ex. 10 ventes/semaine). Choisis « Aucune » si tu n’as pas d’API, ou « API » en indiquant l’URL, l’en‑tête et la clé, puis coche les permissions nécessaires. Enfin, enregistre le service et lance « Tester la connexion » pour vérifier que tout est bien connecté.",
+      "ts": "2026-09-15T21:14:37.906Z",
+      "metadata": {
+        "intent": null,
+        "toolCall": {
+          "name": "getDocumentation",
+          "state": "SUCCESS",
+          "result": {
+            "found": true,
+            "articles": [
+              {
+                "id": "services-metiers-configurer",
+                "title": "Configurer un Service Métier (étape par étape)",
+                "summary": "Le Service Métier est la fiche d'identité de ton activité : produits, prix, règles, objectifs, et éventuellement la connexion API à ta plateforme. C'est là que le chat puise pour vendre et agir.",
+                "steps": [
+                  "Onglet « 🏢 Services Métiers » → « + Ajouter un Service Métier ».",
+                  "Nom + type d'activité (formation, e-commerce, service…).",
+                  "Infos commerciales : prix, devise, description, cible, avantages, objections.",
+                  "Produits : un par ligne au format « Nom | Prix » (ex. « Formation Épicerie et Bouillon | 8000 »).",
+                  "Règles commerciales (ex. remise max) et objectifs (ex. 10 ventes/semaine).",
+                  "Connexion : « Aucune » (infos seules) OU « API » (URL de base + en-tête + clé API).",
+                  "Si API : coche les permissions autorisées (créer accès, suspendre, tagger…).",
+                  "Enregistre, puis « Tester la connexion » → statut RÉEL affiché.",
+                  "La clé API est chiffrée dans un coffre ; jamais réaffichée."
+                ],
+                "body": "Un « Service Métier » décrit une activité que tu gères (une formation, une boutique, un service…). Le Chat Intelligent lit ces informations pour répondre à tes clients avec les VRAIS prix/règles, et, si tu connectes une API, pour agir sur ta plateforme (créer un accès, suspendre…). Rends-toi dans l'onglet « 🏢 Services Métiers » puis « + Ajouter un Service Métier ». Remplis : le nom et le type d'activité ; les infos commerciales (prix, devise, description, cible, avantages, objections/réponses) ; la liste des produits (un par ligne, format « Nom | Prix ») ; les règles commerciales (ex. « jamais plus de 10% de remise ») ; les objectifs (ex. « vendre 10 formations par semaine »). Pour la connexion : choisis « Aucune (interne) » si ta plateforme n'a pas d'API — CYRUS exploitera quand même tes infos ; choisis « API » si ta plateforme expose une API (indique l'URL de base, l'en-tête d'authentification, ta clé API), puis coche les PERMISSIONS que tu autorises (créer un compte élève, suspendre un accès, ajouter un contact, etc.). Enregistre, puis clique « Tester la connexion » : CYRUS effectue un VRAI test non destructif et affiche le statut réel (CONNECTÉ / erreur). Ta clé API est chiffrée dans un coffre : elle n'est jamais réaffichée ni écrite dans les logs ou les conversations."
+              },
+              {
+                "id": "demarrage-apercu",
+                "title": "Qu'est-ce que CYRUS et par où commencer",
+                "summary": "CYRUS est ton assistant business autonome : il comprend un objectif, décide, agit réellement (WhatsApp, Telegram, plateformes) et vérifie le résultat.",
+                "steps": [
+                  "Active ta clé de licence à l'ouverture de l'application.",
+                  "Connecte ton WhatsApp et/ou Telegram (onglet Connexions).",
+                  "Configure ton activité dans l'onglet « Services Métiers ».",
+                  "Importe tes contacts si tu en as (onglet Contacts).",
+                  "Donne un objectif au Chat Intelligent — il agit et te rend compte."
+                ],
+                "body": "CYRUS n'est pas un simple chatbot : c'est un système qui exécute de VRAIES actions pour toi (envoyer des messages, lancer des campagnes, créer des accès élèves, encaisser, importer et segmenter des contacts) et qui vérifie chaque action avant de te confirmer. Pour démarrer : 1) active ta clé de licence ; 2) connecte au moins un canal (WhatsApp ou Telegram) ; 3) configure ton activité dans l'onglet « Services Métiers » (produits, prix, règles, objectifs) ; 4) parle-lui dans le « Chat Intelligent »."
+              }
+            ]
+          },
+          "error": null,
+          "confirmationId": null
+        },
+        "actionLog": [
+          {
+            "icon": "✅",
+            "label": "getDocumentation → SUCCESS",
+            "status": "done"
+          }
+        ]
+      }
+    }
+  ],
+  "updatedAt": "2026-09-15T21:14:37.906Z"
+}
