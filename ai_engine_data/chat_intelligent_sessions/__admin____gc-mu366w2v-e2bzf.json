@@ -1,0 +1,25 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu366w2v-e2bzf",
+  "title": "salut, comment tu vas ?",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu366ynwvfbf",
+      "role": "user",
+      "content": "salut, comment tu vas ?",
+      "text": "salut, comment tu vas ?",
+      "ts": "2026-09-15T21:14:41.276Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu366ynwzqy2",
+      "role": "assistant",
+      "content": "Salut ! Je vais bien, merci, et toi ? J'espère que tu as passé une bonne journée. Qu'est-ce qu'on peut faire ensemble ?",
+      "text": "Salut ! Je vais bien, merci, et toi ? J'espère que tu as passé une bonne journée. Qu'est-ce qu'on peut faire ensemble ?",
+      "ts": "2026-09-15T21:14:41.276Z",
+      "metadata": {}
+    }
+  ],
+  "updatedAt": "2026-09-15T21:14:41.276Z"
+}
