@@ -7,6 +7,7 @@ const platformOrchestrator = require('./platformOrchestrator');
 const connectorManager = require('./connectors/connectorManager');
 const manualPaymentValidator = require('./manualPaymentValidator');
 const contactCrm = require('./contactCrm');
+const recurringTasks = require('../queues/recurringTasks');
 
 // CHAT-DRIVEN AGENT ORCHESTRATOR — ai-engine/chatOrchestrator.js
 // ---------------------------------------------------------------------------
@@ -89,6 +90,14 @@ const GROUPS_RE = /(mes\s+groupes?|liste[rz]?\s+(?:mes\s+)?groupes?|quels?\s+(?:
 // AVANT 'goal' (GOAL_RE capte "prospect") : une question sur les contacts
 // étiquetés ne doit pas lancer le moteur d'objectifs.
 const CRM_RE = /(mes\s+(?:prospects?|clients?|contacts?)|combien\s+de\s+(?:prospects?|clients?|contacts?)|contacts?\s+[ée]tiquet|contacts?\s+tagg?[ée]s?|liste[rz]?\s+(?:mes\s+)?(?:prospects?|clients?|contacts?)|qui\s+sont\s+mes\s+(?:prospects?|clients?)|mes\s+[ée]tiquettes)/i;
+// Tâches récurrentes ("chaque matin envoie X au groupe Y") + gestion (liste,
+// arrêt). Placé AVANT 'grouppost' : un envoi récurrent est d'abord une
+// programmation, pas un envoi immédiat.
+const RECURRING_RE = /(chaque\s+(?:matin|jour|soir|semaine|nuit|midi|\d{1,2}\s*h)|tous\s+les\s+(?:matins|jours|soirs)|chaque\s+jour|t[âa]ches?\s+r[ée]curren|r[ée]currente?s?\b|automatiser?\b|programme[rz]?\s+(?:un\s+)?(?:message|envoi)\s+quotidien)/i;
+// Publication/partage DANS un ou des groupes (poste ça dans le groupe X, envoie
+// à tous mes groupes admin). Exclut "membre" (là c'est un envoi aux MEMBRES en
+// DM = 'goal'/campagne, pas une publication dans le groupe).
+const GROUPPOST_RE = /(poste|publie|partage|diffuse|balance|envoi[e]?)\w*[^]{0,80}?(groupe|groupes|canal|canaux)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
 
 // Détection d'intention (Command Parsing, §1.1 du cahier des charges) —
@@ -98,12 +107,18 @@ const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcon
 // intention en cours sur toute reclassification par mots-clés du nouveau
 // message, exactement comme pour image/vidéo/livre.
 function detectIntent(text, lastAssistantMessage) {
-  const continuation = ['offer', 'payment', 'account', 'connector', 'goal'];
+  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
     return lastAssistantMessage.intent;
   }
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
   if (INBOX_RE.test(text)) return 'inbox';
+  // Ordre important : une programmation récurrente ("chaque matin envoie au
+  // groupe…") l'emporte sur une publication ponctuelle ; une publication (verbe
+  // poste/partage/…) l'emporte sur la simple LISTE des groupes — sinon
+  // "partage à tous mes groupes admin" serait pris pour une question de liste.
+  if (RECURRING_RE.test(text)) return 'recurring';
+  if (GROUPPOST_RE.test(text) && !/membre/i.test(text)) return 'grouppost';
   if (GROUPS_RE.test(text)) return 'groups';
   if (CRM_RE.test(text)) return 'crm';
   if (REPORT_RE.test(text)) return 'report';
@@ -396,6 +411,153 @@ async function handleGroups(text, tenantId, deps) {
 }
 
 // ---------------------------------------------------------------------------
+// 'grouppost' — publie (partage) un message + éventuel visuel généré DANS les
+// groupes ciblés (par nom, sujet, "admin", ou tous). Confirmation OBLIGATOIRE
+// avant tout envoi de masse (même prudence que 'goal'). Exécute via
+// deps.runtime.sendToGroups (appel direct, média en mémoire) — jamais un envoi
+// sans le "oui" du vendeur.
+// ---------------------------------------------------------------------------
+function targetLabel(t) {
+  const k = (t && t.kind) || 'all';
+  if (k === 'admin') return 'tous tes groupes où tu es admin';
+  if ((k === 'named' || k === 'subject') && t.value) return `les groupes « ${t.value} »`;
+  return 'tous tes groupes';
+}
+
+const groupPostSessions = new Map();
+
+async function planGroupPost(text, history, domain) {
+  const prompt = [
+    personaManager.personaSystemPrompt(domain || 'default'),
+    `Message de l'administrateur : "${text}"`,
+    'Il veut publier un message (et éventuellement un visuel/affiche généré) DANS un ou plusieurs de ses groupes WhatsApp/Telegram.',
+    "Cible : {kind:'named'|'subject'|'admin'|'all', value:'nom exact du groupe OU mot-clé de sujet, sinon chaîne vide'}.",
+    'wantsVisual : true seulement s\'il demande de GÉNÉRER une affiche/image à joindre, sinon false. visualPrompt : courte description du visuel si wantsVisual.',
+    "message : le texte à publier (rédige-le proprement si l'ordre est vague mais l'intention claire).",
+    'Réponds UNIQUEMENT avec cet objet JSON (aucun texte autour) : {"target":{"kind":"...","value":"..."},"message":"...","wantsVisual":false,"visualPrompt":""}',
+  ].join('\n');
+  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history);
+  const parsed = extractJsonBlock(String(raw || '').trim());
+  return parsed || { raw: String(raw || '').trim() };
+}
+
+async function handleGroupPost(text, history, sessionKey, tenantId, deps) {
+  const channel = /telegram/i.test(text) ? 'TELEGRAM' : 'WHATSAPP';
+  const label = channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+  const { domain } = await buildPersonaFacts(tenantId);
+  const state = groupPostSessions.get(sessionKey);
+
+  if (state && state.phase === 'ready') {
+    if (personaManager.detectDecline(text)) {
+      groupPostSessions.delete(sessionKey);
+      return { text: 'Ok, j\'annule la publication.' };
+    }
+    if (!personaManager.detectAffirmative(text)) {
+      state.plan.message = text; // le vendeur redicte le texte
+      return { text: `Compris. Je publie ceci dans ${targetLabel(state.plan.target)} (${state.groupsCount} groupe(s)) ? Réponds « oui » pour lancer.`, isPlanningQuestion: true, intent: 'grouppost' };
+    }
+    if (!deps.runtime || typeof deps.runtime.sendToGroups !== 'function') {
+      groupPostSessions.delete(sessionKey);
+      return { text: 'Publication indisponible pour le moment (moteur non injecté).' };
+    }
+    let media = null;
+    if (state.plan.wantsVisual && typeof deps.generateImage === 'function') {
+      try {
+        const img = await deps.generateImage(state.plan.visualPrompt || state.plan.message);
+        if (img && img.buffer) media = { buffer: img.buffer, mimetype: img.mimetype || 'image/jpeg', filename: 'affiche.jpg', caption: state.plan.message };
+      } catch (err) { /* repli texte seul */ }
+    }
+    const out = await deps.runtime.sendToGroups({ channel: state.plan.channel || channel, target: state.plan.target, text: state.plan.message, media, tenantId });
+    groupPostSessions.delete(sessionKey);
+    if (!out.ok) {
+      const hint = out.error === 'NO_MATCHING_GROUP'
+        ? ' Aucun groupe ne correspond à la cible.'
+        : (/RUNTIME_MISSING|whatsapp|telegram|getGroupsSummary/i.test(out.error || '') ? ' Vérifie que le compte est bien connecté.' : '');
+      return { text: `Je n'ai pas pu publier (${out.error}).${hint}` };
+    }
+    return {
+      text: `✅ Publié dans ${out.sent}/${out.total} groupe(s) ${label}${media ? ' (avec le visuel)' : ''}.`,
+      actionLog: [{ icon: '📢', label: `Publié dans ${out.sent} groupe(s)`, status: 'done' }],
+    };
+  }
+
+  const parsed = await planGroupPost(text, history, domain);
+  if (!parsed || !parsed.message) {
+    return { text: (parsed && parsed.raw) || 'Que veux-tu publier, et dans quel(s) groupe(s) — un nom précis, un sujet, ou « tous mes groupes admin » ?', isPlanningQuestion: true, intent: 'grouppost' };
+  }
+  const target = parsed.target && parsed.target.kind ? parsed.target : { kind: 'all', value: '' };
+  let groupsCount = null;
+  let names = [];
+  if (deps.runtime && typeof deps.runtime.resolveGroups === 'function') {
+    const r = await deps.runtime.resolveGroups({ channel, target, tenantId }).catch(() => null);
+    if (r && r.ok) { groupsCount = r.groups.length; names = r.groups.slice(0, 5).map((g) => g.name); }
+  }
+  groupPostSessions.set(sessionKey, {
+    phase: 'ready',
+    plan: { channel, target, message: parsed.message, wantsVisual: !!parsed.wantsVisual, visualPrompt: parsed.visualPrompt || '' },
+    groupsCount: groupsCount || 0,
+  });
+  const where = groupsCount != null
+    ? `${groupsCount} groupe(s)${names.length ? ` (${names.join(', ')}${groupsCount > names.length ? '…' : ''})` : ''}`
+    : targetLabel(target);
+  const visualNote = parsed.wantsVisual ? ' avec un visuel généré' : '';
+  return {
+    text: `Je vais publier${visualNote} dans ${where} sur ${label} :\n« ${parsed.message} »\n\nJe lance ? (réponds « oui », ou redicte un autre texte)`,
+    isPlanningQuestion: true,
+    intent: 'grouppost',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 'recurring' — tâches quotidiennes récurrentes ("chaque matin envoie X au
+// groupe Y") + gestion (liste, arrêt). Persisté (queues/recurringTasks.js),
+// exécuté par le tick d'index.js. La création ne fait aucun envoi immédiat.
+// ---------------------------------------------------------------------------
+async function planRecurring(text, history, tenantId) {
+  const { domain } = await buildPersonaFacts(tenantId);
+  const prompt = [
+    personaManager.personaSystemPrompt(domain || 'default'),
+    `Ordre de l'administrateur : "${text}"`,
+    'Il veut programmer un message QUOTIDIEN récurrent dans un ou des groupes.',
+    "Extrais : channel ('WHATSAPP' ou 'TELEGRAM', défaut WHATSAPP), target {kind:'named'|'subject'|'admin'|'all', value}, message (le texte à envoyer — rédige-le si l'intention est claire, ex. message de motivation/prière), hour (0-23) et minute (0-59).",
+    "Si l'heure OU le message OU la cible manque vraiment, réponds UNIQUEMENT par une question courte (texte, jamais de JSON).",
+    'Sinon réponds UNIQUEMENT avec cet objet JSON : {"ready":true,"channel":"WHATSAPP","target":{"kind":"...","value":"..."},"message":"...","hour":7,"minute":0}',
+  ].join('\n');
+  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history);
+  const parsed = extractJsonBlock(String(raw || '').trim());
+  return parsed || { ready: false, raw: String(raw || '').trim() };
+}
+
+async function handleRecurring(text, history, tenantId, deps) {
+  const channel = /telegram/i.test(text) ? 'TELEGRAM' : 'WHATSAPP';
+  // Liste
+  if (/(liste|montre|voir|quelles?)\b/i.test(text) && /(t[âa]ches?|r[ée]curren|programm)/i.test(text)) {
+    const tasks = await recurringTasks.list(tenantId);
+    const active = tasks.filter((t) => t.active);
+    if (!active.length) return { text: 'Aucune tâche récurrente active pour le moment.' };
+    const lines = active.map((t, i) => `${i + 1}. ${String(t.hour).padStart(2, '0')}h${String(t.minute).padStart(2, '0')} → ${targetLabel(t.target)} (${t.channel}) : « ${String(t.message).slice(0, 60)} »`);
+    return { text: ['⏰ Tes tâches récurrentes :', ...lines].join('\n'), actionLog: [{ icon: '⏰', label: `${active.length} tâche(s) récurrente(s)`, status: 'done' }] };
+  }
+  // Arrêt
+  if (/(arr[êe]te|stop|supprime|annule|d[ée]sactive)/i.test(text)) {
+    const n = await recurringTasks.stopAll(tenantId);
+    return { text: n ? `🛑 ${n} tâche(s) récurrente(s) arrêtée(s).` : 'Aucune tâche récurrente à arrêter.', actionLog: n ? [{ icon: '🛑', label: 'Tâches récurrentes arrêtées', status: 'done' }] : null };
+  }
+  // Création
+  const parsed = await planRecurring(text, history, tenantId);
+  if (!parsed || parsed.ready === false || !parsed.message || parsed.hour == null) {
+    return { text: (parsed && parsed.raw) || 'À quelle heure, dans quel groupe, et quel message veux-tu envoyer chaque jour ?', isPlanningQuestion: true, intent: 'recurring' };
+  }
+  const target = parsed.target && parsed.target.kind ? parsed.target : { kind: 'all', value: '' };
+  const task = await recurringTasks.create(tenantId, { channel: parsed.channel || channel, target, message: parsed.message, hour: parsed.hour, minute: parsed.minute || 0 });
+  const label = (parsed.channel || channel) === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+  return {
+    text: `✅ C'est programmé : chaque jour à ${String(task.hour).padStart(2, '0')}h${String(task.minute).padStart(2, '0')}, j'enverrai dans ${targetLabel(target)} (${label}) :\n« ${task.message} »\n\nDis « liste mes tâches récurrentes » ou « arrête mes tâches récurrentes » quand tu veux.`,
+    actionLog: [{ icon: '⏰', label: 'Tâche récurrente créée', status: 'done' }],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 'crm' — consultation du CRM de contacts (ai-engine/contactCrm.js) : liste par
 // étiquette (prospect/client/personnalisée) + comptages. Lecture pure
 // (stockage), fonctionne même WhatsApp/Telegram déconnecté.
@@ -663,6 +825,8 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'report': return handleReport(text, tenantId, d);
     case 'inbox': return handleInbox(text, tenantId, d);
     case 'groups': return handleGroups(text, tenantId, d);
+    case 'grouppost': return handleGroupPost(text, history, sessionKey, tenantId, d);
+    case 'recurring': return handleRecurring(text, history, tenantId, d);
     case 'crm': return handleCrm(text, tenantId);
     case 'payment': return handlePayment(text, history, tenantId, d);
     case 'connector': return handleConnector(text, history, tenantId, d);

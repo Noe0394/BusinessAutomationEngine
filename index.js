@@ -4354,6 +4354,13 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
       // Secrets (clés de plateforme) lus depuis l'environnement du serveur,
       // jamais depuis la config committée ni la conversation.
       executeOptions: { env: process.env },
+      // Génération de visuel à la volée pour "génère une affiche et poste-la
+      // dans le groupe X" (voir chatOrchestrator#handleGroupPost). Renvoie un
+      // buffer en mémoire, jamais un fichier persistant.
+      generateImage: async (prompt) => {
+        const r = await imageAiEngine.generateImage({ prompt: String(prompt || '').slice(0, 600), width: 1024, height: 1024 });
+        return { buffer: r.buffer, mimetype: r.mimetype };
+      },
     }).catch((err) => {
       console.warn('Chat-Driven Agent Orchestrator — échec, repli sur le pipeline existant :', err.message);
       return null;
@@ -4857,6 +4864,12 @@ intelligenceBridge = createVpsBridge({
     logger: (msg) => console.error('[intelligence-runtime]', msg),
   }),
   stateFile: process.env.INTELLIGENCE_STATE_FILE || undefined,
+  // Génération de visuel pour "génère une affiche et poste-la dans le groupe X"
+  // depuis l'onglet Chat Intelligent (voir chatOrchestrator#handleGroupPost).
+  generateImage: async (prompt) => {
+    const r = await imageAiEngine.generateImage({ prompt: String(prompt || '').slice(0, 600), width: 1024, height: 1024 });
+    return { buffer: r.buffer, mimetype: r.mimetype };
+  },
   // Résolution du tenant à partir de l'identité AUTHENTIFIÉE de la requête
   // (mot de passe admin -> __admin__, sinon la clé de licence) — EXACTEMENT
   // comme whatsappManager.getSessionForRequest / resolveTenantId ailleurs.
@@ -4867,6 +4880,46 @@ intelligenceBridge = createVpsBridge({
   resolveTenant: (req) => resolveTenantId(req),
 });
 app.use('/', requireAccess, intelligenceBridge.router);
+
+// Module 4 : tick des TÂCHES RÉCURRENTES ("chaque matin envoie X au groupe Y",
+// voir queues/recurringTasks.js + ai-engine/chatOrchestrator.js#handleRecurring).
+// Chaque minute : pour chaque tenant, exécute les tâches dues du jour via
+// intelligenceBridge.runtime.sendToGroups (même moteur que le tchat). markRun
+// AVANT l'envoi = idempotence (jamais deux fois le même jour, même si l'envoi
+// est lent ou échoue). N'envoie jamais si le compte du tenant n'est pas
+// connecté (sendToGroups renvoie alors une erreur, journalisée).
+const recurringTasks = require('./queues/recurringTasks');
+let recurringTickRunning = false;
+async function runRecurringTasksTick() {
+  if (recurringTickRunning) return;
+  recurringTickRunning = true;
+  try {
+    const now = new Date();
+    const tenantIds = recurringTasks.listTenantIds();
+    for (const tenantId of tenantIds) {
+      const tasks = await recurringTasks.list(tenantId);
+      for (const task of tasks) {
+        if (!recurringTasks.isDue(task, now)) continue;
+        await recurringTasks.markRun(tenantId, task.id, now);
+        intelligenceBridge.runtime.sendToGroups({
+          channel: task.channel, target: task.target, text: task.message, tenantId,
+        }).then((out) => {
+          if (!out || out.ok === false) {
+            console.warn(`Tâche récurrente ${task.id} (tenant "${tenantId}") : envoi non abouti (${(out && out.error) || 'inconnu'}).`);
+          }
+        }).catch((err) => console.error(`Tâche récurrente ${task.id} (tenant "${tenantId}") :`, err.message));
+      }
+    }
+  } catch (err) {
+    console.error('Cycle des tâches récurrentes :', err.message);
+  } finally {
+    recurringTickRunning = false;
+  }
+}
+const recurringTasksInterval = setInterval(() => {
+  runRecurringTasksTick().catch((err) => console.error('Erreur pendant le cycle des tâches récurrentes :', err));
+}, 60 * 1000);
+if (recurringTasksInterval.unref) recurringTasksInterval.unref();
 
 // Filtrage privé/pro + tuteur pédagogique auto (§3/§4 du cahier des charges
 // "Chat-Driven Agent Orchestrator", voir lib/intelligence/message-triage.js
@@ -4894,6 +4947,13 @@ const AUTO_ANSWER_STUDENT_QUERIES = process.env.AUTO_ANSWER_STUDENT_QUERIES === 
 // envoyé APRÈS la validation admin, lui, part toujours : c'est la conséquence
 // directe d'une commande explicite de l'administrateur.
 const AUTO_PAYMENT_VALIDATION = process.env.AUTO_PAYMENT_VALIDATION === 'true';
+// Module 1 (auto-engagement) : envoyer un message d'accueil au PREMIER message
+// d'un nouveau contact classé 'business'. Désactivé par défaut (même prudence
+// que les autres envois sortants — jamais de message auto à un vrai client sans
+// activation explicite). Le texte vient du profil business (welcomeMessage),
+// sinon de WELCOME_MESSAGE, sinon un défaut. L'engagement CONTINU (réponses aux
+// questions) reste géré par emotionalCloser (AUTO_CLOSE_PROSPECTS).
+const AUTO_ENGAGE_NEW_CONTACTS = process.env.AUTO_ENGAGE_NEW_CONTACTS === 'true';
 // Moteur de Closing Humanisé (voir ai-engine/emotionalCloser.js) — quand
 // activé, prend le pas sur AUTO_ANSWER_STUDENT_QUERIES pour les messages
 // classés 'business' (Q&A factuelle + closing/objections, plus complet).
@@ -5025,8 +5085,22 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       const senderName = channel === 'WHATSAPP'
         ? (msg && msg.pushName) || null
         : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
-      contactCrm.recordSeen(tenantId, { channel, from, name: senderName })
-        .catch((err) => console.error(`contactCrm.recordSeen (tenant "${tenantId}", ${channel}) :`, err.message));
+      try {
+        const seen = await contactCrm.recordSeen(tenantId, { channel, from, name: senderName });
+        // Module 1 : message d'accueil au NOUVEAU contact (une seule fois),
+        // puis on laisse l'échange suivant à emotionalCloser. Envoi réel gardé
+        // derrière AUTO_ENGAGE_NEW_CONTACTS.
+        if (seen.isNew && AUTO_ENGAGE_NEW_CONTACTS) {
+          const welcome = (profile && profile.welcomeMessage)
+            || process.env.WELCOME_MESSAGE
+            || 'Bonjour 👋 Merci de nous avoir écrit ! Dites-moi ce qui vous intéresse, je vous réponds tout de suite.';
+          await sendCustomerReply(channel, session, msg, welcome, { asVoice: false })
+            .catch((err) => console.error(`Envoi du message d'accueil (tenant "${tenantId}", ${channel}) :`, err.message));
+          return; // pas de double message sur le tout premier contact.
+        }
+      } catch (err) {
+        console.error(`contactCrm.recordSeen (tenant "${tenantId}", ${channel}) :`, err.message);
+      }
     }
   }
 

@@ -1,3 +1,44 @@
+## 🧠 Orchestration autonome + CRM + mémoire persistante (2026-09-15, reprendre ICI)
+
+Demande utilisateur : agent "Business OS" autonome exploitant TOUTES les
+fonctionnalités depuis un ordre ("génère une affiche → partage-la dans le groupe
+X → obtiens N ventes", "chaque matin envoie X au groupe Y"), + CRM
+(étiquetage/relance), + mémoire de discussion persistante et effaçable.
+Implémenté d'un bloc (4 modules), testé en isolation, **un seul déploiement**.
+
+- **Module CRM** (déjà livré juste avant, commit `d77b492`) : `ai-engine/contactCrm.js`
+  — chaque contact 'business' mémorisé + auto-étiqueté prospect ; acheteur →
+  client à la validation du paiement ; intention chat 'crm' ("mes prospects").
+- **Module 1 — auto-engagement** : message d'accueil au 1er message d'un
+  nouveau contact (index.js, gardé derrière `AUTO_ENGAGE_NEW_CONTACTS`, texte =
+  profil `welcomeMessage` / `WELCOME_MESSAGE` / défaut). Engagement continu =
+  emotionalCloser (`AUTO_CLOSE_PROSPECTS`).
+- **Module 2 — publication ciblée dans les groupes** : `vps-runtime.sendToGroups`
+  + `resolveGroups`/`matchGroups` (cible named/subject/admin/all), publie texte
+  OU visuel généré DANS les groupes (pas d'extraction de membres). Intention
+  chat 'grouppost' + `handleGroupPost` avec CONFIRMATION obligatoire ; génération
+  d'affiche via `deps.generateImage` (imageAiEngine, buffer en mémoire).
+- **Module 3 — objectif de ventes** : le flux 'goal' existant (task-parser +
+  goal-chat, confirmation) reste la base ; il dispose désormais des vrais
+  backends (groupes, CRM, contenu). Orchestration multi-étapes complète encore
+  à enrichir dans task-parser (non fait ce lot, cadre prêt).
+- **Module 4 — tâches récurrentes** : `queues/recurringTasks.js` (persisté,
+  quotidien à HH:MM, offset `RECURRING_TZ_OFFSET_HOURS`) + tick minute dans
+  index.js appelant `sendToGroups` (markRun avant envoi = idempotent).
+  Intention chat 'recurring' + `handleRecurring` (créer/lister/arrêter).
+- **Mémoire du Chat Intelligent** : `vps-bridge.js` — historique par (tenant,
+  sessionId) désormais PERSISTANT (storageAdapter, namespace
+  `chat_intelligent_sessions`) + cache mémoire ; effaçable via l'action
+  'restart' (`clearHistory`). L'agent ne repart plus de zéro entre redémarrages.
+
+Tests : `test/orchestration.test.js` (récurrent + routage + sendToGroups via
+session simulée), `test/crm.test.js`. **Prérequis dur inchangé** : rien ne part
+tant que WhatsApp/Telegram n'est pas réellement connecté (ré-appairer).
+**Reste** : orchestration multi-étapes complète du 'goal' ; port local-client/
+mobile de ces modules.
+
+---
+
 ## 👁️ Chantier "Reconnaissance / lecture réelle de la boîte de réception" (2026-09-15, reprendre ICI)
 
 **Problème signalé (2 symptômes successifs, même racine)** : l'agent affirmait
