@@ -42,3 +42,9 @@ mobile/**/*.png
 *.ppk
 id_rsa
 id_ed25519
+
+# Stockage runtime du moteur intelligent (sessions de chat, profils, coffre
+# chiffré, historiques) — données vivantes générées à l'exécution, jamais du
+# code. Le VPS/PC les persistent hors dépôt ; ne JAMAIS versionner (secrets
+# chiffrés + conversations réelles). Voir ai-engine/storageAdapter.js.
+ai_engine_data/

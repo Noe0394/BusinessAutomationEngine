@@ -33,7 +33,7 @@ function requireAccessLike(req, res, next) {
   const stateFile = path.join(os.tmpdir(), 'goal-chat-route-test-' + Date.now() + '.json');
   const app = express();
   app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
-  app.use('/', requireAccessLike, createVpsBridge({ runtime: null, stateFile }));
+  app.use('/', requireAccessLike, createVpsBridge({ runtime: null, stateFile }).router);
 
   const server = http.createServer(app);
   await new Promise((r) => server.listen(0, r));

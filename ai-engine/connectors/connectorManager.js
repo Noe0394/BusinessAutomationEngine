@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const storageAdapter = require('../storageAdapter');
+const secretVault = require('../secretVault');
 
 const platformConnector = require('./platformConnector');
 const systemIoConnector = require('./systemIoConnector');
@@ -141,9 +142,24 @@ async function executeTool(tenantId, toolName, args, opts) {
   }
   if (!owner) return { ok: false, error: 'TOOL_NOT_AVAILABLE_OR_NOT_PERMITTED:' + toolName };
 
+  // Résolution de la clé : coffre chiffré PAR TENANT (apiKeyRef) en priorité —
+  // les services configurés via l'onglet Services Métiers stockent leur clé
+  // dans le coffre ; repli sur la variable d'environnement (apiKeyEnv) pour la
+  // config par défaut (ex. clé RIEA du propriétaire dans .env). La clé résolue
+  // est injectée dans ctx.apiKey (jamais loggée).
+  let resolvedApiKey = null;
+  if (ownerCfg && ownerCfg.apiKeyRef) {
+    resolvedApiKey = await secretVault.getSecret(tenantId || 'default', ownerCfg.apiKeyRef).catch(() => null);
+  }
+  if (!resolvedApiKey && ownerCfg && ownerCfg.apiKeyEnv) {
+    const envSource = options.env || process.env;
+    resolvedApiKey = envSource[ownerCfg.apiKeyEnv] || null;
+  }
+
   const ctx = {
     config: ownerCfg,
     tenantId: tenantId || 'default',
+    apiKey: resolvedApiKey,
     getSecret: makeGetSecret(options.env),
     http: options.http || (typeof fetch === 'function' ? fetch : null),
     store: options.store || storageAdapter,

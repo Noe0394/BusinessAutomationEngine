@@ -393,6 +393,7 @@
       <button type="button" class="tab-btn" data-tab="share">🔗 Groupes / Diffusion</button>
       <button type="button" class="tab-btn" data-tab="relance">📇 Relance Manuelle Express</button>
       <button type="button" class="tab-btn" data-tab="studio">🧠 Studio IA</button>
+      <button type="button" class="tab-btn" data-tab="services-metiers">🏢 Services Métiers</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -1938,6 +1939,104 @@
       </div>
     </section>
 
+    <!-- ================= SERVICES MÉTIERS ================= -->
+    <section class="panel" id="panel-services-metiers">
+      <style>
+        #panel-services-metiers .svc-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+        #panel-services-metiers .svc-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+        #panel-services-metiers .svc-badge{font-size:.75rem;padding:3px 8px;border-radius:20px;border:1px solid rgba(255,255,255,.15)}
+        #panel-services-metiers .svc-ok{color:#34d399;border-color:rgba(52,211,153,.4)}
+        #panel-services-metiers .svc-err{color:#f87171;border-color:rgba(248,113,113,.4)}
+        #panel-services-metiers .svc-warn{color:#fbbf24;border-color:rgba(251,191,36,.4)}
+        #panel-services-metiers .svc-form{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:16px;margin-bottom:16px}
+        #panel-services-metiers .svc-form label{display:block;font-size:.85rem;margin:10px 0 4px;opacity:.85}
+        #panel-services-metiers .svc-form input,#panel-services-metiers .svc-form select,#panel-services-metiers .svc-form textarea{width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.25);color:inherit;font:inherit}
+        #panel-services-metiers .svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+        #panel-services-metiers .svc-hint{font-size:.78rem;opacity:.6;margin-top:3px}
+        #panel-services-metiers details{margin:12px 0;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px 12px}
+        #panel-services-metiers summary{cursor:pointer;font-weight:600}
+        @media(max-width:640px){#panel-services-metiers .svc-grid{grid-template-columns:1fr}}
+      </style>
+      <h2>🏢 Services Métiers</h2>
+      <p style="opacity:.8;max-width:720px">Configure ici <strong>tout ce que Cyrus doit connaître et utiliser pour ton activité</strong> : tes projets, produits, prix, règles commerciales, plateformes, comptes et APIs, avec les permissions que tu accordes. Les clés API sont <strong>chiffrées</strong> et ne sont jamais affichées. (La mémoire sélective de Cyrus reste séparée.)</p>
+      <div style="margin:14px 0"><button type="button" id="svc-add-btn" class="btn-primary">+ Ajouter un Service Métier</button></div>
+      <div id="svc-feedback" hidden></div>
+
+      <!-- Formulaire création / édition -->
+      <div class="svc-form" id="svc-form" hidden>
+        <input type="hidden" id="svc-id" />
+        <h3 id="svc-form-title">Nouveau Service Métier</h3>
+        <div class="svc-grid">
+          <div><label>Nom du service / projet</label><input id="svc-name" placeholder="ex : Plateforme de Formation" /></div>
+          <div><label>Type d'activité</label>
+            <select id="svc-type"><option value="formation">Formation</option><option value="ecommerce">E-commerce</option><option value="produit">Produit</option><option value="service">Service</option><option value="importation">Importation / Revente</option><option value="paiement">Paiement</option><option value="crm">CRM</option><option value="autre">Autre</option></select>
+          </div>
+        </div>
+        <label>Projet associé (facultatif)</label><input id="svc-project" placeholder="ex : Formation en ligne" />
+        <label>Description</label><textarea id="svc-desc" rows="2" placeholder="Ce que tu proposes"></textarea>
+
+        <details><summary>💰 Informations commerciales</summary>
+          <div class="svc-grid">
+            <div><label>Prix</label><input id="svc-price" type="number" placeholder="15000" /></div>
+            <div><label>Devise</label><input id="svc-currency" value="FCFA" /></div>
+            <div><label>Prix promo (facultatif)</label><input id="svc-promo" type="number" /></div>
+            <div><label>Cible</label><input id="svc-target" placeholder="ex : restaurateurs" /></div>
+          </div>
+          <label>Avantages / arguments</label><textarea id="svc-advantages" rows="2"></textarea>
+          <label>Objections fréquentes → réponses</label><textarea id="svc-objections" rows="2"></textarea>
+          <label>Conditions de paiement</label><input id="svc-payterms" />
+          <label>Conditions d'accès / livraison</label><input id="svc-accessterms" />
+        </details>
+
+        <details><summary>📦 Produits (un par ligne : nom | prix)</summary>
+          <textarea id="svc-products" rows="3" placeholder="Formation Cuisine | 15000&#10;Formation Épicerie | 20000"></textarea>
+        </details>
+
+        <details><summary>🔌 Connexion (API / compte)</summary>
+          <label>Type de connexion</label>
+          <select id="svc-conn-kind"><option value="none">Aucune (interne)</option><option value="api">API</option><option value="account">Compte / session</option></select>
+          <div id="svc-api-fields" hidden>
+            <label>Type de connecteur</label>
+            <select id="svc-connector"><option value="generic">API générique</option><option value="platform_gateway">Plateforme (passerelle X-API-Key)</option><option value="systemio">System.io</option></select>
+            <label>URL de base</label><input id="svc-baseurl" placeholder="https://ta-plateforme.com" />
+            <div class="svc-hint">Ex. RIEA : https://riea-afrique-web.web.app</div>
+            <label>En-tête d'authentification</label><input id="svc-authheader" value="X-API-Key" />
+            <label>Clé API / token <span style="opacity:.6">(chiffrée, jamais réaffichée)</span></label><input id="svc-apikey" type="password" placeholder="sk_live_..." autocomplete="off" />
+            <div class="svc-hint">La clé part directement dans le coffre chiffré. Elle n'apparaît jamais dans les logs ni les réponses.</div>
+          </div>
+          <div id="svc-noapi-hint" hidden class="svc-hint">Sans API : Cyrus pourra exploiter les informations métier (prix, règles, produits) que tu renseignes ici. Les actions automatisées sur ce service nécessiteront une API ou un connecteur compatible.</div>
+        </details>
+
+        <details><summary>🛡️ Permissions accordées à Cyrus</summary>
+          <div id="svc-perms">
+            <label><input type="checkbox" class="svc-perm" value="students:create" style="width:auto"> Créer un compte élève</label>
+            <label><input type="checkbox" class="svc-perm" value="students:suspend" style="width:auto"> Suspendre un accès</label>
+            <label><input type="checkbox" class="svc-perm" value="courses:enroll" style="width:auto"> Inscrire / débloquer une formation</label>
+            <label><input type="checkbox" class="svc-perm" value="contacts:write" style="width:auto"> Ajouter un contact (CRM)</label>
+            <label><input type="checkbox" class="svc-perm" value="tags:write" style="width:auto"> Attribuer un tag (CRM)</label>
+            <label><input type="checkbox" class="svc-perm" value="accounting:write" style="width:auto"> Enregistrer une vente / facture</label>
+          </div>
+          <div class="svc-hint">Ne coche que ce que tu autorises. Cyrus ne pourra rien faire d'autre sur ce service.</div>
+        </details>
+
+        <details><summary>📏 Règles commerciales (une par ligne)</summary>
+          <textarea id="svc-rules" rows="3" placeholder="Ne jamais accorder plus de 10% de remise.&#10;Après paiement confirmé, débloquer automatiquement la formation.&#10;Pour tout remboursement, demander mon autorisation."></textarea>
+        </details>
+
+        <details><summary>🎯 Objectifs de ce service (un par ligne)</summary>
+          <textarea id="svc-objectives" rows="2" placeholder="Vendre 10 formations par semaine&#10;Relancer les prospects sous 24h"></textarea>
+        </details>
+
+        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+          <button type="button" id="svc-save-btn" class="btn-primary">💾 Enregistrer</button>
+          <button type="button" id="svc-test-btn">🔎 Enregistrer &amp; tester la connexion</button>
+          <button type="button" id="svc-cancel-btn">Annuler</button>
+        </div>
+      </div>
+
+      <div id="svc-list"><p style="opacity:.6">Chargement…</p></div>
+    </section>
+
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -2561,6 +2660,7 @@
         if (btn.dataset.tab === 'relance') { relanceLoadQueue(); }
         if (btn.dataset.tab === 'studio') { studioLoadSessionsList(); }
         if (btn.dataset.tab === 'goalchat') { goalChatInit(); }
+        if (btn.dataset.tab === 'services-metiers') { svcMetiersInit(); }
       });
     });
 
@@ -9332,6 +9432,141 @@
         btn.disabled = false;
       }
     });
+
+    // ===================== SERVICES MÉTIERS =====================
+    let svcWired = false;
+    function svcEsc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function svcFeedback(msg, isError) {
+      const el = document.getElementById('svc-feedback');
+      if (!el) return;
+      el.textContent = msg; el.hidden = false;
+      el.style.cssText = 'margin:10px 0;padding:10px 12px;border-radius:8px;' + (isError ? 'background:rgba(248,113,113,.12);color:#f87171' : 'background:rgba(52,211,153,.12);color:#34d399');
+    }
+    function svcStatusClass(s) { return s === 'CONNECTED' ? 'svc-ok' : (s === 'ERROR' ? 'svc-err' : 'svc-warn'); }
+    function svcParseLines(v) { return String(v || '').split('\n').map((x) => x.trim()).filter(Boolean); }
+    function svcParseProducts(v) {
+      return svcParseLines(v).map((line) => { const [name, price] = line.split('|').map((x) => x.trim()); return { name: name || line, price: price ? Number(price) : null }; });
+    }
+    function svcToggleApiFields() {
+      const kind = document.getElementById('svc-conn-kind').value;
+      document.getElementById('svc-api-fields').hidden = kind !== 'api';
+      document.getElementById('svc-noapi-hint').hidden = kind !== 'account' && kind !== 'none';
+    }
+    function svcOpenForm(service) {
+      const f = (id) => document.getElementById(id);
+      const s = service || {};
+      const c = s.commercial || {}; const conn = s.connection || {};
+      f('svc-form-title').textContent = service ? 'Modifier le service' : 'Nouveau Service Métier';
+      f('svc-id').value = s.id || '';
+      f('svc-name').value = s.name || ''; f('svc-type').value = s.type || 'formation'; f('svc-project').value = s.project || '';
+      f('svc-desc').value = c.description || '';
+      f('svc-price').value = c.price != null ? c.price : ''; f('svc-currency').value = c.currency || 'FCFA';
+      f('svc-promo').value = c.promoPrice != null ? c.promoPrice : ''; f('svc-target').value = c.target || '';
+      f('svc-advantages').value = c.advantages || ''; f('svc-objections').value = c.objections || '';
+      f('svc-payterms').value = c.paymentTerms || ''; f('svc-accessterms').value = c.accessTerms || '';
+      f('svc-products').value = (s.products || []).map((p) => `${p.name || p}${p.price != null ? ' | ' + p.price : ''}`).join('\n');
+      f('svc-conn-kind').value = conn.kind || 'none'; f('svc-connector').value = conn.connectorType || 'generic';
+      f('svc-baseurl').value = conn.baseUrl || ''; f('svc-authheader').value = conn.authHeader || 'X-API-Key'; f('svc-apikey').value = '';
+      document.querySelectorAll('.svc-perm').forEach((cb) => { cb.checked = (s.scopes || []).includes(cb.value); });
+      f('svc-rules').value = (s.rules || []).join('\n'); f('svc-objectives').value = (s.objectives || []).join('\n');
+      svcToggleApiFields();
+      f('svc-form').hidden = false; f('svc-feedback').hidden = true;
+      f('svc-name').focus();
+    }
+    function svcCollectPayload() {
+      const f = (id) => document.getElementById(id).value;
+      const scopes = Array.from(document.querySelectorAll('.svc-perm')).filter((cb) => cb.checked).map((cb) => cb.value);
+      const kind = f('svc-conn-kind'); const connectorType = f('svc-connector');
+      const connection = { kind, connectorType: kind === 'api' ? connectorType : null, baseUrl: f('svc-baseurl') || null, authHeader: f('svc-authheader') || 'X-API-Key' };
+      if (kind === 'api' && connectorType === 'platform_gateway') {
+        connection.endpoints = { enroll: '/api/v1/agent-gateway/enroll-student', suspend: '/api/v1/agent-gateway/suspend-student' };
+      }
+      return {
+        name: f('svc-name'), type: f('svc-type'), project: f('svc-project') || null,
+        commercial: {
+          price: f('svc-price') ? Number(f('svc-price')) : null, currency: f('svc-currency') || 'FCFA',
+          promoPrice: f('svc-promo') ? Number(f('svc-promo')) : null, target: f('svc-target'),
+          description: f('svc-desc'), advantages: f('svc-advantages'), objections: f('svc-objections'),
+          paymentTerms: f('svc-payterms'), accessTerms: f('svc-accessterms'),
+        },
+        products: svcParseProducts(f('svc-products')), rules: svcParseLines(f('svc-rules')),
+        objectives: svcParseLines(f('svc-objectives')), scopes, connection,
+      };
+    }
+    async function svcSave(withTest) {
+      const payload = svcCollectPayload();
+      if (!payload.name) { svcFeedback('Donne un nom au service.', true); return; }
+      const id = document.getElementById('svc-id').value;
+      const apiKey = document.getElementById('svc-apikey').value.trim();
+      try {
+        let sid = id;
+        if (id) { await apiFetch('/api/business-services/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); }
+        else { const r = await apiFetch('/api/business-services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); sid = (await r.json()).service.id; }
+        if (payload.connection.kind === 'api' && apiKey) {
+          await apiFetch('/api/business-services/' + sid + '/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiKey, baseUrl: payload.connection.baseUrl, authHeader: payload.connection.authHeader, connectorType: payload.connection.connectorType, endpoints: payload.connection.endpoints }) });
+        }
+        if (withTest) {
+          const tr = await apiFetch('/api/business-services/' + sid + '/test', { method: 'POST' });
+          const td = await tr.json();
+          svcFeedback('Test : ' + (td.result ? (td.result.status + ' — ' + (td.result.detail || '')) : 'effectué'), !(td.result && (td.result.status === 'CONNECTED' || td.result.status === 'CONNECTED_LIMITED')));
+        } else { svcFeedback('Service enregistré.', false); }
+        document.getElementById('svc-form').hidden = true;
+        svcLoadList();
+      } catch (err) { if (err.message !== 'unauthorized') svcFeedback('Erreur : ' + err.message, true); }
+    }
+    async function svcTest(id) {
+      svcFeedback('Test réel en cours…', false);
+      try { const r = await apiFetch('/api/business-services/' + id + '/test', { method: 'POST' }); const d = await r.json();
+        svcFeedback('Test : ' + (d.result ? (d.result.status + ' — ' + (d.result.detail || '')) : 'effectué'), !(d.result && (d.result.status === 'CONNECTED' || d.result.status === 'CONNECTED_LIMITED')));
+        svcLoadList();
+      } catch (err) { if (err.message !== 'unauthorized') svcFeedback('Erreur : ' + err.message, true); }
+    }
+    async function svcDelete(id) {
+      if (!confirm('Supprimer ce service et révoquer sa clé ?')) return;
+      try { await apiFetch('/api/business-services/' + id, { method: 'DELETE' }); svcLoadList(); svcFeedback('Service supprimé.', false); }
+      catch (err) { if (err.message !== 'unauthorized') svcFeedback('Erreur : ' + err.message, true); }
+    }
+    function svcRender(services) {
+      const box = document.getElementById('svc-list');
+      box.innerHTML = '';
+      if (!services.length) { box.innerHTML = '<p style="opacity:.6">Aucun service configuré. Clique sur « + Ajouter un Service Métier » pour commencer.</p>'; return; }
+      services.forEach((s) => {
+        const card = document.createElement('div'); card.className = 'svc-card';
+        const conn = s.connection || {};
+        const connLabel = conn.kind === 'api' ? ('API' + (conn.hasKey ? ' 🔑' : '')) : (conn.kind === 'account' ? 'Compte' : 'Interne');
+        const price = s.commercial && s.commercial.price != null ? (s.commercial.price + ' ' + (s.commercial.currency || '')) : '—';
+        const top = document.createElement('div'); top.className = 'svc-row';
+        const left = document.createElement('div');
+        left.innerHTML = '<strong>' + svcEsc(s.name) + '</strong> <span style="opacity:.6">· ' + svcEsc(s.type) + '</span><br><span style="opacity:.7;font-size:.85rem">Connexion : ' + connLabel + ' · Prix : ' + svcEsc(String(price)) + ' · Capacités : ' + ((s.scopes || []).length) + '</span>';
+        const badge = document.createElement('span'); badge.className = 'svc-badge ' + svcStatusClass(s.status); badge.textContent = s.status || 'DRAFT';
+        top.appendChild(left); top.appendChild(badge); card.appendChild(top);
+        if (s.lastTest && s.lastTest.detail) { const lt = document.createElement('div'); lt.style.cssText = 'font-size:.8rem;opacity:.65;margin-top:6px'; lt.textContent = 'Dernier test : ' + s.lastTest.status + ' — ' + s.lastTest.detail; card.appendChild(lt); }
+        const actions = document.createElement('div'); actions.style.cssText = 'margin-top:10px;display:flex;gap:8px;flex-wrap:wrap';
+        const bManage = document.createElement('button'); bManage.textContent = '⚙️ Gérer'; bManage.addEventListener('click', () => svcOpenForm(s));
+        const bTest = document.createElement('button'); bTest.textContent = '🔎 Tester'; bTest.addEventListener('click', () => svcTest(s.id));
+        const bDel = document.createElement('button'); bDel.textContent = '🗑️'; bDel.addEventListener('click', () => svcDelete(s.id));
+        actions.appendChild(bManage); if (conn.kind === 'api') actions.appendChild(bTest); actions.appendChild(bDel);
+        card.appendChild(actions);
+        box.appendChild(card);
+      });
+    }
+    async function svcLoadList() {
+      try { const r = await apiFetch('/api/business-services'); const d = await r.json(); svcRender(d.services || []); }
+      catch (err) { if (err.message !== 'unauthorized') document.getElementById('svc-list').innerHTML = '<p class="error">Impossible de charger les services.</p>'; }
+    }
+    function svcMetiersInit() {
+      if (!svcWired) {
+        svcWired = true;
+        document.getElementById('svc-add-btn').addEventListener('click', () => svcOpenForm(null));
+        document.getElementById('svc-cancel-btn').addEventListener('click', () => { document.getElementById('svc-form').hidden = true; });
+        document.getElementById('svc-save-btn').addEventListener('click', () => svcSave(false));
+        document.getElementById('svc-test-btn').addEventListener('click', () => svcSave(true));
+        document.getElementById('svc-conn-kind').addEventListener('change', svcToggleApiFields);
+      }
+      svcLoadList();
+    }
 
     // PWA : installation optionnelle sous le nom "CYRUS SUPER ASSISTANT"
     // (voir public/manifest.json et public/sw.js) — échec silencieux sur un

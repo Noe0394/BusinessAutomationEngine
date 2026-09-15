@@ -45,7 +45,7 @@ function trimSlashes(base) {
 function ctxParts(ctx) {
   const cfg = ctx.config || {};
   const base = trimSlashes(cfg.baseUrl) || DEFAULT_BASE;
-  const apiKey = ctx.getSecret(cfg.apiKeyEnv || 'SYSTEME_IO_API_KEY');
+  const apiKey = ctx.apiKey || ctx.getSecret(cfg.apiKeyEnv || 'SYSTEME_IO_API_KEY');
   const firstNameSlug = cfg.firstNameSlug || 'first_name';
   return { base, apiKey, firstNameSlug, http: ctx.http };
 }

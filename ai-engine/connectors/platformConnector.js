@@ -56,7 +56,7 @@ async function callGateway(ctx, endpointPath, body) {
   const base = trimSlashes(cfg.baseUrl);
   if (!base) return { ok: false, error: 'PLATFORM_BASEURL_MISSING' };
 
-  const apiKey = ctx.getSecret(cfg.apiKeyEnv || 'CYRUS_PLATFORM_API_KEY');
+  const apiKey = ctx.apiKey || ctx.getSecret(cfg.apiKeyEnv || 'CYRUS_PLATFORM_API_KEY');
   if (!apiKey) return { ok: false, error: 'PLATFORM_API_KEY_MISSING' };
 
   const authHeader = cfg.authHeader || 'X-API-Key';

@@ -4961,6 +4961,53 @@ app.post('/api/admin/diag/send-test', requireAccess, async (req, res) => {
   res.json(Object.assign({ tenantId, channel: ch, to, number }, out));
 });
 
+// ---------- SERVICES MÉTIERS (console de configuration métier) ----------
+// Gère les services professionnels de l'utilisateur (projets, produits, APIs,
+// comptes, permissions, règles, objectifs). Les secrets vont au coffre chiffré
+// (ai-engine/secretVault.js), jamais dans les réponses/logs. Voir
+// ai-engine/businessServices.js. Isolé par tenant (resolveTenantId).
+app.get('/api/business-services', requireAccess, async (req, res) => {
+  try { res.json({ services: await businessServices.list(resolveTenantId(req)) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/business-services', requireAccess, async (req, res) => {
+  try { res.status(201).json({ service: await businessServices.create(resolveTenantId(req), req.body || {}) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/business-services/context', requireAccess, async (req, res) => {
+  try { res.json({ context: await businessServices.getEngineContext(resolveTenantId(req)) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/business-services/:id', requireAccess, async (req, res) => {
+  const s = await businessServices.get(resolveTenantId(req), req.params.id);
+  if (!s) return res.status(404).json({ error: 'Service introuvable.' });
+  res.json({ service: s, summary: businessServices.summary(s) });
+});
+app.put('/api/business-services/:id', requireAccess, async (req, res) => {
+  const s = await businessServices.update(resolveTenantId(req), req.params.id, req.body || {});
+  if (!s) return res.status(404).json({ error: 'Service introuvable.' });
+  res.json({ service: s });
+});
+app.delete('/api/business-services/:id', requireAccess, async (req, res) => {
+  res.json(await businessServices.remove(resolveTenantId(req), req.params.id));
+});
+app.post('/api/business-services/:id/connect', requireAccess, async (req, res) => {
+  // La clé API arrive ici puis part DIRECTEMENT au coffre chiffré — jamais
+  // renvoyée ni journalisée.
+  try { res.json(await businessServices.connectApi(resolveTenantId(req), req.params.id, req.body || {})); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/business-services/:id/test', requireAccess, async (req, res) => {
+  // TEST RÉEL : effectue une vraie requête et renvoie le statut réel.
+  try { res.json(await businessServices.testConnection(resolveTenantId(req), req.params.id)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/business-services/:id/permissions', requireAccess, async (req, res) => {
+  const s = await businessServices.setPermissions(resolveTenantId(req), req.params.id, (req.body || {}).scopes || []);
+  if (!s) return res.status(404).json({ error: 'Service introuvable.' });
+  res.json({ service: s });
+});
+
 // Filtrage privé/pro + tuteur pédagogique auto (§3/§4 du cahier des charges
 // "Chat-Driven Agent Orchestrator", voir lib/intelligence/message-triage.js
 // et docs/PARITE-LOCAL.md). Câblé sur CHAQUE message WhatsApp/Telegram
@@ -4978,6 +5025,7 @@ const emotionalCloser = require('./ai-engine/emotionalCloser');
 const manualPaymentValidator = require('./ai-engine/manualPaymentValidator');
 const contactCrm = require('./ai-engine/contactCrm');
 const conversationHistory = require('./ai-engine/messageHistory');
+const businessServices = require('./ai-engine/businessServices');
 const AUTO_ANSWER_STUDENT_QUERIES = process.env.AUTO_ANSWER_STUDENT_QUERIES === 'true';
 // Validation de paiement manuel (Human-in-the-Loop, voir
 // ai-engine/manualPaymentValidator.js) : une preuve de paiement entrante est
