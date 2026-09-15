@@ -10,12 +10,12 @@
       "payload": {
         "text": "Je vais bien."
       },
-      "status": "IN_PROGRESS",
+      "status": "FAILED",
       "requestedAt": "2026-09-15T15:13:47.728Z",
       "startedAt": "2026-09-15T15:13:47.729Z",
-      "finishedAt": null,
+      "finishedAt": "2026-09-15T15:13:47.732Z",
       "confirmation": null,
-      "error": null
+      "error": "NOT_CONNECTED"
     }
   ]
 }
