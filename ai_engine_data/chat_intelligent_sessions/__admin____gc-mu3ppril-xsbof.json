@@ -1,0 +1,29 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu3ppril-xsbof",
+  "title": "Importe ces contacts dans mon CRM stp\n\nPIÈCES JOINTES import",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu3ppt567632",
+      "role": "user",
+      "content": "Importe ces contacts dans mon CRM stp\n\nPIÈCES JOINTES importées par l'utilisateur dans la discussion :\n- Fichier joint « c.csv » (application/octet-stream) [id: f_mu3ppravyv5br]. Contenu :\n\"\"\"\nnom,telephone\nAminata,22600000010\nBakary,22600000011\nAminata,22600000010\n\n\"\"\"",
+      "text": "Importe ces contacts dans mon CRM stp\n\nPIÈCES JOINTES importées par l'utilisateur dans la discussion :\n- Fichier joint « c.csv » (application/octet-stream) [id: f_mu3ppravyv5br]. Contenu :\n\"\"\"\nnom,telephone\nAminata,22600000010\nBakary,22600000011\nAminata,22600000010\n\n\"\"\"",
+      "ts": "2026-09-16T06:21:13.290Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu3ppt56sxbm",
+      "role": "assistant",
+      "content": "Peux‑tu me préciser la formation à attribuer à ces contacts ? Et souhaites‑tu créer un nouveau compte pour chacun ou simplement leur ajouter un module ?",
+      "text": "Peux‑tu me préciser la formation à attribuer à ces contacts ? Et souhaites‑tu créer un nouveau compte pour chacun ou simplement leur ajouter un module ?",
+      "ts": "2026-09-16T06:21:13.290Z",
+      "metadata": {
+        "intent": "account",
+        "toolCall": null,
+        "actionLog": null
+      }
+    }
+  ],
+  "updatedAt": "2026-09-16T06:21:13.290Z"
+}
