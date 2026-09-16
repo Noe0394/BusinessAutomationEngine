@@ -1,0 +1,47 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu3pxv00-laqt0",
+  "title": "Importe ces contacts dans mon CRM stp\n\nPIÈCES JOINTES import",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu3pxv78sa3u",
+      "role": "user",
+      "content": "Importe ces contacts dans mon CRM stp\n\nPIÈCES JOINTES importées par l'utilisateur dans la discussion :\n- Fichier joint « c.csv » (application/octet-stream) [id: f_mu3pxutx33z0l]. Contenu :\n\"\"\"\nnom,telephone\nAminata,22600000010\nBakary,22600000011\nAminata,22600000010\n\n\"\"\"",
+      "text": "Importe ces contacts dans mon CRM stp\n\nPIÈCES JOINTES importées par l'utilisateur dans la discussion :\n- Fichier joint « c.csv » (application/octet-stream) [id: f_mu3pxutx33z0l]. Contenu :\n\"\"\"\nnom,telephone\nAminata,22600000010\nBakary,22600000011\nAminata,22600000010\n\n\"\"\"",
+      "ts": "2026-09-16T06:27:29.204Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu3pxv78wnnf",
+      "role": "assistant",
+      "content": "📇 Import terminé : 2 contact(s) ajouté(s), 0 mis à jour, 1 doublon(s), 0 rejeté(s). Tu peux maintenant me demander de les filtrer, les analyser ou lancer une campagne.",
+      "text": "📇 Import terminé : 2 contact(s) ajouté(s), 0 mis à jour, 1 doublon(s), 0 rejeté(s). Tu peux maintenant me demander de les filtrer, les analyser ou lancer une campagne.",
+      "ts": "2026-09-16T06:27:29.204Z",
+      "metadata": {
+        "intent": null,
+        "toolCall": {
+          "name": "importContactsFromFile",
+          "state": "SUCCESS",
+          "result": {
+            "total": 3,
+            "imported": 2,
+            "updated": 0,
+            "duplicates": 1,
+            "invalid": 0,
+            "source": "chat_import",
+            "channel": "WHATSAPP"
+          }
+        },
+        "actionLog": [
+          {
+            "icon": "📇",
+            "label": "2 contact(s) importé(s)",
+            "status": "done"
+          }
+        ]
+      }
+    }
+  ],
+  "updatedAt": "2026-09-16T06:27:29.204Z"
+}
