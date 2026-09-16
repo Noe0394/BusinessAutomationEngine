@@ -1,19 +1,5 @@
 [
   {
-    "key": "KEY-AFFFF2D9-2026",
-    "active": false,
-    "expiresAt": null,
-    "allowedModules": [
-      "whatsapp",
-      "telegram",
-      "studio_video"
-    ],
-    "note": "",
-    "boundAt": null,
-    "createdAt": "2026-09-10T08:34:50.992Z",
-    "boundDeviceId": null
-  },
-  {
     "allowedModules": [
       "whatsapp",
       "telegram",
