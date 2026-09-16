@@ -5291,10 +5291,29 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       const tsRaw = channel === 'WHATSAPP'
         ? (typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp))
         : Number(msg && msg.date);
+      // Expéditeur réel dans un groupe : Baileys expose msg.key.participant
+      // (le vrai numéro/nom qui a écrit, distinct de remoteJid = le groupe).
+      // Pour les conversations individuelles, l'expéditeur est histFrom lui-même.
+      const isGroupChat = channel === 'WHATSAPP'
+        ? (String(histFrom).endsWith('@g.us') || String(histFrom).endsWith('@broadcast'))
+        : (String(histFrom).startsWith('-'));
+      const realSenderId = isGroupChat && channel === 'WHATSAPP' && msg.key && msg.key.participant
+        ? String(msg.key.participant)
+        : (isGroupChat && channel === 'TELEGRAM' && msg.senderId ? String(msg.senderId) : null);
+      const senderPhone = realSenderId ? String(realSenderId).split('@')[0] : null;
+      // Nom du groupe : métadonnées Baileys (msg.groupName via adapter) ou
+      // best-effort — le nom réel est enrichi par l'adapter si disponible.
+      const groupName = isGroupChat ? ((msg && msg.groupName) || null) : null;
+      // Type de message (texte, image, audio, vidéo, document, etc.)
+      const messageType = hasIncomingAttachment(channel, msg) ? (msg.mimetype || 'media') : 'text';
       conversationHistory.record(tenantId, {
         channel, direction: 'in', party: histFrom, name: senderName, text,
         ts: Number.isFinite(tsRaw) && tsRaw > 0 ? tsRaw : Math.floor(Date.now() / 1000),
         chatId: histFrom, hasMedia: hasIncomingAttachment(channel, msg),
+        messageId: extractMessageId(channel, msg),
+        senderId: realSenderId, senderName, senderPhone,
+        isGroup: isGroupChat, groupName,
+        messageType, mediaId: null,
       });
     }
   }
@@ -5417,6 +5436,12 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
 
 whatsappManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
 telegramManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
+
+// Nettoyage automatique périodique de la mémoire conversationnelle (7 jours).
+// Fenêtre glissante : les données hors de la fenêtre deviennent éligibles au
+// nettoyage toutes les 60 minutes (par défaut), sans IA, par petits lots
+// idempotents, sans bloquer les nouveaux messages.
+try { conversationHistory.startMaintenance(); } catch (_) { /* no-op */ }
 
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {

@@ -296,6 +296,46 @@ const TOOLS = {
     },
   },
 
+  // ---- Recherche conversationnelle (7 jours, index) -----------------------
+  searchConversations: {
+    description: 'Liste les conversations récentes (7 jours) — par nom, numéro ou nom de groupe. Source rapide (index, pas les messages bruts).',
+    permission: null,
+    inputSchema: {
+      query: { type: 'string', required: false, description: 'Nom/numéro/nom de groupe à chercher.' },
+      channel: { type: 'string', required: false, description: 'WHATSAPP ou TELEGRAM (tous si absent).' },
+      type: { type: 'string', required: false, description: 'INDIVIDUAL ou GROUP.' },
+      limit: { type: 'number', required: false, description: 'Nombre max de résultats (défaut 50).' },
+    },
+    resultSchema: { count: 'number', conversations: 'array' },
+    errorSchema: { code: 'string' },
+    async execute(args, ctx) {
+      const rows = await messageHistory.findConversations(ctx.tenant, {
+        query: args.query || null, channel: args.channel || null, type: args.type || null,
+      });
+      return { ok: true, result: { count: rows.length, conversations: rows.slice(0, args.limit || 50) } };
+    },
+  },
+
+  getGroupConversation: {
+    description: 'Renvoie les messages récents d\'un groupe (par groupId), avec l\'expéditeur de chacun.',
+    permission: null,
+    inputSchema: {
+      groupId: { type: 'string', required: true, description: 'Identifiant du groupe (JID WhatsApp ou ID Telegram).' },
+      channel: { type: 'string', required: false, description: 'WHATSAPP (défaut) ou TELEGRAM.' },
+      limit: { type: 'number', required: false, description: 'Nombre max de messages (défaut 50).' },
+    },
+    resultSchema: { count: 'number', messages: 'array' },
+    errorSchema: { code: 'string' },
+    async execute(args, ctx) {
+      const channel = /telegram/i.test(args.channel || '') ? 'TELEGRAM' : 'WHATSAPP';
+      const msgs = await messageHistory.getGroupMessages(ctx.tenant, channel, args.groupId, args.limit || 50);
+      return { ok: true, result: { channel, groupId: args.groupId, count: (msgs || []).length, messages: (msgs || []).map((m) => ({
+        direction: m.direction, senderName: m.senderName || m.name || null, senderPhone: m.senderPhone || null,
+        text: m.text || null, ts: m.ts || null, messageId: m.messageId || null,
+      })) } };
+    },
+  },
+
   // ---- Actions sortantes VÉRIFIÉES ----------------------------------------
   sendWhatsAppMessage: {
     description: 'Envoie un message WhatsApp et VÉRIFIE l\'envoi (identifiant réel). SUCCESS seulement si confirmé.',
