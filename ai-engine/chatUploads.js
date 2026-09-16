@@ -69,6 +69,17 @@ async function get(tenant, id) {
   return (doc.files && doc.files[id]) || null;
 }
 
+// Lit le binaire d'un fichier importé/généré (pour affichage / téléchargement).
+// Renvoie { meta, buffer } ou null si absent (disque éphémère au rebuild).
+async function readFile(tenant, id) {
+  const meta = await get(tenant, id);
+  if (!meta) return null;
+  try {
+    const buffer = fs.readFileSync(path.join(baseDir(tenant), id));
+    return { meta, buffer };
+  } catch (e) { return null; }
+}
+
 // Construit le bloc de contexte à donner à l'IA pour une liste de pièces jointes
 // (contenu réel des fichiers texte ; simple signalement pour les autres).
 async function buildContext(tenant, attachments) {
@@ -79,12 +90,12 @@ async function buildContext(tenant, attachments) {
     const meta = await get(tenant, a && a.id);
     if (!meta) { parts.push(`- Fichier joint : ${(a && a.name) || 'inconnu'} (référence introuvable).`); continue; }
     if (meta.hasText && meta.text) {
-      parts.push(`- Fichier joint « ${meta.name} » (${meta.type}). Contenu :\n"""\n${meta.text}\n"""`);
+      parts.push(`- Fichier joint « ${meta.name} » (${meta.type}) [id: ${meta.id}]. Contenu :\n"""\n${meta.text}\n"""`);
     } else {
-      parts.push(`- Fichier joint « ${meta.name} » (${meta.type}, ${meta.size} octets) — contenu binaire non lisible par le modèle texte actuel : n'invente pas ce qu'il contient, demande des précisions si besoin.`);
+      parts.push(`- Fichier joint « ${meta.name} » (${meta.type}, ${meta.size} octets) [id: ${meta.id}] — contenu binaire non lisible par le modèle texte actuel : n'invente pas ce qu'il contient. Pour un fichier de contacts (CSV/Excel), tu peux l'importer avec l'outil importContactsFromFile en passant ce fileId.`);
     }
   }
   return 'PIÈCES JOINTES importées par l\'utilisateur dans la discussion :\n' + parts.join('\n');
 }
 
-module.exports = { save, get, buildContext, isTextual, NAMESPACE };
+module.exports = { save, get, readFile, buildContext, isTextual, NAMESPACE };

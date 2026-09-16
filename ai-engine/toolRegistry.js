@@ -17,6 +17,7 @@ const businessServices = require('./businessServices');
 const contactCrm = require('./contactCrm');
 const messageHistory = require('./messageHistory');
 const knowledgeBase = require('./knowledgeBase');
+const chatUploads = require('./chatUploads');
 
 const STATE = {
   PENDING: 'PENDING', RUNNING: 'RUNNING', SUCCESS: 'SUCCESS',
@@ -94,6 +95,95 @@ const TOOLS = {
       const hits = knowledgeBase.search(args.query, 2);
       if (!hits.length) return { ok: true, result: { found: false, query: args.query } };
       return { ok: true, result: { found: true, articles: hits.map((a) => ({ id: a.id, title: a.title, summary: a.summary, steps: a.steps || null, body: a.body })) } };
+    },
+  },
+
+  // ---- Configuration métier PAR LE CHAT (écriture) ------------------------
+  configureBusinessService: {
+    description: 'Crée (et éventuellement connecte l\'API + teste) un Service Métier à partir d\'instructions en langage naturel : nom, type d\'activité, prix, produits, règles, objectifs, et connexion API (URL + clé + permissions). Retourne le service créé et, si une API est fournie, le résultat RÉEL du test de connexion.',
+    permission: null,
+    inputSchema: {
+      name: { type: 'string', required: true, description: 'Nom du service/projet.' },
+      type: { type: 'string', required: false, description: 'Type d\'activité (formation, ecommerce, service…).' },
+      price: { type: 'number', required: false, description: 'Prix principal.' },
+      currency: { type: 'string', required: false, description: 'Devise (défaut FCFA).' },
+      description: { type: 'string', required: false, description: 'Description de l\'offre.' },
+      products: { type: 'string', required: false, description: 'Produits, format « Nom|Prix » séparés par des points-virgules ou des retours ligne.' },
+      rules: { type: 'string', required: false, description: 'Règles commerciales, une par ligne ou séparées par « ; ».' },
+      objectives: { type: 'string', required: false, description: 'Objectifs, séparés par « ; ».' },
+      baseUrl: { type: 'string', required: false, description: 'URL de base de l\'API à connecter (si plateforme avec API).' },
+      apiKey: { type: 'string', required: false, description: 'Clé API (stockée chiffrée dans le coffre, jamais réaffichée).' },
+      authHeader: { type: 'string', required: false, description: 'En-tête d\'authentification (défaut X-API-Key).' },
+      connectorType: { type: 'string', required: false, description: 'Type de connecteur : platform_gateway | systemio | generic.' },
+      scopes: { type: 'string', required: false, description: 'Permissions autorisées, séparées par des virgules (ex. students:create,students:suspend).' },
+    },
+    resultSchema: { serviceId: 'string', connected: 'boolean', test: 'object' },
+    errorSchema: { code: 'string' },
+    async execute(args, ctx) {
+      const splitList = (s) => String(s || '').split(/[\n;]+/).map((x) => x.trim()).filter(Boolean);
+      const products = splitList(args.products).map((line) => { const [n, p] = line.split('|').map((x) => x.trim()); return { name: n || line, price: p ? Number(p) : null }; });
+      const scopes = String(args.scopes || '').split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
+      const connection = args.baseUrl ? { kind: 'api', connectorType: args.connectorType || (/agent-gateway|riea/i.test(args.baseUrl) ? 'platform_gateway' : 'generic'), baseUrl: args.baseUrl, authHeader: args.authHeader || 'X-API-Key' } : { kind: 'none' };
+      if (connection.connectorType === 'platform_gateway') connection.endpoints = { enroll: '/api/v1/agent-gateway/enroll-student', suspend: '/api/v1/agent-gateway/suspend-student' };
+      const svc = await businessServices.create(ctx.tenant, {
+        name: args.name, type: args.type || 'autre', connection, scopes,
+        commercial: { price: args.price != null ? Number(args.price) : null, currency: args.currency || 'FCFA', description: args.description || '' },
+        products, rules: splitList(args.rules), objectives: splitList(args.objectives),
+      });
+      let test = null; let connected = false;
+      if (args.apiKey && args.baseUrl) {
+        await businessServices.connectApi(ctx.tenant, svc.id, { apiKey: args.apiKey, baseUrl: args.baseUrl, authHeader: connection.authHeader, connectorType: connection.connectorType, endpoints: connection.endpoints });
+        const t = await businessServices.testConnection(ctx.tenant, svc.id);
+        test = t.result; connected = t.status === 'CONNECTED';
+      }
+      return { ok: true, result: { serviceId: svc.id, name: svc.name, connected, test } };
+    },
+  },
+
+  importContactsFromFile: {
+    description: 'Importe en masse les contacts d\'un fichier déjà joint à la discussion (CSV ou Excel), dans le CRM. À utiliser quand l\'utilisateur joint un fichier de contacts et demande de l\'importer. Retourne un rapport réel (importés / doublons / rejetés).',
+    permission: null,
+    inputSchema: { fileId: { type: 'string', required: true, description: 'Identifiant du fichier joint (fourni dans le contexte des pièces jointes, ex. f_xxx).' } },
+    resultSchema: { imported: 'number', duplicates: 'number', invalid: 'number' },
+    errorSchema: { code: 'string' },
+    async execute(args, ctx) {
+      const meta = await chatUploads.get(ctx.tenant, args.fileId);
+      if (!meta) return { ok: false, error: { code: 'FILE_NOT_FOUND' } };
+      let rows = [];
+      try {
+        const XLSX = require('xlsx');
+        let wb;
+        if (meta.hasText && meta.text) wb = XLSX.read(meta.text, { type: 'string' });
+        else {
+          const fs = require('fs'); const path = require('path');
+          const root = process.env.AI_ENGINE_STORAGE_DIR || path.join(__dirname, '..', 'ai_engine_data');
+          const buf = fs.readFileSync(path.join(root, 'chat_uploads', String(ctx.tenant).replace(/[^A-Za-z0-9_-]/g, '_') || 'unknown', args.fileId));
+          wb = XLSX.read(buf, { type: 'buffer' });
+        }
+        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      } catch (e) { return { ok: false, error: { code: 'PARSE_ERROR', message: e.message } }; }
+      const contacts = rows.map((r) => {
+        const name = String(r.nom || r.Nom || r.prenom || r.Prenom || r.name || r.Name || '').trim();
+        const phone = String(r.telephone || r.Telephone || r.phone || r.Phone || r.numero || r.Numero || r.tel || r.Tel || '').trim();
+        return { name, phone };
+      });
+      const report = await contactCrm.importContacts(ctx.tenant, contacts, { source: 'chat_import' });
+      return { ok: true, result: report };
+    },
+  },
+
+  generateImage: {
+    description: 'Génère une image / affiche à partir d\'une description, et la renvoie TÉLÉCHARGEABLE dans la discussion. À utiliser quand l\'utilisateur demande de générer/créer une image, une affiche ou un visuel.',
+    permission: null,
+    inputSchema: { prompt: { type: 'string', required: true, description: 'Description du visuel à générer.' } },
+    resultSchema: { fileId: 'string', name: 'string', type: 'string', media: 'boolean' },
+    errorSchema: { code: 'string' },
+    async execute(args, ctx) {
+      if (typeof ctx.generateImage !== 'function') return { ok: false, error: { code: 'IMAGE_ENGINE_UNAVAILABLE' } };
+      const img = await ctx.generateImage(args.prompt);
+      if (!img || !img.buffer) return { ok: false, error: { code: 'GENERATION_FAILED' } };
+      const ref = await chatUploads.save(ctx.tenant, { originalname: 'affiche-cyrus.jpg', mimetype: img.mimetype || 'image/jpeg', buffer: img.buffer });
+      return { ok: true, result: { fileId: ref.id, name: ref.name, type: ref.type, media: true, download: true } };
     },
   },
 

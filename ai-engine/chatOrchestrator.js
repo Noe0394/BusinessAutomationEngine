@@ -970,7 +970,7 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     // (image/vidéo/livre/conversation) reprend la main.
     const agent = await toolAgent.runToolAgent(
       { text, history, tenantId },
-      { runtime: d.runtime || null, permissions: d.toolPermissions || undefined },
+      { runtime: d.runtime || null, permissions: d.toolPermissions || undefined, generateImage: d.generateImage || null },
     ).catch((err) => {
       console.warn('chatOrchestrator — toolAgent indisponible, repli :', err.message);
       return null;

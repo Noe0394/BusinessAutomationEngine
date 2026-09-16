@@ -5052,6 +5052,18 @@ app.post('/api/intelligence/upload', requireAccess, upload.array('files', 10), a
     res.json({ ok: true, files: saved });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+// Sert / télécharge un fichier importé ou un média généré (per-tenant).
+// ?download=1 force le téléchargement (Content-Disposition attachment).
+app.get('/api/intelligence/file/:id', requireAccess, async (req, res) => {
+  try {
+    const out = await chatUploads.readFile(resolveTenantId(req), req.params.id);
+    if (!out) return res.status(404).json({ error: 'Fichier introuvable (peut avoir expiré après un redéploiement).' });
+    res.setHeader('Content-Type', out.meta.type || 'application/octet-stream');
+    const disp = req.query.download ? 'attachment' : 'inline';
+    res.setHeader('Content-Disposition', `${disp}; filename="${(out.meta.name || 'fichier').replace(/[^\w.\-]/g, '_')}"`);
+    res.send(out.buffer);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // Aperçu CRM (comptages) — pour l'onglet Contacts et le suivi.
 app.get('/api/contacts/summary', requireAccess, async (req, res) => {

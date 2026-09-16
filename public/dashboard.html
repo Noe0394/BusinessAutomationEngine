@@ -549,6 +549,7 @@
         #panel-goalchat .studio-msg .gc-msg-att img{max-width:160px;max-height:160px;border-radius:8px;display:block}
         #panel-goalchat .studio-msg .gc-msg-file{background:rgba(0,0,0,.06);border-radius:8px;padding:6px 10px;font-size:.82rem}
         #panel-goalchat .studio-msg.user .gc-msg-file{background:rgba(255,255,255,.2)}
+        #panel-goalchat .gc-dl{display:inline-block;background:#6c4fd6;color:#fff;border-radius:16px;padding:6px 14px;font-size:.85rem;text-decoration:none;margin-top:4px}
       </style>
       <div class="gc-head">
         <div class="gc-title">💬 Chat Intelligent</div>
@@ -2886,10 +2887,28 @@
       try { if (id) localStorage.setItem('cyrus_goalchat_session', id); } catch (e) { /* stockage indisponible */ }
     }
 
+    async function goalChatRenderMedia(bubble, media) {
+      // Média généré (ex. affiche) : affiché dans la bulle + TÉLÉCHARGEMENT
+      // DIRECT (blob local, pas un simple lien).
+      try {
+        const res = await apiFetch('/api/intelligence/file/' + encodeURIComponent(media.fileId));
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const wrap = document.createElement('div'); wrap.className = 'gc-msg-att';
+        if ((media.type || '').startsWith('image/')) { const img = document.createElement('img'); img.src = url; wrap.appendChild(img); }
+        const dl = document.createElement('a'); dl.textContent = '⬇️ Télécharger'; dl.href = url; dl.download = media.name || 'fichier'; dl.className = 'gc-dl';
+        wrap.appendChild(dl);
+        bubble.appendChild(wrap);
+      } catch (e) { /* affichage best-effort */ }
+    }
+
     function goalChatHandleResponse(data) {
       if (!data || !data.ok) { goalChatFeedback((data && data.error) || 'Réponse invalide du système intelligent.', true); return; }
       if (data.sessionId) goalChatSaveSession(data.sessionId);
-      if (data.reply && data.reply.text) goalChatAppendBubble('assistant', data.reply.text);
+      let bubble = null;
+      if (data.reply && data.reply.text) bubble = goalChatAppendBubble('assistant', data.reply.text);
+      const r = data.toolCall && data.toolCall.result;
+      if (r && r.media && r.fileId) goalChatRenderMedia(bubble || goalChatAppendBubble('assistant', ''), r);
       if (data.quick) goalChatAppendChips(data.quick, (label) => goalChatSend(label));
       if (data.kind === 'plan' && data.actions) goalChatAppendPlanActions(data.actions);
     }

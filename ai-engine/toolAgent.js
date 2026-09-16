@@ -45,7 +45,7 @@ function statusFor(state) {
 async function runToolAgent({ text, history, tenantId }, deps) {
   const d = deps || {};
   const llm = typeof d.llm === 'function' ? d.llm : defaultLlm;
-  const ctx = { runtime: d.runtime || null, permissions: d.permissions || ['messages:send'] };
+  const ctx = { runtime: d.runtime || null, permissions: d.permissions || ['messages:send'], generateImage: d.generateImage || null };
   const tools = toolRegistry.list(ctx);
 
   const selPrompt = [
