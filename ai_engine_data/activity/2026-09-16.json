@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-16",
+  "events": [
+    {
+      "activityId": "act_mu3ntxs77w7z",
+      "ts": "2026-09-16T05:28:26.695Z",
+      "type": "message_in",
+      "action": "Message client reçu",
+      "status": "ok",
+      "channel": "WHATSAPP",
+      "tenant": "KEY-E5164DF3-2026",
+      "target": "22664977093",
+      "detail": "bonjour"
+    }
+  ],
+  "counts": {
+    "byType": {
+      "message_in": 1
+    },
+    "byStatus": {
+      "ok": 1
+    },
+    "byChannel": {
+      "WHATSAPP": 1
+    }
+  }
+}
