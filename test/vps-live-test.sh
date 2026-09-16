@@ -26,13 +26,38 @@ api() {
   curl -s -w "\n%{http_code}" "$@"
 }
 
+# Lecture des fichiers runtime de la mémoire 7 jours DANS le conteneur, en
+# gérant les DEUX emplacements possibles : le volume persistant app_data
+# (docker-compose actuel : /app/data/ai_engine) en PRIORITÉ, sinon l'ancien
+# chemin éphémère (/app/ai_engine_data) — le script fonctionne donc avant ET
+# après le redéploiement du correctif de persistance.
+engine_file() { # $1 = chemin relatif (ex: message_history/KEY...__WHATSAPP.json)
+  local rel="$1" out
+  out=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/data/ai_engine/$rel 2>/dev/null")
+  if [ -z "$out" ]; then
+    out=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/ai_engine_data/$rel 2>/dev/null")
+  fi
+  [ -n "$out" ] && printf '%s' "$out" || echo "FILE_NOT_FOUND"
+}
+engine_license_file() { # licences runtime (volume /app/data/licenses.json puis ancien chemin)
+  local out
+  out=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/data/licenses.json 2>/dev/null")
+  if [ -z "$out" ]; then
+    out=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/licenses.json 2>/dev/null")
+  fi
+  [ -n "$out" ] && printf '%s' "$out" || echo "FILE_NOT_FOUND"
+}
+
 # === ÉTAPE 1 : Récupérer le device-id ===
 echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "  ÉTAPE 1 : Authentification — récupération device-id"
 echo "═══════════════════════════════════════════════════════"
 
-DEVICE_ID=$(ssh_vps "node -e \"var j=require('/home/cyrus2026/BusinessAutomationEngine/licenses.json'); var l=(j.licenses||[]).find(l=>l.key==='$LICENCE'); console.log(l?l.deviceId:'NOT_FOUND')\"")
+# Parse le fichier runtime (dans le conteneur) LOCALEMENT après docker exec cat
+# — aucun quoting fragile à travers gcloud→plink.
+LIC_JSON=$(engine_license_file)
+DEVICE_ID=$(printf '%s' "$LIC_JSON" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);const l=(j.licenses||[]).find(x=>x.key===process.argv[1]);console.log(l&&l.deviceId?l.deviceId:'')}catch(e){console.log('')}});" "$LICENCE" 2>/dev/null)
 
 if [ -z "$DEVICE_ID" ] || [ "$DEVICE_ID" = "NOT_FOUND" ]; then
   red "Impossible de récupérer le device-id pour $LICENCE"
@@ -123,7 +148,7 @@ else
   echo "═══════════════════════════════════════════════════════"
 
   # Lire le fichier directement sur le VPS
-  MSG_DATA=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/ai_engine_data/message_history/${LICENCE}__WHATSAPP.json 2>/dev/null || echo 'FILE_NOT_FOUND'")
+  MSG_DATA=$(engine_file "message_history/${LICENCE}__WHATSAPP.json")
 
   if echo "$MSG_DATA" | grep -q "FILE_NOT_FOUND"; then
     red "Fichier message_history WhatsApp introuvable"
@@ -189,7 +214,7 @@ else
   echo "  ÉTAPE 6 : Vérification conversation_index"
   echo "═══════════════════════════════════════════════════════"
 
-  IDX_DATA=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/ai_engine_data/conversation_index/${LICENCE}__WHATSAPP.json 2>/dev/null || echo 'FILE_NOT_FOUND'")
+  IDX_DATA=$(engine_file "conversation_index/${LICENCE}__WHATSAPP.json")
 
   if echo "$IDX_DATA" | grep -q "FILE_NOT_FOUND"; then
     red "Fichier conversation_index WhatsApp introuvable"
@@ -263,8 +288,8 @@ echo "════════════════════════�
 echo "  ÉTAPE 8 : Données Telegram"
 echo "═══════════════════════════════════════════════════════"
 
-TG_MSG=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/ai_engine_data/message_history/${LICENCE}__TELEGRAM.json 2>/dev/null || echo 'FILE_NOT_FOUND'")
-TG_IDX=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/ai_engine_data/conversation_index/${LICENCE}__TELEGRAM.json 2>/dev/null || echo 'FILE_NOT_FOUND'")
+TG_MSG=$(engine_file "message_history/${LICENCE}__TELEGRAM.json")
+TG_IDX=$(engine_file "conversation_index/${LICENCE}__TELEGRAM.json")
 
 if echo "$TG_MSG" | grep -q "FILE_NOT_FOUND"; then
   skip "Aucun fichier message_history Telegram pour $LICENCE"
