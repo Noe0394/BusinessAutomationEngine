@@ -1,0 +1,44 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu3pxtg5-z9v7c",
+  "title": "Cree un service metier de type formation nomme Formations Te",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu3pxusiv327",
+      "role": "user",
+      "content": "Cree un service metier de type formation nomme Formations Test Chat, avec le produit Formation Epicerie a 8000 FCFA, la regle jamais plus de 10 pourcent de remise et l objectif vendre 10 formations par semaine.",
+      "text": "Cree un service metier de type formation nomme Formations Test Chat, avec le produit Formation Epicerie a 8000 FCFA, la regle jamais plus de 10 pourcent de remise et l objectif vendre 10 formations par semaine.",
+      "ts": "2026-09-16T06:27:28.674Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu3pxusidc0o",
+      "role": "assistant",
+      "content": "✅ C'est configuré : le service « Formations Test Chat » est créé.",
+      "text": "✅ C'est configuré : le service « Formations Test Chat » est créé.",
+      "ts": "2026-09-16T06:27:28.674Z",
+      "metadata": {
+        "intent": null,
+        "toolCall": {
+          "name": "configureBusinessService",
+          "state": "SUCCESS",
+          "result": {
+            "serviceId": "svc_mu3pxumu6odeq",
+            "name": "Formations Test Chat",
+            "connected": false,
+            "test": null
+          }
+        },
+        "actionLog": [
+          {
+            "icon": "🏢",
+            "label": "Service « Formations Test Chat » configuré",
+            "status": "done"
+          }
+        ]
+      }
+    }
+  ],
+  "updatedAt": "2026-09-16T06:27:28.674Z"
+}
