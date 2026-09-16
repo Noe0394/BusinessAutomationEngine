@@ -1,0 +1,27 @@
+{
+  "tenantId": "KEY-E5164DF3-2026",
+  "channel": "WHATSAPP",
+  "conversations": {
+    "2083713491154@lid": {
+      "chatId": "2083713491154@lid",
+      "type": "INDIVIDUAL",
+      "platform": "WHATSAPP",
+      "accountId": "KEY-E5164DF3-2026",
+      "contactId": "2083713491154@lid",
+      "contactName": "Bénédicte Niamke",
+      "phoneNumber": "2083713491154",
+      "groupId": null,
+      "groupName": null,
+      "participants": null,
+      "firstMessageAt": 1789556022000,
+      "lastMessageAt": 1789556022000,
+      "messageCount": 1,
+      "lastMessage": "Bonjour ! Puis-je en savoir plus à ce sujet ?",
+      "lastMessageDirection": "in",
+      "lastMessageAtIso": "2026-09-16T10:53:43.832Z",
+      "lastSenderId": null,
+      "lastSenderName": "Bénédicte Niamke"
+    }
+  },
+  "updatedAt": "2026-09-16T10:53:44.174Z"
+}
