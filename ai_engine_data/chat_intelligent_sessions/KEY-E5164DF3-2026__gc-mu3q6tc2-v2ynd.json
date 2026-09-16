@@ -1,0 +1,25 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "sessionId": "gc-mu3q6tc2-v2ynd",
+  "title": "Bjr mon pote",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu3q6uhmd1ji",
+      "role": "user",
+      "content": "Bjr mon pote",
+      "text": "Bjr mon pote",
+      "ts": "2026-09-16T06:34:28.186Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu3q6uhm842k",
+      "role": "assistant",
+      "content": "Salut ! Content de te lire, comment puis-je t’aider aujourd’hui ?",
+      "text": "Salut ! Content de te lire, comment puis-je t’aider aujourd’hui ?",
+      "ts": "2026-09-16T06:34:28.186Z",
+      "metadata": {}
+    }
+  ],
+  "updatedAt": "2026-09-16T06:34:28.186Z"
+}
