@@ -389,10 +389,15 @@
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
       <button type="button" class="tab-btn" data-tab="facebook">Facebook</button>
       <button type="button" class="tab-btn" data-tab="scheduler">🗓️ Programmation / Planning</button>
-      <button type="button" class="tab-btn" data-tab="prospects">🎯 Contacts / Prospects</button>
-      <button type="button" class="tab-btn" data-tab="share">🔗 Groupes / Diffusion</button>
+      <!-- MASQUÉS PROVISOIREMENT (demande utilisateur) : Contacts/Prospects,
+           Groupes/Diffusion et Studio IA. Ces onglets sont dans la liste
+           "toujours visibles" de applyModuleVisibility(), qui ne les touche donc
+           pas — l'attribut `hidden` ci-dessous suffit à les cacher. Pour les
+           réafficher : retirer `hidden`. -->
+      <button type="button" class="tab-btn" data-tab="prospects" hidden>🎯 Contacts / Prospects</button>
+      <button type="button" class="tab-btn" data-tab="share" hidden>🔗 Groupes / Diffusion</button>
       <button type="button" class="tab-btn" data-tab="relance">📇 Relance Manuelle Express</button>
-      <button type="button" class="tab-btn" data-tab="studio">🧠 Studio IA</button>
+      <button type="button" class="tab-btn" data-tab="studio" hidden>🧠 Studio IA</button>
       <button type="button" class="tab-btn" data-tab="services-metiers">🏢 Services Métiers</button>
       <button type="button" class="tab-btn" data-tab="aide">📚 Centre d'aide</button>
       <button type="button" class="tab-btn" data-tab="reports">📊 Rapports & Activités</button>
@@ -535,6 +540,15 @@
         #panel-goalchat .gc-input{flex:1;min-height:44px;max-height:140px;border:1px solid rgba(0,0,0,.15);border-radius:22px;padding:11px 16px;resize:none;font:inherit;outline:none;background:#f7f7fa}
         #panel-goalchat .gc-send{flex:0 0 auto;width:46px;height:46px;border-radius:50%;border:none;background:#6c4fd6;color:#fff;font-size:1.3rem;line-height:1;cursor:pointer}
         #panel-goalchat .gc-send:active{background:#5a3fc0}
+        #panel-goalchat .gc-attachments{display:flex;flex-wrap:wrap;gap:8px;padding:8px 12px;background:#fff;border-top:1px solid rgba(0,0,0,.06)}
+        #panel-goalchat .gc-chip{display:flex;align-items:center;gap:6px;background:#f0edfb;border:1px solid rgba(108,79,214,.3);border-radius:16px;padding:5px 10px;font-size:.82rem;max-width:220px}
+        #panel-goalchat .gc-chip img{width:28px;height:28px;object-fit:cover;border-radius:6px}
+        #panel-goalchat .gc-chip .gc-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        #panel-goalchat .gc-chip .gc-chip-x{cursor:pointer;color:#f87171;font-weight:700}
+        #panel-goalchat .studio-msg .gc-msg-att{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px}
+        #panel-goalchat .studio-msg .gc-msg-att img{max-width:160px;max-height:160px;border-radius:8px;display:block}
+        #panel-goalchat .studio-msg .gc-msg-file{background:rgba(0,0,0,.06);border-radius:8px;padding:6px 10px;font-size:.82rem}
+        #panel-goalchat .studio-msg.user .gc-msg-file{background:rgba(255,255,255,.2)}
       </style>
       <div class="gc-head">
         <div class="gc-title">💬 Chat Intelligent</div>
@@ -552,7 +566,10 @@
       </div>
       <div id="goalchat-messages"></div>
       <p id="goalchat-feedback" class="gc-feedback" hidden></p>
+      <div id="goalchat-attachments" class="gc-attachments" hidden></div>
       <div class="gc-inputbar">
+        <button type="button" id="goalchat-attach-btn" class="gc-send" style="background:transparent;color:#6c4fd6;border:1px solid rgba(108,79,214,.4)" title="Joindre un fichier ou un média" aria-label="Joindre">📎</button>
+        <input type="file" id="goalchat-file" multiple hidden />
         <textarea id="goalchat-input" class="gc-input" rows="1" placeholder="Écris ton message…  (Ctrl+Entrée = envoyer)"></textarea>
         <button type="button" id="goalchat-send-btn" class="gc-send" title="Envoyer" aria-label="Envoyer">➤</button>
       </div>
@@ -2767,7 +2784,44 @@
     // place côté serveur (task-parser, human-context-engine, automation-engine
     // + action-executor). Rien n'est exécuté avant confirmation explicite
     // (bouton "🚀 Oui, lancer maintenant"). ----------
-    const goalChatState = { sessionId: null, welcomed: false };
+    const goalChatState = { sessionId: null, welcomed: false, pendingFiles: [] };
+
+    // --- Pièces jointes : import de tout type de fichier/média dans la discussion.
+    function goalChatRenderPending() {
+      const box = document.getElementById('goalchat-attachments');
+      if (!box) return;
+      if (!goalChatState.pendingFiles.length) { box.hidden = true; box.innerHTML = ''; return; }
+      box.hidden = false;
+      box.innerHTML = '';
+      goalChatState.pendingFiles.forEach((pf, idx) => {
+        const chip = document.createElement('div');
+        chip.className = 'gc-chip';
+        if (pf.file.type.startsWith('image/')) {
+          const img = document.createElement('img');
+          img.src = URL.createObjectURL(pf.file);
+          chip.appendChild(img);
+        } else {
+          const ic = document.createElement('span'); ic.textContent = '📄'; chip.appendChild(ic);
+        }
+        const nm = document.createElement('span'); nm.className = 'gc-chip-name'; nm.textContent = pf.file.name;
+        const x = document.createElement('span'); x.className = 'gc-chip-x'; x.textContent = '✕';
+        x.addEventListener('click', () => { goalChatState.pendingFiles.splice(idx, 1); goalChatRenderPending(); });
+        chip.appendChild(nm); chip.appendChild(x);
+        box.appendChild(chip);
+      });
+    }
+    function goalChatAppendAttachments(bubble, atts) {
+      if (!atts || !atts.length) return;
+      const wrap = document.createElement('div'); wrap.className = 'gc-msg-att';
+      atts.forEach((a) => {
+        if (a.previewUrl && a.type && a.type.startsWith('image/')) {
+          const img = document.createElement('img'); img.src = a.previewUrl; wrap.appendChild(img);
+        } else {
+          const f = document.createElement('div'); f.className = 'gc-msg-file'; f.textContent = '📄 ' + (a.name || 'fichier'); wrap.appendChild(f);
+        }
+      });
+      bubble.appendChild(wrap);
+    }
 
     function goalChatFeedback(message, isError) {
       const el = document.getElementById('goalchat-feedback');
@@ -2840,13 +2894,39 @@
       if (data.kind === 'plan' && data.actions) goalChatAppendPlanActions(data.actions);
     }
 
+    async function goalChatUploadPending() {
+      // Téléverse les fichiers en attente et renvoie les références serveur.
+      if (!goalChatState.pendingFiles.length) return [];
+      const fd = new FormData();
+      goalChatState.pendingFiles.forEach((pf) => fd.append('files', pf.file, pf.file.name));
+      const res = await apiFetch('/api/intelligence/upload', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!data || !data.ok) throw new Error((data && data.error) || 'Échec de l\'import du fichier.');
+      // associe une URL de prévisualisation locale (image) à chaque réf
+      return (data.files || []).map((f, i) => {
+        const pf = goalChatState.pendingFiles[i];
+        return Object.assign({}, f, { previewUrl: pf && pf.file.type.startsWith('image/') ? URL.createObjectURL(pf.file) : null });
+      });
+    }
+
     async function goalChatSend(message) {
       goalChatFeedback('');
-      goalChatAppendBubble('user', message);
+      const hasFiles = goalChatState.pendingFiles.length > 0;
+      if (!message && !hasFiles) return;
+      const bubble = goalChatAppendBubble('user', message || '');
+      let attachments = [];
       try {
-        goalChatHandleResponse(await goalChatPost({ message }));
+        if (hasFiles) {
+          goalChatFeedback('Import du/des fichier(s)…', false);
+          attachments = await goalChatUploadPending();
+          goalChatAppendAttachments(bubble, attachments);
+          goalChatState.pendingFiles = [];
+          goalChatRenderPending();
+          goalChatFeedback('');
+        }
+        goalChatHandleResponse(await goalChatPost({ message: message || '', attachments: attachments.map((a) => ({ id: a.id, name: a.name, type: a.type })) }));
       } catch (err) {
-        if (err.message !== 'unauthorized') goalChatFeedback('Erreur de communication avec le système intelligent.', true);
+        if (err.message !== 'unauthorized') goalChatFeedback('Erreur : ' + (err.message || 'communication avec le système intelligent.'), true);
       }
     }
 
@@ -2982,6 +3062,21 @@
         input.dataset.grow = '1';
         const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; };
         input.addEventListener('input', grow);
+      }
+      // Import de fichiers/médias (tout type) dans la discussion.
+      const attachBtn = document.getElementById('goalchat-attach-btn');
+      const fileInput = document.getElementById('goalchat-file');
+      if (attachBtn && fileInput && !attachBtn.dataset.wired) {
+        attachBtn.dataset.wired = '1';
+        attachBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+          Array.from(fileInput.files || []).forEach((f) => {
+            if (f.size > 25 * 1024 * 1024) { goalChatFeedback('Fichier « ' + f.name + ' » ignoré (plus de 25 Mo).', true); return; }
+            goalChatState.pendingFiles.push({ file: f });
+          });
+          fileInput.value = '';
+          goalChatRenderPending();
+        });
       }
       if (goalChatState.welcomed) return;
       goalChatState.welcomed = true;

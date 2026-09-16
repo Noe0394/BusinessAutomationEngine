@@ -5036,6 +5036,23 @@ app.post('/api/contacts/import-crm', requireAccess, upload.single('file'), async
     res.status(400).json({ error: 'Fichier invalide. Utilisez un .xlsx/.csv avec une colonne "telephone" (et éventuellement "nom").' });
   }
 });
+// IMPORT DE FICHIERS / MÉDIAS DANS LA DISCUSSION (Chat Intelligent) — tout type
+// accepté. Le contenu des fichiers TEXTE est extrait et fourni à l'IA ; les
+// autres types sont stockés et signalés (sans invention). Voir
+// ai-engine/chatUploads.js. Renvoie des références utilisées ensuite par
+// POST /api/intelligence/goal-chat (champ `attachments`).
+const chatUploads = require('./ai-engine/chatUploads');
+app.post('/api/intelligence/upload', requireAccess, upload.array('files', 10), async (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return res.status(400).json({ error: 'Aucun fichier fourni (champ "files").' });
+    const tenant = resolveTenantId(req);
+    const saved = [];
+    for (const f of files) saved.push(await chatUploads.save(tenant, f));
+    res.json({ ok: true, files: saved });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Aperçu CRM (comptages) — pour l'onglet Contacts et le suivi.
 app.get('/api/contacts/summary', requireAccess, async (req, res) => {
   try { res.json({ ok: true, summary: await contactCrm.counts(resolveTenantId(req)) }); }
