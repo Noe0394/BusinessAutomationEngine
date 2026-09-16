@@ -19,6 +19,7 @@ const personaManager = require('./personaManager');
 const businessServices = require('./businessServices');
 const messageHistory = require('./messageHistory');
 const storageAdapter = require('./storageAdapter');
+const modelRouter = require('./modelRouter');
 
 const SETTINGS_NS = 'auto_settings';
 
@@ -53,13 +54,17 @@ function isEnabled(settings, channel) {
 // Rédige la réponse au client, EN S'APPUYANT sur le contexte métier réel
 // (produits/prix/règles des Services Métiers) et l'historique de la conversation.
 async function composeReply({ tenant, channel, from, name, text, llm }) {
-  // Appel IA tagué (AI Cost Guard) : purpose 'client_conversation' + tenant,
-  // pour la ventilation des coûts IA par fonctionnalité et par compte.
-  const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'client_conversation', tenant }).then((r) => r.text);
+  // Model router (§6) : complexité du message -> taille de contexte + plafond
+  // de tokens de sortie (économie réelle sur les messages simples).
+  const route = modelRouter.classify(text);
+  // Appel IA tagué (AI Cost Guard) : purpose 'client_conversation' + tenant +
+  // maxTokens (routeur) + taskId (protection anti-boucle par conversation).
+  const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}` };
+  const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, meta).then((r) => r.text);
   const bizCtx = await businessServices.getEngineContextText(tenant).catch(() => '');
   let history = '';
   try {
-    const conv = await messageHistory.getConversation(tenant, channel, from, 12);
+    const conv = await messageHistory.getConversation(tenant, channel, from, route.maxContextMessages);
     if (conv && conv.length) history = conv.map((m) => `${m.direction === 'in' ? 'Client' : 'Moi'}: ${m.text}`).join('\n');
   } catch (e) { history = ''; }
   const prompt = [
@@ -92,13 +97,23 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId }
   if (markProcessed(tenantId, messageId)) return { skipped: 'DUPLICATE' };
   if (!d.runtime || typeof d.runtime.sendMessageVerified !== 'function') return { skipped: 'NO_RUNTIME' };
 
+  try { require('./activityStore').record({ type: 'message_in', action: 'Message client reçu', status: 'ok', channel, tenant: tenantId, target: from, detail: text.slice(0, 120) }); } catch (e) { /* non bloquant */ }
+
   const reply = await composeReply({ tenant: tenantId, channel, from, name, text, llm: d.llm });
   if (!reply) return { skipped: 'EMPTY_REPLY' };
 
   const out = await d.runtime.sendMessageVerified({ channel, to: from, text: reply, tenantId });
   // sendMessageVerified enregistre déjà le message sortant dans l'historique.
+  const sent = out.status === 'SUCCESS';
+  try {
+    require('./activityStore').record({
+      type: 'auto_reply', action: 'Réponse automatique', channel, tenant: tenantId, target: from,
+      status: sent ? 'ok' : (out.status === 'PENDING' ? 'pending' : 'error'),
+      detail: sent ? `envoyée (réf. ${out.confirmationId || '?'})` : (out.error || out.status),
+    });
+  } catch (e) { /* non bloquant */ }
   return {
-    sent: out.status === 'SUCCESS',
+    sent,
     status: out.status,
     confirmationId: out.confirmationId || null,
     error: out.error || null,

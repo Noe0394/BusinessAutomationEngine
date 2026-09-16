@@ -395,6 +395,7 @@
       <button type="button" class="tab-btn" data-tab="studio">🧠 Studio IA</button>
       <button type="button" class="tab-btn" data-tab="services-metiers">🏢 Services Métiers</button>
       <button type="button" class="tab-btn" data-tab="aide">📚 Centre d'aide</button>
+      <button type="button" class="tab-btn" data-tab="reports">📊 Rapports & Activités</button>
     </nav>
 
     <!-- Onglet unifié : Connexions & Intégrations (Hub) -->
@@ -2096,6 +2097,35 @@
       <div id="aide-content"><p style="opacity:.6">Chargement de la documentation…</p></div>
     </section>
 
+    <!-- Onglet : Rapports, Activités & Amélioration (interface UNIQUE de
+         supervision, §15). Données réelles et DÉTERMINISTES (aucun appel IA) :
+         coûts IA (GET /api/reports/ai-usage) + flux d'activités
+         (GET /api/reports/activity). Portée par tenant (clé de licence). -->
+    <section class="panel" id="panel-reports">
+      <style>
+        #panel-reports .rep-kpis{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
+        #panel-reports .rep-kpi{flex:1 1 140px;min-width:130px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px}
+        #panel-reports .rep-kpi .v{font-size:1.5rem;font-weight:700}
+        #panel-reports .rep-kpi .l{opacity:.7;font-size:.82rem;margin-top:2px}
+        #panel-reports .rep-section{margin-top:22px}
+        #panel-reports .rep-bar-row{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:.85rem}
+        #panel-reports .rep-bar-label{width:120px;flex:0 0 auto;opacity:.8;text-align:right}
+        #panel-reports .rep-bar-track{flex:1;background:rgba(255,255,255,.06);border-radius:6px;height:16px;overflow:hidden}
+        #panel-reports .rep-bar-fill{height:100%;background:#6c4fd6;border-radius:6px}
+        #panel-reports .rep-feed{margin-top:8px;border:1px solid rgba(255,255,255,.08);border-radius:12px;overflow:hidden}
+        #panel-reports .rep-evt{display:flex;gap:8px;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.06);font-size:.88rem}
+        #panel-reports .rep-evt:last-child{border-bottom:none}
+        #panel-reports .rep-evt .rep-when{opacity:.55;font-size:.78rem;flex:0 0 auto}
+        #panel-reports .rep-evt .rep-what{flex:1}
+        #panel-reports .rep-ok{color:#34d399}
+        #panel-reports .rep-err{color:#f87171}
+        #panel-reports .rep-warn{color:#fbbf24}
+      </style>
+      <h2>📊 Rapports, Activités &amp; Amélioration <button type="button" id="reports-refresh" style="float:right;font-size:.8rem;padding:5px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit;cursor:pointer">🔄 Rafraîchir</button></h2>
+      <p class="empty">Supervision en temps réel : coûts IA et activités réelles (messages, réponses automatiques, actions/outils, erreurs). Données déterministes — cette page n'utilise aucune IA.</p>
+      <div id="reports-content"><p style="opacity:.6">Chargement…</p></div>
+    </section>
+
   </div>
 
   <!-- Modal : Rapport Final de Campagne -->
@@ -2350,7 +2380,7 @@
       // que soit le module de la licence. Sans cette exclusion, ils étaient
       // masqués pour toute licence à modules restreints (bug signalé).
       const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'))
-        .filter((btn) => !['connections', 'goalchat', 'scheduler', 'prospects', 'share', 'studio', 'services-metiers', 'aide'].includes(btn.dataset.tab));
+        .filter((btn) => !['connections', 'goalchat', 'scheduler', 'prospects', 'share', 'studio', 'services-metiers', 'aide', 'reports'].includes(btn.dataset.tab));
 
       applyStudioLockState();
 
@@ -2727,6 +2757,7 @@
         if (btn.dataset.tab === 'goalchat') { goalChatInit(); }
         if (btn.dataset.tab === 'services-metiers') { svcMetiersInit(); }
         if (btn.dataset.tab === 'aide') { aideInit(); }
+        if (btn.dataset.tab === 'reports') { reportsInit(); }
       });
     });
 
@@ -9796,6 +9827,66 @@
       } catch (e) {
         if (e.message !== 'unauthorized') document.getElementById('aide-content').innerHTML = '<p class="error">Impossible de charger la documentation.</p>';
       }
+    }
+
+    // ===================== RAPPORTS, ACTIVITÉS & AMÉLIORATION =====================
+    function repEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+    function repStatusClass(s) { return s === 'ok' ? 'rep-ok' : (s === 'error' ? 'rep-err' : (s === 'warning' || s === 'pending' ? 'rep-warn' : '')); }
+    function repIcon(s) { return s === 'ok' ? '✓' : (s === 'error' ? '✗' : (s === 'pending' ? '⏳' : (s === 'warning' ? '⚠' : '•'))); }
+    function repBars(obj) {
+      const entries = Object.entries(obj || {});
+      if (!entries.length) return '<p style="opacity:.6">Aucune donnée.</p>';
+      const max = Math.max(...entries.map(([, v]) => Number(v) || 0), 1);
+      return entries.sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+        const pct = Math.round((Number(v) || 0) / max * 100);
+        return '<div class="rep-bar-row"><div class="rep-bar-label">' + repEsc(k) + '</div><div class="rep-bar-track"><div class="rep-bar-fill" style="width:' + pct + '%"></div></div><div>' + v + '</div></div>';
+      }).join('');
+    }
+    async function reportsInit() {
+      const box = document.getElementById('reports-content');
+      const rbtn = document.getElementById('reports-refresh');
+      if (rbtn && !rbtn.dataset.wired) { rbtn.dataset.wired = '1'; rbtn.addEventListener('click', () => reportsLoad()); }
+      reportsLoad();
+    }
+    async function reportsLoad() {
+      const box = document.getElementById('reports-content');
+      box.innerHTML = '<p style="opacity:.6">Chargement…</p>';
+      let usage = null; let activity = null;
+      try {
+        const [ru, ra] = await Promise.all([
+          apiFetch('/api/reports/ai-usage').then((r) => r.json()).catch(() => null),
+          apiFetch('/api/reports/activity').then((r) => r.json()).catch(() => null),
+        ]);
+        usage = ru && ru.usage ? ru.usage : null;
+        activity = ra && ra.activity ? ra.activity : null;
+      } catch (e) { if (e.message === 'unauthorized') return; }
+      const t = (usage && usage.totals) || { calls: 0, tokens: 0, cost: 0 };
+      let html = '';
+      html += '<div class="rep-section"><strong>💸 Coûts IA (aujourd\'hui)</strong>';
+      html += '<div class="rep-kpis">'
+        + '<div class="rep-kpi"><div class="v">' + (t.calls || 0) + '</div><div class="l">appels IA</div></div>'
+        + '<div class="rep-kpi"><div class="v">' + (t.tokens || 0) + '</div><div class="l">tokens</div></div>'
+        + '<div class="rep-kpi"><div class="v">$' + (Number(t.cost || 0)).toFixed(4) + '</div><div class="l">coût estimé</div></div>'
+        + '</div></div>';
+      if (activity && activity.counts) {
+        html += '<div class="rep-section"><strong>📈 Activités par statut</strong>' + repBars(activity.counts.byStatus) + '</div>';
+        if (activity.counts.byType && Object.keys(activity.counts.byType).length) {
+          html += '<div class="rep-section"><strong>📊 Activités par type</strong>' + repBars(activity.counts.byType) + '</div>';
+        }
+      }
+      const events = (activity && activity.events) || [];
+      html += '<div class="rep-section"><strong>🕒 Flux d\'activités récentes</strong>';
+      if (!events.length) {
+        html += '<p style="opacity:.6;margin-top:6px">Aucune activité enregistrée pour le moment. Dès qu\'un message est reçu, qu\'une réponse automatique part ou qu\'une action est exécutée, elle apparaît ici en temps réel.</p>';
+      } else {
+        html += '<div class="rep-feed">' + events.map((e) => {
+          const when = e.ts ? new Date(e.ts).toLocaleTimeString('fr-FR') : '';
+          const label = (e.action || e.type) + (e.target ? ' → ' + e.target : '') + (e.detail ? ' · ' + e.detail : '');
+          return '<div class="rep-evt"><div class="' + repStatusClass(e.status) + '">' + repIcon(e.status) + '</div><div class="rep-what">' + repEsc(label) + '</div><div class="rep-when">' + repEsc(when) + '</div></div>';
+        }).join('') + '</div>';
+      }
+      html += '</div>';
+      box.innerHTML = html;
     }
 
     // PWA : installation optionnelle sous le nom "CYRUS SUPER ASSISTANT"

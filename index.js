@@ -5079,9 +5079,28 @@ app.post('/api/admin/diag/auto-reply-test', requireAccess, async (req, res) => {
 // passage unique des appels IA (voir ai-engine/aiUsageLedger.js). 100 %
 // déterministe, aucun appel IA ici. Admin uniquement (supervision opérateur).
 const aiUsageLedger = require('./ai-engine/aiUsageLedger');
-app.get('/api/admin/ai-usage', requireAdmin, async (req, res) => {
-  try { res.json({ ok: true, usage: await aiUsageLedger.summary(req.query.date) }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+const activityStore = require('./ai-engine/activityStore');
+// Interface UNIQUE « Rapports, Activités & Amélioration » (§15) — accessible par
+// clé de licence (le dashboard n'envoie jamais le mot de passe admin). Portée :
+// un utilisateur voit SON tenant ; l'admin voit le global. 100 % déterministe.
+app.get('/api/reports/ai-usage', requireAccess, async (req, res) => {
+  try {
+    const u = await aiUsageLedger.summary(req.query.date);
+    if (req.isAdmin) return res.json({ ok: true, scope: 'global', usage: u });
+    const t = resolveTenantId(req);
+    const mine = (u.byTenant && u.byTenant[t]) || { calls: 0, tokens: 0, cost: 0 };
+    const recent = (u.recent || []).filter((r) => r.tenant === t).slice(0, 40);
+    res.json({ ok: true, scope: 'tenant', usage: { date: u.date, totals: mine, recent } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/reports/activity', requireAccess, async (req, res) => {
+  try {
+    const a = await activityStore.summary(req.query.date, 200);
+    if (req.isAdmin) return res.json({ ok: true, scope: 'global', activity: a });
+    const t = resolveTenantId(req);
+    const events = (a.events || []).filter((e) => e.tenant === t).slice(0, 60);
+    res.json({ ok: true, scope: 'tenant', activity: { date: a.date, events, counts: a.counts } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // CENTRE D'AIDE / DOCUMENTATION — base de connaissances embarquée

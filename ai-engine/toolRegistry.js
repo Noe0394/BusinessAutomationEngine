@@ -260,7 +260,7 @@ function list(ctx) {
   return describe().filter((t) => !t.permission || !perms || perms.includes(t.permission));
 }
 
-async function execute(tenant, name, args, ctx) {
+async function _execute(tenant, name, args, ctx) {
   const call = { name, args: args || {}, state: STATE.PENDING, startedAt: new Date().toISOString() };
   const tool = TOOLS[name];
   if (!tool) return Object.assign(call, { state: STATE.FAILED, error: { code: 'UNKNOWN_TOOL', message: `Outil « ${name} » inconnu.` }, finishedAt: new Date().toISOString() });
@@ -291,6 +291,21 @@ async function execute(tenant, name, args, ctx) {
     return Object.assign(call, { state: v && v.verified ? STATE.SUCCESS : STATE.UNCONFIRMED, result: out.result, verification: v, finishedAt: new Date().toISOString() });
   }
   return Object.assign(call, { state: STATE.SUCCESS, result: out.result, finishedAt: new Date().toISOString() });
+}
+
+// Exécution + journalisation d'activité (déterministe, non bloquante) : chaque
+// tool call réel devient un évènement dans l'interface de supervision.
+async function execute(tenant, name, args, ctx) {
+  const call = await _execute(tenant, name, args, ctx);
+  try {
+    const status = call.state === STATE.SUCCESS ? 'ok'
+      : (call.state === STATE.UNCONFIRMED || call.state === STATE.BLOCKED ? 'warning' : 'error');
+    require('./activityStore').record({
+      type: 'tool_call', action: name, status, tenant,
+      detail: call.state + (call.error && call.error.code ? ' — ' + call.error.code : ''),
+    });
+  } catch (e) { /* non bloquant */ }
+  return call;
 }
 
 // Enchaînement RÉEL d'outils : chaque étape peut piocher dans les résultats des
