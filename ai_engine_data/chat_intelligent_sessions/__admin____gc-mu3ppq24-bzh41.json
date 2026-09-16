@@ -1,0 +1,29 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu3ppq24-bzh41",
+  "title": "Cree un service metier de type formation nomme Formations Te",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu3ppr3ys265",
+      "role": "user",
+      "content": "Cree un service metier de type formation nomme Formations Test Chat, avec le produit Formation Epicerie a 8000 FCFA, la regle jamais plus de 10 pourcent de remise et l objectif vendre 10 formations par semaine.",
+      "text": "Cree un service metier de type formation nomme Formations Test Chat, avec le produit Formation Epicerie a 8000 FCFA, la regle jamais plus de 10 pourcent de remise et l objectif vendre 10 formations par semaine.",
+      "ts": "2026-09-16T06:21:10.654Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu3ppr3yd3z2",
+      "role": "assistant",
+      "content": "Souhaitez‑vous créer un lien de paiement pour la Formation Épicerie ou appliquer une remise ?",
+      "text": "Souhaitez‑vous créer un lien de paiement pour la Formation Épicerie ou appliquer une remise ?",
+      "ts": "2026-09-16T06:21:10.654Z",
+      "metadata": {
+        "intent": "payment",
+        "toolCall": null,
+        "actionLog": null
+      }
+    }
+  ],
+  "updatedAt": "2026-09-16T06:21:10.654Z"
+}
