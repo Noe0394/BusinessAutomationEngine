@@ -1,5 +1,7 @@
 [
   {
+    "createdAt": "2026-09-13T21:15:25.282Z",
+    "boundDeviceId": null,
     "boundAt": null,
     "allowedModules": [
       "whatsapp",
@@ -7,52 +9,50 @@
       "studio_video"
     ],
     "key": "KEY-91EC2DB1-2026",
-    "boundDeviceId": null,
-    "expiresAt": null,
-    "note": "",
     "active": true,
-    "createdAt": "2026-09-13T21:15:25.282Z"
+    "note": "",
+    "expiresAt": null
   },
   {
-    "expiresAt": null,
-    "active": true,
-    "allowedModules": [
-      "whatsapp",
-      "telegram",
-      "studio_video"
-    ],
-    "note": "",
-    "createdAt": "2026-09-10T08:34:50.992Z",
     "boundDeviceId": null,
-    "key": "KEY-AFFFF2D9-2026",
-    "boundAt": null
-  },
-  {
-    "createdAt": "2026-09-10T07:21:56.094Z",
-    "allowedModules": [
-      "whatsapp",
-      "telegram",
-      "studio_video"
-    ],
-    "key": "KEY-E5164DF3-2026",
+    "expiresAt": null,
     "boundAt": null,
-    "note": "Noe 1",
-    "boundDeviceId": null,
-    "expiresAt": "2026-09-30T00:00:00.000Z",
-    "active": true
-  },
-  {
-    "expiresAt": null,
-    "note": "",
-    "key": "KEY-FB6EF0A6-2026",
+    "active": true,
+    "createdAt": "2026-09-10T08:34:50.992Z",
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
     ],
-    "boundAt": "2026-09-16T05:43:31.658Z",
+    "key": "KEY-AFFFF2D9-2026",
+    "note": ""
+  },
+  {
+    "expiresAt": "2026-09-30T00:00:00.000Z",
+    "boundDeviceId": "23af4689-010f-4025-ae44-46d559493b6c",
+    "boundAt": "2026-09-16T06:34:01.411Z",
+    "allowedModules": [
+      "whatsapp",
+      "telegram",
+      "studio_video"
+    ],
     "active": true,
+    "key": "KEY-E5164DF3-2026",
+    "note": "Noe 1",
+    "createdAt": "2026-09-10T07:21:56.094Z"
+  },
+  {
+    "boundAt": "2026-09-16T05:43:31.658Z",
+    "note": "",
+    "expiresAt": null,
+    "active": true,
+    "key": "KEY-FB6EF0A6-2026",
     "boundDeviceId": "69d59421-b07a-41da-a327-9cffdaf20a0d",
+    "allowedModules": [
+      "whatsapp",
+      "telegram",
+      "studio_video"
+    ],
     "createdAt": "2026-09-13T06:43:21.463Z"
   }
 ]
