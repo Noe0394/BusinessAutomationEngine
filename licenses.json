@@ -42,8 +42,8 @@
     "active": true
   },
   {
-    "boundDeviceId": "69d59421-b07a-41da-a327-9cffdaf20a0d",
-    "boundAt": "2026-09-13T15:26:53.394Z",
+    "boundDeviceId": null,
+    "boundAt": null,
     "allowedModules": [
       "whatsapp",
       "telegram",
