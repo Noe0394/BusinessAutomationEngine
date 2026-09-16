@@ -1,0 +1,45 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu3pxv7u-uqk2v",
+  "title": "genere une affiche promotionnelle pour ma formation de cuisi",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu3pxxz5o5sr",
+      "role": "user",
+      "content": "genere une affiche promotionnelle pour ma formation de cuisine",
+      "text": "genere une affiche promotionnelle pour ma formation de cuisine",
+      "ts": "2026-09-16T06:27:32.801Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu3pxxz5hlm6",
+      "role": "assistant",
+      "content": "Voilà ton visuel ! Tu peux le télécharger juste en dessous. 👇",
+      "text": "Voilà ton visuel ! Tu peux le télécharger juste en dessous. 👇",
+      "ts": "2026-09-16T06:27:32.801Z",
+      "metadata": {
+        "intent": null,
+        "toolCall": {
+          "name": "generateImage",
+          "state": "SUCCESS",
+          "result": {
+            "fileId": "f_mu3pxxz234op3",
+            "name": "affiche-cyrus.jpg",
+            "type": "image/jpeg",
+            "media": true,
+            "download": true
+          }
+        },
+        "actionLog": [
+          {
+            "icon": "🎨",
+            "label": "Visuel généré",
+            "status": "done"
+          }
+        ]
+      }
+    }
+  ],
+  "updatedAt": "2026-09-16T06:27:32.801Z"
+}
