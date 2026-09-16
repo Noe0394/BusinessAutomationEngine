@@ -1,6 +1,14 @@
 #!/bin/bash
 # test/vps-live-test.sh — Tests vivants de la mémoire conversationnelle 7 jours
-# Exécuter avec : ! bash test/vps-live-test.sh
+# MODES D'EXÉCUTION (aucun SSH récursif) :
+#   - DIRECTEMENT SUR LE VPS : docker exec / grep / curl sont exécutés
+#     localement, aucune connexion `gcloud compute ssh` vers soi-même
+#     (recursive ici, elle régénérerait une clé root et échouerait) :
+#         sudo -u cyrus2026 bash test/vps-live-test.sh
+#     Auto-détection : le conteneur est visible dans le docker local.
+#     Forçage si besoin : VPS_DIRECT=1 bash test/vps-live-test.sh
+#   - DEPUIS LE PC DE DÉV (mode histórico conservé) :
+#         ! bash test/vps-live-test.sh   (via gcloud compute ssh)
 # Compte de test : KEY-E5164DF3-2026
 
 set -e
@@ -16,10 +24,55 @@ SKIPPED=0
 green() { echo "\033[32m✓ $1\033[0m"; }
 red()   { echo "\033[31m✗ $1\033[0m"; }
 skip()  { echo "\033[33m⊘ NON TESTÉ — $1\033[0m"; }
-info()  { echo "  → $1"; }
+# Tout contenu dynamique affiché passe par ici : les credentials (device-id,
+# licence, tokens...) sont masquées — jamais de clé/secret dans un log.
+info()  { echo "  → $(mask "$1")"; }
 
-ssh_vps() {
-  gcloud compute ssh "$VPS" --project="$PROJECT" --zone="$ZONE" --command="$1" 2>/dev/null
+# --- Détection de l'environnement d'exécution --------------------------------
+# ON_VPS=1 => le script tourne DIRECTEMENT sur le VPS : toutes les commandes
+# (docker exec...) sont exécutées localement. Auto-détection : le conteneur
+# cyrus-super-assistant-backend est visible dans le docker local.
+ON_VPS=0
+if [ "${VPS_DIRECT:-0}" = "1" ]; then
+  ON_VPS=1
+elif command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'cyrus-super-assistant-backend'; then
+  ON_VPS=1
+elif command -v sudo >/dev/null 2>&1 && sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'cyrus-super-assistant-backend'; then
+  ON_VPS=1
+fi
+
+# Exécute une commande shell dans "l'environnement VPS" :
+#   - sur le VPS   : bash -c (local, aucune connexion réseau)
+#   - depuis le PC : gcloud compute ssh
+run_on_vps() {
+  if [ "$ON_VPS" = "1" ]; then
+    bash -c "$1"
+  else
+    gcloud compute ssh "$VPS" --project="$PROJECT" --zone="$ZONE" --command="$1" 2>/dev/null
+  fi
+}
+
+# docker exec dans cyrus-super-assistant-backend — passe par sudo automatiquement
+# si l'utilisateur local n'a pas l'accès docker direct (selon le compte qui
+# lance le script sur le VPS).
+dc() {
+  if [ "$ON_VPS" = "1" ]; then
+    if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'cyrus-super-assistant-backend'; then
+      docker exec "$@"
+    else
+      sudo docker exec "$@"
+    fi
+  else
+    run_on_vps "docker exec $*"
+  fi
+}
+
+# Masque la licence de test et tout identifiant/secret d'au moins 24 caractères
+# (device-id UUID, tokens...) dans un texte destiné à l'affichage.
+mask() {
+  local s="$1"
+  s="${s//$LICENCE/*****}"
+  printf '%s' "$s" | sed -E 's/[A-Za-z0-9_-]{24,}/*****/g'
 }
 
 api() {
@@ -33,17 +86,17 @@ api() {
 # après le redéploiement du correctif de persistance.
 engine_file() { # $1 = chemin relatif (ex: message_history/KEY...__WHATSAPP.json)
   local rel="$1" out
-  out=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/data/ai_engine/$rel 2>/dev/null")
+  out=$(dc cyrus-super-assistant-backend cat "/app/data/ai_engine/$rel" 2>/dev/null || true)
   if [ -z "$out" ]; then
-    out=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/ai_engine_data/$rel 2>/dev/null")
+    out=$(dc cyrus-super-assistant-backend cat "/app/ai_engine_data/$rel" 2>/dev/null || true)
   fi
   [ -n "$out" ] && printf '%s' "$out" || echo "FILE_NOT_FOUND"
 }
 engine_license_file() { # licences runtime (volume /app/data/licenses.json puis ancien chemin)
   local out
-  out=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/data/licenses.json 2>/dev/null")
+  out=$(dc cyrus-super-assistant-backend cat /app/data/licenses.json 2>/dev/null || true)
   if [ -z "$out" ]; then
-    out=$(ssh_vps "docker exec cyrus-super-assistant-backend cat /app/licenses.json 2>/dev/null")
+    out=$(dc cyrus-super-assistant-backend cat /app/licenses.json 2>/dev/null || true)
   fi
   [ -n "$out" ] && printf '%s' "$out" || echo "FILE_NOT_FOUND"
 }
@@ -54,15 +107,16 @@ echo "════════════════════════�
 echo "  ÉTAPE 1 : Authentification — récupération device-id"
 echo "═══════════════════════════════════════════════════════"
 
-# Parse le fichier runtime (dans le conteneur) LOCALEMENT après docker exec cat
-# — aucun quoting fragile à travers gcloud→plink.
+# Le fichier licences runtime est lu DANS le conteneur (docker exec) puis parsé
+# LOCALEMENT — sur le VPS comme depuis le PC. Aucune clé n'est affichée : seul
+# le device-id (masqué) et les compteurs restent visibles.
 LIC_JSON=$(engine_license_file)
-DEVICE_ID=$(printf '%s' "$LIC_JSON" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);const l=(j.licenses||[]).find(x=>x.key===process.argv[1]);console.log(l&&l.deviceId?l.deviceId:'')}catch(e){console.log('')}});" "$LICENCE" 2>/dev/null)
+DEVICE_ID=$(printf '%s' "$LIC_JSON" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);const l=(j.licenses||[]).find(x=>x.key===process.argv[1]);console.log(l&&l.deviceId?l.deviceId:'')}catch(e){console.log('')}});" "$LICENCE" 2>/dev/null || true)
 
-if [ -z "$DEVICE_ID" ] || [ "$DEVICE_ID" = "NOT_FOUND" ]; then
-  red "Impossible de récupérer le device-id pour $LICENCE"
-  echo "  Tentative alternative..."
-  DEVICE_ID=$(ssh_vps "grep -o '\"deviceId\":\"[^\"]*\"' /home/cyrus2026/BusinessAutomationEngine/licenses.json | head -1 | cut -d'\"' -f4")
+if [ -z "$DEVICE_ID" ]; then
+  red "Device-id introuvable pour la licence de test"
+  echo "  Tentative alternative (checkout local)..."
+  DEVICE_ID=$(grep -o '"deviceId":"[^"]*"' /home/cyrus2026/BusinessAutomationEngine/licenses.json 2>/dev/null | head -1 | cut -d'"' -f4 || true)
 fi
 
 if [ -z "$DEVICE_ID" ] || [ "$DEVICE_ID" = "" ]; then
@@ -71,7 +125,7 @@ if [ -z "$DEVICE_ID" ] || [ "$DEVICE_ID" = "" ]; then
   echo ""
   echo "Tentative de lecture directe des données stockées..."
 else
-  green "DEVICE_ID = $DEVICE_ID"
+  green "DEVICE_ID = $(mask "$DEVICE_ID")"
   PASSED=$((PASSED + 1))
 
   # === ÉTAPE 2 : Health check ===
@@ -80,7 +134,7 @@ else
   echo "  ÉTAPE 2 : Health check VPS"
   echo "═══════════════════════════════════════════════════════"
 
-  HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "$URL/health")
+  HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "$URL/health" || true)
   if [ "$HEALTH" = "200" ]; then
     green "Health check = HTTP 200"
     PASSED=$((PASSED + 1))
@@ -95,7 +149,7 @@ else
   echo "  ÉTAPE 3 : Sessions actives (diag/tenants)"
   echo "═══════════════════════════════════════════════════════"
 
-  RESP=$(api -H "x-license-key: $LICENCE" -H "x-device-id: $DEVICE_ID" "$URL/api/admin/diag/tenants")
+  RESP=$(api -H "x-license-key: $LICENCE" -H "x-device-id: $DEVICE_ID" "$URL/api/admin/diag/tenants" || true)
   HTTP=$(echo "$RESP" | tail -1)
   BODY=$(echo "$RESP" | sed '$d')
 
@@ -124,7 +178,7 @@ else
     -H "x-license-key: $LICENCE" -H "x-device-id: $DEVICE_ID" \
     -H "Content-Type: application/json" \
     -d "{\"tenantId\":\"$LICENCE\",\"channel\":\"WHATSAPP\"}" \
-    "$URL/api/admin/diag/send-test")
+    "$URL/api/admin/diag/send-test" || true)
   HTTP=$(echo "$RESP" | tail -1)
   BODY=$(echo "$RESP" | sed '$d')
 
@@ -147,7 +201,7 @@ else
   echo "  ÉTAPE 5 : Vérification messages WhatsApp stockés"
   echo "═══════════════════════════════════════════════════════"
 
-  # Lire le fichier directement sur le VPS
+  # Lire le fichier via docker exec (local sur le VPS, gcloud depuis le PC)
   MSG_DATA=$(engine_file "message_history/${LICENCE}__WHATSAPP.json")
 
   if echo "$MSG_DATA" | grep -q "FILE_NOT_FOUND"; then
@@ -292,7 +346,7 @@ TG_MSG=$(engine_file "message_history/${LICENCE}__TELEGRAM.json")
 TG_IDX=$(engine_file "conversation_index/${LICENCE}__TELEGRAM.json")
 
 if echo "$TG_MSG" | grep -q "FILE_NOT_FOUND"; then
-  skip "Aucun fichier message_history Telegram pour $LICENCE"
+  skip "Aucun fichier message_history Telegram pour $(mask "$LICENCE")"
 else
   TG_COUNT=$(echo "$TG_MSG" | node -e "
     let d=''; process.stdin.on('data',c=>d+=c);
@@ -326,7 +380,7 @@ else
 fi
 
 if echo "$TG_IDX" | grep -q "FILE_NOT_FOUND"; then
-  skip "Aucun fichier conversation_index Telegram pour $LICENCE"
+  skip "Aucun fichier conversation_index Telegram pour $(mask "$LICENCE")"
 else
   echo "$TG_IDX" | node -e "
     let d=''; process.stdin.on('data',c=>d+=c);
@@ -356,7 +410,7 @@ if [ -n "$DEVICE_ID" ] && [ "$DEVICE_ID" != "NOT_FOUND" ]; then
     -H "x-license-key: $LICENCE" -H "x-device-id: $DEVICE_ID" \
     -H "Content-Type: application/json" \
     -d "{\"tenantId\":\"$LICENCE\",\"channel\":\"TELEGRAM\"}" \
-    "$URL/api/admin/diag/send-test")
+    "$URL/api/admin/diag/send-test" || true)
   HTTP=$(echo "$RESP" | tail -1)
   BODY=$(echo "$RESP" | sed '$d')
 
@@ -380,7 +434,7 @@ echo "════════════════════════�
 echo "  ÉTAPE 10 : Docker container status + logs récents"
 echo "═══════════════════════════════════════════════════════"
 
-CONTAINER_STATUS=$(ssh_vps "sudo docker inspect --format='{{.State.Status}} (Up {{.State.StartedAt}})' cyrus-super-assistant-backend 2>/dev/null || echo 'CONTAINER_NOT_FOUND'")
+CONTAINER_STATUS=$(run_on_vps "sudo docker inspect --format='{{.State.Status}} (Up {{.State.StartedAt}})' cyrus-super-assistant-backend 2>/dev/null || echo 'CONTAINER_NOT_FOUND'")
 if echo "$CONTAINER_STATUS" | grep -q "CONTAINER_NOT_FOUND"; then
   red "Conteneur cyrus-super-assistant-backend introuvable"
   FAILED=$((FAILED + 1))
@@ -389,7 +443,7 @@ else
   PASSED=$((PASSED + 1))
 fi
 
-LOG_ERRORS=$(ssh_vps "sudo docker logs cyrus-super-assistant-backend --tail 100 2>&1 | grep -i 'MODULE_NOT_FOUND\|SyntaxError\|FATAL\|memoryHistory\|conversation_index\|messageHistory' | tail -10 || echo 'NO_MATCHES'")
+LOG_ERRORS=$(run_on_vps "sudo docker logs cyrus-super-assistant-backend --tail 100 2>&1 | grep -i 'MODULE_NOT_FOUND\|SyntaxError\|FATAL\|memoryHistory\|conversation_index\|messageHistory' | tail -10 || echo 'NO_MATCHES'")
 if echo "$LOG_ERRORS" | grep -q "NO_MATCHES"; then
   green "Aucune erreur liée à la mémoire conversationnelle dans les logs"
   PASSED=$((PASSED + 1))
@@ -418,7 +472,7 @@ green "Réussis : $PASSED"
 if [ "$FAILED" -gt 0 ]; then red "Échoués : $FAILED"; fi
 if [ "$SKIPPED" -gt 0 ]; then skip "Ignorés : $SKIPPED"; fi
 echo ""
-echo "Compte : $LICENCE"
+echo "Compte : $(mask "$LICENCE")"
 echo "VPS    : $URL"
 echo "Date   : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo ""
