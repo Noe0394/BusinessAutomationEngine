@@ -1,0 +1,68 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "sessionId": "gc-mu47354q-6lrjo",
+  "title": "Je veux la liste de toute mes dernière discussion WhatsApp d",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu4736r7s069",
+      "role": "user",
+      "content": "Je veux la liste de toute mes dernière discussion WhatsApp datant de 2 jours",
+      "text": "Je veux la liste de toute mes dernière discussion WhatsApp datant de 2 jours",
+      "ts": "2026-09-16T14:27:30.931Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu4736r7flvj",
+      "role": "assistant",
+      "content": "Voici les trois dernières discussions WhatsApp que vous avez eues il y a deux jours : un message « Bonjour ! Puis‑je en savoir plus à ce sujet ? » provenant de 203787759272159@lid, un autre identique de carineido052 (128273694588972@lid) et un troisième, même texte, de Espace Soleo (230218920894572@lid).",
+      "text": "Voici les trois dernières discussions WhatsApp que vous avez eues il y a deux jours : un message « Bonjour ! Puis‑je en savoir plus à ce sujet ? » provenant de 203787759272159@lid, un autre identique de carineido052 (128273694588972@lid) et un troisième, même texte, de Espace Soleo (230218920894572@lid).",
+      "ts": "2026-09-16T14:27:30.931Z",
+      "metadata": {
+        "intent": null,
+        "toolCall": {
+          "name": "getMessagesByDate",
+          "state": "SUCCESS",
+          "result": {
+            "channel": "WHATSAPP",
+            "sinceDays": 2,
+            "count": 3,
+            "messages": [
+              {
+                "direction": "in",
+                "name": null,
+                "party": "203787759272159@lid",
+                "text": "Bonjour ! Puis-je en savoir plus à ce sujet ?",
+                "ts": 1789474563
+              },
+              {
+                "direction": "in",
+                "name": "carineido052",
+                "party": "128273694588972@lid",
+                "text": "Bonjour ! Puis-je en savoir plus à ce sujet ?",
+                "ts": 1789563124
+              },
+              {
+                "direction": "in",
+                "name": "Espace Soleo",
+                "party": "230218920894572@lid",
+                "text": "Bonjour ! Puis-je en savoir plus à ce sujet ?",
+                "ts": 1789563945
+              }
+            ]
+          },
+          "error": null,
+          "confirmationId": null
+        },
+        "actionLog": [
+          {
+            "icon": "✅",
+            "label": "getMessagesByDate → SUCCESS",
+            "status": "done"
+          }
+        ]
+      }
+    }
+  ],
+  "updatedAt": "2026-09-16T14:27:30.931Z"
+}
