@@ -1,58 +1,58 @@
 [
   {
-    "boundDeviceId": null,
-    "key": "KEY-91EC2DB1-2026",
+    "boundAt": null,
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
     ],
-    "active": true,
-    "createdAt": "2026-09-13T21:15:25.282Z",
+    "key": "KEY-91EC2DB1-2026",
+    "boundDeviceId": null,
     "expiresAt": null,
-    "boundAt": null,
-    "note": ""
+    "note": "",
+    "active": true,
+    "createdAt": "2026-09-13T21:15:25.282Z"
   },
   {
+    "expiresAt": null,
     "active": true,
-    "key": "KEY-AFFFF2D9-2026",
-    "note": "",
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
     ],
+    "note": "",
     "createdAt": "2026-09-10T08:34:50.992Z",
-    "expiresAt": null,
     "boundDeviceId": null,
+    "key": "KEY-AFFFF2D9-2026",
     "boundAt": null
   },
   {
     "createdAt": "2026-09-10T07:21:56.094Z",
-    "expiresAt": "2026-09-30T00:00:00.000Z",
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
     ],
+    "key": "KEY-E5164DF3-2026",
+    "boundAt": null,
     "note": "Noe 1",
     "boundDeviceId": null,
-    "boundAt": null,
-    "key": "KEY-E5164DF3-2026",
+    "expiresAt": "2026-09-30T00:00:00.000Z",
     "active": true
   },
   {
-    "boundDeviceId": null,
-    "boundAt": null,
+    "expiresAt": null,
+    "note": "",
+    "key": "KEY-FB6EF0A6-2026",
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
     ],
-    "expiresAt": null,
-    "key": "KEY-FB6EF0A6-2026",
-    "note": "",
-    "createdAt": "2026-09-13T06:43:21.463Z",
-    "active": true
+    "boundAt": "2026-09-16T05:43:31.658Z",
+    "active": true,
+    "boundDeviceId": "69d59421-b07a-41da-a327-9cffdaf20a0d",
+    "createdAt": "2026-09-13T06:43:21.463Z"
   }
 ]
