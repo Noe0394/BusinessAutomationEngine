@@ -1,17 +1,17 @@
 [
   {
+    "active": false,
+    "key": "KEY-91EC2DB1-2026",
+    "note": "",
+    "boundDeviceId": null,
+    "expiresAt": null,
+    "createdAt": "2026-09-13T21:15:25.282Z",
     "allowedModules": [
       "whatsapp",
       "telegram",
       "studio_video"
     ],
-    "active": false,
-    "createdAt": "2026-09-13T21:15:25.282Z",
-    "expiresAt": null,
-    "key": "KEY-91EC2DB1-2026",
-    "boundDeviceId": null,
-    "boundAt": null,
-    "note": ""
+    "boundAt": null
   },
   {
     "boundDeviceId": null,
@@ -24,7 +24,7 @@
     "note": "",
     "createdAt": "2026-09-10T08:34:50.992Z",
     "boundAt": null,
-    "active": true,
+    "active": false,
     "expiresAt": null
   },
   {
