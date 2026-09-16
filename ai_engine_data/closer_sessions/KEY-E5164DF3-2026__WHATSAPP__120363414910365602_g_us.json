@@ -1,0 +1,18 @@
+{
+  "tenantId": "KEY-E5164DF3-2026",
+  "channel": "WHATSAPP",
+  "from": "120363414910365602@g.us",
+  "history": [
+    {
+      "analysisAt": "2026-09-16T11:05:44.931Z",
+      "sentiment": "slightly_positive",
+      "interest": "Low",
+      "intent": "CASUAL",
+      "objection_primary": "NONE",
+      "hesitation": 0
+    }
+  ],
+  "escalated": false,
+  "awaitingFeedback": false,
+  "updatedAt": "2026-09-16T11:05:44.932Z"
+}
