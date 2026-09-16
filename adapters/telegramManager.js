@@ -25,6 +25,14 @@ function setIncomingMessageHandler(fn) {
   incomingMessageHandler = typeof fn === 'function' ? fn : null;
 }
 
+// Handler des messages HISTORIQUES PRÉEXISTANTS (backfill mémoire 7 jours,
+// voir adapters/telegram.js#backfillHistory). Distinct du handler live : ces
+// messages n'alimentent que la mémoire, jamais les auto-réponses.
+let historyMessageHandler = null;
+function setHistoryMessageHandler(fn) {
+  historyMessageHandler = typeof fn === 'function' ? fn : null;
+}
+
 function sanitizeTenantId(rawId) {
   const cleaned = String(rawId || '').trim().replace(/[^A-Za-z0-9_-]/g, '_');
   return cleaned || 'unknown';
@@ -56,6 +64,14 @@ function getOrCreate(rawTenantId) {
         if (!incomingMessageHandler) return;
         Promise.resolve(incomingMessageHandler({ channel: 'TELEGRAM', tenantId, session, msg })).catch((err) => {
           console.error(`Erreur dans le filtrage privé/pro Telegram (tenant "${tenantId}") :`, err.message);
+        });
+      });
+    }
+    if (typeof session.onHistoryMessage === 'function') {
+      session.onHistoryMessage((msg) => {
+        if (!historyMessageHandler) return;
+        Promise.resolve(historyMessageHandler({ channel: 'TELEGRAM', tenantId, session, msg })).catch((err) => {
+          console.error(`Erreur dans le backfill historique Telegram (tenant "${tenantId}") :`, err.message);
         });
       });
     }
@@ -303,4 +319,5 @@ module.exports = {
   listActiveEntries,
   getStorageStatus,
   setIncomingMessageHandler,
+  setHistoryMessageHandler,
 };

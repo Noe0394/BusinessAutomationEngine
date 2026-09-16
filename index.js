@@ -5434,8 +5434,68 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
   }
 }
 
+// Enregistre un message HISTORIQUE PRÉEXISTANT (antérieur à l'installation de
+// Cyrus ou à la connexion de ce compte) dans la mémoire 7 jours — backfill
+// Telegram via GramJS (adapters/telegram.js#backfillHistory, câblé ci-dessous
+// par telegramManager.setHistoryMessageHandler). On réutilise EXACTEMENT le
+// même enregistrement que le live (bloc "Historique PERSISTANT" de
+// handleIncomingCustomerMessage) : la mémoire met les messages anciens et
+// actuels sur le même plan, indexables par date/conversation/contact/groupe.
+// Différences assumées avec le live : PAS de traitement IA (pas de réponse
+// automatique, pas de transcription vocale, pas de validation de paiement) —
+// un backfill alimente la mémoire et rien d'autre. Idempotent : la direction
+// et le messageId servent de dédup (le même message retiré à un redémarrage
+// du process n'est pas ré-inséré en double).
+async function handleHistoricalMessage({ channel, tenantId, session, msg }) {
+  if (!msg) return;
+  let text = extractIncomingText(channel, msg).trim();
+  if (!text) return;
+
+  const histFrom = extractFromId(channel, msg);
+  if (!histFrom) return;
+
+  const mid = extractMessageId(channel, msg);
+  if (mid) {
+    try {
+      const knownIds = await conversationHistory.getMessageIds(tenantId, channel);
+      if (knownIds.has(mid)) return; // déjà en mémoire : dédup du backfill
+    } catch (err) {
+      // Une panne de lecture ne bloque PAS l'enregistrement (best-effort).
+    }
+  }
+
+  const senderName = channel === 'WHATSAPP'
+    ? (msg && msg.pushName) || null
+    : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
+  const tsRaw = channel === 'WHATSAPP'
+    ? (typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp))
+    : Number(msg && msg.date);
+  const isGroupChat = channel === 'WHATSAPP'
+    ? (String(histFrom).endsWith('@g.us') || String(histFrom).endsWith('@broadcast'))
+    : (String(histFrom).startsWith('-'));
+  const realSenderId = isGroupChat && channel === 'WHATSAPP' && msg.key && msg.key.participant
+    ? String(msg.key.participant)
+    : (isGroupChat && channel === 'TELEGRAM' && msg.senderId ? String(msg.senderId) : null);
+  const senderPhone = realSenderId ? String(realSenderId).split('@')[0] : null;
+  const groupName = isGroupChat ? ((msg && msg.groupName) || null) : null;
+  const messageType = hasIncomingAttachment(channel, msg) ? (msg.mimetype || 'media') : 'text';
+
+  conversationHistory.record(tenantId, {
+    channel, direction: 'in', party: histFrom, name: senderName, text,
+    ts: Number.isFinite(tsRaw) && tsRaw > 0 ? tsRaw : Math.floor(Date.now() / 1000),
+    chatId: histFrom, hasMedia: hasIncomingAttachment(channel, msg),
+    messageId: mid,
+    senderId: realSenderId, senderName, senderPhone,
+    isGroup: isGroupChat, groupName,
+    messageType, mediaId: null,
+  }).catch((err) => {
+    console.error(`Échec d'enregistrement d'un message historique Telegram (tenant "${tenantId}") :`, err.message);
+  });
+}
+
 whatsappManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
 telegramManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
+telegramManager.setHistoryMessageHandler(handleHistoricalMessage);
 
 // Nettoyage automatique périodique de la mémoire conversationnelle (7 jours).
 // Fenêtre glissante : les données hors de la fenêtre deviennent éligibles au

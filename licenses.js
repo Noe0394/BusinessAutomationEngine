@@ -352,14 +352,27 @@ async function verifyKey(key, deviceId) {
   }
 
   if (!license.boundDeviceId) {
-    // Premier usage réussi de cette clé : on la lie définitivement à cet
-    // appareil (jusqu'à libération manuelle par l'admin).
+    // Premier usage réussi de cette clé : on la lie à cet appareil.
     license.boundDeviceId = deviceId;
     license.boundAt = new Date().toISOString();
     await saveLicenses(licenses);
   } else if (license.boundDeviceId !== deviceId) {
-    recordFailure(license.key, 'DEVICE_MISMATCH');
-    return { valid: false, reason: 'DEVICE_MISMATCH' };
+    // DEVICE_MISMATCH (clé déjà liée à un autre appareil) : la clé est
+    // VALIDE (trouvée, active, non expirée) mais n'était plus reconnue quand
+    // le client la présentait depuis un appareil réinstallé/changé (deviceId
+    // différent) — rejetée en 403 alors qu'elle est légitime. Compromis
+    // assumé (déjà acté pour le failover Firebase : verifyLicenseOffline lie
+    // un nouvel appareil) : par défaut, la présentation d'une clé valide
+    // RE-LIE cette clé au nouvel appareil. Le contrôle strict (403) reste
+    // possible via LICENSE_STRICT_DEVICE_BINDING=true. Rien n'est supprimé
+    // ni régénéré : la clé elle-même ne change jamais.
+    if (process.env.LICENSE_STRICT_DEVICE_BINDING === 'true') {
+      recordFailure(license.key, 'DEVICE_MISMATCH');
+      return { valid: false, reason: 'DEVICE_MISMATCH' };
+    }
+    license.boundDeviceId = deviceId;
+    license.boundAt = new Date().toISOString();
+    await saveLicenses(licenses);
   }
 
   // Clés créées avant l'introduction des modules : accès complet par défaut

@@ -158,6 +158,78 @@ function createSession(tenantId) {
     incomingMessageListeners.push(callback);
   }
 
+  // Écouteurs "message HISTORIQUE PRÉEXISTANT" (backfill Telegram, voir
+  // backfillHistory ci-dessous) — DISTINCT d'onIncomingMessage : ces messages
+  // sont RÉCUPÉRÉS depuis le serveur Telegram (client.getDialogs +
+  // client.getMessages, mêmes API déjà utilisées par getGroups) et alimentent
+  // uniquement la mémoire 7 jours. Ils ne doivent JAMAIS déclencher
+  // d'auto-réponse/relance : seul les objets Message bruts transitent ici, et
+  // le gestionnaire d'index.js n'enregistre que la mémoire (idempotent par
+  // messageId).
+  const historyMessageListeners = [];
+
+  function onHistoryMessage(callback) {
+    if (typeof callback === 'function') historyMessageListeners.push(callback);
+  }
+
+  function notifyHistoryMessage(m) {
+    historyMessageListeners.forEach((callback) => {
+      try {
+        callback(m);
+      } catch (err) {
+        console.error(`Erreur dans un écouteur de message historique Telegram (tenant "${tenantId}") :`, err.message);
+      }
+    });
+  }
+
+  // Récupération de l'HISTORIQUE PRÉEXISTANT (mémoire 7 jours). La mémoire ne
+  // démarre PAS à l'installation : quand un compte Telegram déjà existant se
+  // connecte (init() restauré ou login terminé), on interroge le serveur
+  // Telegram — qui garde l'historique complet — et on remonte les messages
+  // des 7 derniers jours de chaque dialogue. Borné (60 dialogues × 120
+  // messages), best-effort, lancé UNE FOIS par instance de client (pas de
+  // boucle après reconnexion). N'altère aucune API existante.
+  const backfilledClients = new Set();
+  const BACKFILL_DIALOG_LIMIT = 60;
+  const BACKFILL_MESSAGES_PER_DIALOG = 120;
+  const BACKFILL_HISTORY_DAYS = 7;
+
+  async function backfillHistory() {
+    if (!client || !connected || backfilledClients.has(client)) return;
+    backfilledClients.add(client);
+    try {
+      const cutoffMs = Date.now() - BACKFILL_HISTORY_DAYS * 86400000;
+      const me = (await client.getMe().catch(() => null)) || null;
+      const meId = me && me.id != null ? Number(me.id) : null;
+      const dialogs = (await client.getDialogs({ limit: BACKFILL_DIALOG_LIMIT }).catch(() => [])) || [];
+      let recorded = 0;
+      for (const d of dialogs) {
+        if (!d || !d.id) continue;
+        const did = Number(d.id);
+        if (meId && did === meId) continue; // "Messages sauvegardés" de notre propre compte
+        let msgs = [];
+        try {
+          msgs = await client.getMessages(d.id, { limit: BACKFILL_MESSAGES_PER_DIALOG });
+        } catch (err) {
+          continue; // dialogue inaccessible : on passe au suivant, jamais bloquant
+        }
+        for (const m of msgs || []) {
+          if (!m) continue;
+          const dateMs = m.date ? new Date(m.date).getTime() : 0;
+          if (!dateMs || dateMs < cutoffMs) continue;
+          notifyHistoryMessage(m);
+          recorded += 1;
+        }
+        await sleep(120); // respiration : ne jamais marteler les serveurs Telegram
+      }
+      if (recorded > 0) {
+        console.log(`backfillHistory Telegram (tenant "${tenantId}") : ${recorded} messages des 7 derniers jours envoyés à la mémoire 7 jours.`);
+      }
+    } catch (err) {
+      console.error(`backfillHistory Telegram (tenant "${tenantId}") :`, err.message);
+    }
+  }
+
   // Écouteurs "identité de compte réinitialisée" — adapters/telegramManager.js
   // s'y abonne pour réinitialiser (TelegramCampaignEngine#reset) le moteur de
   // campagne de ce tenant dès que le compte Telegram connecté change : une
@@ -411,6 +483,7 @@ function createSession(tenantId) {
     if (connected) {
       console.log(`Telegram (tenant "${tenantId}"): session restaurée, connecté.`);
       startHeartbeat();
+      backfillHistory().catch(() => {});
     } else {
       console.log(`Telegram (tenant "${tenantId}"): aucune session valide — connexion requise via POST /api/telegram/login/start.`);
     }
@@ -484,6 +557,7 @@ function createSession(tenantId) {
       // côté WhatsApp).
       authStore.pushSnapshot(sessionPath);
       console.log(`Telegram (tenant "${tenantId}"): connexion établie et session sauvegardée.`);
+      backfillHistory().catch(() => {});
     }).catch((err) => {
       if (myGeneration !== sessionGeneration) return;
       loginError = err;
@@ -708,6 +782,7 @@ function createSession(tenantId) {
     getGroupsSummary,
     getGroupMembers,
     getRecentMessages,
+    onHistoryMessage,
     resolveRecipient,
     sendMessage,
     sendMedia,

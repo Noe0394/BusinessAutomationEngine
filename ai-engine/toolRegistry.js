@@ -256,7 +256,7 @@ const TOOLS = {
       else msgs = await messageHistory.getRecent(ctx.tenant, channel, args.limit || 50);
       msgs = msgs || [];
       return { ok: true, result: { channel, count: msgs.length, messages: msgs.slice(-100).map((m) => ({
-        direction: m.direction, name: m.name || null, party: m.party, text: m.text || null, ts: m.ts || null,
+        direction: m.direction, name: m.name || null, number: m.number || null, party: m.party, text: m.text || null, ts: m.ts || null,
       })) } };
     },
   },
@@ -276,7 +276,7 @@ const TOOLS = {
       const q = norm(args.query);
       const all = await messageHistory.getSince(ctx.tenant, channel, args.sinceDays || 30);
       const matches = (all || []).filter((m) => norm(m.text).includes(q));
-      return { ok: true, result: { channel, count: matches.length, matches: matches.slice(-50).map((m) => ({ direction: m.direction, name: m.name || null, party: m.party, text: m.text || null, ts: m.ts || null })) } };
+      return { ok: true, result: { channel, count: matches.length, matches: matches.slice(-50).map((m) => ({ direction: m.direction, name: m.name || null, number: m.number || null, party: m.party, text: m.text || null, ts: m.ts || null })) } };
     },
   },
 
@@ -292,7 +292,7 @@ const TOOLS = {
     async execute(args, ctx) {
       const channel = /telegram/i.test(args.channel || '') ? 'TELEGRAM' : 'WHATSAPP';
       const msgs = await messageHistory.getSince(ctx.tenant, channel, args.sinceDays || 2);
-      return { ok: true, result: { channel, sinceDays: args.sinceDays, count: (msgs || []).length, messages: (msgs || []).slice(-100).map((m) => ({ direction: m.direction, name: m.name || null, party: m.party, text: m.text || null, ts: m.ts || null })) } };
+      return { ok: true, result: { channel, sinceDays: args.sinceDays, count: (msgs || []).length, messages: (msgs || []).slice(-100).map((m) => ({ direction: m.direction, name: m.name || null, number: m.number || null, party: m.party, text: m.text || null, ts: m.ts || null })) } };
     },
   },
 

@@ -210,6 +210,18 @@ async function getLastIncoming(tenantId, channel) {
   }
   return null;
 }
+// Ensemble des messageId DEJA enregistrés (les deux directions) pour ce
+// (tenant, canal) — sert l'idempotence d'un BACKFILL (voir
+// adapters/telegram.js#backfillHistory) : un message historique déjà présent
+// dans la mémoire 7 jours n'y est pas ré-inséré en double.
+async function getMessageIds(tenantId, channel) {
+  const doc = await load(tenantId, channel);
+  const set = new Set();
+  for (const m of (doc.messages || [])) {
+    if (m && m.messageId) set.add(m.messageId);
+  }
+  return set;
+}
 // Messages échangés avec une partie précise (numéro/username) OU dans un chat
 // précis (chatId = discussion individuelle OU groupe), chronologiques. Comportement
 // compatible : le filtre historique (par numéro) reste valide ; le filtre par
@@ -378,6 +390,7 @@ function stopMaintenance() {
 module.exports = {
   record, getRecent, getLastIncoming, getConversation, getSince,
   listConversations, findConversations, getConversationMessages, getGroupMessages,
+  getMessageIds,
   cleanupExpired, sweepAllExpired, startMaintenance, stopMaintenance,
   updateConversationIndex, normalizeSearch, deriveConversationType, prune,
   NAMESPACE, INDEX_NAMESPACE, RETENTION_DAYS, MAX_MESSAGES,
