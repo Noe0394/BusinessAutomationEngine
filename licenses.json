@@ -36,8 +36,8 @@
       "studio_video"
     ],
     "note": "Noe 1",
-    "boundDeviceId": "23af4689-010f-4025-ae44-46d559493b6c",
-    "boundAt": "2026-09-10T14:18:44.382Z",
+    "boundDeviceId": null,
+    "boundAt": null,
     "key": "KEY-E5164DF3-2026",
     "active": true
   },
