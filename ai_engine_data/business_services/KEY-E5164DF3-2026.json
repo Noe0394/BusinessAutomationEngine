@@ -1,0 +1,47 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "services": [
+    {
+      "id": "svc_mu3qrggtbq1tj",
+      "name": "Épicerie et Charcuterie",
+      "type": "commerce",
+      "project": null,
+      "connection": {
+        "kind": "none",
+        "connectorType": null,
+        "baseUrl": null,
+        "authHeader": "X-API-Key",
+        "endpoints": null,
+        "apiKeyRef": null
+      },
+      "scopes": [],
+      "commercial": {
+        "price": null,
+        "promoPrice": null,
+        "currency": "FCFA",
+        "description": "Vente d'épicerie et de charcuterie fraîche et de qualité.",
+        "advantages": "",
+        "objections": "",
+        "responses": "",
+        "paymentTerms": "",
+        "accessTerms": "",
+        "target": ""
+      },
+      "products": [],
+      "rules": [],
+      "objectives": [],
+      "capabilities": [],
+      "status": "DRAFT",
+      "lastTest": null,
+      "history": [
+        {
+          "at": "2026-09-16T06:50:29.789Z",
+          "event": "Service créé"
+        }
+      ],
+      "createdAt": "2026-09-16T06:50:29.789Z",
+      "updatedAt": "2026-09-16T06:50:29.789Z"
+    }
+  ],
+  "updatedAt": "2026-09-16T06:50:29.790Z"
+}
