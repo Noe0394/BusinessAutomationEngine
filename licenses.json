@@ -5,7 +5,7 @@
       "telegram",
       "studio_video"
     ],
-    "active": true,
+    "active": false,
     "createdAt": "2026-09-13T21:15:25.282Z",
     "expiresAt": null,
     "key": "KEY-91EC2DB1-2026",
