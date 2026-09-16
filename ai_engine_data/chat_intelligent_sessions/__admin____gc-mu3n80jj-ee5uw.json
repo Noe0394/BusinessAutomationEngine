@@ -1,0 +1,25 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu3n80jj-ee5uw",
+  "title": "salut, tu vas bien ?",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu3n81sl5xp0",
+      "role": "user",
+      "content": "salut, tu vas bien ?",
+      "text": "salut, tu vas bien ?",
+      "ts": "2026-09-16T05:11:25.461Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu3n81slk1ix",
+      "role": "assistant",
+      "content": "Salut ! Ça va très bien, merci. Et toi, comment ça se passe ? Dis-moi ce dont tu as besoin et je m’en occupe.",
+      "text": "Salut ! Ça va très bien, merci. Et toi, comment ça se passe ? Dis-moi ce dont tu as besoin et je m’en occupe.",
+      "ts": "2026-09-16T05:11:25.461Z",
+      "metadata": {}
+    }
+  ],
+  "updatedAt": "2026-09-16T05:11:25.461Z"
+}
