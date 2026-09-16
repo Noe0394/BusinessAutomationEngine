@@ -61,7 +61,12 @@ function deriveConversationType(chatId, meta) {
 // tous les champs du cahier des charges 7 jours quand ils sont disponibles.
 function normalizeMessage(tenantId, channel, m) {
   const ch = String(channel || 'WHATSAPP').toUpperCase();
-  const tsSec = Number(m.ts) > 0 ? Number(m.ts) : Math.floor(Date.now() / 1000);
+  // Auto-détection seconds vs milliseconds : les handlers WhatsApp transmettent
+  // des secondes (Baileys messageTimestamp), les handlers Telegram transmettent
+  // des millisecondes (GramJS Date object). Seuil 1e12 ≈ 2001 en secondes
+  // (première valeur au-dessus de laquelle la valeur est certainement en ms).
+  const rawTs = Number(m.ts);
+  const tsSec = rawTs > 1e12 ? Math.floor(rawTs / 1000) : (rawTs > 0 ? rawTs : Math.floor(Date.now() / 1000));
   const party = String(m.party || '');
   const isGroup = deriveConversationType(m.chatId || party, m) === 'GROUP';
   const phoneOf = (id) => String(id || '').split('@')[0];
