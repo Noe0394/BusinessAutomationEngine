@@ -14,6 +14,14 @@ services:
       # Render/Koyeb, voir README.md), sans conflit puisque PORT est déjà lu
       # dynamiquement par index.js (process.env.PORT || 10000).
       - PORT=3000
+      # Persistance des LICENCES (licenses.json) et de la MÉMOIRE 7 JOURS
+      # (ai_engine_data) dans le volume nommé app_data ci-dessous — sinon ces
+      # fichiers vivent sur le disque ÉPHÉMÈRE du conteneur et sont effacés à
+      # chaque rebuild (docker-compose up -d --build), ce qui "rejette"
+      # systématiquement les clés générées après le redéploiement ET efface la
+      # mémoire conversationnelle 7 jours (bug réel constaté en production).
+      - LICENSES_PATH=/app/data/licenses.json
+      - AI_ENGINE_STORAGE_DIR=/app/data/ai_engine
     env_file:
       # Créer ce fichier sur le VPS à partir de .env.example (jamais commité,
       # voir .gitignore) — toutes les clés API + PUBLIC_BASE_URL (l'IP/domaine
@@ -42,8 +50,14 @@ services:
       # y compris un simple redéploiement) — persistés ici pour survivre aux
       # redéploiements, avec la même purge automatique par TTL (6h) qu'avant.
       - generated_media:/app/generated_media
+      # Données applicatives (licences + mémoire 7 jours/agent intelligent) :
+      # le volume nommé devra être initialisé UNE FOIS avec les données du
+      # conteneur précédent avant le premier rebuild (voir deploy.sh) pour ne
+      # pas perdre les licences déjà émises.
+      - app_data:/app/data
 
 volumes:
   whatsapp_auth:
   telegram_sessions:
   generated_media:
+  app_data:
