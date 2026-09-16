@@ -1,0 +1,25 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "sessionId": "gc-mu40eho6-8jlrr",
+  "title": "Salut chef",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu40eiwevcoz",
+      "role": "user",
+      "content": "Salut chef",
+      "text": "Salut chef",
+      "ts": "2026-09-16T11:20:22.574Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu40eiwe8krv",
+      "role": "assistant",
+      "content": "Salut ! Prêt à t’aider, dis-moi ce dont tu as besoin aujourd’hui.",
+      "text": "Salut ! Prêt à t’aider, dis-moi ce dont tu as besoin aujourd’hui.",
+      "ts": "2026-09-16T11:20:22.574Z",
+      "metadata": {}
+    }
+  ],
+  "updatedAt": "2026-09-16T11:20:22.575Z"
+}
