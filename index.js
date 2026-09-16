@@ -5075,6 +5075,15 @@ app.post('/api/admin/diag/auto-reply-test', requireAccess, async (req, res) => {
   res.json({ ok: !!(out && out.sent), result: out });
 });
 
+// SUIVI DES COÛTS IA (RÈGLE N°2) — consommation réelle mesurée au point de
+// passage unique des appels IA (voir ai-engine/aiUsageLedger.js). 100 %
+// déterministe, aucun appel IA ici. Admin uniquement (supervision opérateur).
+const aiUsageLedger = require('./ai-engine/aiUsageLedger');
+app.get('/api/admin/ai-usage', requireAdmin, async (req, res) => {
+  try { res.json({ ok: true, usage: await aiUsageLedger.summary(req.query.date) }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // CENTRE D'AIDE / DOCUMENTATION — base de connaissances embarquée
 // (ai-engine/knowledgeBase.js), servie à l'onglet « Centre d'aide » du
 // dashboard. Le Chat Intelligent y accède aussi via l'outil getDocumentation.

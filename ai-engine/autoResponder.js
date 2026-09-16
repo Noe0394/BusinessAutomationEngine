@@ -53,7 +53,9 @@ function isEnabled(settings, channel) {
 // Rédige la réponse au client, EN S'APPUYANT sur le contexte métier réel
 // (produits/prix/règles des Services Métiers) et l'historique de la conversation.
 async function composeReply({ tenant, channel, from, name, text, llm }) {
-  const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, []).then((r) => r.text);
+  // Appel IA tagué (AI Cost Guard) : purpose 'client_conversation' + tenant,
+  // pour la ventilation des coûts IA par fonctionnalité et par compte.
+  const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'client_conversation', tenant }).then((r) => r.text);
   const bizCtx = await businessServices.getEngineContextText(tenant).catch(() => '');
   let history = '';
   try {
