@@ -1,0 +1,27 @@
+{
+  "tenantId": "KEY-E5164DF3-2026",
+  "channel": "TELEGRAM",
+  "conversations": {
+    "7227551162": {
+      "chatId": "7227551162",
+      "type": "INDIVIDUAL",
+      "platform": "TELEGRAM",
+      "accountId": "KEY-E5164DF3-2026",
+      "contactId": "7227551162",
+      "contactName": "Noe",
+      "phoneNumber": "7227551162",
+      "groupId": null,
+      "groupName": null,
+      "participants": null,
+      "firstMessageAt": 1789559519000,
+      "lastMessageAt": 1789559519000,
+      "messageCount": 1,
+      "lastMessage": "https://34-135-20-27.sslip.io/admin-secret-portal",
+      "lastMessageDirection": "in",
+      "lastMessageAtIso": "2026-09-16T11:51:59.184Z",
+      "lastSenderId": null,
+      "lastSenderName": "Noe"
+    }
+  },
+  "updatedAt": "2026-09-16T11:51:59.597Z"
+}
