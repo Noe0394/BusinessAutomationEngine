@@ -1,0 +1,27 @@
+{
+  "tenantId": "KEY-FB6EF0A6-2026",
+  "channel": "TELEGRAM",
+  "conversations": {
+    "-1001514631094": {
+      "chatId": "-1001514631094",
+      "type": "GROUP",
+      "platform": "TELEGRAM",
+      "accountId": "KEY-FB6EF0A6-2026",
+      "contactId": null,
+      "contactName": null,
+      "phoneNumber": null,
+      "groupId": "-1001514631094",
+      "groupName": null,
+      "participants": null,
+      "firstMessageAt": 1789564700000,
+      "lastMessageAt": 1789564700000,
+      "messageCount": 1,
+      "lastMessage": "Hi Giàng Nghĩa!\nWelcome to Era7: Game of Truth community!  🎉 🔥\n\nIf you're new in the world of Era7, this is what you need!\nAn Adventurer’s Guide to Era7: Game of Truth\nYou can find all our announcements in Era7: Game of Truth Official - News 💌 \nFeel free to ask questions and participate actively in all the upcoming activities 🙏🏼\n\nWarm regards,\nEra7 Team 🦦 🌻\n\n🌐 Official Links:\n| Website | Twitter | Facebook | Discord | Reddit | Medium | Telegram | Telegram News Channel | TG 中文 | TG Turkish | TG Persian | TG Spanish | TG Russian | TG Tagalog | TG Indonesian | TG Portuguese | TG Arabic | TG Indian | TG Korean | TG Vietnamese |",
+      "lastMessageDirection": "in",
+      "lastMessageAtIso": "2026-09-16T13:18:22.110Z",
+      "lastSenderId": "609517172",
+      "lastSenderName": "Rose"
+    }
+  },
+  "updatedAt": "2026-09-16T13:18:22.470Z"
+}
