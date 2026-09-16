@@ -6,6 +6,7 @@ const personaManager = require('./personaManager');
 const platformOrchestrator = require('./platformOrchestrator');
 const connectorManager = require('./connectors/connectorManager');
 const businessServices = require('./businessServices');
+const toolRegistry = require('./toolRegistry');
 const toolAgent = require('./toolAgent');
 const manualPaymentValidator = require('./manualPaymentValidator');
 const contactCrm = require('./contactCrm');
@@ -116,6 +117,13 @@ const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcon
 // action, pas une question). Placé APRÈS toutes les intentions d'action et
 // juste AVANT 'goal' : une vraie commande garde la priorité.
 const BUSINESSINFO_RE = /((?:\bquel(?:le|s|les)?\b|\bcombien\b|c(?:'|’)?est\s+(?:quoi|combien)|\bliste[rz]?\b|\bmontre|\baffiche|\brappelle|\bdonne(?:-|\s)moi|\bc'est\s+quoi)[^]{0,40}(?:prix|tarif|co[ûu]te?|produits?|formations?|offres?|services?|catalogue|r[èe]gles?|objectifs?))|((?:prix|tarif)\s+(?:de|d'|du|de\s+la|de\s+ma|de\s+mon)\b)|(mes\s+(?:produits?|offres?|formations?|r[èe]gles?|objectifs?|tarifs?)\b)|(mon\s+catalogue\b)/i;
+// Configuration d'un Service Métier PAR LE CHAT (création / connexion API /
+// permissions). Placé AVANT payment/account/businessinfo/goal.
+const CONFIGSVC_RE = /((cr[ée]e?r?|configur|param[èe]tr|enregistre?|ajoute?r?|mets?\s+en\s+place)\w*[^]{0,40}(service\s+m[ée]tier|nouveau\s+service|mon\s+service|activit[ée]|business))|((connect|branch|relie?|lie?)\w*[^]{0,30}(api|plateforme|passerelle|system\.?io))|(configure?r?\s+mon\s+api)/i;
+// Import de contacts en masse depuis un fichier joint dans le chat.
+const IMPORTCONTACTS_RE = /((importe?r?|charge?r?|ajoute?r?|int[èe]gre?r?)\s+(ces?|les?|mes?|ce|le|un|des)?\s*(contacts?|fichier|liste|excel|csv))|(importe?r?\s+(ce|le)\s+fichier)/i;
+// Génération d'un média (affiche/image/visuel) — hors publication de groupe.
+const GENMEDIA_RE = /(g[ée]n[èe]re?r?|cr[ée]e?r?|fabrique?r?|dessine?r?|fais(?:-|\s)moi|con[çc]ois)\w*[^]{0,25}(affiche|image|visuel|flyer|banni[èe]re|logo|illustration|poster|carte|design)/i;
 
 // Détection d'intention (Command Parsing, §1.1 du cahier des charges) —
 // zéro appel réseau, comme index.js#detectStudioIntent dont ce module étend
@@ -134,6 +142,12 @@ function detectIntent(text, lastAssistantMessage) {
   if (REPLY_RE.test(text)) return 'reply';
   if (ACTIONS_RE.test(text)) return 'actionsreport';
   if (INBOX_RE.test(text)) return 'inbox';
+  // Actions "centre des intentions" pilotées par le chat, prioritaires sur les
+  // intentions génériques (payment/account/businessinfo/goal) qui les
+  // happaient. genmedia laisse la main à grouppost si un groupe est mentionné.
+  if (CONFIGSVC_RE.test(text)) return 'configsvc';
+  if (IMPORTCONTACTS_RE.test(text)) return 'importcontacts';
+  if (GENMEDIA_RE.test(text) && !/groupe/i.test(text)) return 'genmedia';
   // Ordre important : une programmation récurrente ("chaque matin envoie au
   // groupe…") l'emporte sur une publication ponctuelle ; une publication (verbe
   // poste/partage/…) l'emporte sur la simple LISTE des groupes — sinon
@@ -938,6 +952,76 @@ async function handleBusinessInfo(text, history, tenantId) {
 }
 
 // ---------------------------------------------------------------------------
+// 'configsvc' — configure un Service Métier depuis une instruction en langage
+// naturel (extraction LLM des champs) puis exécute l'outil réel
+// configureBusinessService (création + connexion API + test réel si fournis).
+// ---------------------------------------------------------------------------
+async function handleConfigSvc(text, history, tenantId) {
+  const prompt = [
+    personaManager.personaSystemPrompt('default'),
+    'Le vendeur veut créer/configurer un Service Métier. Extrais ses informations.',
+    `Instruction : "${text}"`,
+    'Réponds UNIQUEMENT avec cet objet JSON (aucun texte autour), en ne remplissant que ce qui est fourni : {"ready":true,"name":"...","type":"formation|ecommerce|service|autre","price":8000,"currency":"FCFA","description":"","products":"Nom|Prix; Nom|Prix","rules":"regle1; regle2","objectives":"obj1; obj2","baseUrl":"","apiKey":"","authHeader":"X-API-Key","connectorType":"platform_gateway|systemio|generic","scopes":"students:create,students:suspend"}. Si le NOM du service manque vraiment, réponds plutôt {"ready":false,"ask":"question courte pour obtenir le nom"}.',
+  ].join('\n');
+  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history || []);
+  const parsed = extractJsonBlock(String(raw || '').trim());
+  if (!parsed || parsed.ready === false || !parsed.name) {
+    return { text: (parsed && parsed.ask) || 'Quel nom veux-tu donner à ce service métier, et quel type d\'activité (formation, e-commerce, service…) ?', isPlanningQuestion: true, intent: 'configsvc' };
+  }
+  const call = await toolRegistry.execute(tenantId, 'configureBusinessService', parsed, {});
+  if (call.state !== 'SUCCESS') {
+    return { text: `Je n'ai pas pu configurer le service (${(call.error && call.error.code) || call.state}).`, actionLog: [{ icon: '⚠️', label: 'Échec configuration service', status: 'error' }] };
+  }
+  const r = call.result;
+  let msg = `✅ C'est configuré : le service « ${r.name} » est créé.`;
+  if (r.test) {
+    msg += r.connected
+      ? ` J'ai connecté ton API et le test est bon (${r.test.detail || 'authentifié et joignable'}).`
+      : ` Par contre le test de l'API n'est pas passé (${(r.test && r.test.detail) || 'non connecté'}) — vérifie l'URL et la clé.`;
+  }
+  return { text: msg, toolCall: { name: 'configureBusinessService', state: call.state, result: r }, actionLog: [{ icon: '🏢', label: `Service « ${r.name} » configuré`, status: r.connected || !r.test ? 'done' : 'warning' }] };
+}
+
+// ---------------------------------------------------------------------------
+// 'importcontacts' — importe en masse les contacts d'un fichier JOINT (le
+// fileId est présent dans le contexte des pièces jointes injecté par la route).
+// ---------------------------------------------------------------------------
+async function handleImportContacts(text, tenantId) {
+  const m = String(text || '').match(/\[id:\s*(f_[A-Za-z0-9]+)\]/);
+  if (!m) {
+    return { text: 'Joins-moi le fichier de contacts (CSV ou Excel) via le trombone 📎, puis redis « importe ces contacts » — je m\'occupe du reste.', isPlanningQuestion: true, intent: 'importcontacts' };
+  }
+  const call = await toolRegistry.execute(tenantId, 'importContactsFromFile', { fileId: m[1] }, {});
+  if (call.state !== 'SUCCESS') {
+    return { text: `Je n'ai pas pu importer le fichier (${(call.error && call.error.code) || call.state}). Vérifie qu'il contient une colonne « telephone ».`, actionLog: [{ icon: '⚠️', label: 'Import échoué', status: 'error' }] };
+  }
+  const r = call.result;
+  return {
+    text: `📇 Import terminé : ${r.imported} contact(s) ajouté(s), ${r.updated} mis à jour, ${r.duplicates} doublon(s), ${r.invalid} rejeté(s). Tu peux maintenant me demander de les filtrer, les analyser ou lancer une campagne.`,
+    toolCall: { name: 'importContactsFromFile', state: call.state, result: r },
+    actionLog: [{ icon: '📇', label: `${r.imported} contact(s) importé(s)`, status: 'done' }],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 'genmedia' — génère un visuel (affiche/image) et le renvoie téléchargeable.
+// ---------------------------------------------------------------------------
+async function handleGenMedia(text, tenantId, deps) {
+  const call = await toolRegistry.execute(tenantId, 'generateImage', { prompt: text }, { generateImage: deps.generateImage || null });
+  if (call.state !== 'SUCCESS') {
+    const why = (call.error && call.error.code) === 'IMAGE_ENGINE_UNAVAILABLE'
+      ? 'le générateur d\'image n\'est pas disponible ici'
+      : ((call.error && call.error.code) || call.state);
+    return { text: `Je n'ai pas pu générer le visuel (${why}).`, actionLog: [{ icon: '⚠️', label: 'Génération échouée', status: 'error' }] };
+  }
+  return {
+    text: 'Voilà ton visuel ! Tu peux le télécharger juste en dessous. 👇',
+    toolCall: { name: 'generateImage', state: call.state, result: call.result },
+    actionLog: [{ icon: '🎨', label: 'Visuel généré', status: 'done' }],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Point d'entrée unique — appelé par index.js AVANT le pipeline chat/média
 // existant (image/vidéo/livre, réponse générique). `deps` = { runtime,
 // engineFor, humanContext } injectés depuis la même instance que
@@ -994,6 +1078,9 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'payment': return handlePayment(text, history, tenantId, d);
     case 'connector': return handleConnector(text, history, tenantId, d);
     case 'businessinfo': return handleBusinessInfo(text, history, tenantId);
+    case 'configsvc': return handleConfigSvc(text, history, tenantId);
+    case 'importcontacts': return handleImportContacts(text, tenantId);
+    case 'genmedia': return handleGenMedia(text, tenantId, d);
     default: return null;
   }
 }
