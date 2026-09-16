@@ -1,0 +1,35 @@
+{
+  "tenant": "__admin__",
+  "sessionId": "gc-mu3ppt61-150s5",
+  "title": "genere une affiche promotionnelle pour ma formation de cuisi",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu3ppu239fhz",
+      "role": "user",
+      "content": "genere une affiche promotionnelle pour ma formation de cuisine",
+      "text": "genere une affiche promotionnelle pour ma formation de cuisine",
+      "ts": "2026-09-16T06:21:14.475Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu3ppu231584",
+      "role": "assistant",
+      "content": "Je vois que le service que tu as configuré, « RIEA AFRIQUE (test reel VPS) », est décrit comme une « Formation test » au tarif de 15 000 FCFA, mais il n’y a aucune mention d’une formation de cuisine. Pour créer une affiche promotionnelle adaptée, il me faudrait les infos précises (titre, description, dates, bénéfices, visuel souhaité, etc.) dans l’onglet Services Métiers. Peux‑tu me les fournir ?",
+      "text": "Je vois que le service que tu as configuré, « RIEA AFRIQUE (test reel VPS) », est décrit comme une « Formation test » au tarif de 15 000 FCFA, mais il n’y a aucune mention d’une formation de cuisine. Pour créer une affiche promotionnelle adaptée, il me faudrait les infos précises (titre, description, dates, bénéfices, visuel souhaité, etc.) dans l’onglet Services Métiers. Peux‑tu me les fournir ?",
+      "ts": "2026-09-16T06:21:14.475Z",
+      "metadata": {
+        "intent": null,
+        "toolCall": null,
+        "actionLog": [
+          {
+            "icon": "📋",
+            "label": "Réponse basée sur tes Services Métiers",
+            "status": "done"
+          }
+        ]
+      }
+    }
+  ],
+  "updatedAt": "2026-09-16T06:21:14.475Z"
+}
