@@ -111,7 +111,7 @@ echo "════════════════════════�
 # LOCALEMENT — sur le VPS comme depuis le PC. Aucune clé n'est affichée : seul
 # le device-id (masqué) et les compteurs restent visibles.
 LIC_JSON=$(engine_license_file)
-DEVICE_ID=$(printf '%s' "$LIC_JSON" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);const l=(j.licenses||[]).find(x=>x.key===process.argv[1]);const v=l&&(l.boundDeviceId||l.deviceId);console.log(v?String(v):'')}catch(e){console.log('')}});" "$LICENCE" 2>/dev/null || true)
+DEVICE_ID=$(printf '%s' "$LIC_JSON" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);const arr=Array.isArray(j)?j:(Array.isArray(j.licenses)?j.licenses:(j.licenses&&typeof j.licenses==='object'?Object.values(j.licenses):[]));const l=arr.find(x=>x&&x.key===process.argv[1]);const v=l&&(l.boundDeviceId||l.deviceId);console.log(v?String(v):'')}catch(e){console.log('')}});" "$LICENCE" 2>/dev/null || true)
 
 if [ -z "$DEVICE_ID" ]; then
   red "Device-id introuvable pour la licence de test"
