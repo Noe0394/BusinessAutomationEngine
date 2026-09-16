@@ -1,0 +1,15 @@
+{
+  "tenant": "__admin__",
+  "files": {
+    "f_mu3p2sg6201ep": {
+      "id": "f_mu3p2sg6201ep",
+      "name": "tarifs.csv",
+      "type": "application/octet-stream",
+      "size": 79,
+      "textual": true,
+      "hasText": true,
+      "text": "produit,prix\nFormation Epicerie,8000\nFormation Patisserie,12000\nCoaching,25000\n",
+      "at": "2026-09-16T06:03:19.303Z"
+    }
+  }
+}
