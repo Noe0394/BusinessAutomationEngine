@@ -1,0 +1,25 @@
+{
+  "date": "2026-09-17",
+  "events": [
+    {
+      "activityId": "act_mu5d3flvopgp",
+      "ts": "2026-09-17T10:03:26.275Z",
+      "type": "tool_call",
+      "action": "getBusinessServices",
+      "status": "ok",
+      "channel": null,
+      "tenant": "KEY-E5164DF3-2026",
+      "target": null,
+      "detail": "SUCCESS"
+    }
+  ],
+  "counts": {
+    "byType": {
+      "tool_call": 1
+    },
+    "byStatus": {
+      "ok": 1
+    },
+    "byChannel": {}
+  }
+}
