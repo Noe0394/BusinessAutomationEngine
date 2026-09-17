@@ -1,0 +1,35 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "sessionId": "gc-mu5dk5fg-zjgb1",
+  "title": "Quelle est le dernier message du groupe WhatsApp \"RIEA AFRIQ",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu5dk5ln5z5k",
+      "role": "user",
+      "content": "Quelle est le dernier message du groupe WhatsApp \"RIEA AFRIQUE\" et son expéditeur?",
+      "text": "Quelle est le dernier message du groupe WhatsApp \"RIEA AFRIQUE\" et son expéditeur?",
+      "ts": "2026-09-17T10:16:26.459Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu5dk5lnn017",
+      "role": "assistant",
+      "content": "Voici tes derniers messages WhatsApp (numéro : 22506650471) :\n➡️ 120363293949478984 — \"Busness Time 🤍\" · 16/09/2026 23:07:26\n• ongfedaci2015 (111583418155160) — \"Ok\" · 16/09/2026 22:10:33\n• ongfedaci2015 (111583418155160) — \"Ok d'ici vendredi je vais m'inscrire si Les inscriptions continues. Ça m'intéresse vraiment\" · 16/09/2026 22:09:54\n• ongfedaci2015 (111583418155160) — \"Les créneaux possibles c'est à dire ?\" · 16/09/2026 22:07:06\n• ongfedaci2015 (111583418155160) — \"La formation commence quand\" · 16/09/2026 22:06:00",
+      "text": "Voici tes derniers messages WhatsApp (numéro : 22506650471) :\n➡️ 120363293949478984 — \"Busness Time 🤍\" · 16/09/2026 23:07:26\n• ongfedaci2015 (111583418155160) — \"Ok\" · 16/09/2026 22:10:33\n• ongfedaci2015 (111583418155160) — \"Ok d'ici vendredi je vais m'inscrire si Les inscriptions continues. Ça m'intéresse vraiment\" · 16/09/2026 22:09:54\n• ongfedaci2015 (111583418155160) — \"Les créneaux possibles c'est à dire ?\" · 16/09/2026 22:07:06\n• ongfedaci2015 (111583418155160) — \"La formation commence quand\" · 16/09/2026 22:06:00",
+      "ts": "2026-09-17T10:16:26.459Z",
+      "metadata": {
+        "intent": null,
+        "toolCall": null,
+        "actionLog": [
+          {
+            "icon": "📥",
+            "label": "Dernier message : 120363293949478984",
+            "status": "done"
+          }
+        ]
+      }
+    }
+  ],
+  "updatedAt": "2026-09-17T10:16:26.459Z"
+}
