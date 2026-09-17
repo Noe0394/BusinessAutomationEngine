@@ -1,0 +1,53 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "sessionId": "gc-mu5d3esq-cl50f",
+  "title": "Bjr comment tu vas ?? Peux tu me faire un résumé de mon serv",
+  "context": {},
+  "messages": [
+    {
+      "id": "m_mu5d3fv0ox0x",
+      "role": "user",
+      "content": "Bjr comment tu vas ?? Peux tu me faire un résumé de mon service métier actif actuel stp ?",
+      "text": "Bjr comment tu vas ?? Peux tu me faire un résumé de mon service métier actif actuel stp ?",
+      "ts": "2026-09-17T10:03:26.604Z",
+      "metadata": {}
+    },
+    {
+      "id": "m_mu5d3fv043me",
+      "role": "assistant",
+      "content": "Salut ! Ça va bien, merci. Ton service métier actif en ce moment, c’est la formation « Épicerie et Charcuterie », tarifée à 8 000 FCFA, et il est déjà connecté à ton compte.",
+      "text": "Salut ! Ça va bien, merci. Ton service métier actif en ce moment, c’est la formation « Épicerie et Charcuterie », tarifée à 8 000 FCFA, et il est déjà connecté à ton compte.",
+      "ts": "2026-09-17T10:03:26.604Z",
+      "metadata": {
+        "intent": null,
+        "toolCall": {
+          "name": "getBusinessServices",
+          "state": "SUCCESS",
+          "result": {
+            "count": 1,
+            "services": [
+              {
+                "id": "svc_mu3qrggtbq1tj",
+                "name": "Épicerie et Charcuterie",
+                "type": "formation",
+                "price": 8000,
+                "currency": "FCFA",
+                "connected": true
+              }
+            ]
+          },
+          "error": null,
+          "confirmationId": null
+        },
+        "actionLog": [
+          {
+            "icon": "✅",
+            "label": "getBusinessServices → SUCCESS",
+            "status": "done"
+          }
+        ]
+      }
+    }
+  ],
+  "updatedAt": "2026-09-17T10:03:26.604Z"
+}
