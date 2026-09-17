@@ -1,0 +1,12 @@
+{
+  "tenant": "KEY-E5164DF3-2026",
+  "secrets": {
+    "service_svc_mu3qrggtbq1tj": {
+      "updatedAt": "2026-09-17T09:52:37.445Z",
+      "v": 1,
+      "iv": "X9LR+FCi2tvTowig",
+      "tag": "vIQmVMMlc8o8KCtF4BbfMA==",
+      "ct": "tBW4dTPLUdvEx44VZv9lky11nWjXzbefgmTejB6Vb8utyXaGZDbgpenMmIg5QF0/6+zNJ0zbuFnydDioYe7eSasBgIJsY/WB"
+    }
+  }
+}
