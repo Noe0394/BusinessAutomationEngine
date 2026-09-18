@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-18",
+  "events": [
+    {
+      "activityId": "act_mu73cc409rf2",
+      "ts": "2026-09-18T15:05:57.840Z",
+      "type": "message_in",
+      "action": "Message client reçu",
+      "status": "ok",
+      "channel": "WHATSAPP",
+      "tenant": "KEY-E5164DF3-2026",
+      "target": "120363414910365602@g.us",
+      "detail": "Ok Il y a trois qui m'intéresse mais si  vous pouvez m'accorder un délai de grâce jusqu'à demain pour le paiement."
+    }
+  ],
+  "counts": {
+    "byType": {
+      "message_in": 1
+    },
+    "byStatus": {
+      "ok": 1
+    },
+    "byChannel": {
+      "WHATSAPP": 1
+    }
+  }
+}
