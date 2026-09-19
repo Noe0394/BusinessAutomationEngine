@@ -1,0 +1,40 @@
+{
+  "date": "2026-09-19",
+  "totals": {
+    "calls": 1,
+    "tokens": 785,
+    "cost": 0.00023549999999999998
+  },
+  "byPurpose": {
+    "conversation": {
+      "calls": 1,
+      "tokens": 785,
+      "cost": 0.00023549999999999998
+    }
+  },
+  "byProvider": {
+    "groq": {
+      "calls": 1,
+      "tokens": 785,
+      "cost": 0.00023549999999999998
+    }
+  },
+  "byTenant": {
+    "unknown": {
+      "calls": 1,
+      "tokens": 785,
+      "cost": 0.00023549999999999998
+    }
+  },
+  "recent": [
+    {
+      "ts": "2026-09-19T18:59:19.351Z",
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
+      "tokens": 785,
+      "cost": 0.000235,
+      "purpose": "conversation",
+      "tenant": null
+    }
+  ]
+}
