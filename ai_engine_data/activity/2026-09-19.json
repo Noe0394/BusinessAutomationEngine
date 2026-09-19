@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-19",
+  "events": [
+    {
+      "activityId": "act_mu8rr6hudz6c",
+      "ts": "2026-09-19T19:17:07.362Z",
+      "type": "message_in",
+      "action": "Message client reçu",
+      "status": "ok",
+      "channel": "WHATSAPP",
+      "tenant": "KEY-E5164DF3-2026",
+      "target": "120363425685207805@g.us",
+      "detail": "D’ici deux ans ?😂😂😂 non mais mon frère c’est abusé .🤣🤣🤣🤣😂🤲"
+    }
+  ],
+  "counts": {
+    "byType": {
+      "message_in": 1
+    },
+    "byStatus": {
+      "ok": 1
+    },
+    "byChannel": {
+      "WHATSAPP": 1
+    }
+  }
+}
