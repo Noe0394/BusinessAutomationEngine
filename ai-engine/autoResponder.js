@@ -80,7 +80,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   const route = modelRouter.classify(text);
   // Appel IA tagué (AI Cost Guard) : purpose 'client_conversation' + tenant +
   // maxTokens (routeur) + taskId (protection anti-boucle par conversation).
-  const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}` };
+  const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}`, tier: route.tier === 'complex' ? 'reasoning' : 'standard' };
   const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, meta).then((r) => r.text);
   const bizCtx = await businessServices.getEngineContextText(tenant).catch(() => '');
   let history = '';
@@ -191,11 +191,13 @@ async function processBatch({ tenantId, channel, from, name, items, settings }, 
       for (const p of (svc.products || [])) if (p && (p.name || typeof p === 'string')) productNames.push(p.name || String(p));
     }
   } catch (e) { productNames = []; }
+  // Arbitrage des intentions AMBIGUËES (refus vs intérêt, hésitation vs paiement…) : décision critique -> niveau raisonnement.
+  const arbitrationLlm = d.llm || ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'intent_arbitration', tenant: tenantId, tier: 'reasoning', maxTokens: 300 }).then((r) => r.text));
   const result = await conversationEngine.handleBatch({ tenantId, channel, from, name, items }, {
     isGroup: isGroupChat(channel, from),
     groupReplies: settings.groupReplies === true,
     productNames,
-    llm: d.llm,
+    llm: arbitrationLlm,
     crm: d.crm || contactCrm,
     knownText,
     history,

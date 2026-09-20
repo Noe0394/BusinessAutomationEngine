@@ -73,7 +73,7 @@ async function planOffer(text, history, domain) {
     'Si tu as assez d\'informations (catégorie + les 3 points de la catégorie concernée), réponds UNIQUEMENT avec cet objet JSON (aucun texte avant/après, aucun markdown) : {"ready":true,"category":"physical"|"service"|"training","summary":"résumé en français de l\'offre configurée, à afficher au vendeur","offer":{"name":"nom de l\'offre","description":"description courte","price":"prix ou modalité de paiement (texte libre, ex: 15000 FCFA)","options":"déclinaisons/variantes ou chaîne vide (produit physique)","delivery":"frais/délais de livraison + stock, ou chaîne vide (produit physique)","duration":"durée de la prestation ou chaîne vide (service)","targetAudience":"cible ou chaîne vide (service)","booking":"modalité de réservation/acompte ou chaîne vide (service)","learningOutcome":"ce que l\'élève apprend ou chaîne vide (formation)","format":"format de délivrance (vidéos/Telegram/PDF...) ou chaîne vide (formation)","accessType":"none, access_key ou student_account (formation uniquement, défaut none)"}}',
   ].join('\n');
 
-  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history, null, undefined, 'designDirectorSkill');
+  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history, null, undefined, 'designDirectorSkill', { purpose: 'offer_clarification', tier: 'reasoning' });
   const trimmed = raw.trim();
   const parsed = extractJsonBlock(trimmed);
   if (!parsed && looksLikeRunaway(trimmed)) {

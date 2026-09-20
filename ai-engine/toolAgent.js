@@ -31,7 +31,7 @@ function describeTools(tools) {
 
 async function defaultLlm(prompt, history) {
   const llmFallbackEngine = require('../lib/ai/llmFallbackEngine');
-  const { text } = await llmFallbackEngine.generateAIResponse(prompt, history || []);
+  const { text } = await llmFallbackEngine.generateAIResponse(prompt, history || [], null, undefined, null, { purpose: 'tool_agent', tier: 'reasoning' });
   return text;
 }
 

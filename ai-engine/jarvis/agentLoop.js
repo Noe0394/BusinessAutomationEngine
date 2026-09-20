@@ -28,7 +28,7 @@ function sig(name, args) { return `${name}:${JSON.stringify(args || {})}`; }
 function brief(v) { const s = JSON.stringify(v == null ? {} : v); return s.length > 1500 ? s.slice(0, 1500) + '…' : s; }
 
 async function defaultLlm(prompt, history) {
-  const r = await llmFallbackEngine.generateAIResponse(prompt, history || [], null, undefined, null, { purpose: 'jarvis_agent' });
+  const r = await llmFallbackEngine.generateAIResponse(prompt, history || [], null, undefined, null, { purpose: 'jarvis_agent', tier: 'reasoning' });
   return r.text;
 }
 

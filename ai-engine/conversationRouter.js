@@ -371,7 +371,7 @@ async function processBatch(input, deps) {
 
   let cls = classify(text, { crmContact, state, isGroup: input.isGroup, hasAttachment: input.hasAttachment });
   // Une pièce jointe (image/document) sans texte exploitable n'est pas classable : on ne devine pas.
-  cls = await arbitrate(cls, text, d.llm);
+  cls = await arbitrate(cls, text, d.llmReasoning || d.llm);
   const decision = decide(cls, { state, policy, isGroup: input.isGroup });
 
   const label = identity ? identity.label : contactIdentity.resolveIdentity({ channel, jid: from }).label;

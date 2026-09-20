@@ -4967,6 +4967,8 @@ app.post('/api/admin/diag/assistant-check', requireAccess, async (req, res) => {
     const svcs = await require('./ai-engine/businessServices').list(tenantId);
     out.services = svcs.map((s) => ({ name: s.name, hasPrice: !!(s.commercial && s.commercial.price != null), hasPaymentTerms: !!(s.commercial && s.commercial.paymentTerms), adCampaigns: (s.adCampaigns || []).length }));
     out.groupCampaigns = (await groupCampaigns.list(tenantId)).map((c) => ({ name: c.name, status: c.status, groups: c.groups.length }));
+    // Connexions IA (noms de fournisseurs seulement, jamais de clé) : ordre effectif par niveau ; « missingStrongModels » = clés à ajouter.
+    out.ai = llmFallbackEngine.getProviderStatus();
     if (out.session.connected) {
       const g = await intelligenceBridge.runtime.listGroups({ channel: 'WHATSAPP', tenantId });
       const groups = (g && g.groups) || [];
@@ -5614,7 +5616,9 @@ const assistant = require('./ai-engine/assistantLayer').create({
   getRuntime: () => intelligenceBridge && intelligenceBridge.runtime,
   // IA conversationnelle : rédige les réponses privées (accusés, réponses d'attente) et arbitre les cas ambigus. Les gabarits ne servent
   // que de secours si aucune IA ne répond.
-  llm: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_conversation', maxTokens: 250 }).then((r) => r.text),
+  llm: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_conversation', maxTokens: 250, tier: 'fast' }).then((r) => r.text),
+  // Décisions critiques (arbitrage de classification) : niveau raisonnement.
+  llmReasoning: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_arbitration', maxTokens: 300, tier: 'reasoning' }).then((r) => r.text),
   chatOrchestrator,
   aiStudioStore,
   llmFallbackEngine,

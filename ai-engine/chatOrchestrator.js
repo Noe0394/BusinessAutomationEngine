@@ -71,7 +71,7 @@ function extractJsonBlock(rawText) {
 // prospection, relance/relancer, analyser/analyse, encaisser/encaisse,
 // négocie/négocier, débloque/débloquer...) — un `\b` final les aurait
 // bloquées à tort (ex: /\bvend\b/ ne matche jamais "vendre").
-const REPORT_RE = /(o[uù]\s+en\s+(?:est|sont)|bilan\s+du\s+jour|statut\s+de|rapport\s+de|comment\s+(?:vont|se\s+portent)|combien\s+de\s+ventes|r[ée]sultats?\s+du\s+jour)/i;
+const REPORT_RE = /(o[uù]\s+en\s+(?:est|sont)|bilan\s+(?:du\s+jour|de\s+la\s+journ[ée]e|de\s+la\s+semaine|des\s+ventes)|statut\s+de|rapport\s+de|comment\s+(?:vont|se\s+portent)|combien\s+de\s+ventes|r[ée]sultats?\s+du\s+jour)/i;
 const PAYMENT_RE = /(lien\s+de\s+paiement|\bpayer\b|\bpaiement\b|encaiss|mobile\s?money|orange\s?money|mtn\s?money|moov\s?money|\bwave\b|\bremise\b|r[ée]duction|\brabais\b|n[ée]goci)/i;
 const ACCOUNT_RE = /(compte\s+(?:[ée]l[eè]ve|[ée]tudiant|client)|cl[ée]\s+d.?acc[èe]s|acc[èe]s\s+(?:[ée]l[eè]ve|module|au\s+module)|g[ée]n[èe]re?\s+un\s+acc[èe]s|d[ée]bloque|inscri(?:s|re|t)|enr[ôo]le|suspend|d[ée]sactive)/i;
 // Actions "plateforme externe" (connecteurs pilotés par les permissions du
@@ -90,7 +90,7 @@ const CONNECTOR_RE = /(ajoute[rz]?\s+(?:ce\s+|le\s+|un\s+|mon\s+)?contact|\btagu
 // vrai message/expéditeur). Volontairement placé AVANT 'goal' dans
 // detectIntent : "dernier message reçu" ne doit pas être happé par le moteur
 // d'objectifs.
-const INBOX_RE = /(derniers?\s+messages?|messages?\s+re[çc]us?|qui\s+m.?a\s+(?:écrit|ecrit|envoy[ée]|contact[ée])|num[ée]ro\s+de\s+l.?exp[ée]diteur|\bexp[ée]diteur\b|bo[îi]te\s+de\s+r[ée]ception|\binbox\b|(?:es|est)-?\s*tu\s+(?:vraiment\s+)?connect[ée]|connect[ée]\s+[àa]\s+mon\s+(?:whatsapp|telegram)|montre(?:-|\s+)(?:moi\s+)?mes\s+messages)/i;
+const INBOX_RE = /((?:as|ai|avez)-?\s*(?:tu|je|vous)\s+re[çc]u\s+(?:des?\s+|de\s+)?(?:nouveaux?\s+)?(?:messages?|nouvelles?)|derniers?\s+messages?|messages?\s+re[çc]us?|qui\s+m.?a\s+(?:écrit|ecrit|envoy[ée]|contact[ée])|num[ée]ro\s+de\s+l.?exp[ée]diteur|\bexp[ée]diteur\b|bo[îi]te\s+de\s+r[ée]ception|\binbox\b|(?:es|est)-?\s*tu\s+(?:vraiment\s+)?connect[ée]|connect[ée]\s+[àa]\s+mon\s+(?:whatsapp|telegram)|montre(?:-|\s+)(?:moi\s+)?mes\s+messages)/i;
 // Consultation des groupes (liste, "où je suis admin", filtre par sujet).
 // Placé AVANT 'goal' (GOAL_RE capte "groupes"/"membres") : une QUESTION sur les
 // groupes ne doit pas lancer le moteur d'objectifs. La véritable exécution
@@ -109,7 +109,8 @@ const RECURRING_RE = /(chaque\s+(?:matin|jour|soir|semaine|nuit|midi|\d{1,2}\s*h
 // DM = 'goal'/campagne, pas une publication dans le groupe).
 const GROUPPOST_RE = /(poste|publie|partage|diffuse|balance|envoi[e]?)\w*[^]{0,80}?(groupe|groupes|canal|canaux)/i;
 // Réponse RÉELLE au dernier message (ou à un contact nommé), avec vérification.
-const REPLY_RE = /(r[ée]ponds?(?:\s|-)?(?:lui|leur|[àa]\b)|r[ée]pondre\s+[àa]\b|dis(?:\s|-)?lui|renvoie(?:\s|-)?lui|r[ée]pond(?:s|re)\s+(?:au|à|a)\b)/i;
+// NB : « \b » ne fonctionne pas après une lettre accentuée en JavaScript ("à\b" ne matche jamais) : on utilise (?=\s) à la place.
+const REPLY_RE = /(r[ée]ponds?(?:\s|-)?(?:lui|leur|(?:à|a)(?=\s))|r[ée]pondre\s+(?:à|a)(?=\s)|dis(?:\s|-)?lui|renvoie(?:\s|-)?lui|r[ée]pond(?:s|re)\s+(?:au|à|a)(?=\s))/i;
 // File d'attente du propriétaire : conversations qui attendent son intervention, paiements à valider, messages/alertes
 // importants (états RÉELS lus dans les conversations, actions en attente et alertes — jamais inventés).
 const OWNERQUEUE_RE = /((conversations?|discussions?|personnes?|contacts?|gens|messages?)[^]{0,40}(n[ée]cessit\w*|attend\w*|demand\w*|requi\w*|exig\w*)[^]{0,25}\b(mon|ma|ton|ta)\s+(intervention|r[ée]ponse|attention))|(qui\s+attend\w*\s+(ma|mon|ta|ton)\s+(r[ée]ponse|intervention))|((paiements?|preuves?\s+de\s+paiement)[^]{0,30}(en\s+attente|[àa]\s+valider|non\s+valid[ée]s?))|(en\s+attente\s+de\s+(validation|ma\s+d[ée]cision))|(ai[- ]?je\s+(re[çc]u|des?)[^]{0,30}(message|alerte)s?[^]{0,15}important\w*)|(j.?ai\s+(re[çc]u|des?)[^]{0,30}(message|alerte)s?[^]{0,15}important\w*)|(messages?\s+importants?)|(qu.?est[- ]ce\s+qui\s+(m.?attend|attend\s+ma|est\s+urgent))|(mes\s+alertes)|(reste[- ]t[- ]il\s+quelque\s+chose\s+[àa]\s+traiter)|(\b[àa]\s+traiter\b)/i;
@@ -124,7 +125,7 @@ const GROUPCAMPAIGN_STOP_RE = /(arr[êe]te\w*|stoppe\w*|annule\w*|suspend\w*)[^]
 const GROUPGOAL_RE = /objectifs?[^\n]{0,70}?\d[\d\s.,]*\s*(fcfa|f\s?cfa|xof|cfa|€|eur|euros?|usd|\$)/i;
 // Supervision : "qu'as-tu fait / statut de tes actions / rapport de tes envois".
 const ACTIONS_RE = /(qu.?as-?tu\s+fait|tes\s+actions|actions\s+r[ée]centes|statut\s+de[s]?\s+actions|rapport\s+de[s]?\s+(?:tes\s+)?(?:actions|envois)|historique\s+de[s]?\s+actions)/i;
-const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
+const GOAL_RE = /(\bcampagne|\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
 // Question FACTUELLE sur l'activité configurée dans l'onglet Services Métiers
 // (prix, tarif, produit, formation, offre, catalogue, règle, objectif). Le
 // chat doit y répondre depuis les VRAIES données (businessServices), jamais en
@@ -138,7 +139,7 @@ const BUSINESSINFO_RE = /((?:\bquel(?:le|s|les)?\b|\bcombien\b|c(?:'|’)?est\s+
 // permissions). Placé AVANT payment/account/businessinfo/goal.
 const CONFIGSVC_RE = /((cr[ée]e?r?|configur|param[èe]tr|enregistre?|ajoute?r?|mets?\s+en\s+place)\w*[^]{0,40}(service\s+m[ée]tier|nouveau\s+service|mon\s+service|activit[ée]|business))|((connect|branch|relie?|lie?)\w*[^]{0,30}(api|plateforme|passerelle|system\.?io))|(configure?r?\s+mon\s+api)/i;
 // Import de contacts en masse depuis un fichier joint dans le chat.
-const IMPORTCONTACTS_RE = /((importe?r?|charge?r?|ajoute?r?|int[èe]gre?r?)\s+(ces?|les?|mes?|ce|le|un|des)?\s*(contacts?|fichier|liste|excel|csv))|(importe?r?\s+(ce|le)\s+fichier)/i;
+const IMPORTCONTACTS_RE = /((importe?r?|charge?r?|ajoute?r?|int[èe]gre?r?)\s+(ces?|les?|mes?|mon|ma|ce|le|un|des)?\s*(contacts?|fichier|liste|excel|csv))|(importe?r?\s+(ce|le)\s+fichier)/i;
 // Génération d'un média (affiche/image/visuel) — hors publication de groupe.
 const GENMEDIA_RE = /(g[ée]n[èe]re?r?|cr[ée]e?r?|fabrique?r?|dessine?r?|fais(?:-|\s)moi|con[çc]ois)\w*[^]{0,25}(affiche|image|visuel|flyer|banni[èe]re|logo|illustration|poster|carte|design)/i;
 
@@ -179,6 +180,9 @@ function detectIntent(text, lastAssistantMessage) {
   if (RECURRING_RE.test(text)) return 'recurring';
   if (GROUPPOST_RE.test(text) && !/membre/i.test(text)) return 'grouppost';
   if (GROUPS_RE.test(text)) return 'groups';
+  // « relance mes prospects » = ACTION de campagne (objectif), pas une consultation du CRM ; « aide-moi à définir mon offre » = offre.
+  if (/\brelanc\w*\s+(?:mes|les|tous|toutes|ces)\s+(?:prospects?|clients?|contacts?)/i.test(text) && !/\?\s*$/.test(text)) return 'goal';
+  if (/(?:d[ée]finir|structurer|construire|pr[ée]ciser)\s+(?:mon|mes|ma|l['’])\s*(?:offres?|catalogue|produits?)/i.test(text)) return 'offer';
   if (CRM_RE.test(text)) return 'crm';
   if (REPORT_RE.test(text)) return 'report';
   if (PAYMENT_RE.test(text)) return 'payment';
@@ -190,6 +194,13 @@ function detectIntent(text, lastAssistantMessage) {
   // APRÈS les actions, AVANT 'goal' : "analyse mes ventes" reste un objectif,
   // "quel est le prix de ma formation ?" devient une consultation de données.
   if (BUSINESSINFO_RE.test(text)) return 'businessinfo';
+  // PILOTAGE d'une campagne existante (pause, reprise, annulation, statut, progression) : l'AGENT À OUTILS l'exécute réellement
+  // (pauseCampaign, resumeCampaign, cancelCampaign, getCampaignProgress…) — jamais un nouveau plan d'objectif. Seule la CRÉATION va à « goal ».
+  if (/\bcampagnes?\b/i.test(text)
+    && /(?:\bmets?\b|\bmet\b|\breprends?\b|\breprendre\b|\bannule\w*|\barr[êe]te\w*|\bstoppe\w*|\bsuspend\w*|\bpause\b|\bstatut\b|\bprogression\b|\bavancement\b|combien\s+de\s+messages|o[ùu]\s+en\s+est|\bd[ée]tails?\b)/i.test(text)
+    && !/(?:\blance\w*|\bcr[ée]e\w*|\bprogramme\w*|\bd[ée]marre\w*|\bnouvelle\b)/i.test(text)) return null;
+  // Une simple QUESTION d'explication (« comment ça marche », « c'est quoi ») n'est pas un objectif : conversation / agent à outils.
+  if (/(?:^|\s)(?:explique\w*|comment\s+(?:ça\s+|ca\s+)?(?:fonctionne|marche)|c['’]?est\s+quoi|qu['’]?est[- ]ce\s+que|[àa]\s+quoi\s+sert)/i.test(text)) return null;
   if (GOAL_RE.test(text)) return 'goal';
   return null;
 }
@@ -413,7 +424,7 @@ async function handleAdCampaign(text, history, tenantId, deps, last) {
         `Date du jour : ${today}. Ne remplis que ce qui est explicitement dit ; sinon chaîne vide.`,
         `Instruction : "${String(text).slice(0, 1500)}"`,
       ].join('\n');
-      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'ad_campaign_parse', tenant: tenantId }).then((r) => r.text));
+      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'ad_campaign_parse', tier: 'reasoning', tenant: tenantId }).then((r) => r.text));
       extra = extractJsonBlock(String(await llm(prompt) || '').trim()) || {};
     } catch (e) { extra = {}; }
     const per = parser.detectPeriod(text);
@@ -516,7 +527,7 @@ async function handleGroupCampaign(text, history, tenantId, deps, last) {
     // Service / produit : IA optionnelle (jamais les messages). Échec -> l'existant décide (service unique) ou on demande.
     try {
       const prompt = ['Extrais de cette instruction de campagne le nom du produit ou service vendu et du service métier si nommé. Réponds UNIQUEMENT en JSON : {"productName":"","serviceName":""}. Vide si non dit.', `Instruction : "${String(text).slice(0, 1200)}"`].join('\n');
-      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'group_campaign_parse', tenant: tenantId }).then((r) => r.text));
+      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'group_campaign_parse', tier: 'reasoning', tenant: tenantId }).then((r) => r.text));
       const ex = extractJsonBlock(String(await llm(prompt) || '').trim()) || {};
       if (ex.productName) args.productName = ex.productName; if (ex.serviceName) args.serviceName = ex.serviceName;
     } catch (e) { /* facultatif */ }
@@ -600,7 +611,7 @@ async function handleOwnerQueue(text, tenantId) {
 }
 
 async function handleMemory(text, tenantId, deps) {
-  const llm = deps.llm || ((prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'memory_summary', tenant: tenantId }).then((r) => r.text));
+  const llm = deps.llm || ((prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'memory_summary', tier: 'reasoning', tenant: tenantId }).then((r) => r.text));
   try {
     const out = await memoryQuery.answer(tenantId, text, { llm });
     return { text: out.text, actionLog: out.actionLog };

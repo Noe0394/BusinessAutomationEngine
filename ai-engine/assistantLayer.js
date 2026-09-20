@@ -80,7 +80,7 @@ function create(d) {
     conversationQueue.submit(`priv:${sanitize(tenantId)}:${channel}:${from}`, { text, messageId },
       async (items) => {
         const out = await conversationRouter.processBatch({ tenantId, channel, from, identity, items, hasAttachment }, {
-          send: (reply) => sendVia(tenantId, channel, from, reply), settings, llm: d.llm,
+          send: (reply) => sendVia(tenantId, channel, from, reply), settings, llm: d.llm, llmReasoning: d.llmReasoning,
         });
         // Le lot pris ensemble ressemble à une demande métier : on laisse le moteur existant répondre.
         if (out.mode === 'BUSINESS') {

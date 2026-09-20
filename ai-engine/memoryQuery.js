@@ -78,7 +78,11 @@ const isMemoryQuestion = (text) => {
     || /qu est ce (que|qu)[^?!.]{0,60}(m a|m ont|a|ont) (dit|ecrit|demande|repondu|envoye)/.test(n)
     || /(^| )qui (m a|a|m ont|ont) (parle|ecrit|demande|contacte|repondu)/.test(n)
     || /combien de [^?!.]{0,50}(ont|a) (demande|ecrit|parle|repondu|contacte)/.test(n)
-    || /(discussion|conversation)s? (avec|de|d)[^?!.]{0,40}(hier|aujourd|avant hier|cette semaine)/.test(n);
+    || /(discussion|conversation)s? (avec|de|d)[^?!.]{0,40}(hier|aujourd|avant hier|cette semaine)/.test(n)
+    // « Résume-moi ce que Marie m'a écrit cette semaine », « de quoi avons-nous parlé hier avec Awa ? »
+    || /(resume|resumer|recapitule|synthese)[^?!.]{0,40}(ce que|ce qu)[^?!.]{0,40}(m a|a|m ont|ont) (ecrit|dit|demande|envoye|repondu)/.test(n)
+    || /(ce que|ce qu)[^?!.]{0,30}(m a|m ont) (ecrit|dit|demande|envoye)/.test(n)
+    || /de quoi[^?!.]{0,40}(parle|discute|echange)/.test(n);
 };
 
 // Nom lisible d'un contact : jamais un JID/LID brut ni un ancien « numéro » qui serait en réalité un LID
