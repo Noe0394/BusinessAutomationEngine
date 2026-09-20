@@ -1,0 +1,48 @@
+{
+  "tenant": "real1",
+  "services": [
+    {
+      "id": "svc_mua3s1uj50gg9",
+      "name": "Épicerie et Charcuterie",
+      "type": "ecommerce",
+      "project": null,
+      "connection": {
+        "kind": "none",
+        "connectorType": null,
+        "baseUrl": null,
+        "authHeader": "X-API-Key",
+        "endpoints": null,
+        "apiKeyRef": null
+      },
+      "scopes": [],
+      "commercial": {
+        "price": 8000,
+        "promoPrice": null,
+        "currency": "FCFA",
+        "description": "",
+        "advantages": "",
+        "objections": "",
+        "responses": "",
+        "paymentTerms": "Orange Money 07 00 00 00 00",
+        "accessTerms": "",
+        "target": ""
+      },
+      "products": [],
+      "rules": [],
+      "objectives": [],
+      "capabilities": [],
+      "adCampaigns": [],
+      "status": "DRAFT",
+      "lastTest": null,
+      "history": [
+        {
+          "at": "2026-09-20T17:41:29.563Z",
+          "event": "Service créé"
+        }
+      ],
+      "createdAt": "2026-09-20T17:41:29.563Z",
+      "updatedAt": "2026-09-20T17:41:29.563Z"
+    }
+  ],
+  "updatedAt": "2026-09-20T17:41:29.563Z"
+}
