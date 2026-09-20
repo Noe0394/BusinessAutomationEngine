@@ -4984,6 +4984,38 @@ app.post('/api/admin/diag/send-test', requireAccess, async (req, res) => {
   res.json(Object.assign({ tenantId, channel: ch, to, number }, out));
 });
 
+// Diagnostic RÉEL de la couche d'assistance sur un compte connecté (admin uniquement) : session, réglages, groupes RÉELS et
+// statut administrateur, ciblage par mot-clé, complétude du Service métier, et — si `deliverAlert` — livraison réelle d'une
+// alerte dans le self-chat du propriétaire. N'ENVOIE RIEN dans un groupe ni à un contact.
+app.post('/api/admin/diag/assistant-check', requireAccess, async (req, res) => {
+  if (!req.isAdmin) return res.status(403).json({ error: 'Réservé à l\'administrateur.' });
+  const { tenantId, keyword, deliverAlert } = req.body || {};
+  if (!tenantId) return res.status(400).json({ error: 'tenantId requis.' });
+  const out = { tenantId };
+  try {
+    const entry = whatsappManager.peek(tenantId);
+    const session = entry && entry.session;
+    out.session = { exists: !!session, connected: !!(session && session.isConnected && session.isConnected()), paired: !!(session && session.isPaired && session.isPaired()) };
+    if (session && session.getSelfIds) { const ids = session.getSelfIds(); out.selfIds = { pn: ids.pn ? `…${ids.pn.split('@')[0].slice(-4)}` : null, lid: !!ids.lid }; }
+    const settings = await autoResponder.getSettings(tenantId);
+    out.settings = { whatsapp: !!settings.whatsapp, telegram: !!settings.telegram, alwaysOn: !!settings.alwaysOn, ownerChannelEnabled: require('./ai-engine/ownerChannel').isEnabled(settings) };
+    const svcs = await require('./ai-engine/businessServices').list(tenantId);
+    out.services = svcs.map((s) => ({ name: s.name, hasPrice: !!(s.commercial && s.commercial.price != null), hasPaymentTerms: !!(s.commercial && s.commercial.paymentTerms), adCampaigns: (s.adCampaigns || []).length }));
+    out.groupCampaigns = (await groupCampaigns.list(tenantId)).map((c) => ({ name: c.name, status: c.status, groups: c.groups.length }));
+    if (out.session.connected) {
+      const g = await intelligenceBridge.runtime.listGroups({ channel: 'WHATSAPP', tenantId });
+      const groups = (g && g.groups) || [];
+      out.groups = { total: groups.length, adminCount: groups.filter((x) => x.isAdmin).length, sample: groups.slice(0, 40).map((x) => ({ name: x.name, isAdmin: !!x.isAdmin, size: x.size })) };
+      if (keyword) { const t = await groupCampaigns.resolveTargets(tenantId, keyword, intelligenceBridge.runtime, 'WHATSAPP'); out.target = t.ok ? { adminGroups: t.groups.map((x) => x.name), notAdmin: t.notAdmin } : { error: t.error }; }
+      if (deliverAlert) {
+        const del = require('./ai-engine/ownerChannel').whatsappDeliverer({ peek: (t) => whatsappManager.peek(t), getSettings: (t) => autoResponder.getSettings(t) });
+        out.alertDelivery = await del(tenantId, `🔔 Test de la couche d'assistance — ${new Date().toISOString()}\nSi tu lis ce message dans ta conversation avec toi-même, les alertes propriétaire fonctionnent.`);
+      }
+    }
+  } catch (err) { out.error = err.message; }
+  res.json(out);
+});
+
 // ---------- SERVICES MÉTIERS (console de configuration métier) ----------
 // Gère les services professionnels de l'utilisateur (projets, produits, APIs,
 // comptes, permissions, règles, objectifs). Les secrets vont au coffre chiffré

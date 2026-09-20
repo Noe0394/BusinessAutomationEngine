@@ -388,3 +388,14 @@ test('câblage assistantLayer.groupEntry : message de groupe réel -> identité 
   assert.equal(lead.phoneNumber, '22670123123', 'numéro réel fourni par WhatsApp (participantPn), jamais déduit du LID');
   assert.equal(lead.groupName, 'Épicerie du Quartier');
 });
+
+test('groupe hors campagne : aucun traitement, aucune identité créée dans l\'annuaire', async () => {
+  const t = 't19'; await makeService(t); const rt = runtimeFor(GROUPS);
+  await createCampaign(t, rt, '2026-09-21T07:00:00Z');
+  const layer = assistantLayerMod.create({ autoResponder, getRuntime: () => ({ sendMessageVerified: async () => ({ status: 'SUCCESS' }) }), whatsappManager: {}, aiStudioStore: {}, chatOrchestrator: {}, llmFallbackEngine: {}, chatDeps: () => ({}) });
+  const session = { getIdentityHints: () => ({ senderJid: '55556666777788@lid', altJids: [], pushName: 'Inconnu' }) };
+  const r = await layer.groupEntry({ tenantId: t, session, msg: { key: { remoteJid: '1203630004@g.us', participant: '55556666777788@lid', id: 'Z9' } }, text: 'Ça m\'intéresse', from: '1203630004@g.us', messageId: 'Z9', hasAttachment: false });
+  assert.equal(r.reason, 'NOT_A_CAMPAIGN_GROUP');
+  const dir = await require('../ai-engine/storageAdapter').get('contact_identity', t, { contacts: {} });
+  assert.equal(Object.keys(dir.contacts).length, 0);
+});

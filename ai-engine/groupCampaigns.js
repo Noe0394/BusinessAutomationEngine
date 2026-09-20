@@ -95,6 +95,11 @@ async function create(tenant, spec) {
 }
 
 async function list(tenant) { return Object.values((await loadDoc(tenant)).campaigns).sort((a, b) => b.createdAt - a.createdAt); }
+// Ce groupe appartient-il à une campagne non arrêtée (y compris pendant la période de grâce) ? Évite tout traitement inutile des autres groupes.
+async function hasCampaignForGroup(tenant, groupJid, nowMs) {
+  const t = nowMs || Date.now();
+  return (await list(tenant)).some((c) => c.status !== 'stopped' && c.groups.some((g) => String(g.id) === String(groupJid)) && (c.status === 'active' || c.endAt + GRACE_MS > t));
+}
 async function get(tenant, id) { return (await loadDoc(tenant)).campaigns[id] || null; }
 
 async function findCampaign(tenant, ref) {
@@ -435,6 +440,6 @@ async function report(tenant, ref) {
 }
 
 module.exports = {
-  NS, LEADS_NS, resolveTargets, create, list, get, stop, setGoal, tick, tickAll, isInterest, buildOfferMessage,
+  NS, LEADS_NS, resolveTargets, create, list, get, hasCampaignForGroup, stop, setGoal, tick, tickAll, isInterest, buildOfferMessage,
   handleGroupMessage, leadForContact, ensureConversationOrigin, handleLeadProof, recordPaymentOutcome, continuationContext, report, findCampaign,
 };

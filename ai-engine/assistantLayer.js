@@ -115,6 +115,8 @@ function create(d) {
   const registerProof = (args) => require('./manualPaymentValidator').registerProof(args);
 
   async function groupEntry({ tenantId, session, msg, text, from, messageId, hasAttachment }) {
+    // Groupe hors campagne : aucun traitement (ni identité, ni annuaire) — les autres groupes ne sont pas concernés.
+    if (!(await groupCampaigns.hasCampaignForGroup(tenantId, from))) return { handled: false, reason: 'NOT_A_CAMPAIGN_GROUP' };
     const { senderJid, identity } = await groupSenderIdentity({ tenantId, session, msg });
     if (!senderJid || !identity) return { handled: false, reason: 'SENDER_UNKNOWN' };
     const proof = await groupCampaigns.handleLeadProof({ tenantId, identity, text, hasAttachment, messageId, jidForReply: senderJid }, { send: sendTo(tenantId), registerProof });
