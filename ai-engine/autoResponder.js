@@ -91,6 +91,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   // Contact issu d'une campagne Facebook Ads : le message d'accueil exact est déjà parti ; on continue à partir de là.
   let adCtx = '';
   try { adCtx = await require('./adCampaigns').continuationContext(tenant, channel, from); } catch (e) { adCtx = ''; }
+  try { const gctx = await require('./groupCampaigns').continuationContext(tenant, channel, from); if (gctx) adCtx = [adCtx, gctx].filter(Boolean).join('\n'); } catch (e) { /* facultatif */ }
   const prompt = [
     personaManager.personaSystemPrompt('default'),
     adCtx,

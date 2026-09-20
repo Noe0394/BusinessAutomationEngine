@@ -32,7 +32,7 @@ const LOCAL_ONLY_NAMESPACES = new Set([
   'message_history', 'conversation_index', 'conversation_state', 'closer_sessions',
   'crm_contacts', 'activity', 'chat_uploads', 'chat_intelligent_sessions',
   'task_queue', 'campaign_drafts', 'notifications', 'campaign_fallbacks',
-  'contact_identity', 'alerts', 'pending_actions', 'owner_channel',
+  'contact_identity', 'alerts', 'pending_actions', 'owner_channel', 'group_campaigns', 'group_leads', 'ad_entries',
 ]);
 function isMirrored(namespace) {
   if (process.env.GITHUB_MIRROR_USER_DATA === 'true') return true;

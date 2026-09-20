@@ -384,5 +384,5 @@ async function continuationContext(tenant, channel, from) {
 
 module.exports = {
   SOURCE, NS, TAG_VERIFIED, TAG_DECLARED, extractAdOrigin, matchesEntryMessage, canonTokens, normalizeCampaign, listAll, statusOf, isWithinPeriod,
-  configure, setStatus, isNewContact, evaluate, handleEntry, continuationContext,
+  configure, setStatus, isNewContact, evaluate, handleEntry, continuationContext, resolveService,
 };

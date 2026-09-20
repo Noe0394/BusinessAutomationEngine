@@ -943,12 +943,15 @@ function createSession(tenantId) {
       return Object.values(groups || {}).map((g) => {
         const participants = g.participants || [];
         let isAdmin = false;
-        if (meNum) {
-          const mine = participants.find((p) => {
-            const idNum = String(p.id || '').split('@')[0].split(':')[0];
-            const jidNum = String(p.jid || '').split('@')[0].split(':')[0];
-            return idNum === meNum || jidNum === meNum;
-          });
+        // Le compte peut apparaître par son NUMÉRO ou par son LID selon le mode d'adressage du groupe : on compare aux deux
+        // identifiants du compte connecté (sinon un vrai administrateur serait vu comme simple membre).
+        const selfLid = (getSelfIds().lid || '').split('@')[0];
+        const meNums = [meNum, selfLid].filter(Boolean);
+        if (meNums.length) {
+          const mine = participants.find((p) => [p.id, p.jid, p.lid].some((x) => {
+            const num = String(x || '').split('@')[0].split(':')[0];
+            return num && meNums.includes(num);
+          }));
           isAdmin = !!(mine && (mine.admin === 'admin' || mine.admin === 'superadmin'));
         }
         return {

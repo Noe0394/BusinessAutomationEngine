@@ -112,7 +112,7 @@ async function ensureAction(tenantId, record) {
 
 // PHASE 1 + 2. Enregistre une demande en attente et prévient le propriétaire.
 // Retourne { ack, record, created, duplicate } ; `ack` = message à renvoyer au client (jamais un accès).
-async function registerProof({ tenantId, channel, from, text, hasAttachment, courseId, product, proofMessageId, proofMediaId, identity }) {
+async function registerProof({ tenantId, channel, from, text, hasAttachment, courseId, product, proofMessageId, proofMediaId, identity, origin }) {
   const email = extractEmail(text);
   if (!email) return { ack: null };
 
@@ -160,6 +160,8 @@ async function registerProof({ tenantId, channel, from, text, hasAttachment, cou
     declaredAmount: amount,
     proofMessageId: proofMessageId || null,
     proofMediaId: proofMediaId || null,
+    // Origine commerciale (campagne de groupes) : groupe, campagne, service, produit — retrouver exactement la transaction.
+    origin: origin || null,
     proofExcerpt: String(text || '').slice(0, 300),
     hasAttachment: hasAttachment === true,
     attempt,
@@ -175,6 +177,7 @@ async function registerProof({ tenantId, channel, from, text, hasAttachment, cou
     '⚠️ NOUVEAU PAIEMENT À VALIDER',
     '──────────────────────────────',
     `• Client : ${label} (${channelLabel})`,
+    ...(origin && origin.groupName ? [`• Groupe d'origine : ${origin.groupName}`] : []),
     `• Email fourni : ${email}`,
     `• Produit / Formation : ${record.courseId || record.product || '(à préciser à la validation)'}`,
     `• Montant déclaré : ${amount || 'non précisé'}`,
@@ -191,9 +194,9 @@ async function registerProof({ tenantId, channel, from, text, hasAttachment, cou
   // Alerte générale (WhatsApp du propriétaire) : reliée à l'action précise, idempotente.
   const raised = await alertCenter.raise(tenantId, {
     type: 'PAYMENT_VALIDATION_REQUIRED',
-    title: `Preuve de paiement reçue de ${label}`,
-    body: [`Email : ${email}`, `Produit : ${record.courseId || record.product || 'à préciser'}`, `Montant déclaré : ${amount || 'non précisé'}`, record.hasAttachment ? 'Reçu joint.' : ''].filter(Boolean).join('\n'),
-    hint: `Réponds « OUI » pour valider ou « NON » pour refuser.`,
+    title: origin && origin.groupName ? `Preuve de paiement reçue — ${label}` : `Preuve de paiement reçue de ${label}`,
+    body: [origin && origin.groupName ? `Groupe : ${origin.groupName}` : '', origin && origin.productName ? `Offre : ${origin.productName}` : '', `Email : ${email}`, `Produit : ${record.courseId || record.product || 'à préciser'}`, `Montant déclaré : ${amount || 'non précisé'}`, record.hasAttachment ? 'Reçu joint.' : ''].filter(Boolean).join('\n'),
+    hint: origin && origin.groupName ? 'Veuillez confirmer : réponds « OUI » pour valider ou « NON » pour refuser.' : `Réponds « OUI » pour valider ou « NON » pour refuser.`,
     pendingActionId: action.pendingActionId, contact: identity || null, contactLabel: label,
     conversationId: record.customerConversationId, idempotencyKey: `alert:${idem}`, notify: true,
   }).catch((err) => { console.error('manualPaymentValidator — échec d\'alerte propriétaire :', err.message); return null; });
@@ -271,6 +274,7 @@ async function applyDecision(tenantId, record, decision, opts) {
     await saveRecord(record);
     const clientReply = 'Merci pour ton envoi. Nous n\'avons pas pu confirmer ce paiement pour l\'instant. Vérifie ta transaction et renvoie-nous une preuve correcte (capture du reçu + ton email) : on la regarde tout de suite.';
     await tell(clientReply);
+    try { await require('./groupCampaigns').recordPaymentOutcome(tenantId, record, 'REJECTED'); } catch (e) { /* suivi secondaire */ }
     await alertCenter.raise(tenantId, { type: 'TASK_DONE', title: `Paiement refusé — ${who}`, body: 'Aucune activation. Le client a été invité à renvoyer une preuve.', pendingActionId: action.pendingActionId, notify: false }).catch(() => {});
     return {
       kind: 'rejected', target: record, clientReply, pendingActionId: action.pendingActionId,
@@ -330,6 +334,7 @@ async function applyDecision(tenantId, record, decision, opts) {
     : 'Connecte-toi avec cet email pour accéder à ton contenu.';
   const clientReply = `C'est validé ! 🎉 Ton compte a été créé (${record.email}). ${accessLine}`;
   await tell(clientReply);
+  try { await require('./groupCampaigns').recordPaymentOutcome(tenantId, record, 'CONFIRMED'); } catch (e) { /* suivi secondaire */ }
   await alertCenter.raise(tenantId, {
     type: exec.result && exec.result.accountCreated ? 'ACCOUNT_CREATED' : 'TRAINING_ACTIVATED',
     title: `Accès activé — ${who}`, body: `${record.email} · formation « ${courseId} » (confirmé par l'API).`,

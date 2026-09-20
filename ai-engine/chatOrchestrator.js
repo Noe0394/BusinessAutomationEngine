@@ -116,6 +116,12 @@ const OWNERQUEUE_RE = /((conversations?|discussions?|personnes?|contacts?|gens|m
 // Configuration d'une campagne publicitaire Facebook/Meta (Click-to-WhatsApp) : message d'accueil exact pour les nouveaux
 // contacts qui en proviennent. Exige à la fois la publicité Facebook ET une notion de contacts/messages reçus.
 const ADCAMPAIGN_RE = /((facebook|meta|\bfb\b)\s*ads?\b|publicit[ée]s?\s+(?:sur\s+)?(?:facebook|meta)|\bpub\s+(?:sur\s+)?facebook|campagne\s+(?:publicitaire\s+)?(?:sur\s+)?(?:facebook|meta)|annonces?\s+(?:sur\s+)?facebook)[^]{0,600}(nouveau|nouveaux|contacts?|prospects?|[ée]cri(?:vent|ront|t)\b|arriv\w+|re[çc]oiv\w+|message\s+d.accueil|message\s+automatique|message\s+pr[ée]par[ée])|((nouveau|nouveaux|contacts?|prospects?)[^]{0,120}(facebook|meta)\s*ads?\b)/i;
+// Campagne programmée sur les groupes ADMINISTRÉS dont le nom contient un mot-clé (durée, horaires, messages, intérêt -> paiement).
+const GROUPCAMPAIGN_TARGET_RE = /(cible\w*|envoi\w*|diffuse\w*|poste\w*|publie\w*|lance\w*|programme\w*|lanc\w*)[^]{0,160}groupes?[^]{0,160}(nom|intitul\w+|titre)[^]{0,30}(contien\w+|contenant|comportant|comprenant)/i;
+const GROUPCAMPAIGN_TIME_RE = /(pendant|durant|chaque\s+jour|tous\s+les\s+jours|\d{1,2}\s*h\b|\bmatin\b|\bmidi\b|\bsoir\b|semaine|\bmois\b|\bjours?\b)/i;
+const GROUPCAMPAIGN_REPORT_RE = /((rapport|bilan|suivi|r[ée]sultats?|progression|avancement|statistiques?|o[ùu]\s+en\s+est|o[ùu]\s+en\s+sommes)[^]{0,70}campagne[^]{0,70}(groupes?|[ée]picerie)|campagne\s+de\s+groupes?[^]{0,50}(rapport|bilan|r[ée]sultats?|progress|avancement)|objectifs?[^]{0,50}(atteint|progress|o[ùu]\s+en|avancement))/i;
+const GROUPCAMPAIGN_STOP_RE = /(arr[êe]te\w*|stoppe\w*|annule\w*|suspend\w*)[^]{0,50}campagne[^]{0,50}groupes?/i;
+const GROUPGOAL_RE = /objectifs?[^\n]{0,70}?\d[\d\s.,]*\s*(fcfa|f\s?cfa|xof|cfa|€|eur|euros?|usd|\$)/i;
 // Supervision : "qu'as-tu fait / statut de tes actions / rapport de tes envois".
 const ACTIONS_RE = /(qu.?as-?tu\s+fait|tes\s+actions|actions\s+r[ée]centes|statut\s+de[s]?\s+actions|rapport\s+de[s]?\s+(?:tes\s+)?(?:actions|envois)|historique\s+de[s]?\s+actions)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
@@ -143,10 +149,12 @@ const GENMEDIA_RE = /(g[ée]n[èe]re?r?|cr[ée]e?r?|fabrique?r?|dessine?r?|fais(
 // intention en cours sur toute reclassification par mots-clés du nouveau
 // message, exactement comme pour image/vidéo/livre.
 function detectIntent(text, lastAssistantMessage) {
-  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply', 'adcampaign'];
+  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply', 'adcampaign', 'groupcampaign'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
     return lastAssistantMessage.intent;
   }
+  // Campagnes de groupes administrés (création, rapport, arrêt) : AVANT « recurring » / « grouppost » / « goal ».
+  if ((GROUPCAMPAIGN_TARGET_RE.test(text) && GROUPCAMPAIGN_TIME_RE.test(text)) || GROUPCAMPAIGN_REPORT_RE.test(text) || GROUPCAMPAIGN_STOP_RE.test(text)) return 'groupcampaign';
   // Campagne Facebook Ads (message d'accueil des nouveaux contacts) : AVANT « offer » / « goal » qui la happaient.
   if (ADCAMPAIGN_RE.test(text)) return 'adcampaign';
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
@@ -446,6 +454,103 @@ async function handleAdCampaign(text, history, tenantId, deps, last) {
     c.criteria.adIds.length || c.criteria.sourceUrls.length ? `• Annonce reconnue par : ${[...c.criteria.adIds, ...c.criteria.sourceUrls].join(', ')}` : 'ℹ️ L\'origine Facebook n\'est marquée « vérifiée » que si WhatsApp fournit réellement les données de l\'annonce ; un contact reconnu seulement par son message d\'entrée est marqué « source déclarée », jamais présenté comme prouvé.',
   ];
   return { text: lines.join('\n'), toolCall: { name: 'configureFacebookAdCampaign', state: call.state, result: { campaignId: r.campaignId, serviceId: r.serviceId } }, actionLog: [{ icon: '📣', label: `Campagne « ${c.name} » configurée`, status: 'done' }] };
+}
+
+// 'groupcampaign' — campagnes programmées sur les groupes ADMINISTRÉS (outils createGroupCampaign / setGroupCampaignGoal /
+// getGroupCampaignReport / stopGroupCampaign). Les vrais noms de groupes viennent de WhatsApp ; le statut administrateur est
+// vérifié ; aucun envoi n'est simulé.
+async function handleGroupCampaign(text, history, tenantId, deps, last) {
+  const gp = require('./groupCampaignParser');
+  const d = deps || {};
+  const fmtDate = (t) => new Date(t).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+  const draft = last && last.isPlanningQuestion && last.intent === 'groupcampaign' && last.gcDraft ? last.gcDraft : null;
+  const ask = (q, args, awaiting) => ({ text: q, isPlanningQuestion: true, intent: 'groupcampaign', gcDraft: { args, awaiting }, actionLog: [{ icon: '👥', label: 'Campagne de groupes : information manquante', status: 'warning' }] });
+  const kwHint = gp.extractKeyword(text);
+
+  if (!draft && GROUPCAMPAIGN_STOP_RE.test(text)) {
+    const call = await toolRegistry.execute(tenantId, 'stopGroupCampaign', { campaign: kwHint || undefined }, {});
+    if (call.state !== 'SUCCESS') return { text: `Je n'ai pas pu arrêter la campagne (${(call.error && call.error.message) || call.state})${call.error && call.error.choices ? ` : ${call.error.choices.join(', ')}` : ''}.` };
+    return { text: `⏹️ Campagne « ${call.result.name} » arrêtée : plus aucun message programmé ne partira.`, actionLog: [{ icon: '⏹️', label: 'Campagne de groupes arrêtée', status: 'done' }] };
+  }
+
+  if (!draft && GROUPCAMPAIGN_REPORT_RE.test(text) && !GROUPCAMPAIGN_TARGET_RE.test(text)) {
+    const call = await toolRegistry.execute(tenantId, 'getGroupCampaignReport', { campaign: kwHint || undefined }, {});
+    if (call.state !== 'SUCCESS') return { text: `Pas de rapport disponible (${(call.error && call.error.message) || call.state}).` };
+    const r = call.result;
+    const L = [`📊 Campagne « ${r.name} » — ${r.status === 'active' ? 'en cours' : (r.status === 'completed' ? 'terminée' : 'arrêtée')} (${fmtDate(r.startAt)} → ${fmtDate(r.endAt)})`,
+      `• Groupes ciblés (${r.groups.length}) : ${r.groups.join(', ')}`,
+      `• Messages réellement envoyés : ${r.messagesSent}${r.messagesFailed ? ` (échecs/ignorés : ${r.messagesFailed})` : ''}`,
+      `• Prospects intéressés : ${r.leads} · offres envoyées : ${r.offersSent} · preuves reçues : ${r.proofsReceived}`,
+      `• Paiements : ${r.paymentsPending} en attente de ta validation · ${r.paymentsConfirmed} confirmé(s)${r.confirmedAmountKnownFor ? ` (${r.confirmedAmount} au total, montants déclarés par les clients)` : ''}`];
+    if (r.note) L.push(`ℹ️ ${r.note}`);
+    if (r.goal) L.push(`🎯 Objectif ${r.goal.period ? 'du ' + r.goal.period : ''} : ${r.goal.amount} ${r.goal.currency} — atteint à ${r.goal.progressPercent}% (reste ${r.goal.remaining} ${r.goal.currency})`);
+    else L.push('🎯 Aucun objectif défini pour cette campagne.');
+    return { text: L.join('\n'), toolCall: { name: 'getGroupCampaignReport', state: call.state }, actionLog: [{ icon: '📊', label: `Rapport « ${r.name} »`, status: 'done' }] };
+  }
+
+  const parsed = gp.parseInstruction(text);
+  // Objectif seul (« Objectif du mois : 1 000 000 FCFA ») : rattaché à la campagne existante.
+  if (!draft && parsed.goal && !GROUPCAMPAIGN_TARGET_RE.test(text)) {
+    const call = await toolRegistry.execute(tenantId, 'setGroupCampaignGoal', { amount: parsed.goal.amount, currency: parsed.goal.currency, period: parsed.goal.period, campaign: kwHint || undefined }, {});
+    if (call.state !== 'SUCCESS') return { text: `Je n'ai pas pu enregistrer l'objectif (${(call.error && call.error.message) || call.state})${call.error && call.error.choices ? ` : ${call.error.choices.join(', ')}` : ''}.` };
+    return { text: `🎯 Objectif enregistré pour « ${call.result.name} » : ${call.result.goal.amount} ${call.result.goal.currency}${call.result.goal.period ? ' (' + call.result.goal.period + ')' : ''}. Je suivrai les paiements CONFIRMÉS (montants déclarés) et je te donnerai la progression réelle.`, actionLog: [{ icon: '🎯', label: 'Objectif enregistré', status: 'done' }] };
+  }
+
+  // Création : on assemble les champs (instruction + réponses aux questions précédentes).
+  const args = draft ? Object.assign({}, draft.args) : {};
+  if (draft && draft.awaiting === 'messages') {
+    const q = require('./adCampaignParser').quotedBlocks(text).map((b) => b.text);
+    args.messages = (q.length ? q : [text.trim()]).join('\n|||\n');
+  } else if (draft && draft.awaiting === 'service') {
+    args.serviceName = text.trim().replace(/^["«“]|["»”]$/g, ''); args.createService = /^(nouveau|cr[ée]e)/i.test(text.trim()) ? true : args.createService;
+  } else if (draft && draft.awaiting === 'days') {
+    const du = gp.extractDuration(text); if (du) args.days = du.days;
+  } else if (draft && draft.awaiting === 'times') {
+    const tm = gp.extractTimes(text); if (tm.length) args.times = tm.join(',');
+  } else {
+    if (parsed.keyword) args.keyword = parsed.keyword;
+    if (parsed.duration) args.days = parsed.duration.days;
+    if (parsed.times.length) args.times = parsed.times.join(',');
+    if (parsed.messages.length) args.messages = parsed.messages.join('\n|||\n');
+    if (parsed.goal) { args.goalAmount = parsed.goal.amount; args.goalCurrency = parsed.goal.currency; args.goalPeriod = parsed.goal.period; }
+    // Service / produit : IA optionnelle (jamais les messages). Échec -> l'existant décide (service unique) ou on demande.
+    try {
+      const prompt = ['Extrais de cette instruction de campagne le nom du produit ou service vendu et du service métier si nommé. Réponds UNIQUEMENT en JSON : {"productName":"","serviceName":""}. Vide si non dit.', `Instruction : "${String(text).slice(0, 1200)}"`].join('\n');
+      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'group_campaign_parse', tenant: tenantId }).then((r) => r.text));
+      const ex = extractJsonBlock(String(await llm(prompt) || '').trim()) || {};
+      if (ex.productName) args.productName = ex.productName; if (ex.serviceName) args.serviceName = ex.serviceName;
+    } catch (e) { /* facultatif */ }
+  }
+  if (!args.keyword) return ask('Quel mot-clé doit contenir le nom des groupes ciblés ?', args, 'keyword');
+  if (!args.days) return ask('Pendant combien de temps (ex. 3 jours, 1 semaine, 1 mois) ?', args, 'days');
+  if (!args.times) return ask('À quelles heures envoyer les messages (ex. 8h, 12h et 18h) ?', args, 'times');
+  if (!args.messages) return ask('Quels messages dois-je envoyer ? Écris-les entre guillemets « … » (un par horaire, ou un seul pour tous) : je ne les reformulerai pas.', args, 'messages');
+
+  const call = await toolRegistry.execute(tenantId, 'createGroupCampaign', args, { runtime: d.runtime });
+  if (call.state !== 'SUCCESS') {
+    const e = call.error || {};
+    if (e.code === 'SERVICE_REQUIRED') {
+      const choices = e.choices || [];
+      return ask(`À quel service métier / produit rattacher cette campagne ?${choices.length ? ` Services existants : ${choices.map((c) => `« ${c} »`).join(', ')}. Réponds par le nom, ou « nouveau <nom> » pour en créer un.` : ' Donne-moi le nom du produit ou service vendu.'}`, args, 'service');
+    }
+    return { text: `Je n'ai pas pu créer la campagne : ${e.message || e.code || call.state}`, actionLog: [{ icon: '⚠️', label: 'Échec campagne de groupes', status: 'error' }] };
+  }
+  const c = call.result.campaign;
+  const svc = (await businessServices.list(tenantId)).find((s) => s.id === c.serviceId);
+  const missing = [];
+  if (svc) { const cm = svc.commercial || {}; if (cm.price == null && !(svc.products || []).some((p) => p && p.price != null)) missing.push('le prix'); if (!cm.paymentTerms) missing.push('les numéros / instructions de dépôt'); }
+  const L = [
+    `✅ Campagne « ${c.name} » programmée (service « ${c.serviceName} »).`,
+    `• Groupes ciblés — tu y es administrateur (${c.groups.length}) : ${c.groups.map((g) => g.name).join(', ')}`,
+    ...(call.result.notAdmin && call.result.notAdmin.length ? [`• Ignorés (tu n'y es pas administrateur) : ${call.result.notAdmin.join(', ')}`] : []),
+    `• Du ${fmtDate(c.startAt)} au ${fmtDate(c.endAt)} · horaires : ${c.slots.map((s) => s.time).join(', ')} · arrêt automatique à la fin`,
+    ...c.slots.map((s) => `   ${s.time} → « ${s.message.length > 90 ? s.message.slice(0, 90) + '…' : s.message} »`),
+    'ℹ️ Les créneaux déjà passés aujourd\'hui ne sont pas envoyés rétroactivement.',
+    '• Un membre qui manifeste son intérêt reçoit en privé l\'offre de ton Service métier (prix + instructions de paiement) ; sa preuve de paiement te sera remontée avec une référence PA-XXXX pour ta confirmation.',
+    ...(c.goal ? [`🎯 Objectif enregistré : ${c.goal.amount} ${c.goal.currency}${c.goal.period ? ' (' + c.goal.period + ')' : ''}.`] : []),
+    ...(missing.length ? [`⚠️ Dans le service « ${c.serviceName} », il manque : ${missing.join(' et ')}. Je ne les inventerai pas : complète-les avant que quelqu'un ne s'intéresse.`] : []),
+  ];
+  return { text: L.join('\n'), toolCall: { name: 'createGroupCampaign', state: call.state, result: { campaignId: c.id } }, actionLog: [{ icon: '👥', label: `Campagne « ${c.name} » : ${c.groups.length} groupe(s)`, status: 'done' }] };
 }
 
 // 'ownerqueue' — ce qui attend le propriétaire : lecture des états RÉELS (aucune liste inventée).
@@ -1205,6 +1310,11 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
   const confirmed = await agentLoop.resolvePending({ tenantId, sessionId, text }, { ctx: { runtime: d.runtime || null } }).catch(() => null);
   if (confirmed) return confirmed;
 
+  // « Objectif du mois : 1 000 000 FCFA » : rattaché à la campagne de groupes s'il en existe une (sinon comportement historique).
+  if (GROUPGOAL_RE.test(text) && !(lastAssistantMessage && lastAssistantMessage.isPlanningQuestion)) {
+    try { if ((await require('./groupCampaigns').list(tenantId)).length) return handleGroupCampaign(text, history, tenantId, d, lastAssistantMessage); } catch (e) { /* repli */ }
+  }
+
   const intent = detectIntent(text, lastAssistantMessage);
   if (!intent) {
     // Aucune intention à motif connu : l'AGENT À OUTILS prend le relais — le LLM
@@ -1230,6 +1340,7 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'goal': return handleGoal(text, sessionKey, tenantId, d);
     case 'report': return handleReport(text, tenantId, d);
     case 'inbox': return handleInbox(text, tenantId, d);
+    case 'groupcampaign': return handleGroupCampaign(text, history, tenantId, d, lastAssistantMessage);
     case 'adcampaign': return handleAdCampaign(text, history, tenantId, d, lastAssistantMessage);
     case 'ownerqueue': return handleOwnerQueue(text, tenantId);
     case 'memory': return handleMemory(text, tenantId, d);

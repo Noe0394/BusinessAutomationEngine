@@ -13,6 +13,7 @@ const alertCenter = require('./alertCenter');
 const ownerChannel = require('./ownerChannel');
 const contactCrm = require('./contactCrm');
 const adCampaigns = require('./adCampaigns');
+const groupCampaigns = require('./groupCampaigns');
 
 const DEFAULT_DEBOUNCE_MS = Math.max(0, parseInt(process.env.AUTO_REPLY_DEBOUNCE_MS, 10) || 1500);
 const sanitize = (t) => String(t || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'unknown';
@@ -62,6 +63,7 @@ function create(d) {
 
     // Classification rapide par message : le métier suit le flux existant, inchangé.
     const state = await conversationState.get(tenantId, channel, from);
+    if (state.groupOrigin) return { handled: false, reason: 'GROUP_LEAD' }; // prospect issu d'un groupe : conversation commerciale
     if (state.ad) return { handled: false, reason: 'AD_CONTACT' }; // contact issu d'une campagne : conversation commerciale
     let crm = null; try { crm = await contactCrm.getContact(tenantId, channel, contactCrm.identityOf(from)); } catch (e) { crm = null; }
     const quick = conversationRouter.classify(text, { crmContact: crm, state, hasAttachment });
@@ -96,6 +98,35 @@ function create(d) {
   async function adEntry({ tenantId, channel, msg, text, from, messageId, identity }) {
     if (String(channel).toUpperCase() !== 'WHATSAPP' || !from || d.autoResponder.isGroupChat(channel, from)) return { handled: false, reason: 'NOT_APPLICABLE' };
     return adCampaigns.handleEntry({ tenantId, channel, from, messageId, text, msg, identity }, { send: (reply) => sendVia(tenantId, channel, from, reply) });
+  }
+
+  // --- Campagnes de groupes : membre intéressé / preuve de paiement (expéditeur RÉEL, jamais l'id du groupe) -------------
+  async function groupSenderIdentity({ tenantId, session, msg }) {
+    const hints = session && typeof session.getIdentityHints === 'function' ? session.getIdentityHints(msg) : null;
+    const senderJid = (hints && hints.senderJid) || (msg && msg.key && msg.key.participant) || null;
+    if (!senderJid) return { senderJid: null, identity: null };
+    const identity = await contactIdentity.resolveContact(tenantId, {
+      channel: 'WHATSAPP', jid: senderJid, altJids: (hints && hints.altJids) || [], contactName: hints && hints.savedName || null,
+      pushName: (hints && hints.pushName) || (msg && msg.pushName) || null, knownName: (hints && hints.knownName) || null,
+    });
+    return { senderJid, identity };
+  }
+  const sendTo = (tenantId) => (to, text) => sendVia(tenantId, 'WHATSAPP', to, text);
+  const registerProof = (args) => require('./manualPaymentValidator').registerProof(args);
+
+  async function groupEntry({ tenantId, session, msg, text, from, messageId, hasAttachment }) {
+    const { senderJid, identity } = await groupSenderIdentity({ tenantId, session, msg });
+    if (!senderJid || !identity) return { handled: false, reason: 'SENDER_UNKNOWN' };
+    const proof = await groupCampaigns.handleLeadProof({ tenantId, identity, text, hasAttachment, messageId, jidForReply: senderJid }, { send: sendTo(tenantId), registerProof });
+    if (proof.handled) return proof;
+    return groupCampaigns.handleGroupMessage({ tenantId, groupJid: from, senderJid, identity, text, messageId }, { send: sendTo(tenantId) });
+  }
+
+  async function leadDm({ tenantId, jid, identity, text, hasAttachment, messageId }) {
+    if (!identity || !identity.contactId) return { handled: false, reason: 'NO_IDENTITY' };
+    const lead = await groupCampaigns.ensureConversationOrigin(tenantId, jid, identity);
+    if (!lead) return { handled: false, reason: 'NOT_A_LEAD' };
+    return groupCampaigns.handleLeadProof({ tenantId, identity, text, hasAttachment, messageId, jidForReply: jid }, { send: sendTo(tenantId), registerProof });
   }
 
   // --- Canal propriétaire ------------------------------------------------------------------------------------
@@ -157,7 +188,7 @@ function create(d) {
     }
   }
 
-  return { resolveIdentity, route, adEntry, handleOwnerMessage, start, ownerDeps, isConfiguredOwner: ownerChannel.isConfiguredOwner };
+  return { resolveIdentity, route, adEntry, groupEntry, leadDm, handleOwnerMessage, start, ownerDeps, isConfiguredOwner: ownerChannel.isConfiguredOwner };
 }
 
 module.exports = { create };

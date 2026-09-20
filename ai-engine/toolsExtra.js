@@ -479,6 +479,54 @@ const TOOLS = {
     async execute(args, ctx) { return require('./adCampaigns').setStatus(ctx.tenant, args.campaign, args.active === true); },
   },
 
+  // ================= CAMPAGNES DE GROUPES ADMINISTRÉS (Service Métier + scheduler) =================
+  createGroupCampaign: {
+    description: 'Crée une campagne programmée qui cible TOUS les groupes WhatsApp dont le nom contient un mot-clé ET où le compte connecté est réellement administrateur : durée, horaires multiples, messages fournis, service/produit concerné, objectif. La liste des groupes est figée avec leurs vrais noms. Les membres intéressés reçoivent en privé l\'offre du Service métier.',
+    permission: null, risk: 'WRITE',
+    inputSchema: {
+      keyword: { type: 'string', required: true, description: 'Mot-clé contenu dans le NOM des groupes.' },
+      days: { type: 'number', required: true, description: 'Durée en jours.' },
+      times: { type: 'string', required: true, description: 'Horaires HH:MM séparés par des virgules (ex. 08:00,12:00,18:00).' },
+      messages: { type: 'string', required: true, description: 'Messages fournis, séparés par une ligne « ||| » (1 message = pour tous les horaires ; autant que d\'horaires = un par horaire).' },
+      serviceName: { type: 'string' }, productName: { type: 'string' }, courseId: { type: 'string' }, name: { type: 'string' },
+      goalAmount: { type: 'number' }, goalCurrency: { type: 'string' }, goalPeriod: { type: 'string' }, createService: { type: 'boolean' },
+    },
+    resultSchema: { campaignId: 'string' }, errorSchema: { code: 'string' },
+    async execute(args, ctx) {
+      const gc = require('./groupCampaigns'); const parser = require('./groupCampaignParser');
+      const times = String(args.times || '').split(/[,;\s]+/).map((t) => t.trim()).filter((t) => /^\d{1,2}:\d{2}$/.test(t)).map((t) => t.padStart(5, '0')).sort();
+      const messages = String(args.messages || '').split(/\n?\|\|\|\n?/).map((m) => m.trim()).filter(Boolean);
+      const slots = parser.assignMessages(times, messages);
+      const target = await gc.resolveTargets(ctx.tenant, args.keyword, ctx.runtime, 'WHATSAPP');
+      if (!target.ok) return fail(target.error === 'NOT_CONNECTED' ? 'WHATSAPP_NOT_CONNECTED' : target.error, target.error === 'NOT_CONNECTED' ? 'WhatsApp n\'est pas connecté.' : undefined, true);
+      if (!target.groups.length) return { ok: false, error: { code: 'NO_ADMIN_GROUP', message: target.notAdmin.length ? `Des groupes correspondent mais tu n'y es pas administrateur : ${target.notAdmin.join(', ')}.` : `Aucun groupe ne contient « ${args.keyword} » (${target.total} groupe(s) au total).`, notAdmin: target.notAdmin } };
+      const r = await gc.create(ctx.tenant, {
+        keyword: args.keyword, groups: target.groups, days: args.days, slots, name: args.name, serviceName: args.serviceName, productName: args.productName,
+        courseId: args.courseId, createService: args.createService, goal: args.goalAmount ? { amount: Number(args.goalAmount), currency: args.goalCurrency || 'FCFA', period: args.goalPeriod || null } : null,
+      });
+      if (r.ok) r.result.notAdmin = target.notAdmin;
+      return r;
+    },
+  },
+  listGroupCampaigns: {
+    description: 'Liste les campagnes de groupes (statut, groupes ciblés, horaires, messages envoyés).', permission: null, risk: 'READ', inputSchema: {},
+    async execute(args, ctx) { const all = await require('./groupCampaigns').list(ctx.tenant); return { ok: true, result: { count: all.length, campaigns: all.map((c) => ({ id: c.id, name: c.name, status: c.status, groups: c.groups.map((g) => g.name), slots: c.slots.map((s) => s.time), endAt: c.endAt, sent: c.sends.filter((x) => x.ok).length })) } }; },
+  },
+  stopGroupCampaign: {
+    description: 'Arrête une campagne de groupes (par nom ou identifiant).', permission: null, risk: 'LOW_WRITE', inputSchema: { campaign: { type: 'string' } },
+    async execute(args, ctx) { return require('./groupCampaigns').stop(ctx.tenant, args.campaign); },
+  },
+  setGroupCampaignGoal: {
+    description: 'Définit l\'objectif commercial d\'une campagne de groupes (ex. 1 000 000 FCFA sur le mois).', permission: null, risk: 'LOW_WRITE',
+    inputSchema: { amount: { type: 'number', required: true }, currency: { type: 'string' }, period: { type: 'string' }, campaign: { type: 'string' } },
+    async execute(args, ctx) { return require('./groupCampaigns').setGoal(ctx.tenant, args.campaign, { amount: Number(args.amount), currency: args.currency || 'FCFA', period: args.period || null }); },
+  },
+  getGroupCampaignReport: {
+    description: 'Rapport RÉEL d\'une campagne de groupes : messages envoyés par créneau, prospects, preuves reçues, paiements confirmés, progression vers l\'objectif.', permission: null, risk: 'READ',
+    inputSchema: { campaign: { type: 'string' } },
+    async execute(args, ctx) { return require('./groupCampaigns').report(ctx.tenant, args.campaign); },
+  },
+
   // ================= CONTINUITÉ (protection -> mode assisté) =================
   getCampaignFallback: {
     description: 'Liste les campagnes basculées en mode assisté (protection réseau) avec leur fiche de continuité et la file manuelle restante.',

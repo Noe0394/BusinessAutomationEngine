@@ -4922,6 +4922,23 @@ async function runRecurringTasksTick() {
     recurringTickRunning = false;
   }
 }
+// CAMPAGNES DE GROUPES (ai-engine/groupCampaigns.js) : même scheduler (tick d'une minute), verrou propre pour ne pas se chevaucher.
+const groupCampaigns = require('./ai-engine/groupCampaigns');
+let groupCampaignsTickRunning = false;
+async function runGroupCampaignsTick() {
+  if (groupCampaignsTickRunning) return;
+  groupCampaignsTickRunning = true;
+  try {
+    await groupCampaigns.tickAll({ listGroups: (p) => intelligenceBridge.runtime.listGroups(p), sendToGroups: (p) => intelligenceBridge.runtime.sendToGroups(p) });
+  } catch (err) {
+    console.error('Cycle des campagnes de groupes :', err.message);
+  } finally {
+    groupCampaignsTickRunning = false;
+  }
+}
+const groupCampaignsInterval = setInterval(() => { runGroupCampaignsTick().catch(() => {}); }, 60 * 1000);
+if (groupCampaignsInterval.unref) groupCampaignsInterval.unref();
+
 const recurringTasksInterval = setInterval(() => {
   runRecurringTasksTick().catch((err) => console.error('Erreur pendant le cycle des tâches récurrentes :', err));
 }, 60 * 1000);
@@ -5296,7 +5313,10 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       return; // pas de texte exploitable : on n'alimente ni la FAQ ni le closer sur du vide.
     }
   }
-  if (!text) return;
+  // Une capture d'écran envoyée SANS légende n'a pas de texte : elle doit quand même atteindre le suivi des preuves de paiement.
+  const attachOnly = !text && channel === 'WHATSAPP' && hasIncomingAttachment(channel, msg);
+  if (!text && !attachOnly) return;
+  const isGroupMsg = channel === 'WHATSAPP' && /@g\.us$/i.test(String(extractFromId(channel, msg) || ''));
 
   // IDENTITÉ RÉELLE du contact (nom -> vrai numéro -> « non identifié ») : un JID/LID n'est jamais un numéro de téléphone
   // (ai-engine/contactIdentity.js). Utilisée par les notifications, la mémoire et le routage ci-dessous.
@@ -5318,6 +5338,19 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       console.error(`Canal propriétaire (tenant "${tenantId}") :`, err.message);
     }
   }
+
+  // CAMPAGNES DE GROUPES : intérêt d'un membre / preuve de paiement d'un prospect (expéditeur RÉEL, jamais l'identifiant du groupe).
+  try {
+    if (channel === 'WHATSAPP') {
+      const gc = isGroupMsg
+        ? await assistant.groupEntry({ tenantId, session, msg, text, from: extractFromId(channel, msg), messageId: extractMessageId(channel, msg), hasAttachment: hasIncomingAttachment(channel, msg) })
+        : await assistant.leadDm({ tenantId, jid: extractFromId(channel, msg), identity, text, hasAttachment: hasIncomingAttachment(channel, msg), messageId: extractMessageId(channel, msg) });
+      if (gc && gc.handled) return;
+    }
+  } catch (err) {
+    console.error(`groupCampaigns (tenant "${tenantId}") :`, err.message);
+  }
+  if (!text) return; // pièce jointe seule hors suivi de paiement : comportement historique (ignorée)
 
   // Historique PERSISTANT (>= 7 jours) — enregistre CHAQUE message entrant
   // (tous types), pour la mémoire opérationnelle du contexte, la lecture de
@@ -5367,7 +5400,7 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
   // AUTO_PAYMENT_VALIDATION=true (sinon le vendeur voit la fiche et répond).
   {
     const proofFrom = extractFromId(channel, msg);
-    if (proofFrom && manualPaymentValidator.looksLikePaymentProof(text, hasIncomingAttachment(channel, msg))) {
+    if (proofFrom && !isGroupMsg && manualPaymentValidator.looksLikePaymentProof(text, hasIncomingAttachment(channel, msg))) {
       const ack = await manualPaymentValidator.handleClientProof({
         tenantId, channel, from: proofFrom, text, hasAttachment: hasIncomingAttachment(channel, msg),
         proofMessageId: extractMessageId(channel, msg), identity,

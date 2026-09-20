@@ -121,3 +121,17 @@ Origine RÉELLE seulement : `contextInfo.externalAdReply` (sourceType=ad, source
 (jamais `source_facebook_ads`). Nouveau contact strict : aucun CRM, aucun message en mémoire (7 j), aucun état, aucun passage au registre.
 Limite : la mémoire ne remonte qu'à 7 jours ; un contact plus ancien sans trace locale peut être vu comme nouveau. Hook : `index.js`
 (`assistant.adEntry`, avant le routage privé et le répondeur). Tests : `test/ad-campaigns.test.js`.
+
+## Campagnes de groupes administrés — 2026-09-20
+Code : `ai-engine/groupCampaigns.js` (ciblage, scheduler, intérêt, preuve, rapport), `groupCampaignParser.js` (mot-clé, durée, horaires,
+messages entre « », objectif), outils `createGroupCampaign` / `listGroupCampaigns` / `stopGroupCampaign` / `setGroupCampaignGoal` /
+`getGroupCampaignReport` (`toolsExtra.js`), intention `groupcampaign` (`chatOrchestrator.js`, donc aussi via le self-chat), hooks
+`assistant.groupEntry` / `assistant.leadDm` (`assistantLayer.js`, `index.js`), tick d'une minute dans `index.js`.
+Règles : nom du groupe insensible casse/accents ; seuls les groupes où le compte est RÉELLEMENT admin (contrôle à la création ET à
+chaque envoi ; `getGroupsSummary` compare numéro ET LID) ; liste figée ; 1 envoi par créneau/jour (claim avant envoi) ; créneau raté
+> 90 min = non envoyé ; créneaux passés le jour de création non rattrapés ; arrêt automatique + 3 jours de grâce pour les réponses.
+Intérêt (intentClassifier) -> offre en privé composée UNIQUEMENT du Service métier (prix, `commercial.paymentTerms`) ; champ manquant =
+dit + alerte, jamais inventé. Preuve : rattachée par `contactId` EXACT (capture sans légende acceptée -> email demandé) ->
+`manualPaymentValidator.registerProof(origin)` -> `PA-XXXX` -> OUI/NON -> API -> vérification -> suivi (leads, objectif).
+Limites : le rapport n'additionne que les montants DÉCLARÉS des paiements CONFIRMÉS ; message privé à un LID non joignable = alerte ;
+Telegram non couvert ; réponses aux membres dans les groupes non administrés jamais traitées.
