@@ -66,6 +66,7 @@ const humanContextEngine = require('./lib/intelligence/human-context-engine');
 // createVpsBridge) fournit le runtime/moteur RÉELS déjà branchés — jamais
 // dupliqués ici.
 const chatOrchestrator = require('./ai-engine/chatOrchestrator');
+const contactIdentity = require('./ai-engine/contactIdentity');
 const voiceProcessor = require('./ai-engine/voiceProcessor');
 let intelligenceBridge = null;
 
@@ -788,7 +789,8 @@ async function handleNaturalMessage(message, session, campaignEngine) {
     if (!participants || participants.length === 0) {
       return `Aucun participant trouvé pour le groupe "${group.subject}".`;
     }
-    const lines = participants.map((p, i) => `${i + 1}. ${(p.id || '').split('@')[0]}`);
+    // Nom / vrai numéro seulement : un @lid n'est pas un numéro (contactIdentity).
+    const lines = participants.map((p, i) => `${i + 1}. ${contactIdentity.resolveIdentity({ jid: p.jid || p.id, altJids: [p.id], pushName: p.name || p.notify }).label}`);
     return `Membres de "${group.subject}" (${participants.length}) :\n${lines.join('\n')}`;
   }
 
@@ -5296,6 +5298,27 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
   }
   if (!text) return;
 
+  // IDENTITÉ RÉELLE du contact (nom -> vrai numéro -> « non identifié ») : un JID/LID n'est jamais un numéro de téléphone
+  // (ai-engine/contactIdentity.js). Utilisée par les notifications, la mémoire et le routage ci-dessous.
+  const identity = await assistant.resolveIdentity({ channel, tenantId, session, msg }).catch((err) => {
+    console.error(`contactIdentity (tenant "${tenantId}", ${channel}) :`, err.message);
+    return null;
+  });
+
+  // Numéro PROPRIÉTAIRE explicitement configuré (settings.ownerNumbers — jamais déduit) : ses messages vont au Chat
+  // Intelligent, comme ceux de son self-chat. Un client n'atteint jamais ce chemin.
+  if (channel === 'WHATSAPP' && identity && identity.phoneNumber) {
+    try {
+      const ownerSettings = await autoResponder.getSettings(tenantId);
+      if (assistant.isConfiguredOwner(ownerSettings, identity)) {
+        await assistant.handleOwnerMessage({ tenantId, session, msg, configuredOwner: true });
+        return;
+      }
+    } catch (err) {
+      console.error(`Canal propriétaire (tenant "${tenantId}") :`, err.message);
+    }
+  }
+
   // Historique PERSISTANT (>= 7 jours) — enregistre CHAQUE message entrant
   // (tous types), pour la mémoire opérationnelle du contexte, la lecture de
   // l'inbox et la réponse au dernier message (voir ai-engine/messageHistory.js).
@@ -5317,7 +5340,8 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       const realSenderId = isGroupChat && channel === 'WHATSAPP' && msg.key && msg.key.participant
         ? String(msg.key.participant)
         : (isGroupChat && channel === 'TELEGRAM' && msg.senderId ? String(msg.senderId) : null);
-      const senderPhone = realSenderId ? String(realSenderId).split('@')[0] : null;
+      // Téléphone RÉEL uniquement (JID téléphonique) : un LID ou un id Telegram n'est pas un numéro.
+      const senderPhone = realSenderId && channel === 'WHATSAPP' ? (contactIdentity.parseJid(realSenderId).phone || null) : null;
       // Nom du groupe : métadonnées Baileys (msg.groupName via adapter) ou
       // best-effort — le nom réel est enrichi par l'adapter si disponible.
       const groupName = isGroupChat ? ((msg && msg.groupName) || null) : null;
@@ -5346,6 +5370,7 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     if (proofFrom && manualPaymentValidator.looksLikePaymentProof(text, hasIncomingAttachment(channel, msg))) {
       const ack = await manualPaymentValidator.handleClientProof({
         tenantId, channel, from: proofFrom, text, hasAttachment: hasIncomingAttachment(channel, msg),
+        proofMessageId: extractMessageId(channel, msg), identity,
       }).catch((err) => {
         console.error(`manualPaymentValidator — échec du traitement d'une preuve (tenant "${tenantId}", ${channel}) :`, err.message);
         return null;
@@ -5367,9 +5392,18 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
   {
     const from = extractFromId(channel, msg);
     const messageId = extractMessageId(channel, msg);
-    const senderName = channel === 'WHATSAPP'
+    const senderName = (identity && identity.displayName) || (channel === 'WHATSAPP'
       ? (msg && msg.pushName) || null
-      : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
+      : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null);
+
+    // COUCHE D'ASSISTANCE GÉNÉRALE : conversations privées/quotidiennes (réponse sûre, alerte du propriétaire, handoff)
+    // avant le moteur commercial. Les conversations métier retombent sur autoResponder/Jarvis, inchangés.
+    try {
+      const routed = await assistant.route({ tenantId, channel, session, msg, text, from, messageId, hasAttachment: hasIncomingAttachment(channel, msg), identity });
+      if (routed && routed.handled) return;
+    } catch (err) {
+      console.error(`assistantLayer.route (tenant "${tenantId}", ${channel}) :`, err.message);
+    }
     const autoOut = await autoResponder.handleIncoming(
       { tenantId, channel, from, name: senderName, text, messageId },
       { runtime: intelligenceBridge && intelligenceBridge.runtime },
@@ -5485,7 +5519,8 @@ async function handleHistoricalMessage({ channel, tenantId, session, msg }) {
   const realSenderId = isGroupChat && channel === 'WHATSAPP' && msg.key && msg.key.participant
     ? String(msg.key.participant)
     : (isGroupChat && channel === 'TELEGRAM' && msg.senderId ? String(msg.senderId) : null);
-  const senderPhone = realSenderId ? String(realSenderId).split('@')[0] : null;
+  // Téléphone RÉEL uniquement (JID téléphonique) : un LID ou un id Telegram n'est pas un numéro.
+      const senderPhone = realSenderId && channel === 'WHATSAPP' ? (contactIdentity.parseJid(realSenderId).phone || null) : null;
   const groupName = isGroupChat ? ((msg && msg.groupName) || null) : null;
   const messageType = hasIncomingAttachment(channel, msg) ? (msg.mimetype || 'media') : 'text';
 
@@ -5503,6 +5538,51 @@ async function handleHistoricalMessage({ channel, tenantId, session, msg }) {
     console.error(`Échec d'enregistrement d'un message historique Telegram (tenant "${tenantId}") :`, err.message);
   });
 }
+
+// Dépendances du Chat Intelligent (chatOrchestrator.handle) — mêmes que celles de l'onglet « Chat Intelligent » du tableau
+// de bord ; réutilisées par le canal propriétaire (WhatsApp) pour que ce soit le MÊME cerveau, pas un second chatbot.
+function buildChatDeps(tenantId) {
+  return {
+    runtime: intelligenceBridge && intelligenceBridge.runtime,
+    engineFor: intelligenceBridge && intelligenceBridge.engineFor,
+    humanContext: humanContextEngine,
+    deliverToClient: async ({ channel, from, text: clientText }) => {
+      if (!from) return;
+      if (channel === 'TELEGRAM') {
+        const { session } = telegramManager.getOrCreate(tenantId);
+        if (session && typeof session.sendMessage === 'function') await session.sendMessage(from, clientText);
+      } else {
+        const { session } = whatsappManager.getOrCreate(tenantId);
+        if (session && typeof session.sendMessage === 'function') await session.sendMessage(from, clientText);
+      }
+    },
+    executeOptions: { env: process.env },
+    generateImage: async (prompt) => {
+      const r = await imageAiEngine.generateImage({ prompt: String(prompt || '').slice(0, 600), width: 1024, height: 1024 });
+      return { buffer: r.buffer, mimetype: r.mimetype };
+    },
+  };
+}
+
+// Couche d'assistance générale : identité des contacts, routage privé/métier, alertes, canal propriétaire (self-chat).
+const assistant = require('./ai-engine/assistantLayer').create({
+  whatsappManager,
+  telegramManager,
+  autoResponder,
+  getRuntime: () => intelligenceBridge && intelligenceBridge.runtime,
+  chatOrchestrator,
+  aiStudioStore,
+  llmFallbackEngine,
+  platformOrchestrator: require('./ai-engine/platformOrchestrator'),
+  chatDeps: buildChatDeps,
+  transcribeVoice: async (session, msg) => {
+    if (!isVoiceNote('WHATSAPP', msg)) return '';
+    const buffer = await session.downloadIncomingMedia(msg);
+    const { text: raw, language } = await voiceProcessor.transcribeAudio(buffer, 'audio/ogg', 'voice.ogg');
+    return voiceProcessor.translateToFrench(raw, language);
+  },
+});
+assistant.start();
 
 whatsappManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
 // Mémoire 7 jours : historique WhatsApp, messages rattrapés hors ligne et messages écrits depuis le téléphone.

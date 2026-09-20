@@ -42,3 +42,21 @@ liée. Un test avec `deviceId` bidon lie la clé de test à cet appareil, et la 
 Pour tester un refus, utiliser une clé temporaire créée pour l'occasion (puis la supprimer), jamais la clé de test réelle.
 Restauration si cela arrive : `licenses.unbindDevice(clé)` puis `licenses.verifyKey(clé, <vrai id d'appareil>)` sur le VPS,
 `POST /admin/unbind` + `POST /admin/sync` sur Cloudflare, et corriger la copie GitHub de `licenses.json`.
+
+## Passage réel — couche d'assistance générale (à exécuter EN UNE FOIS après déploiement)
+Prérequis : branche déployée sur la VM (procédure CLAUDE.md), répondeur WhatsApp activé sur le compte de test, un second téléphone
+(« contact »), le téléphone du compte de test pour son self-chat. Ne rien pousser vers RIEA/Firebase.
+
+| # | Action | Attendu |
+|---|---|---|
+| 1 | Contact : « Salut, tu vas bien ? » | réponse naturelle, AUCUNE notification |
+| 2 | Contact : « Est-ce que ta maman est à la maison ? » | réponse d'attente sans invention ; self-chat : « 🔔 <nom> vient de t'écrire… » |
+| 3 | Contact : 5 messages en 10 s | 1 notification puis 1 récapitulatif, pas 5 |
+| 4/5/6 | Contact enregistré / numéro seul / contact sans nom | nom / « +226 … » / « Contact WhatsApp non identifié » — jamais de longue série de chiffres |
+| 7 | Self-chat : « Bonjour » | réponse dans le self-chat (signature invisible) |
+| 8 | Self-chat : « Qui m'a écrit aujourd'hui ? » | liste réelle |
+| 9 | Self-chat : « Donne-moi les conversations qui nécessitent mon intervention » | états réels |
+| 10 | Contact : « Voici mon reçu 5000 FCFA email: <email de test> » puis self-chat « OUI » | PA-XXXX notifié ; appel API ; client notifié SEULEMENT si l'API confirme. ⚠️ crée un vrai accès RIEA : utiliser un email jetable |
+| 11 | Idem puis « NON » | aucune activation, client invité à renvoyer une preuve ; nouvelle preuve = nouveau PA |
+| 12 | Onglet WhatsApp/Telegram : coller une liste, Excel, photo | tableau + compteur « ajoutés à la liste d'envoi » ; cible « Liste importée » cochée ; envoi utilise la liste |
+Diagnostic : `docker exec cyrus-super-assistant-backend node scripts/jarvis-inspect.js <tenant>`.

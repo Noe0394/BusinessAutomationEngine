@@ -10319,7 +10319,15 @@
             { key: 'name', label: 'Nom' }, { key: 'number', label: 'Numéro' },
             { key: 'state', label: 'Statut', map: (s) => CMP_STATUS_LABELS[s] || s }, { key: 'reason', label: 'Détail' },
           ]));
-          use.hidden = !(data.counts.valid > 0 || (opts.extra && opts.extra(text).length));
+          // SOURCE DE VÉRITÉ UNIQUE : les numéros valides entrent immédiatement dans la liste réellement utilisée par le
+          // moteur d'envoi (state.importedContacts / tgDmImportedContacts). Plus de tableau affiché sans que la cible
+          // « Liste importée » ni « Lancer l'envoi » ne les voient.
+          const validRows = last.rows.filter((r) => r.state === 'valid');
+          if (validRows.length || (opts.extra && opts.extra(text).length)) {
+            const n = opts.onValid(validRows, text);
+            out.appendChild(cmpEl('p', n + ' contact(s) ajouté(s) à la liste d\'envoi (doublons ignorés) et prêts à être utilisés.', { style: 'color:#22c55e;' }));
+          }
+          use.hidden = true;
         } catch (err) {
           if (err.message !== 'unauthorized') out.textContent = err.message;
         }
@@ -10339,6 +10347,9 @@
         let added = 0;
         valid.forEach((r) => { if (!seen.has(String(r.number))) { seen.add(String(r.number)); state.importedContacts.push({ telephone: r.number, nom: r.name || '' }); added += 1; } });
         renderImportedContacts();
+        // La cible « Liste importée » est sélectionnée : « Lancer l'envoi » lit la même liste.
+        const importRadio = document.querySelector('input[name="target-mode"][value="import"]');
+        if (importRadio && state.importedContacts.length) { importRadio.checked = true; importRadio.dispatchEvent(new Event('change')); }
         return added;
       },
     });

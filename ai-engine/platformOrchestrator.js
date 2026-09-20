@@ -52,6 +52,8 @@ function formatNetworkStatusMessage(evt) {
 // dépôt : l'y intégrer directement est la façon la plus simple de la rendre
 // visible, cohérente avec "il informe l'utilisateur dans le chat" (§1.1).
 async function notifyTenantChat(tenantId, text, actionLog) {
+  // Filet de sécurité : aucun identifiant technique WhatsApp (JID/LID) ne doit atteindre l'utilisateur.
+  text = require('./contactIdentity').scrubTechnicalIds(text);
   const sessions = await aiStudioStore.listSessions(tenantId);
   let sessionId = sessions[0] && sessions[0].id;
   if (!sessionId) {

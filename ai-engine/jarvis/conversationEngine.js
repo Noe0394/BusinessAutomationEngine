@@ -303,6 +303,9 @@ function detectSubject(text, productNames) {
 async function noteHumanActivity(tenantId, channel, from, minutes) {
   const state = await conversationState.get(tenantId, channel, from);
   state.humanUntil = Date.now() + (Number(minutes) > 0 ? Number(minutes) : 30) * 60 * 1000;
+  // Handoff : le propriétaire écrit lui-même -> HUMAN_ACTIVE (l'automatisation se tait, le contexte est conservé).
+  state.private = null;
+  state.handoff = Object.assign({}, state.handoff || {}, { state: 'HUMAN_ACTIVE', at: Date.now(), until: state.humanUntil });
   await conversationState.save(state);
   return state.humanUntil;
 }
@@ -360,7 +363,13 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
       else if (decision.reopen && state.optOut !== true) await crm.clearOptOut(tenantId, channel, from);
     } catch (e) { /* le CRM ne bloque jamais la conversation */ }
   }
-  if (decision.escalate && d.notify) { try { await d.notify(`Conversation ${channel} ${from} (${cls.intent}) : intervention du vendeur recommandée.`); } catch (e) { /* non bloquant */ } }
+  if (decision.escalate && d.notify) {
+    try {
+      // Jamais l'identifiant technique (JID/LID) : nom, sinon vrai numéro, sinon « non identifié » (contactIdentity).
+      const who = await require('../contactIdentity').labelFor(tenantId, channel, from, name ? { pushName: name } : null);
+      await d.notify(`Conversation ${channel} avec ${who} (${cls.intent}) : intervention du vendeur recommandée.`);
+    } catch (e) { /* non bloquant */ }
+  }
 
   return { action, reason, intent: cls.intent, intents: cls.intents, state: state.state, kind: decision.kind, text: replyText, out, sent, guard: guardInfo && guardInfo.issue };
 }

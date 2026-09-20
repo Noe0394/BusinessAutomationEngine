@@ -162,10 +162,12 @@ async function handleCustomerMessage({ tenantId, channel, from, text }) {
     session.escalated = true;
     await saveSession(tenantId, channel, from, session);
     const label = channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+    // Nom / vrai numéro, jamais l'identifiant technique (JID/LID) — voir ai-engine/contactIdentity.js.
+    const who = await require('./contactIdentity').labelFor(tenantId, channel, from);
     platformOrchestrator.notifyTenantChat(
       tenantId,
-      `🔥 Prospect chaud à haute valeur sur ${label} (${from}) — ${escalationReason === 'HIGH_VALUE_SIGNAL' ? 'signal d\'un besoin sur mesure/volume important' : 'hésitation persistante malgré un intérêt élevé'}. Tu veux reprendre la main ?`,
-      [{ icon: '🔥', label: `Escalade prospect ${from}`, status: 'warning' }],
+      `🔥 Prospect chaud à haute valeur sur ${label} (${who}) — ${escalationReason === 'HIGH_VALUE_SIGNAL' ? 'signal d\'un besoin sur mesure/volume important' : 'hésitation persistante malgré un intérêt élevé'}. Tu veux reprendre la main ?`,
+      [{ icon: '🔥', label: `Escalade prospect ${who}`, status: 'warning' }],
     ).catch((err) => console.error('emotionalCloser — échec de notification d\'escalade :', err.message));
     return 'Je transmets votre demande directement à notre équipe pour un suivi personnalisé — on revient vers vous très vite !';
   }

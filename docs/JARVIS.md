@@ -89,3 +89,25 @@ l'arrêt (simple note), les plans d'objectif sont exécutés directement (`CHAT_
 Un compte permanent répond en continu sur WhatsApp ET Telegram (pause explicite possible : `paused`). Le gardien
 (`ai-engine/responderKeeper.js`) vérifie chaque minute les sessions, relance une session appairée mais coupée (au plus une tentative
 toutes les 5 min), et ces sessions ne sont jamais évincées. État : `GET /api/auto-responder/status`, outil `getAutoReplyStatus`.
+
+## Couche d'assistance générale (2026-09-20) — identité, alertes, conversations privées, canal propriétaire
+
+Le Chat Intelligent reste le cerveau ; WhatsApp du propriétaire n'est qu'une interface vers lui.
+
+| Module | Rôle |
+|---|---|
+| `contactIdentity.js` | Résolveur central : nom -> vrai numéro -> « Contact non identifié ». Un LID/JID de groupe/id Telegram n'est JAMAIS un numéro ; `scrubTechnicalIds` en filet de sécurité. Annuaire local d'alias (LID <-> numéro appris de WhatsApp). |
+| `conversationRouter.js` | Classe chaque message (privé banal / personnel / sensible / urgent / rappel / métier…), décide AUTO_REPLY / AUTO_REPLY_NOTIFY / HUMAN_REQUIRED / SILENT / BUSINESS, réponses d'attente non répétitives, handoff (AI_ACTIVE, HUMAN_REQUIRED, HUMAN_ACTIVE, AI_RESUMED). L'arbitrage IA ne peut que renforcer la prudence. |
+| `alertCenter.js` | 6 niveaux, politique (`alertPolicy` dans les réglages : `minOwnerLevel`, `notifyCasual`, `aggregateWindowMs`…), agrégation, idempotence, persistance locale. |
+| `pendingActions.js` | Actions en attente `PA-XXXX` (PENDING→APPROVED→EXECUTING→DONE/FAILED, REJECTED, EXPIRED), transitions atomiques. |
+| `ownerChannel.js` | Self-chat -> Chat Intelligent, OUI/NON, reprise de conversation, anti-boucle (marqueur invisible, ids d'envoi, plafond/minute, écho). `settings.ownerNumbers` = autres numéros propriétaires, explicitement configurés. |
+| `assistantLayer.js` | Colle index.js <-> modules ; démarre les livreurs d'alertes (WhatsApp propriétaire puis tchat du dashboard). |
+
+Réglages : le canal propriétaire suit l'activation du répondeur WhatsApp (`ownerChannel:false` pour le couper). Routage actif
+seulement si le répondeur est activé pour le canal ; `assistant:false` le coupe ; `firstContactMode:'private'` traite aussi
+la toute première salutation d'un inconnu comme privée (par défaut : accueil commercial si une activité est configurée).
+Paiements : `manualPaymentValidator` — preuve -> action `PA-XXXX` -> OUI/NON -> API -> VÉRIFICATION (`ok`/`uid`/`account_created`
+dans la réponse ; sinon FAILED et le client n'est pas prévenu). Tests : `contact-identity`, `alert-center`, `conversation-router`,
+`payment-owner-flow`, `owner-channel`.
+Limites connues : Telegram n'a pas de self-chat exploitable ici (canal propriétaire = WhatsApp) ; routage privé désactivé si le
+répondeur du canal est désactivé ; classification par signaux + contexte (pas un LLM) ; tests réels WhatsApp/RIEA non exécutés.

@@ -71,7 +71,8 @@ function normalizeMessage(tenantId, channel, m) {
   const tsSec = Math.min(tsRaw, nowSec); // un horodatage futur (horloge décalée) est ramené à maintenant
   const party = String(m.party || '');
   const isGroup = deriveConversationType(m.chatId || party, m) === 'GROUP';
-  const phoneOf = (id) => String(id || '').split('@')[0];
+  // numéro RÉEL uniquement (JID téléphonique) : un LID / id de groupe n'est pas un numéro (voir contactIdentity).
+  const phoneOf = (id) => require('./contactIdentity').parseJid(id).phone || (String(id || '').includes('@') ? '' : String(id || ''));
   const entry = {
     channel: ch,
     direction: m.direction === 'out' ? 'out' : 'in',

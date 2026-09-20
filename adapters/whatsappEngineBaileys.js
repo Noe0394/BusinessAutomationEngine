@@ -139,6 +139,58 @@ function createSession(tenantId) {
       || '';
   }
 
+  // Correspondance LID -> JID téléphonique, apprise UNIQUEMENT à partir de ce que WhatsApp fournit (événements de
+  // contacts, senderPn/participantPn/remoteJidAlt des messages). Jamais déduite des chiffres d'un identifiant.
+  const lidToPn = new Map();
+  function learnLidPair(a, b) {
+    const isLid = (x) => /@lid$/i.test(String(x || ''));
+    const isPn = (x) => /@s\.whatsapp\.net$/i.test(String(x || ''));
+    if (isLid(a) && isPn(b)) lidToPn.set(String(a), String(b));
+    else if (isLid(b) && isPn(a)) lidToPn.set(String(b), String(a));
+  }
+
+  // Indices d'identité d'un message entrant (pour ai-engine/contactIdentity.js). `phoneNumber` est renseigné
+  // seulement si un vrai JID téléphonique est disponible ; sinon null.
+  function getIdentityHints(msg) {
+    const key = (msg && msg.key) || {};
+    const primary = key.remoteJid || null;
+    const isGroup = /@g\.us$/i.test(String(primary || ''));
+    const senderJid = isGroup ? (key.participant || null) : primary;
+    const alts = [key.remoteJidAlt, key.senderPn, key.participantPn, key.participantAlt].filter(Boolean);
+    alts.forEach((a) => learnLidPair(senderJid, a));
+    const known = senderJid && lidToPn.get(String(senderJid));
+    if (known) alts.push(known);
+    const pnJid = [senderJid].concat(alts).find((j) => /^\d{6,15}(?::\d+)?@s\.whatsapp\.net$/i.test(String(j || '')));
+    return {
+      jid: primary,
+      senderJid,
+      altJids: alts.map(String),
+      pushName: msg && msg.pushName ? String(msg.pushName) : null,
+      knownName: (senderJid && contactNames.get(senderJid)) || (pnJid && contactNames.get(pnJid)) || null,
+      phoneNumber: pnJid ? String(pnJid).split('@')[0].split(':')[0] : null,
+      isGroup,
+    };
+  }
+
+  // Identifiants du compte connecté (numéro + LID) : sert à reconnaître la conversation « à soi-même » (self-chat).
+  function getSelfIds() {
+    const out = { pn: null, lid: null };
+    try {
+      const u = (sock && sock.user) || (authState && authState.creds && authState.creds.me) || {};
+      if (u.id) out.pn = String(u.id).split(':')[0].split('@')[0] + '@s.whatsapp.net';
+      const lid = u.lid || (authState && authState.creds && authState.creds.me && authState.creds.me.lid);
+      if (lid) out.lid = String(lid).split(':')[0].split('@')[0] + '@lid';
+    } catch (e) { /* ids inconnus */ }
+    return out;
+  }
+
+  function isSelfChatJid(jid) {
+    const ids = getSelfIds();
+    const base = (j) => String(j || '').split(':')[0].split('@')[0] + '@' + String(j || '').split('@')[1];
+    const b = base(jid);
+    return !!jid && ((ids.pn && b === ids.pn) || (ids.lid && b === ids.lid));
+  }
+
   function recordIncomingMessage(msg) {
     try {
       const from = msg.key && msg.key.remoteJid;
@@ -146,9 +198,11 @@ function createSession(tenantId) {
       const hasMedia = !!(msg.message && (msg.message.imageMessage || msg.message.videoMessage
         || msg.message.audioMessage || msg.message.documentMessage || msg.message.stickerMessage));
       const tsRaw = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp);
+      // `number` = vrai numéro UNIQUEMENT (JID téléphonique) ; un @lid n'est pas un numéro (contactIdentity).
+      const idHints = getIdentityHints(msg);
       recentMessages.push({
         from,
-        number: String(from).split('@')[0],
+        number: idHints.phoneNumber,
         name: msg.pushName || contactNames.get(from) || null,
         text: extractMessageText(msg) || '',
         hasMedia,
@@ -227,6 +281,20 @@ function createSession(tenantId) {
       });
     } catch (err) { /* jamais bloquant */ }
   }
+  // Canal propriétaire : messages écrits par l'utilisateur dans SA propre conversation (self-chat). Ce ne sont pas des
+  // messages clients ni de l'« activité humaine » sur une conversation : ils vont vers l'interface propriétaire.
+  const ownerMessageListeners = [];
+  function onOwnerMessage(callback) { ownerMessageListeners.push(callback); }
+  function checkOwnerMessage(msg) {
+    // Court délai : l'écho d'un message envoyé par Cyrus peut arriver avant que son identifiant soit mémorisé.
+    setTimeout(() => {
+      if (!msg.key || sentByCyrus.has(String(msg.key.id))) return; // message généré par Cyrus : jamais retraité
+      ownerMessageListeners.forEach((callback) => {
+        try { callback(msg); } catch (err) { console.error(`Erreur dans un écouteur de message propriétaire (tenant "${tenantId}") :`, err.message); }
+      });
+    }, 700);
+  }
+  function wasSentByCyrus(id) { return sentByCyrus.has(String(id)); }
   const humanActivityListeners = [];
   function onOutgoingMessage(callback) { humanActivityListeners.push(callback); }
   function checkHumanActivity(msg) {
@@ -301,6 +369,7 @@ function createSession(tenantId) {
   // résolu via participant.jid — voir /api/groups/export-members) échouerait
   // alors que le nom est bel et bien connu.
   function rememberContact(c) {
+    learnLidPair(c.id, c.jid); learnLidPair(c.id, c.lid); learnLidPair(c.lid, c.jid);
     const name = bestContactName(c);
     if (!name) return;
     rememberContactName(c.id, name);
@@ -589,7 +658,8 @@ function createSession(tenantId) {
           notifyIncomingMessage(msg);
         } else if (m.type === 'notify' && msg.key && msg.key.fromMe && msg.key.remoteJid !== 'status@broadcast') {
           notifyHistoryMessage(msg);
-          checkHumanActivity(msg);
+          if (isSelfChatJid(msg.key.remoteJid)) checkOwnerMessage(msg);
+          else checkHumanActivity(msg);
         } else if (m.type === 'append') {
           notifyHistoryMessage(msg); // messages reçus pendant une déconnexion, rattrapés à la reconnexion
         }
@@ -988,6 +1058,11 @@ function createSession(tenantId) {
     getGroupsSummary,
     getGroupParticipants,
     getContactName,
+    getIdentityHints,
+    getSelfIds,
+    isSelfChatJid,
+    onOwnerMessage,
+    wasSentByCyrus,
     getRecentMessages,
     getConnectedNumber,
     isPaired,

@@ -103,6 +103,11 @@ async function execute(toolName, args, ctx) {
         email: body.email,
         courseId: body.course_id,
         accountCreated: res.data.account_created,
+        // VERIFY : confirmation explicite de la passerelle (réponse 2xx portant `ok:true`/`uid` ou `account_created`).
+        // Une réponse 2xx vide n'est PAS une confirmation (EXECUTE ≠ SUCCESS) — voir manualPaymentValidator.verifyEnrollment.
+        confirmed: (res.data.ok === true && !!res.data.uid) || typeof res.data.account_created === 'boolean',
+        userId: res.data.uid || null,
+        courseIdConfirmed: res.data.course_id || null,
         passwordResetLink: res.data.password_reset_link || null,
         expiresAt: res.data.expires_at || null,
         provider: 'platform-gateway',

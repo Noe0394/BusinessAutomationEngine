@@ -37,6 +37,11 @@ let outgoingMessageHandler = null;
 function setOutgoingMessageHandler(fn) {
   outgoingMessageHandler = typeof fn === 'function' ? fn : null;
 }
+// Canal propriétaire : message écrit par l'utilisateur dans sa propre conversation (self-chat) -> Chat Intelligent.
+let ownerMessageHandler = null;
+function setOwnerMessageHandler(fn) {
+  ownerMessageHandler = typeof fn === 'function' ? fn : null;
+}
 
 function sanitizeTenantId(rawId) {
   const cleaned = String(rawId || '').trim().replace(/[^A-Za-z0-9_-]/g, '_');
@@ -77,6 +82,14 @@ function getOrCreate(rawTenantId) {
         if (!historyMessageHandler) return;
         Promise.resolve(historyMessageHandler({ channel: 'WHATSAPP', tenantId, session, msg })).catch((err) => {
           console.error(`Erreur d'enregistrement d'un message historique WhatsApp (tenant "${tenantId}") :`, err.message);
+        });
+      });
+    }
+    if (typeof session.onOwnerMessage === 'function') {
+      session.onOwnerMessage((msg) => {
+        if (!ownerMessageHandler) return;
+        Promise.resolve(ownerMessageHandler({ channel: 'WHATSAPP', tenantId, session, msg })).catch((err) => {
+          console.error(`Erreur du canal propriétaire WhatsApp (tenant "${tenantId}") :`, err.message);
         });
       });
     }
@@ -123,6 +136,12 @@ function getOrCreate(rawTenantId) {
 // un redéploiement) — voir CampaignEngine#pauseForShutdown.
 function listActiveEntries() {
   return Array.from(tenants.values());
+}
+
+// Session déjà instanciée d'un tenant, SANS en créer ni la connecter (contrairement à getOrCreate) : utilisé pour
+// livrer une alerte au propriétaire seulement si son WhatsApp est réellement actif.
+function peek(rawTenantId) {
+  return tenants.get(sanitizeTenantId(rawTenantId)) || null;
 }
 
 // Connexion paresseuse : une instance WhatsApp n'est démarrée (restauration
@@ -363,8 +382,10 @@ module.exports = {
   bootResumePendingCampaigns,
   bootReconnectAllPairedTenants,
   listActiveEntries,
+  peek,
   getStorageStatus,
   setIncomingMessageHandler,
   setOutgoingMessageHandler,
+  setOwnerMessageHandler,
   setHistoryMessageHandler,
 };

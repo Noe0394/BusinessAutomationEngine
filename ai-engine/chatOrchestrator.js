@@ -15,6 +15,9 @@ const contactCrm = require('./contactCrm');
 const recurringTasks = require('../queues/recurringTasks');
 const messageHistory = require('./messageHistory');
 const actionLedger = require('./actionLedger');
+const conversationRouter = require('./conversationRouter');
+const alertCenter = require('./alertCenter');
+const contactIdentity = require('./contactIdentity');
 
 // CHAT-DRIVEN AGENT ORCHESTRATOR — ai-engine/chatOrchestrator.js
 // ---------------------------------------------------------------------------
@@ -107,6 +110,9 @@ const RECURRING_RE = /(chaque\s+(?:matin|jour|soir|semaine|nuit|midi|\d{1,2}\s*h
 const GROUPPOST_RE = /(poste|publie|partage|diffuse|balance|envoi[e]?)\w*[^]{0,80}?(groupe|groupes|canal|canaux)/i;
 // Réponse RÉELLE au dernier message (ou à un contact nommé), avec vérification.
 const REPLY_RE = /(r[ée]ponds?(?:\s|-)?(?:lui|leur|[àa]\b)|r[ée]pondre\s+[àa]\b|dis(?:\s|-)?lui|renvoie(?:\s|-)?lui|r[ée]pond(?:s|re)\s+(?:au|à|a)\b)/i;
+// File d'attente du propriétaire : conversations qui attendent son intervention, paiements à valider, messages/alertes
+// importants (états RÉELS lus dans les conversations, actions en attente et alertes — jamais inventés).
+const OWNERQUEUE_RE = /((conversations?|discussions?|personnes?|contacts?|gens|messages?)[^]{0,40}(n[ée]cessit\w*|attend\w*|demand\w*|requi\w*|exig\w*)[^]{0,25}\b(mon|ma|ton|ta)\s+(intervention|r[ée]ponse|attention))|(qui\s+attend\w*\s+(ma|mon|ta|ton)\s+(r[ée]ponse|intervention))|((paiements?|preuves?\s+de\s+paiement)[^]{0,30}(en\s+attente|[àa]\s+valider|non\s+valid[ée]s?))|(en\s+attente\s+de\s+(validation|ma\s+d[ée]cision))|(ai[- ]?je\s+(re[çc]u|des?)[^]{0,30}(message|alerte)s?[^]{0,15}important\w*)|(j.?ai\s+(re[çc]u|des?)[^]{0,30}(message|alerte)s?[^]{0,15}important\w*)|(messages?\s+importants?)|(qu.?est[- ]ce\s+qui\s+(m.?attend|attend\s+ma|est\s+urgent))|(mes\s+alertes)|(reste[- ]t[- ]il\s+quelque\s+chose\s+[àa]\s+traiter)|(\b[àa]\s+traiter\b)/i;
 // Supervision : "qu'as-tu fait / statut de tes actions / rapport de tes envois".
 const ACTIONS_RE = /(qu.?as-?tu\s+fait|tes\s+actions|actions\s+r[ée]centes|statut\s+de[s]?\s+actions|rapport\s+de[s]?\s+(?:tes\s+)?(?:actions|envois)|historique\s+de[s]?\s+actions)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
@@ -142,6 +148,7 @@ function detectIntent(text, lastAssistantMessage) {
   // 'reply' (répondre réellement au dernier message) AVANT 'inbox' : "réponds-lui"
   // est une action d'envoi, pas une lecture. AVANT 'report' aussi (répond ≠ rapport).
   if (REPLY_RE.test(text)) return 'reply';
+  if (OWNERQUEUE_RE.test(text)) return 'ownerqueue';
   if (ACTIONS_RE.test(text)) return 'actionsreport';
   // Questions sur la mémoire 7×24 h (retrouver une discussion, ce qu'un client a dit, qui a parlé de...) : réponse factuelle.
   if (memoryQuery.isMemoryQuestion(text) && !(INBOX_RE.test(text) && !memoryQuery.hasSpecifics(text))) return 'memory';
@@ -363,6 +370,52 @@ async function handleReport(text, tenantId, deps) {
 // honnêtement : non connecté / connecté mais tampon vide (après redémarrage) /
 // messages disponibles.
 // ---------------------------------------------------------------------------
+// 'ownerqueue' — ce qui attend le propriétaire : lecture des états RÉELS (aucune liste inventée).
+async function handleOwnerQueue(text, tenantId) {
+  const wantsPayments = /paiement|preuve/i.test(text);
+  const wantsConvs = /conversation|discussion|personne|contact|gens|intervention|r[ée]ponse|attend/i.test(text);
+  const wantsAlerts = /important|alerte|urgent|traiter/i.test(text);
+  const all = !wantsPayments && !wantsConvs && !wantsAlerts;
+  const lines = [];
+  const log = [];
+  const ago = (ts) => { const m = Math.max(0, Math.round((Date.now() - ts) / 60000)); return m < 60 ? `il y a ${m} min` : `il y a ${Math.round(m / 60)} h`; };
+
+  if (all || wantsConvs || wantsAlerts) {
+    const waiting = await conversationRouter.listAwaitingOwner(tenantId);
+    if (waiting.length) {
+      lines.push(`📩 ${waiting.length} conversation(s) attendent ton intervention :`);
+      waiting.slice(0, 15).forEach((c) => lines.push(`• ${c.contactLabel || contactIdentity.resolveIdentity({ channel: c.channel, jid: c.chatId }).label} (${c.channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp'}) — ${c.reason || 'intervention requise'}${c.lastMessage ? ` : “${c.lastMessage}”` : ''} · ${ago(c.since)}`));
+      log.push({ icon: '📩', label: `${waiting.length} conversation(s) en attente`, status: 'done' });
+    } else if (wantsConvs) {
+      lines.push("📩 Aucune conversation n'attend ton intervention en ce moment.");
+    }
+  }
+  if (all || wantsPayments) {
+    const pend = await manualPaymentValidator.listPending(tenantId);
+    if (pend.length) {
+      lines.push(`💰 ${pend.length} paiement(s) à valider :`);
+      pend.slice(0, 15).forEach((p) => lines.push(`• ${p.customerName || p.email} — ${p.declaredAmount || 'montant non précisé'} — ${p.productName || p.courseId || 'produit à préciser'} — réf. ${p.pendingActionId || 'n/a'}`));
+      lines.push("Réponds « OUI » ou « NON » (avec la référence s'il y en a plusieurs).");
+      log.push({ icon: '💰', label: `${pend.length} paiement(s) en attente`, status: 'done' });
+    } else if (wantsPayments) {
+      lines.push("💰 Aucun paiement n'est en attente de validation.");
+    }
+  }
+  if (all || wantsAlerts) {
+    const alerts = (await alertCenter.list(tenantId, { status: 'OPEN', minLevel: 'IMPORTANT', sinceMs: Date.now() - 24 * 3600 * 1000, limit: 10 }))
+      .filter((a) => !['PAYMENT_VALIDATION_REQUIRED'].includes(a.type));
+    if (alerts.length) {
+      lines.push(`🔔 Alertes importantes (24 h) :`);
+      alerts.forEach((a) => lines.push(`• [${a.level}] ${a.title}${a.count > 1 ? ` (×${a.count})` : ''} · ${ago(a.createdAt)}`));
+      log.push({ icon: '🔔', label: `${alerts.length} alerte(s) importante(s)`, status: 'done' });
+    } else if (wantsAlerts && !lines.length) {
+      lines.push('🔔 Aucune alerte importante ouverte sur les dernières 24 h.');
+    }
+  }
+  if (!lines.length) lines.push("✅ Rien n'attend ton intervention pour le moment.");
+  return { text: lines.join('\n'), actionLog: log.length ? log : null };
+}
+
 async function handleMemory(text, tenantId, deps) {
   const llm = deps.llm || ((prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'memory_summary', tenant: tenantId }).then((r) => r.text));
   try {
@@ -1099,6 +1152,7 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'goal': return handleGoal(text, sessionKey, tenantId, d);
     case 'report': return handleReport(text, tenantId, d);
     case 'inbox': return handleInbox(text, tenantId, d);
+    case 'ownerqueue': return handleOwnerQueue(text, tenantId);
     case 'memory': return handleMemory(text, tenantId, d);
     case 'reply': return handleReply(text, tenantId, d);
     case 'actionsreport': return handleActionsReport(tenantId);
@@ -1116,4 +1170,4 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
   }
 }
 
-module.exports = { detectIntent, handle };
+module.exports = { detectIntent, handle, handleOwnerQueue };

@@ -17,16 +17,15 @@ function normalizeJid(telephone) {
   return `${digits}@s.whatsapp.net`;
 }
 
-// Format E.164 (ex: +2250700000000) à partir d'un JID WhatsApp
-// (2250700000000@s.whatsapp.net) — utilisé pour l'export Excel. Les JID au
-// format @lid (identité anonyme récente de WhatsApp, sans numéro réel
-// exploitable) ne portent pas un vrai numéro : les chiffres qui précèdent
-// "@lid" ne sont pas un numéro de téléphone valide, mais on les renvoie quand
-// même préfixés d'un "+" plutôt que de faire échouer l'export pour ces
-// quelques participants.
+// Format E.164 (ex: +2250700000000) à partir d'un JID TÉLÉPHONIQUE WhatsApp
+// (2250700000000@s.whatsapp.net) — utilisé pour l'export Excel. Un JID au format
+// @lid (identité anonyme de WhatsApp) ne porte PAS de numéro de téléphone : les
+// chiffres qui précèdent "@lid" ne sont qu'un identifiant technique. On renvoie
+// alors une chaîne vide (numéro non disponible) plutôt que de fabriquer un faux
+// numéro (voir ai-engine/contactIdentity.js : JID/LID ≠ numéro de téléphone).
 function jidToE164(jid) {
-  const digits = String(jid || '').split('@')[0].replace(/\D/g, '');
-  return digits ? `+${digits}` : '';
+  const m = String(jid || '').match(/^(\d{6,15})(?::\d+)?@(?:s\.whatsapp\.net|c\.us)$/i);
+  return m ? `+${m[1]}` : '';
 }
 
 // Représentation normalisée d'un destinataire WhatsApp pour l'envoi : un JID

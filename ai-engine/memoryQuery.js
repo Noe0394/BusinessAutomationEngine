@@ -2,6 +2,7 @@
 // noms, extraits) avec l'étendue réelle de la mémoire. Aucun chiffre ni citation n'est inventé : tout vient des messages
 // enregistrés ; l'IA n'est utilisée que pour résumer un extrait fourni, avec repli déterministe.
 const messageHistory = require('./messageHistory');
+const contactIdentity = require('./contactIdentity');
 const { norm } = require('./jarvis/intentClassifier');
 
 const DAY = 24 * 3600 * 1000;
@@ -80,7 +81,12 @@ const isMemoryQuestion = (text) => {
     || /(discussion|conversation)s? (avec|de|d)[^?!.]{0,40}(hier|aujourd|avant hier|cette semaine)/.test(n);
 };
 
-function nameOf(m) { return m.name || m.senderName || m.number || String(m.chatId || m.party || '').split('@')[0]; }
+// Nom lisible d'un contact : jamais un JID/LID brut ni un ancien « numéro » qui serait en réalité un LID
+// (voir ai-engine/contactIdentity.js). Le numéro n'est affiché que s'il vient d'un vrai JID téléphonique.
+function nameOf(m) {
+  const uname = m.channel === 'TELEGRAM' && m.number && !/^\d+$/.test(String(m.number)) ? m.number : null;
+  return contactIdentity.resolveIdentity({ channel: m.channel, jid: m.chatId || m.party, pushName: m.name || m.senderName, username: uname }).label;
+}
 function excerpt(t, n) { const s = String(t || '').replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n - 1)}…` : s; }
 
 async function collect(tenant, channels, period) {
@@ -113,7 +119,7 @@ function groupByChat(msgs) {
     g.messages.push(m);
     map.set(key, g);
   }
-  return Array.from(map.values()).map((g) => Object.assign(g, { label: g.isGroup ? `groupe « ${g.groupName || g.chatId} »` : (g.name || String(g.chatId).split('@')[0]), last: g.messages[g.messages.length - 1] }))
+  return Array.from(map.values()).map((g) => Object.assign(g, { label: g.isGroup ? `groupe « ${g.groupName || g.chatId} »` : (g.name || contactIdentity.resolveIdentity({ channel: g.channel, jid: g.chatId }).label), last: g.messages[g.messages.length - 1] }))
     .sort((a, b) => b.last.tsMs - a.last.tsMs);
 }
 
