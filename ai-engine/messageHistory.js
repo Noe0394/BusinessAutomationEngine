@@ -28,7 +28,7 @@ const storageAdapter = require('./storageAdapter');
 const NAMESPACE = 'message_history';
 const INDEX_NAMESPACE = 'conversation_index';
 const RETENTION_DAYS = 7; // fenêtre glissante STRICTE du cahier des charges
-const MAX_MESSAGES = 2000; // garde-fou de taille (ne vole jamais la fenêtre)
+const MAX_MESSAGES = 200000; // garde-fou global de la vue « document » (le stockage est journalier)
 const CLEANUP_BATCH = 200; // lots pour le nettoyage périodique
 const DEFAULT_MAINTENANCE_MINUTES = 60;
 
@@ -105,9 +105,70 @@ function normalizeMessage(tenantId, channel, m) {
   return entry;
 }
 
-async function load(tenantId, channel) {
-  return storageAdapter.get(NAMESPACE, docId(tenantId, channel), { tenantId: sanitize(tenantId), channel: String(channel || 'WHATSAPP').toUpperCase(), messages: [] });
+// STOCKAGE JOURNALIER : un document par (tenant, canal, jour UTC). Écritures petites, purge exacte par jour, aucun
+// plafond qui rogne la fenêtre 7 jours d'un compte actif. Toute écriture d'un même (tenant, canal) est SÉRIALISÉE
+// (verrou) : deux messages simultanés ne s'écrasent plus.
+const DAY_MS = 24 * 3600 * 1000;
+const MAX_PER_DAY = 20000; // garde-fou d'un seul jour
+const dayKey = (ms) => new Date(ms).toISOString().slice(0, 10).replace(/-/g, '');
+const shardId = (tenantId, channel, day) => `${docId(tenantId, channel)}__${day}`;
+
+const locks = new Map();
+function withLock(key, fn) {
+  const next = (locks.get(key) || Promise.resolve()).then(fn, fn);
+  locks.set(key, next.catch(() => {}));
+  return next;
 }
+
+function windowDays(now) {
+  const t = now == null ? Date.now() : now;
+  const out = [];
+  for (let ms = windowCutoffMs(RETENTION_DAYS) - (Date.now() - t); ms <= t + DAY_MS; ms += DAY_MS) {
+    const k = dayKey(Math.min(ms, t));
+    if (!out.includes(k)) out.push(k);
+  }
+  const last = dayKey(t);
+  if (!out.includes(last)) out.push(last);
+  return out;
+}
+
+const migrated = new Set();
+// Ancien format (un seul document par canal) : découpé en journées au premier accès, puis supprimé.
+async function migrateLegacy(tenantId, channel) {
+  const id = docId(tenantId, channel);
+  if (migrated.has(id)) return 0;
+  migrated.add(id);
+  let legacy = null;
+  try { legacy = await storageAdapter.get(NAMESPACE, id, null); } catch (e) { legacy = null; }
+  if (!legacy || !Array.isArray(legacy.messages)) return 0;
+  const now = Date.now();
+  const kept = prune(legacy.messages, now);
+  const dropped = legacy.messages.length - kept.length;
+  const byDay = new Map();
+  for (const m of kept) { const k = dayKey(m.tsMs); (byDay.get(k) || byDay.set(k, []).get(k)).push(m); }
+  for (const [day, list] of byDay) {
+    const sid = shardId(tenantId, channel, day);
+    const cur = await storageAdapter.get(NAMESPACE, sid, null);
+    const merged = (cur && cur.messages ? cur.messages : []).concat(list);
+    merged.sort((x, y) => (x.tsMs || 0) - (y.tsMs || 0));
+    storageAdapter.set(NAMESPACE, sid, { tenantId: sanitize(tenantId), channel: String(channel).toUpperCase(), day, messages: merged.slice(-MAX_PER_DAY), updatedAt: new Date().toISOString() });
+  }
+  storageAdapter.remove(NAMESPACE, id);
+  return dropped;
+}
+
+// Vue « document » de la fenêtre glissante : messages des 7×24 h, chronologiques, jamais hors fenêtre.
+async function load(tenantId, channel, now) {
+  const t = now == null ? Date.now() : now;
+  await withLock(docId(tenantId, channel), () => migrateLegacy(tenantId, channel));
+  const cutoff = t - RETENTION_DAYS * DAY_MS;
+  const docs = await Promise.all(windowDays(t).map((d) => storageAdapter.get(NAMESPACE, shardId(tenantId, channel, d), null)));
+  const messages = [];
+  for (const d of docs) if (d && Array.isArray(d.messages)) for (const m of d.messages) { const ts = (m && m.tsMs) || 0; if (ts >= cutoff && ts <= t) messages.push(m); }
+  messages.sort((x, y) => (x.tsMs || 0) - (y.tsMs || 0));
+  return { tenantId: sanitize(tenantId), channel: String(channel || 'WHATSAPP').toUpperCase(), messages };
+}
+
 async function loadIndex(tenantId, channel) {
   return storageAdapter.get(INDEX_NAMESPACE, docId(tenantId, channel), { tenantId: sanitize(tenantId), channel: String(channel || 'WHATSAPP').toUpperCase(), conversations: {}, updatedAt: null });
 }
@@ -124,12 +185,6 @@ function prune(messages, now) {
   if (kept.length > MAX_MESSAGES) kept = kept.slice(-MAX_MESSAGES);
   return kept;
 }
-function save(tenantId, channel, doc) {
-  doc.messages = prune(doc.messages || []);
-  doc.updatedAt = new Date().toISOString();
-  return storageAdapter.set(NAMESPACE, docId(tenantId, channel), doc);
-}
-
 // Fusionne les participants de groupe connus (union, sans doublon, borné).
 function mergeParticipants(a, b) {
   const set = new Set((Array.isArray(a) ? a : []).map(String));
@@ -194,11 +249,29 @@ function record(tenantId, opts) {
   if (!tenantId || !opts || !opts.party) return Promise.resolve(null);
   const ch = String(opts.channel || 'WHATSAPP').toUpperCase();
   const entry = normalizeMessage(tenantId, ch, opts);
-  return load(tenantId, ch).then((doc) => {
+  return withLock(docId(tenantId, ch), async () => {
+    await migrateLegacy(tenantId, ch);
+    const now = Date.now();
+    if (entry.tsMs < now - RETENTION_DAYS * DAY_MS) return null; // hors fenêtre : jamais stocké
+    const sid = shardId(tenantId, ch, dayKey(entry.tsMs));
+    const doc = (await storageAdapter.get(NAMESPACE, sid, null)) || { tenantId: sanitize(tenantId), channel: ch, day: dayKey(entry.tsMs), messages: [] };
     doc.messages = Array.isArray(doc.messages) ? doc.messages : [];
+    // Idempotence : un même message (id plateforme) n'est jamais enregistré deux fois (envoi Cyrus + écho, import d'historique...).
+    const dup = entry.messageId
+      ? doc.messages.find((m) => m.messageId === entry.messageId && m.direction === entry.direction)
+      : doc.messages.find((m) => m.tsMs === entry.tsMs && m.direction === entry.direction && m.party === entry.party && m.text === entry.text);
+    if (dup) {
+      // Complète l'existant (ex. identifiant de confirmation connu seulement après l'envoi).
+      if (entry.confirmationId && !dup.confirmationId) { dup.confirmationId = entry.confirmationId; storageAdapter.set(NAMESPACE, sid, doc); }
+      return dup;
+    }
     doc.messages.push(entry);
-    save(tenantId, ch, doc);
-    return updateConversationIndex(tenantId, ch, entry, opts.accountId).then(() => entry).catch(() => entry);
+    if (doc.messages.length > 1 && doc.messages[doc.messages.length - 2].tsMs > entry.tsMs) doc.messages.sort((x, y) => (x.tsMs || 0) - (y.tsMs || 0));
+    if (doc.messages.length > MAX_PER_DAY) doc.messages = doc.messages.slice(-MAX_PER_DAY);
+    doc.updatedAt = new Date().toISOString();
+    storageAdapter.set(NAMESPACE, sid, doc);
+    await updateConversationIndex(tenantId, ch, entry, opts.accountId).catch(() => null);
+    return entry;
   }).catch((err) => {
     console.error(`messageHistory.record (tenant "${tenantId}", ${ch}) :`, err.message);
     return null;
@@ -312,16 +385,17 @@ async function cleanupExpired(tenantId) {
   try {
     for (const ch of CHANNELS) {
       const id = docId(tenantId, ch);
-      let doc;
-      try { doc = await storageAdapter.get(NAMESPACE, id, null); } catch (e) { doc = null; }
-      if (doc && Array.isArray(doc.messages)) {
-        const before = doc.messages.length;
-        const kept = prune(doc.messages);
-        report.removedMessages += before - kept.length;
-        if (kept.length !== before) {
-          doc.messages = kept;
-          doc.updatedAt = new Date().toISOString();
-          storageAdapter.set(NAMESPACE, id, doc);
+      report.removedMessages += await withLock(id, () => migrateLegacy(tenantId, ch));
+      const cutDay = dayKey(cut);
+      for (const sid of storageAdapter.listIds(NAMESPACE)) {
+        const m = String(sid).match(/^(.+)__(\d{8})$/);
+        if (!m || m[1] !== id) continue;
+        const doc = await storageAdapter.get(NAMESPACE, sid, null);
+        const count = doc && Array.isArray(doc.messages) ? doc.messages.length : 0;
+        if (m[2] < cutDay) { storageAdapter.remove(NAMESPACE, sid); report.removedMessages += count; continue; }
+        if (m[2] === cutDay && doc) {
+          const kept = prune(doc.messages);
+          if (kept.length !== count) { report.removedMessages += count - kept.length; doc.messages = kept; storageAdapter.set(NAMESPACE, sid, doc); }
         }
       }
       let idx;
@@ -368,7 +442,7 @@ async function sweepAllExpired(batch = CLEANUP_BATCH) {
     const ids = storageAdapter.listIds(NAMESPACE) || [];
     const tenants = new Set();
     for (const id of ids) {
-      const m = String(id).match(/^(.+?)__(WHATSAPP|TELEGRAM)$/i);
+      const m = String(id).match(/^(.+?)__(WHATSAPP|TELEGRAM)(?:__\d{8})?$/i);
       if (m) tenants.add(m[1]);
     }
     const list = Array.from(tenants);

@@ -5454,15 +5454,7 @@ async function handleHistoricalMessage({ channel, tenantId, session, msg }) {
   const histFrom = extractFromId(channel, msg);
   if (!histFrom) return;
 
-  const mid = extractMessageId(channel, msg);
-  if (mid) {
-    try {
-      const knownIds = await conversationHistory.getMessageIds(tenantId, channel);
-      if (knownIds.has(mid)) return; // déjà en mémoire : dédup du backfill
-    } catch (err) {
-      // Une panne de lecture ne bloque PAS l'enregistrement (best-effort).
-    }
-  }
+  const mid = extractMessageId(channel, msg); // la déduplication est faite par messageHistory.record (idempotent)
 
   const senderName = channel === 'WHATSAPP'
     ? (msg && msg.pushName) || null
@@ -5480,8 +5472,10 @@ async function handleHistoricalMessage({ channel, tenantId, session, msg }) {
   const groupName = isGroupChat ? ((msg && msg.groupName) || null) : null;
   const messageType = hasIncomingAttachment(channel, msg) ? (msg.mimetype || 'media') : 'text';
 
+  // Direction réelle : messages écrits par l'utilisateur (ou par Cyrus) = 'out', reçus = 'in'.
+  const outgoing = channel === 'WHATSAPP' ? !!(msg.key && msg.key.fromMe) : !!msg.out;
   conversationHistory.record(tenantId, {
-    channel, direction: 'in', party: histFrom, name: senderName, text,
+    channel, direction: outgoing ? 'out' : 'in', party: histFrom, name: outgoing ? null : senderName, text,
     ts: Number.isFinite(tsRaw) && tsRaw > 0 ? tsRaw : Math.floor(Date.now() / 1000),
     chatId: histFrom, hasMedia: hasIncomingAttachment(channel, msg),
     messageId: mid,
@@ -5494,6 +5488,8 @@ async function handleHistoricalMessage({ channel, tenantId, session, msg }) {
 }
 
 whatsappManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
+// Mémoire 7 jours : historique WhatsApp, messages rattrapés hors ligne et messages écrits depuis le téléphone.
+whatsappManager.setHistoryMessageHandler(handleHistoricalMessage);
 // Activité humaine : l'utilisateur écrit lui-même depuis son téléphone -> l'auto-réponse se tait sur cette conversation.
 whatsappManager.setOutgoingMessageHandler(({ tenantId, msg }) => autoResponder.handleHumanActivity({ tenantId, channel: 'WHATSAPP', from: msg && msg.key && msg.key.remoteJid }));
 telegramManager.setIncomingMessageHandler(handleIncomingCustomerMessage);

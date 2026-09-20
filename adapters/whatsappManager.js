@@ -29,6 +29,10 @@ function setIncomingMessageHandler(fn) {
 }
 
 // Activité humaine (l'utilisateur écrit lui-même depuis son téléphone) : callback unique réglé par index.js.
+let historyMessageHandler = null;
+function setHistoryMessageHandler(fn) {
+  historyMessageHandler = typeof fn === 'function' ? fn : null;
+}
 let outgoingMessageHandler = null;
 function setOutgoingMessageHandler(fn) {
   outgoingMessageHandler = typeof fn === 'function' ? fn : null;
@@ -65,6 +69,14 @@ function getOrCreate(rawTenantId) {
         if (!incomingMessageHandler) return;
         Promise.resolve(incomingMessageHandler({ channel: 'WHATSAPP', tenantId, session, msg })).catch((err) => {
           console.error(`Erreur dans le filtrage privé/pro WhatsApp (tenant "${tenantId}") :`, err.message);
+        });
+      });
+    }
+    if (typeof session.onHistoryMessage === 'function') {
+      session.onHistoryMessage((msg) => {
+        if (!historyMessageHandler) return;
+        Promise.resolve(historyMessageHandler({ channel: 'WHATSAPP', tenantId, session, msg })).catch((err) => {
+          console.error(`Erreur d'enregistrement d'un message historique WhatsApp (tenant "${tenantId}") :`, err.message);
         });
       });
     }
@@ -353,4 +365,5 @@ module.exports = {
   getStorageStatus,
   setIncomingMessageHandler,
   setOutgoingMessageHandler,
+  setHistoryMessageHandler,
 };

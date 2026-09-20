@@ -213,6 +213,20 @@ function createSession(tenantId) {
     sentByCyrus.add(String(id));
     if (sentByCyrus.size > 2000) sentByCyrus.delete(sentByCyrus.values().next().value);
   }
+  // Mémoire 7 jours : messages HISTORIQUES (synchronisation initiale), rattrapés hors ligne (type « append ») et écrits par
+  // l'utilisateur/Cyrus (fromMe). Ils alimentent la mémoire uniquement : aucune réponse automatique.
+  const historyMessageListeners = [];
+  function onHistoryMessage(callback) { historyMessageListeners.push(callback); }
+  function notifyHistoryMessage(msg) {
+    try {
+      if (!msg || !msg.key || !msg.key.remoteJid || msg.key.remoteJid === 'status@broadcast') return;
+      const tsRaw = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp);
+      if (Number.isFinite(tsRaw) && tsRaw > 0 && tsRaw * 1000 < Date.now() - 7 * 24 * 3600 * 1000) return;
+      historyMessageListeners.forEach((callback) => {
+        try { callback(msg); } catch (err) { console.error(`Erreur dans un écouteur d'historique (tenant "${tenantId}") :`, err.message); }
+      });
+    } catch (err) { /* jamais bloquant */ }
+  }
   const humanActivityListeners = [];
   function onOutgoingMessage(callback) { humanActivityListeners.push(callback); }
   function checkHumanActivity(msg) {
@@ -574,7 +588,10 @@ function createSession(tenantId) {
           recordIncomingMessage(msg);
           notifyIncomingMessage(msg);
         } else if (m.type === 'notify' && msg.key && msg.key.fromMe && msg.key.remoteJid !== 'status@broadcast') {
+          notifyHistoryMessage(msg);
           checkHumanActivity(msg);
+        } else if (m.type === 'append') {
+          notifyHistoryMessage(msg); // messages reçus pendant une déconnexion, rattrapés à la reconnexion
         }
       });
     });
@@ -600,6 +617,7 @@ function createSession(tenantId) {
       if (isStale()) return;
       (contacts || []).forEach((c) => rememberContact(c));
       (messages || []).forEach(rememberFromMessage);
+      (messages || []).forEach(notifyHistoryMessage);
     });
 
     return sock;
@@ -975,6 +993,7 @@ function createSession(tenantId) {
     isPaired,
     onIncomingMessage,
     onOutgoingMessage,
+    onHistoryMessage,
     onAccountReset,
     logout,
     dispose,

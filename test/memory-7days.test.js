@@ -290,6 +290,6 @@ describe('messageHistory — exports 7 jours', () => {
       assert.equal(typeof messageHistory[fn], 'function', `${fn} exporté`);
     }
     assert.equal(messageHistory.INDEX_NAMESPACE, 'conversation_index');
-    assert.equal(messageHistory.MAX_MESSAGES, 2000);
+    assert.ok(messageHistory.MAX_MESSAGES >= 2000, "plus aucun plafond qui rogne la fenêtre 7 jours");
   });
 });

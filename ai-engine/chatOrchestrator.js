@@ -9,6 +9,7 @@ const businessServices = require('./businessServices');
 const toolRegistry = require('./toolRegistry');
 const toolAgent = require('./toolAgent');
 const agentLoop = require('./jarvis/agentLoop');
+const memoryQuery = require('./memoryQuery');
 const manualPaymentValidator = require('./manualPaymentValidator');
 const contactCrm = require('./contactCrm');
 const recurringTasks = require('../queues/recurringTasks');
@@ -142,6 +143,8 @@ function detectIntent(text, lastAssistantMessage) {
   // est une action d'envoi, pas une lecture. AVANT 'report' aussi (répond ≠ rapport).
   if (REPLY_RE.test(text)) return 'reply';
   if (ACTIONS_RE.test(text)) return 'actionsreport';
+  // Questions sur la mémoire 7×24 h (retrouver une discussion, ce qu'un client a dit, qui a parlé de...) : réponse factuelle.
+  if (memoryQuery.isMemoryQuestion(text) && !(INBOX_RE.test(text) && !memoryQuery.hasSpecifics(text))) return 'memory';
   if (INBOX_RE.test(text)) return 'inbox';
   // Actions "centre des intentions" pilotées par le chat, prioritaires sur les
   // intentions génériques (payment/account/businessinfo/goal) qui les
@@ -348,6 +351,16 @@ async function handleReport(text, tenantId, deps) {
 // honnêtement : non connecté / connecté mais tampon vide (après redémarrage) /
 // messages disponibles.
 // ---------------------------------------------------------------------------
+async function handleMemory(text, tenantId, deps) {
+  const llm = deps.llm || ((prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'memory_summary', tenant: tenantId }).then((r) => r.text));
+  try {
+    const out = await memoryQuery.answer(tenantId, text, { llm });
+    return { text: out.text, actionLog: out.actionLog };
+  } catch (err) {
+    return { text: `Je n'ai pas pu interroger la mémoire (${err.message}).`, actionLog: [{ icon: '⚠️', label: 'Mémoire indisponible', status: 'error' }] };
+  }
+}
+
 async function handleInbox(text, tenantId, deps) {
   if (!deps.runtime || !deps.runtime.actionExecutor) {
     return { text: 'Je ne peux pas lire les messages pour le moment (moteur non disponible).' };
@@ -1074,6 +1087,7 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'goal': return handleGoal(text, sessionKey, tenantId, d);
     case 'report': return handleReport(text, tenantId, d);
     case 'inbox': return handleInbox(text, tenantId, d);
+    case 'memory': return handleMemory(text, tenantId, d);
     case 'reply': return handleReply(text, tenantId, d);
     case 'actionsreport': return handleActionsReport(tenantId);
     case 'groups': return handleGroups(text, tenantId, d);

@@ -254,6 +254,16 @@ const TOOLS = {
     },
   },
 
+  queryMemory: {
+    description: 'Interroge la mémoire des 7 derniers jours : dernière discussion avec quelqu’un, ce qu’un client a dit (hier, aujourd’hui…), qui a parlé d’un sujet, combien de personnes ont demandé quelque chose, résumé d’une conversation. Renvoie des faits précis (dates, heures, extraits) et l’étendue réelle de la mémoire.',
+    permission: null, risk: 'READ',
+    inputSchema: { question: { type: 'string', required: true, description: 'La question, formulée comme l’utilisateur l’a posée.' } },
+    async execute(args, ctx) {
+      const out = await require('./memoryQuery').answer(ctx.tenant, String(args.question), { llm: ctx.llm });
+      return { ok: true, result: { answer: out.text, data: out.data } };
+    },
+  },
+
   // ================= FILE / PLANIFICATION =================
   getQueueStatus: {
     description: 'État de la file de tâches durable (en attente, en cours, terminées, échouées, bloquées).', permission: null, risk: 'READ', inputSchema: {},
