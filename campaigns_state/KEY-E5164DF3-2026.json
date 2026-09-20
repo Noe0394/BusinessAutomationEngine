@@ -1,6 +1,6 @@
 {
   "tenantId": "KEY-E5164DF3-2026",
-  "activeCampaignId": "391c2b2f-9221-42cd-a57f-64c81ba8e3d4",
+  "activeCampaignId": null,
   "networkHealth": {
     "consecutiveSlowSends": 0,
     "consecutiveOverloadFailures": 0,
@@ -18,17 +18,17 @@
       "skippedDuplicates": 0,
       "messageHash": "fd8ab008ccff112b5eb2215d",
       "duplicateWindowHours": 48,
-      "status": "running",
+      "status": "stopped",
       "paused": false,
       "userPaused": false,
-      "stopRequested": false,
-      "superseded": false,
+      "stopRequested": true,
+      "superseded": true,
       "createdAt": "2026-09-20T16:11:55.065Z",
       "startedAt": "2026-09-20T16:11:55.065Z",
-      "finishedAt": null,
-      "lastProgressAt": "2026-09-20T16:11:55.307Z",
-      "nextIndex": 1,
-      "lastProcessedIndex": 0,
+      "finishedAt": "2026-09-20T16:12:42.675Z",
+      "lastProgressAt": "2026-09-20T16:12:42.675Z",
+      "nextIndex": 92,
+      "lastProcessedIndex": 91,
       "recipients": [
         {
           "telephone": "221775367648",
