@@ -134,8 +134,10 @@ function classify(text, ctx) {
   if (has(S.thanks, n) || has(S.sentDoc, n)) return out('PRIVATE_CASUAL', 0.7, 'remerciement/envoi', 'none');
 
   // Question ou demande sans signal reconnu : on ne sait pas y répondre -> le propriétaire.
-  if (S.question.test(raw)) return out('HUMAN_INTERVENTION_REQUIRED', 0.6, 'question que Cyrus ne peut pas traiter sans inventer', 'medium');
-  if (raw.length >= 40) return out('HUMAN_INTERVENTION_REQUIRED', 0.5, 'message libre trop ouvert pour une réponse sûre', 'medium');
+  // Question ouverte / message libre sans sujet privé ni sensible détecté : c'est l'IA conversationnelle qui tient l'échange (avec le
+  // contexte du Service métier et ses garde-fous anti-invention ; elle prévient elle-même le propriétaire si elle ne sait pas).
+  if (S.question.test(raw)) return out('GENERAL_INFORMATION', 0.6, "question ouverte : traitée par l'IA conversationnelle", 'low');
+  if (raw.length >= 40) return out('GENERAL_INFORMATION', 0.5, "message libre : traité par l'IA conversationnelle", 'low');
   return out('OTHER', 0.4, 'message ambigu', 'low');
 }
 
@@ -261,6 +263,32 @@ function casualReply(text, { seed, recentReplies }) {
   return pick(pools[key], seed, recentReplies);
 }
 
+// Réponse COMPOSÉE PAR L'IA (jamais un gabarit quand une IA est disponible). Garde-fous : court, sans chiffre/lien/adresse, sans
+// répétition ; l'IA n'a pas le droit d'inventer un fait sur le propriétaire. Retourne null si indisponible ou invalide -> gabarit de secours.
+async function aiCompose(kind, { text, name, recent, llm }) {
+  if (typeof llm !== 'function') return null;
+  const mission = kind === 'waiting'
+    ? "Le sujet du message exige le propriétaire lui-même. Réponds en 1 phrase naturelle que tu lui transmets le message et qu'il répondra directement. NE réponds PAS à la question, ne confirme ni ne nie rien."
+    : "Réponds simplement et chaleureusement à cette salutation / ce remerciement / cet accusé de réception, en 1 ou 2 phrases. Ne donne AUCUN fait sur le propriétaire (où il est, ce qu'il fait, sa famille, ses horaires).";
+  const prompt = [
+    "Tu écris au nom du propriétaire d'un compte WhatsApp, à un de ses contacts" + (name ? ` (${name})` : '') + '. Ton naturel, humain, court, dans la langue du message reçu.',
+    mission,
+    "N'invente JAMAIS : position, horaires, activités, décisions, engagements, informations familiales ou privées, chiffres, liens.",
+    (recent && recent.length) ? `Ne répète pas tes précédentes réponses : ${recent.slice(-3).map((r) => `« ${r} »`).join(' ')}` : '',
+    `Message reçu : « ${String(text).slice(0, 400)} »`,
+    'Écris UNIQUEMENT le message à envoyer, sans guillemets ni préambule.',
+  ].filter(Boolean).join('\n');
+  try {
+    const out = String(await llm(prompt) || '').trim().replace(/^["«»“”\s]+|["«»“”\s]+$/g, '');
+    if (out.length < 2 || out.length > 280) return null;
+    // Aucun chiffre/lien, et aucune affirmation de position ou d'activité du propriétaire (« il est à la maison », « je suis au bureau »…).
+    if (/\d|https?:|www\.|@/.test(out)) return null;
+    if (/\b(?:il|elle|lui)\s+(?:est|va|sera|dort|mange|travaille|se trouve|rentre|arrive)\b|\bje\s+(?:suis|serai|vais)\s+(?:à|au|chez|en|dans|sur)\b|\b(?:maison|bureau|travail|marché|église|réunion|hôpital|voyage|route)\b/i.test(out)) return null;
+    if ((recent || []).some((r) => String(r).trim() === out)) return null;
+    return out;
+  } catch (e) { return null; }
+}
+
 function waitingReply(category, text, { seed, recentReplies }) {
   const n = norm(text);
   const pools = isEnglish(n) ? WAIT_EN : WAIT_FR;
@@ -364,7 +392,9 @@ async function processBatch(input, deps) {
   }
 
   if (decision.mode === 'AUTO_REPLY' || decision.mode === 'AUTO_REPLY_NOTIFY') {
-    const reply = casualReply(lastText, { seed, recentReplies: recent });
+    const casualTemplate = casualReply(lastText, { seed, recentReplies: recent });
+    // « ok » / « d'accord » seuls : le gabarit renvoie null = rien à répondre (pas d'échange sans fin), l'IA n'est pas sollicitée.
+    const reply = casualTemplate === null ? null : ((await aiCompose('casual', { text: lastText, name: identity && identity.displayName, recent, llm: d.llm })) || casualTemplate);
     if (reply && d.send) {
       const out = await d.send(reply);
       result.replied = !!(out && out.status === 'SUCCESS'); result.replyStatus = out && out.status; result.reply = reply;
@@ -390,7 +420,7 @@ async function processBatch(input, deps) {
     state: 'HUMAN_REQUIRED', at: wasRequired ? state.handoff.at : Date.now(), reason: cls.reason, category: cls.category, contactLabel: label,
   });
   if (decision.sendWaitingReply && d.send) {
-    const reply = waitingReply(cls.category, lastText, { seed, recentReplies: recent });
+    const reply = (await aiCompose('waiting', { text: lastText, name: identity && identity.displayName, recent, llm: d.llm })) || waitingReply(cls.category, lastText, { seed, recentReplies: recent });
     const out = await d.send(reply);
     result.replied = !!(out && out.status === 'SUCCESS'); result.replyStatus = out && out.status; result.reply = reply;
     if (result.replied) { rememberReply(reply); state.handoff.lastWaitingReplyAt = Date.now(); }
@@ -422,6 +452,6 @@ async function processBatch(input, deps) {
 module.exports = {
   CATEGORIES, HANDOFF, classify, arbitrate, decide, casualReply, waitingReply, processBatch,
   setHandoff, getHandoff, noteOwnerTookOver, resumeAutomation, listAwaitingOwner,
-  THREAD_TTL_MS, HUMAN_REQUIRED_TTL_MS,
+  THREAD_TTL_MS, HUMAN_REQUIRED_TTL_MS, aiCompose,
   isCommercialInterest: (text) => { const raw = String(text || ''); return raw.length <= 400 && has(S.commercialInterest, norm(raw)); },
 };

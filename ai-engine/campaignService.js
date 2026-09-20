@@ -50,36 +50,33 @@ async function launchDraft(tenant, draft, runtime) {
 // Sources : text (liste collée / CSV), file { buffer, name, type } (Excel/CSV), image { buffer } (OCR).
 async function prepareRecipients(tenant, src, opts) {
   const o = opts || {};
-  let input = null; let uncertainNumbers = []; let source = 'text';
+  const extractor = require('./contactExtractor');
+  let input = null; let uncertainNumbers = []; let source = 'text'; let entries = [];
   if (src.image) {
     source = 'image';
     let ocr;
     try { ocr = await (o.ocr || ocrProvider).recognize(src.image); } catch (e) { throw err(e.code || 'OCR_FAILED', e.message, e.code === 'OCR_ENGINE_MISSING' ? 501 : 422); }
-    input = pipeline.extractPhoneNumbers(ocr.text).join('\n');
+    entries = extractor.extractFromText(ocr.text, 'ocr');
     uncertainNumbers = (ocr.words || []).filter((w) => w.confidence < 70 && /\d/.test(w.text)).map((w) => w.text.replace(/\D/g, ''));
   } else if (src.file) {
     source = 'file';
-    const name = String(src.file.name || '').toLowerCase();
-    try {
-      const XLSX = require('xlsx');
-      const isText = /\.(csv|txt|tsv)$/.test(name) || /text\//.test(src.file.type || '');
-      const wb = isText ? XLSX.read(src.file.buffer.toString('utf8'), { type: 'string' }) : XLSX.read(src.file.buffer, { type: 'buffer' });
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-      input = rows.length ? rows : src.file.buffer.toString('utf8');
-    } catch (e) { throw err('PARSE_ERROR', 'Fichier illisible (formats acceptés : .xlsx, .xls, .csv).', 422); }
+    try { entries = extractor.extractFromFile(src.file).entries; } catch (e) { throw err('PARSE_ERROR', 'Fichier illisible (formats acceptés : .xlsx, .xls, .csv, .txt, .vcf, .json).', 422); }
   } else if (Array.isArray(src.rows)) {
     source = 'rows';
-    input = src.rows;
+    entries = extractor.extractFromRows(src.rows);
   } else if (src.text) {
-    input = src.text;
+    entries = extractor.extractFromText(src.text, 'texte');
   }
-  if (!input || (Array.isArray(input) && !input.length)) throw err('EMPTY_SOURCE', 'Aucune source de destinataires fournie.');
+  const usernames = Array.from(new Set(entries.filter((e) => e.username).map((e) => e.username)));
+  input = entries.filter((e) => e.phone).map((e) => ({ raw: e.raw || e.phone, phone: e.phone, name: e.name || '' }));
+  // Aucune source fournie = erreur ; une source SANS numéro exploitable renvoie un tableau vide (compteurs à 0, l'interface l'explique).
+  if (!src.image && !src.file && !Array.isArray(src.rows) && !src.text) throw err('EMPTY_SOURCE', 'Aucune source de destinataires fournie.');
   const { rows, counts } = pipeline.classify(input, { defaultCountryCode: o.defaultCountryCode, uncertainNumbers });
   const doc = await load(tenant);
   const id = uid('rcp');
   doc.drafts[id] = { id, kind: 'recipients', source, rows, counts, createdAt: Date.now() };
   await save(tenant, doc);
-  return { recipientsId: id, source, counts, rows: rows.slice(0, 200) };
+  return { recipientsId: id, source, counts, rows: rows.slice(0, 200), usernames };
 }
 
 async function getRecipientsPage(tenant, id, { offset, limit }) {

@@ -21,30 +21,15 @@ function splitCsvLine(line, sep) {
 
 // Texte libre ou CSV -> [{ raw, phone, name }]. Un numéro = séquence de 8 à 15 chiffres (séparateurs tolérés).
 function parseContacts(input) {
-  if (Array.isArray(input)) return input.map((r) => parseRow(r)).filter(Boolean);
-  const text = String(input == null ? '' : input);
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const sep = [';', '\t', ','].find((s) => lines.length > 1 && lines[0].includes(s) && lines.slice(1, 4).every((l) => l.includes(s)));
-  if (sep) {
-    const head = splitCsvLine(lines[0], sep).map(plain);
-    const pi = head.findIndex((h) => PHONE_HEADERS.includes(h));
-    const ni = head.findIndex((h) => NAME_HEADERS.includes(h));
-    if (pi >= 0) {
-      return lines.slice(1).map((l) => { const c = splitCsvLine(l, sep); return { raw: l, phone: c[pi] || '', name: ni >= 0 ? (c[ni] || '') : '' }; }).filter((r) => r.phone);
-    }
+  // UNE seule logique d'extraction pour toutes les sources (voir ai-engine/contactExtractor.js).
+  const ex = require('./contactExtractor');
+  const toEntry = (e) => (e && e.phone ? { raw: e.raw || e.phone, phone: e.phone, name: e.name || '' } : null);
+  if (Array.isArray(input)) {
+    if (input.length && input.every((r) => r && typeof r === 'object' && 'phone' in r)) return input.map(parseRow).filter(Boolean); // déjà extrait
+    return ex.extractFromRows(input).map(toEntry).filter(Boolean);
   }
-  const out = [];
-  for (const line of lines) {
-    const found = line.match(PHONE_RE);
-    if (!found) continue;
-    let rest = line;
-    for (const f of found) rest = rest.replace(f, ' ');
-    const name = rest.replace(/[,;:|\-–—/\\()[\]]+/g, ' ').replace(/\s+/g, ' ').trim();
-    for (const f of found) out.push({ raw: line, phone: f.trim(), name: found.length === 1 ? name : '' });
-  }
-  return out;
+  return ex.extractFromText(input).map(toEntry).filter(Boolean);
 }
-
 function parseRow(r) {
   if (!r) return null;
   if (typeof r === 'string') { const m = r.match(PHONE_RE); return m ? { raw: r, phone: m[0], name: '' } : null; }
@@ -59,6 +44,16 @@ function extractPhoneNumbers(text) {
 }
 
 // Chiffres seuls -> E.164 sans « + ». Sans indicatif pays connu, un numéro local (0...) reste signalé.
+// Plan de numérotation E.164 : indicatifs à 1, 2 ou 3 chiffres (répartition par premier chiffre).
+const CC2_RE = /^(20|27|30|31|32|33|34|36|39|40|41|43|44|45|46|47|48|49|51|52|53|54|55|56|57|58|60|61|62|63|64|65|66|81|82|84|86|90|91|92|93|94|95|98)/;
+const CC3_RE = /^(2[1-9]\d|3(?:5|7|8)\d|42\d|50\d|59\d|6[789]\d|80\d|85\d|87\d|88\d|9[679]\d)/;
+function looksInternational(digits) {
+  const d = String(digits || '');
+  if (d.length < 11 || d.length > 15 || /^0/.test(d)) return false;
+  if (/^[17]/.test(d)) return true; // indicatif à 1 chiffre (Amérique du Nord, Russie/Kazakhstan)
+  return CC2_RE.test(d) || CC3_RE.test(d);
+}
+
 function normalizeOne(rawPhone, opts) {
   const o = opts || {};
   const cc = String(o.defaultCountryCode || process.env.DEFAULT_COUNTRY_CODE || '').replace(/\D/g, '');
@@ -70,6 +65,10 @@ function normalizeOne(rawPhone, opts) {
   if (cc && digits.startsWith(cc) && digits.length >= cc.length + 7) return { phone: digits, reason: null };
   if (digits.startsWith('0') && cc) return { phone: cc + digits.replace(/^0+/, ''), reason: null };
   if (cc && digits.length <= 10) return { phone: cc + digits, reason: null };
+  // Format international SANS « + » (ex. 22670123456 : ce que produit Excel, qui supprime le +, ou un JID WhatsApp) : c'est un
+  // numéro complet, pas un numéro local. Accepté seulement si l'indicatif est un vrai indicatif ITU et la longueur plausible
+  // (11 à 15 chiffres) ; un numéro local court (ex. 70123459) reste « incertain » : aucun chiffre n'est deviné.
+  if (looksInternational(digits)) return { phone: digits, reason: null };
   return { phone: digits, reason: cc ? null : 'COUNTRY_CODE_UNKNOWN' };
 }
 

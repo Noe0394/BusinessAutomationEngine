@@ -107,6 +107,11 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
     bizCtx
       ? 'Rédige la réponse en t\'appuyant uniquement sur ces informations réelles.'
       : 'Comme aucune offre n\'est renseignée, NE CITE AUCUN produit/service/domaine : réponds chaleureusement et demande simplement au client ce qu\'il recherche (ou dis que le vendeur va lui préciser) — sans jamais deviner ce qui est vendu.',
+    // Conduite de la conversation commerciale (défauts constatés en test réel : moyens de paiement inventés, salutation répétée).
+    'PAIEMENT : quand le client veut payer ou demande comment payer, donne EXACTEMENT les instructions de paiement configurées (numéro/moyen tels quels), puis demande la capture de la preuve de paiement avec son email. N\'invente JAMAIS un lien de paiement, un moyen (virement, carte…) ou un numéro absent des informations ci-dessus ; s\'ils ne sont pas configurés, dis que tu fais confirmer la procédure par le vendeur.',
+    'INTÉRÊT : si le client manifeste son intérêt, réponds concrètement avec ce que tu sais RÉELLEMENT de l\'offre (ce que c\'est, le prix), puis propose la suite (comment payer) — pas une simple question.',
+    history ? 'Ne dis « Bonjour »/« Salut » que dans le TOUT PREMIER message d\'une conversation : ici l\'échange est déjà commencé, va droit au but.' : '',
+    'INFORMATION ABSENTE : si la question porte sur un fait absent des informations (livraison, zone, délai…), ne promets pas de « vérifier et revenir » ; dis simplement que tu transmets la question au vendeur qui confirmera.',
     'Rédige UNIQUEMENT le message à lui envoyer (1 à 4 phrases naturelles, parlées), sans préambule ni guillemets. Ne présente JAMAIS une action (paiement reçu, accès débloqué) comme déjà faite — propose-la.',
   ].filter(Boolean).join('\n');
   const raw = await gen(prompt);
@@ -162,6 +167,9 @@ async function handleHumanActivity({ tenantId, channel, from }) {
   return conversationEngine.noteHumanActivity(tenantId, channel, from, settings.humanPauseMinutes);
 }
 
+// Le client est informé qu'une réponse viendra du vendeur / qu'on vérifie : dans ce cas le propriétaire DOIT être prévenu (promesse tenue).
+const PROMISE_TO_OWNER_RE = /(?:je\s+(?:vais\s+)?(?:v[ée]rifie\w*|me\s+renseigne\w*|regarde\w*)[^.!?]{0,80}(?:reviens|reviendrai|revenir|reviendra|reponds|répondrai)|je\s+(?:te|vous)\s+(?:reviens|recontacte\w*|tiens\s+au\s+courant)|transmet\w*\s+(?:ta|votre|la|cette|tes|vos)\s+(?:question|demande|message)s?|(?:fais|faire|fera)\s+confirmer|(?:le\s+)?vendeur\s+(?:te|vous)?\s*(?:qui\s+)?(?:te\s+|vous\s+)?(?:confirmera|reviendra|revient|répondra|contactera)|(?:il|elle)\s+(?:te|vous)\s+(?:revient|répondra|confirmera|recontactera))/i;
+
 // Consignes de personnalisation de l'accueil : contact enregistré -> on l'appelle par son nom ; inconnu -> on demande poliment
 // son nom/l'objet de sa demande (sans insister s'il ne répond pas).
 function identityDirectives(identity, name) {
@@ -192,7 +200,17 @@ async function processBatch({ tenantId, channel, from, name, items, settings }, 
     knownText,
     history,
     settings,
-    compose: (directives, ctx) => composeReply({ tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives: (directives || []).concat(identityDirectives(d.identity, name)) }),
+    compose: async (directives, ctx) => {
+      const reply = await composeReply({ tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives: (directives || []).concat(identityDirectives(d.identity, name)) });
+      // Le client attend une confirmation du vendeur (fait absent du Service métier) : la promesse est TENUE — le propriétaire est prévenu.
+      if (PROMISE_TO_OWNER_RE.test(reply)) {
+        require('./alertCenter').triggerAdminNotification(tenantId, {
+          reason: `Question sans réponse dans le Service métier : le client attend une confirmation.`, contact: d.identity || null, text: ctx.text,
+          key: `esc:${tenantId}:${channel}:${from}:${Math.floor(Date.now() / 600000)}`, // même clé que l'escalade du moteur : une seule alerte par événement
+        }).catch(() => {});
+      }
+      return reply;
+    },
     send: async (reply) => { lastOut = await sendAndLog({ tenantId, channel, from, reply }, d); return lastOut; },
     // Demande hors périmètre / escalade : triggerAdminNotification (alerte persistante, WhatsApp du propriétaire + tableau de bord).
     notify: d.notify || ((msg) => require('./alertCenter').triggerAdminNotification(tenantId, { reason: msg, contact: d.identity || null, key: `esc:${tenantId}:${channel}:${from}:${Math.floor(Date.now() / 600000)}` })),

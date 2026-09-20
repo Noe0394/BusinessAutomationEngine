@@ -22,6 +22,21 @@ const path = require('path');
 const express = require('express');
 const multer = require('multer');
 const XLSX = require('xlsx');
+const contactExtractor = require('./ai-engine/contactExtractor');
+const contactsPipeline = require('./ai-engine/contactsPipeline');
+
+// EXTRACTION UNIQUE de contacts depuis un fichier, quelle que soit la source (Excel toutes feuilles, CSV, TXT, vCard, JSON) : colonnes
+// reconnues par leur contenu, numéros normalisés/validés/dédoublonnés par le même pipeline que le collage et l'OCR.
+function importContactsFromFile(file, opts) {
+  const ex = contactExtractor.extractFromFile({ buffer: file.buffer, name: file.originalname, type: file.mimetype });
+  const cls = contactsPipeline.classify(ex.entries.filter((e) => e.phone).map((e) => ({ raw: e.raw || e.phone, phone: e.phone, name: e.name || '' })), opts || {});
+  const valid = cls.rows.filter((r) => r.state === 'valid');
+  return {
+    entries: ex.entries, counts: cls.counts,
+    contacts: valid.map((r) => ({ telephone: r.number, prenom: r.name || '', nom: r.name || '' })),
+    skipped: cls.rows.filter((r) => r.state !== 'valid').slice(0, 50).map((r) => ({ number: r.number || r.raw, name: r.name, state: r.state, reason: r.reason })),
+  };
+}
 const QRCode = require('qrcode');
 const axios = require('axios');
 const whatsappManager = require('./adapters/whatsappManager');
@@ -1664,31 +1679,11 @@ app.post('/api/contacts/import', requireAccess, requireModule('whatsapp'), uploa
   }
 
   try {
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet);
-
-    // "nom" (variable de personnalisation {nom}, voir replaceVariables) est
-    // reconnu depuis une colonne "nom"/"Nom" dédiée (produite par
-    // /api/groups/export-members) et, à défaut, depuis les mêmes colonnes que
-    // "prenom" (rétrocompatibilité avec d'anciens fichiers importés) —
-    // "prenom" reste renseigné séparément pour ne rien casser côté appelants
-    // existants qui le lisent encore.
-    const contacts = rows
-      .map((row) => {
-        const prenom = String(row.prenom || row.Prenom || row.name || row.Name || '').trim();
-        return {
-          telephone: String(row.telephone || row.Telephone || row.phone || row.Phone || row.numero || row.Numero || '').trim(),
-          prenom,
-          nom: String(row.nom || row.Nom || prenom || '').trim(),
-        };
-      })
-      .filter((c) => c.telephone);
-
-    res.status(200).json({ contacts, total: contacts.length });
+    const r = importContactsFromFile(req.file, { defaultCountryCode: req.body && req.body.defaultCountryCode });
+    res.status(200).json({ contacts: r.contacts, total: r.contacts.length, counts: r.counts, skipped: r.skipped });
   } catch (err) {
     console.error('Erreur lors de l\'import du fichier de contacts:', err);
-    res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .xlsx ou .csv avec une colonne "telephone".' });
+    res.status(400).json({ error: 'Fichier illisible. Formats acceptés : .xlsx, .xls, .csv, .txt, .vcf, .json (les numéros sont reconnus dans toutes les colonnes).' });
   }
 });
 
@@ -1707,24 +1702,12 @@ app.post('/api/messages/manual-import', requireAccess, requireModule('whatsapp')
   }
   const template = String((req.body || {}).message || '').trim();
 
-  let rows;
+  let contacts;
   try {
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    rows = XLSX.utils.sheet_to_json(sheet);
+    contacts = importContactsFromFile(req.file, { defaultCountryCode: (req.body || {}).defaultCountryCode }).contacts.map((c) => ({ telephone: c.telephone, nom: c.nom }));
   } catch (err) {
-    return res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .xlsx ou .csv avec une colonne "telephone".' });
+    return res.status(400).json({ error: 'Fichier illisible. Formats acceptés : .xlsx, .xls, .csv, .txt, .vcf, .json.' });
   }
-
-  const contacts = rows
-    .map((row) => {
-      const prenom = String(row.prenom || row.Prenom || row.name || row.Name || '').trim();
-      return {
-        telephone: String(row.telephone || row.Telephone || row.phone || row.Phone || row.numero || row.Numero || '').trim(),
-        nom: String(row.nom || row.Nom || prenom || '').trim(),
-      };
-    })
-    .filter((c) => c.telephone);
 
   const tenantId = resolveTenantId(req);
   const messageHash = messageHistory.hashTemplate([template]);
@@ -2832,15 +2815,12 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), attach
 // pour le nom affiché. Ne persiste rien côté serveur : le frontend garde la
 // liste importée en mémoire le temps de composer et lancer l'envoi.
 app.post('/api/telegram/contacts/import', requireAccess, requireModule('telegram'), upload.single('file'), async (req, res) => {
-  let rows;
-
+  let entries;
   try {
     if (req.file) {
-      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      rows = XLSX.utils.sheet_to_json(sheet);
+      entries = contactExtractor.extractFromFile({ buffer: req.file.buffer, name: req.file.originalname, type: req.file.mimetype }).entries;
     } else if (Array.isArray(req.body?.contacts)) {
-      rows = req.body.contacts;
+      entries = contactExtractor.extractFromRows(req.body.contacts);
     } else {
       return res.status(400).json({
         error: 'Fournissez un fichier CSV/Excel (champ "file") ou un tableau JSON "contacts".',
@@ -2848,18 +2828,14 @@ app.post('/api/telegram/contacts/import', requireAccess, requireModule('telegram
     }
   } catch (err) {
     console.error('Erreur lors de la lecture du fichier de contacts Telegram:', err);
-    return res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .csv ou .xlsx.' });
+    return res.status(400).json({ error: 'Fichier illisible. Formats acceptés : .xlsx, .xls, .csv, .txt, .vcf, .json.' });
   }
 
-  const contacts = rows
-    .map((row) => ({
-      identifier: String(
-        row.identifiant || row.username || row.Username || row.telegram || row.Telegram
-        || row.contact || row.Contact || row.telephone || row.Telephone || row.phone || row.Phone || '',
-      ).trim(),
-      name: String(row.prenom || row.Prenom || row.nom || row.Nom || row.name || row.Name || '').trim(),
-    }))
-    .filter((c) => c.identifier);
+  // Identifiant = @username reconnu (n'importe où dans le fichier), sinon le numéro NORMALISÉ (mêmes règles que WhatsApp).
+  const contacts = contactExtractor.toTelegramIdentifiers(entries, (p) => {
+    const c = contactsPipeline.classify([{ phone: p }], { defaultCountryCode: req.body && req.body.defaultCountryCode }).rows[0];
+    return c && c.state === 'valid' ? c.number : null;
+  });
 
   res.status(200).json({ contacts, total: contacts.length });
 });
@@ -2873,24 +2849,13 @@ app.post('/api/telegram/campaign/manual-import', requireAccess, requireModule('t
   }
   const template = String((req.body || {}).message || '').trim();
 
-  let rows;
+  let contacts;
   try {
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    rows = XLSX.utils.sheet_to_json(sheet);
+    const entries = contactExtractor.extractFromFile({ buffer: req.file.buffer, name: req.file.originalname, type: req.file.mimetype }).entries;
+    contacts = contactExtractor.toTelegramIdentifiers(entries, (p) => { const c = contactsPipeline.classify([{ phone: p }], {}).rows[0]; return c && c.state === 'valid' ? c.number : null; });
   } catch (err) {
-    return res.status(400).json({ error: 'Fichier invalide. Utilisez un fichier .xlsx ou .csv avec une colonne "identifiant"/"username"/"telephone".' });
+    return res.status(400).json({ error: 'Fichier illisible. Formats acceptés : .xlsx, .xls, .csv, .txt, .vcf, .json.' });
   }
-
-  const contacts = rows
-    .map((row) => ({
-      identifier: String(
-        row.identifiant || row.username || row.Username || row.telegram || row.Telegram
-        || row.contact || row.Contact || row.telephone || row.Telephone || row.phone || row.Phone || '',
-      ).trim(),
-      name: String(row.prenom || row.Prenom || row.nom || row.Nom || row.name || row.Name || '').trim(),
-    }))
-    .filter((c) => c.identifier);
 
   const tenantId = resolveTenantId(req);
   const messageHash = messageHistory.hashTemplate([template]);
@@ -5084,6 +5049,10 @@ app.post('/api/contacts/import-crm', requireAccess, upload.single('file'), async
       });
       return { phone, name, fields };
     });
+    // Extraction intelligente (toutes feuilles, colonnes reconnues par leur contenu) : utilisée dès qu'elle trouve PLUS de contacts
+    // que la lecture par noms de colonnes exacts ; les champs annexes (entreprise, ville…) restent ceux de la lecture par en-têtes.
+    const smart = contactExtractor.extractFromFile({ buffer: req.file.buffer, name: req.file.originalname, type: req.file.mimetype }).entries.filter((e) => e.phone);
+    if (smart.length > contacts.filter((c) => c.phone).length) contacts.splice(0, contacts.length, ...smart.map((e) => ({ phone: e.phone, name: e.name || '', fields: {} })));
     const report = await contactCrm.importContacts(resolveTenantId(req), contacts, { source: 'import_fichier', channel: (req.body && req.body.channel) || 'WHATSAPP' });
     res.json({ ok: true, report });
   } catch (err) {
@@ -5643,6 +5612,9 @@ const assistant = require('./ai-engine/assistantLayer').create({
   telegramManager,
   autoResponder,
   getRuntime: () => intelligenceBridge && intelligenceBridge.runtime,
+  // IA conversationnelle : rédige les réponses privées (accusés, réponses d'attente) et arbitre les cas ambigus. Les gabarits ne servent
+  // que de secours si aucune IA ne répond.
+  llm: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_conversation', maxTokens: 250 }).then((r) => r.text),
   chatOrchestrator,
   aiStudioStore,
   llmFallbackEngine,
@@ -5701,6 +5673,7 @@ try {
       text: req.body && req.body.text,
       image: isImage ? file.buffer : null,
       file: file && !isImage ? { buffer: file.buffer, name: file.originalname, type: file.mimetype } : null,
+      rows: (() => { try { const c = req.body && req.body.contacts; const a = typeof c === 'string' ? JSON.parse(c) : c; return Array.isArray(a) ? a.map((x) => ({ phone: x.telephone || x.phone || x.identifier || '', name: x.nom || x.name || '' })) : undefined; } catch (e) { return undefined; } })(),
     }, { defaultCountryCode: req.body && req.body.defaultCountryCode });
   }));
   app.get('/api/campaigns/recipients/:id', requireAccess, cmpRoute((req, tenant) => campaignService.getRecipientsPage(tenant, req.params.id, req.query)));

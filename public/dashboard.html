@@ -2895,10 +2895,27 @@
       return data.mediaFileId;
     }
 
+    // Liste PAR DÉFAUT : la liste unique (Excel, collage, photo) devient la liste de destinataires de la campagne, sans nouvelle analyse.
+    async function cmpSyncDefaultRecipients() {
+      const ch = document.getElementById('cmp-channel').value;
+      const list = ch === 'TELEGRAM'
+        ? tgDmImportedContacts.map((c) => ({ telephone: c.identifier, nom: c.name || '' }))
+        : state.importedContacts.map((c) => ({ telephone: c.telephone, nom: c.nom || c.prenom || '' }));
+      if (!list.length) return false;
+      const key = ch + ':' + list.map((x) => x.telephone).join(',');
+      if (cmpState.syncKey === key && cmpState.recipientsId) return true;
+      const form = new FormData();
+      form.append('contacts', JSON.stringify(list));
+      const data = await cmpJson('/api/campaigns/recipients', { method: 'POST', body: form });
+      cmpState.recipientsId = data.recipientsId; cmpState.syncKey = key;
+      return true;
+    }
+
     async function cmpCreate(mode) {
       cmpFeedback('', false);
       try {
-        if (!cmpState.recipientsId) throw new Error('Analysez d\'abord les destinataires.');
+        await cmpSyncDefaultRecipients();
+        if (!cmpState.recipientsId) throw new Error('Aucune liste de destinataires : chargez un fichier Excel/CSV, collez une liste ou photographiez-la.');
         const body = {
           name: document.getElementById('cmp-name').value.trim(),
           channel: document.getElementById('cmp-channel').value,
@@ -3760,6 +3777,8 @@
     function setSelectedImportFile(file) {
       selectedImportFile = file;
       document.getElementById('import-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+      // Chargement DIRECT dans la liste d'envoi : plus de second clic sur « Importer ».
+      setTimeout(() => document.getElementById('import-btn').click(), 0);
     }
 
     function renderImportedContacts() {
@@ -3808,9 +3827,15 @@
           showImportResult(data.error || 'Échec de l\'import.', true);
           return;
         }
-        state.importedContacts = data.contacts || [];
+        // FUSION avec la liste déjà chargée (autres méthodes, autres fichiers), doublons ignorés : jamais de remplacement silencieux.
+        const seenNum = new Set(state.importedContacts.map((c) => String(c.telephone)));
+        let addedNum = 0;
+        (data.contacts || []).forEach((c) => { if (!seenNum.has(String(c.telephone))) { seenNum.add(String(c.telephone)); state.importedContacts.push(c); addedNum += 1; } });
         renderImportedContacts();
-        showImportResult(data.total + ' contact(s) importé(s).', false);
+        const impRadio = document.querySelector('input[name="target-mode"][value="import"]');
+        if (impRadio && state.importedContacts.length) { impRadio.checked = true; impRadio.dispatchEvent(new Event('change')); }
+        const skipNote = data.counts && (data.counts.uncertain || data.counts.invalid) ? ' — ' + ((data.counts.uncertain || 0) + (data.counts.invalid || 0)) + ' numéro(s) écarté(s) (local sans indicatif pays ou invalide : ajoutez le + / l\'indicatif, ou utilisez « Autres méthodes de chargement »)' : '';
+        showImportResult(addedNum + " contact(s) ajouté(s) à la liste d'envoi (" + (data.total || 0) + ' valide(s) dans le fichier) — ' + state.importedContacts.length + ' au total.' + skipNote, false);
       } catch (err) {
         showImportResult('Erreur réseau lors de l\'import.', true);
       }
@@ -4660,6 +4685,7 @@
     function tgDmSetSelectedFile(file) {
       selectedTgDmFile = file;
       document.getElementById('tg-dm-import-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+      setTimeout(() => document.getElementById('tg-dm-import-btn').click(), 0); // chargement direct, sans second clic
     }
 
     // Pièce jointe (image/vidéo/PDF) envoyée avec le message à chaque
@@ -4725,7 +4751,9 @@
           tgDmShowFeedback(data.error || 'Échec de l\'import.', true);
           return;
         }
-        tgDmImportedContacts = data.contacts || [];
+        // FUSION avec la liste déjà chargée, doublons ignorés.
+        const seenTg = new Set(tgDmImportedContacts.map((c) => String(c.identifier)));
+        (data.contacts || []).forEach((c) => { if (!seenTg.has(String(c.identifier))) { seenTg.add(String(c.identifier)); tgDmImportedContacts.push(c); } });
         document.getElementById('tg-dm-import-count').textContent = tgDmImportedContacts.length > 0
           ? tgDmImportedContacts.length + ' contact(s) importé(s) et prêt(s) à être contactés.'
           : 'Aucun contact valide trouvé dans le fichier (colonnes Téléphone, Username, Nom attendues).';
@@ -5864,6 +5892,7 @@
     function schedSetSelectedContactsFile(file) {
       selectedSchedContactsFile = file;
       document.getElementById('sched-contacts-file-name').textContent = 'Fichier sélectionné : ' + file.name;
+      setTimeout(() => document.getElementById('sched-contacts-import-btn').click(), 0); // chargement direct, sans second clic
     }
 
     document.getElementById('sched-contacts-import-btn').addEventListener('click', async () => {
@@ -5876,7 +5905,8 @@
         const res = await apiFetch(endpoint, { method: 'POST', body: formData });
         const data = await res.json();
         if (!res.ok) { schedShowFeedback(data.error || 'Échec de l\'import.', true); return; }
-        schedImportedContacts = data.contacts || [];
+        const seenSc = new Set(schedImportedContacts.map((c) => String(schedContactIdentifier(c))));
+        (data.contacts || []).forEach((c) => { const k = String(schedContactIdentifier(c)); if (!seenSc.has(k)) { seenSc.add(k); schedImportedContacts.push(c); } });
         document.getElementById('sched-contacts-count').textContent = schedImportedContacts.length + ' contact(s) importé(s).';
         schedShowFeedback(schedImportedContacts.length + ' contact(s) importé(s).', false);
       } catch (err) {
@@ -6006,10 +6036,13 @@
         // la variable de personnalisation {nom} dans les messages (voir
         // replaceVariables côté serveur) — spécifique à WhatsApp, Telegram
         // garde un identifiant simple ci-dessous.
+        // Liste PAR DÉFAUT : celle déjà chargée par n'importe quelle méthode (Excel, collage, photo) si le planificateur n'a pas la sienne.
+        if (!schedImportedContacts.length && state.importedContacts.length) schedImportedContacts = state.importedContacts.slice();
         recipients = schedImportedContacts
           .map((c) => ({ telephone: schedContactIdentifier(c), nom: c.nom || c.prenom || '' }))
           .filter((c) => c.telephone);
       } else {
+        if (!schedImportedContacts.length && tgDmImportedContacts.length) schedImportedContacts = tgDmImportedContacts.slice();
         recipients = schedImportedContacts.map(schedContactIdentifier).filter(Boolean);
       }
 
@@ -10327,7 +10360,7 @@
             if (!page.rows || !page.rows.length) break;
             allRows = allRows.concat(page.rows);
           }
-          last = { rows: allRows, text };
+          last = { rows: allRows, text, data };
           window.__impLast = window.__impLast || {};
           window.__impLast[hostId] = { counts: data.counts, at: Date.now() };
           cmpState.recipientsId = data.recipientsId;
@@ -10346,7 +10379,7 @@
           // « Liste importée » ni « Lancer l'envoi » ne les voient.
           const validRows = last.rows.filter((r) => r.state === 'valid');
           if (validRows.length || (opts.extra && opts.extra(text).length)) {
-            const n = opts.onValid(validRows, text);
+            const n = opts.onValid(validRows, text, data);
             out.appendChild(cmpEl('p', n + ' contact(s) ajouté(s) à la liste d\'envoi (doublons ignorés) et prêts à être utilisés.', { style: 'color:#22c55e;' }));
           }
           use.hidden = true;
@@ -10357,7 +10390,7 @@
       use.addEventListener('click', () => {
         if (!last) return;
         const valid = last.rows.filter((r) => r.state === 'valid');
-        const n = opts.onValid(valid, last.text);
+        const n = opts.onValid(valid, last.text, last.data);
         out.appendChild(cmpEl('p', n + ' contact(s) ajouté(s) à la liste de cet onglet et prêts à être utilisés.', { style: 'color:#22c55e;' }));
         use.hidden = true;
       });
@@ -10378,11 +10411,12 @@
 
     impBuild('tg-adv-import', {
       extra(text) { return (String(text || '').match(/@[A-Za-z0-9_]{4,32}/g) || []); },
-      onValid(valid, text) {
+      onValid(valid, text, data) {
         const seen = new Set(tgDmImportedContacts.map((c) => String(c.identifier)));
         let added = 0;
         const add = (identifier, name) => { if (!seen.has(identifier)) { seen.add(identifier); tgDmImportedContacts.push({ identifier, name: name || '' }); added += 1; } };
         valid.forEach((r) => add(String(r.number), r.name));
+        ((data && data.usernames) || []).forEach((u) => add(u, ''));
         (String(text || '').match(/@[A-Za-z0-9_]{4,32}/g) || []).forEach((u) => add(u, ''));
         tgDmRenderContactsPreview();
         const cnt = document.getElementById('tg-dm-import-count');

@@ -277,6 +277,11 @@ async function getEngineContextText(tenant) {
     if (products.length) lines.push(`  Produits : ${products.join(' ; ')}`);
     if (c.advantages) lines.push(`  Avantages : ${c.advantages}`);
     if (c.objections) lines.push(`  Objections & réponses : ${c.objections}`);
+    if (c.responses) lines.push(`  Réponses préparées : ${c.responses}`);
+    // Instructions de paiement / d'accès configurées par le vendeur : à donner EXACTEMENT, jamais complétées ni inventées.
+    if (c.paymentTerms) lines.push(`  INSTRUCTIONS DE PAIEMENT (seuls moyens/numéros valides, à donner tels quels) : ${c.paymentTerms}`);
+    else lines.push('  Instructions de paiement : NON CONFIGURÉES (ne cite aucun numéro, lien ni moyen de paiement).');
+    if (c.accessTerms) lines.push(`  Conditions d'accès / livraison : ${c.accessTerms}`);
     if ((s.rules || []).length) lines.push(`  Règles commerciales : ${s.rules.join(' | ')}`);
     if ((s.objectives || []).length) lines.push(`  Objectifs : ${s.objectives.join(' | ')}`);
     if ((s.scopes || []).length) lines.push(`  Capacités autorisées (outils réels) : ${s.scopes.join(', ')}`);

@@ -192,3 +192,32 @@ test('RÉGRESSION (messages réellement reçus sur le compte de test) : intérê
   assert.equal(require('../ai-engine/groupCampaigns').isInterest('Super promo !'), false);
   assert.equal(require('../ai-engine/groupCampaigns').isInterest("Je suis intéressée, c'est combien ?"), true);
 });
+
+test('IA : les réponses privées sont COMPOSÉES par l\'IA (gabarit seulement en secours) et gardent leurs garde-fous', async () => {
+  const from = '22670123000@s.whatsapp.net';
+  const identity = await contactIdentity.resolveContact('ai1', { jid: from, pushName: 'Awa' });
+  const sent = []; const send = async (t) => { sent.push(t); return { status: 'SUCCESS' }; };
+  const prompts = [];
+  const llm = async (p) => { prompts.push(p); return /transmets le message/.test(p) ? 'Je lui transmets ton message, il te répond directement 🙂' : 'Salut Awa ! Très bien merci, et toi ? 😊'; };
+  // conversation banale -> réponse rédigée par l'IA
+  await router.processBatch({ tenantId: 'ai1', channel: 'WHATSAPP', from, identity, items: [{ text: 'Salut, tu vas bien ?', messageId: 'AI1' }] }, { send, llm });
+  assert.equal(sent[0], 'Salut Awa ! Très bien merci, et toi ? 😊');
+  assert.match(prompts[0], /N'invente JAMAIS/);
+  // sujet personnel -> réponse d'attente rédigée par l'IA, sans répondre à la question
+  await router.processBatch({ tenantId: 'ai1', channel: 'WHATSAPP', from, identity, items: [{ text: 'Est-ce que ta maman est à la maison ?', messageId: 'AI2' }] }, { send, llm });
+  assert.equal(sent[1], 'Je lui transmets ton message, il te répond directement 🙂');
+  assert.match(prompts[1], /NE réponds PAS à la question/);
+  // sortie IA invalide (chiffres, lien, trop longue) -> rejetée, gabarit de secours ; jamais d'invention transmise
+  for (const bad of ['Il est à la maison depuis 18h30', 'Voici le lien https://x.example', 'x'.repeat(400)]) {
+    assert.equal(await router.aiCompose('casual', { text: 'Salut', name: 'Awa', recent: [], llm: async () => bad }), null, bad.slice(0, 30));
+  }
+  const fallback = await router.processBatch({ tenantId: 'ai1', channel: 'WHATSAPP', from: '22670123001@s.whatsapp.net', identity: await contactIdentity.resolveContact('ai1', { jid: '22670123001@s.whatsapp.net', pushName: 'Ben' }), items: [{ text: 'Merci beaucoup !', messageId: 'AI3' }] }, { send, llm: async () => { throw new Error('IA indisponible'); } });
+  assert.equal(fallback.replied, true, 'IA en panne : réponse de secours, jamais de silence');
+});
+
+test('questions ouvertes : traitées par l\'IA conversationnelle (moteur commercial), plus renvoyées systématiquement au propriétaire', () => {
+  assert.equal(router.classify('Tu peux m\'envoyer ça ?', {}).category, 'GENERAL_INFORMATION');
+  assert.equal(router.decide(router.classify('Vous livrez le samedi ?', {}), {}).mode, 'BUSINESS');
+  // les sujets réellement privés/sensibles restent au propriétaire (jamais d'invention)
+  assert.equal(router.decide(router.classify('Est-ce que ta maman est à la maison ?', {}), {}).mode, 'HUMAN_REQUIRED');
+});

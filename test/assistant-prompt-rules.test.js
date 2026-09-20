@@ -142,3 +142,24 @@ test('GARDE-FOU BUILD : le dashboard obscurci exécute « Analyser la liste » e
   assert.deepEqual(calls, ['/api/campaigns/recipients']);
   assert.match(String(byId['campaign-import-count'] && byId['campaign-import-count'].__s.textContent), /^2 contact\(s\) prêt\(s\)/);
 });
+
+test('promesse tenue : si l\'IA dit « je transmets au vendeur », le propriétaire est réellement prévenu', async () => {
+  const notes = [];
+  alertCenter.setDeliverers([async (t, text) => { notes.push(text); return { ok: true, channel: 't' }; }]);
+  const runtime = { sendMessageVerified: async () => ({ status: 'SUCCESS', confirmationId: 'C' }) };
+  const phrases = [
+    'Je n\'ai pas d\'info précise sur la livraison à Bobo. Je vais transmettre ta question au vendeur, et il te revient dès que possible.',
+    'Je vérifie et je reviens vers toi rapidement.',
+    'Le vendeur te confirmera la zone de livraison.',
+  ];
+  for (let i = 0; i < phrases.length; i++) {
+    notes.length = 0;
+    await autoResponder.handleIncoming({ tenantId: 'pr' + i, channel: 'WHATSAPP', from: '2267012340' + i + '@s.whatsapp.net', name: 'Awa', text: 'Vous livrez à Bobo ?', messageId: 'PR' + i }, { runtime, llm: async () => phrases[i], settings: { whatsapp: true, debounceMs: 0 } });
+    assert.equal(notes.length, 1, 'alerte propriétaire pour : ' + phrases[i]);
+    assert.match(notes[0], /Question sans réponse dans le Service métier/);
+  }
+  // une réponse qui n'annonce rien de tel ne déclenche aucune alerte
+  notes.length = 0;
+  await autoResponder.handleIncoming({ tenantId: 'pr9', channel: 'WHATSAPP', from: '22670123499@s.whatsapp.net', name: 'Awa', text: "C'est combien ?", messageId: 'PR9' }, { runtime, llm: async () => 'Le service coûte 8 000 FCFA.', settings: { whatsapp: true, debounceMs: 0 } });
+  assert.equal(notes.length, 0);
+});

@@ -11,7 +11,9 @@
 //   2) Idempotence (idempotencyKey) : seen() renvoie true si une clé a déjà été
 //      traitée récemment (évite de re-traiter le même message/évènement).
 
-const MAX_AI_CALLS_PER_TASK = Math.max(1, parseInt(process.env.MAX_AI_CALLS_PER_TASK, 10) || 6);
+// 30 appels / 5 min / conversation : assez pour un échange soutenu (2 à 3 appels IA par réponse : rédaction + régénération éventuelle),
+// tout en coupant une vraie boucle (bot <-> bot, boucle d'outils). Avec 6, un prospect qui écrit vite faisait taire l'IA en pleine conversation.
+const MAX_AI_CALLS_PER_TASK = Math.max(1, parseInt(process.env.MAX_AI_CALLS_PER_TASK, 10) || 30);
 const TASK_TTL_MS = 5 * 60 * 1000; // une "tâche" vit 5 min
 const IDEMP_TTL_MS = 60 * 60 * 1000; // idempotence sur 1 h
 
