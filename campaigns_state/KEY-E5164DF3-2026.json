@@ -1,6 +1,6 @@
 {
   "tenantId": "KEY-E5164DF3-2026",
-  "activeCampaignId": null,
+  "activeCampaignId": "ffa9f457-35b6-45c8-bfdb-0832b7812dab",
   "networkHealth": {
     "consecutiveSlowSends": 0,
     "consecutiveOverloadFailures": 0,
@@ -981,15 +981,15 @@
       "skippedDuplicates": 0,
       "messageHash": "bd808dae93575a0fd04e6a57",
       "duplicateWindowHours": 48,
-      "status": "completed",
+      "status": "running",
       "paused": false,
       "userPaused": false,
       "stopRequested": false,
       "superseded": false,
       "createdAt": "2026-09-20T19:22:37.856Z",
       "startedAt": "2026-09-20T19:22:37.856Z",
-      "finishedAt": "2026-09-20T20:02:37.867Z",
-      "lastProgressAt": "2026-09-20T20:02:37.867Z",
+      "finishedAt": null,
+      "lastProgressAt": "2026-09-20T20:02:37.862Z",
       "nextIndex": 92,
       "lastProcessedIndex": 91,
       "recipients": [
