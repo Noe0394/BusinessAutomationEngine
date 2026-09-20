@@ -22,7 +22,7 @@
   const ACTIONS = ['EXTRACT_MEMBERS', 'SEND_CAMPAIGN', 'FOLLOW_UP', 'ANALYZE_HUMAN_CONTEXT',
     'ANALYZE_RESPONSES', 'REPLY_COMMENT', 'GENERATE_VIDEO', 'PAUSE_CAMPAIGN',
     'RESUME_CAMPAIGN', 'GENERATE_REPORT', 'CREATE_USER_ACCOUNT', 'GENERATE_ACCESS_KEY'];
-  const DEFAULT_FIREBASE_BASE = 'https://us-central1-rien-afrique.cloudfunctions.net';
+  const DEFAULT_FIREBASE_BASE = (typeof process !== 'undefined' && process.env && (process.env.CLOUD_FUNCTIONS_BASE || process.env.CLOUDFLARE_LICENSE_URL)) || 'https://cyrus-license.ezechielatannidje.workers.dev'; // Cloudflare (Firebase n'est plus utilisé)
 
   function uuid(prefix) {
     const rnd = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -252,7 +252,7 @@
         accessKey: { generate: true },
       };
 
-      const secret = envSecret(env, 'FIREBASE_ADMIN_SECRET') || envSecret(env, 'ADMIN_SECRET');
+      const secret = envSecret(env, 'CLOUDFLARE_ADMIN_SECRET') || envSecret(env, 'FIREBASE_ADMIN_SECRET') || envSecret(env, 'ADMIN_SECRET');
       const res = await postCloudFunction(cloudBase + '/grantAccessOnPurchase', body, { 'x-admin-secret': secret || '' }, d)
         .catch((e) => ({ ok: false, error: String(e && e.message || e), transportError: true }));
 

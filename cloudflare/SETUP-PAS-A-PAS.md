@@ -65,3 +65,15 @@ partagé avec RIEA AFRIQUE, règle de non-intervention). Firebase reste simpleme
 ## Quotas gratuits à surveiller
 D1 : 100 k écritures / 5 M lectures par jour. Workers : 100 k requêtes/jour. Une vérification = 1 lecture ;
 la réplication n'écrit que les clés modifiées.
+
+## Fonctions Firebase reprises sur Cloudflare (2026-09-20)
+Le Worker expose les MÊMES noms de routes que les anciennes fonctions Firebase, donc les clients n'ont changé que d'adresse :
+`verifyLicenseOffline`, `create/list/update/setActive/deleteLicenseOffline`, `generateTextFallback`, `generateImageFallback`,
+`startVideoFallback`, `pollVideoFallback`, `checkUpdateOffline`, `publishUpdateOffline`, `grantAccessOnPurchase`, `grantModuleAccess`.
+- Élèves et clés d'accès : tables D1 `cyrus_students`, `cyrus_access_keys` (Firestore `cyrus_*` n'est plus utilisé).
+- Image : fal.ai -> **Workers AI (FLUX, gratuit)** -> Pollinations ; l'image est renvoyée en `data:` (pas de stockage objet activé).
+- Texte : cascade des fournisseurs -> **Workers AI (Llama)** en dernier filet.
+- Vidéo : fal.ai / Replicate (clés requises et crédit chez ces fournisseurs) ; Hugging Face non porté.
+- Mise à jour du client PC : `publishUpdateOffline` prend désormais une `downloadUrl` HTTPS (binaire hébergé ailleurs, ex. GitHub Releases).
+- **Non porté : `generateEbookFallback`** (moteur PDF non exécutable dans un Worker) -> répond 501 explicite ; ebook disponible via le VPS et le client PC.
+Redéploiement : `node scripts/cloudflare-deploy.js` (idempotent).

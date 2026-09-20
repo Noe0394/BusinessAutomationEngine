@@ -27,6 +27,11 @@ const FIREBASE_IMAGE_URL = process.env.FIREBASE_IMAGE_URL || '';
 // lib/media/videoAiEngine.js côté VPS/Firebase.
 const FIREBASE_VIDEO_START_URL = process.env.FIREBASE_VIDEO_START_URL || '';
 const FIREBASE_VIDEO_POLL_URL = process.env.FIREBASE_VIDEO_POLL_URL || '';
+// Cloudflare (Worker) : voie principale image/vidéo quand CLOUDFLARE_LICENSE_URL est défini.
+const CF_BASE = String(process.env.CLOUDFLARE_LICENSE_URL || '').replace(/\/+$/, '');
+const CLOUDFLARE_IMAGE_URL = CF_BASE ? `${CF_BASE}/ai/image` : '';
+const CLOUDFLARE_VIDEO_START_URL = CF_BASE ? `${CF_BASE}/ai/video/start` : '';
+const CLOUDFLARE_VIDEO_POLL_URL = CF_BASE ? `${CF_BASE}/ai/video/poll` : '';
 
 function firebaseHeaders() {
   return { 'x-license-key': LICENSE_KEY, 'x-device-id': getDeviceId() };
@@ -56,6 +61,14 @@ async function generateText(prompt, { history, mode, skillKey } = {}) {
 }
 
 async function generateImage(prompt, { width, height } = {}) {
+  if (CLOUDFLARE_IMAGE_URL) {
+    try {
+      const { data } = await axios.post(CLOUDFLARE_IMAGE_URL, { prompt }, { headers: firebaseHeaders(), timeout: 30_000 });
+      return data; // { url, provider }
+    } catch (err) {
+      console.warn('Cloudflare injoignable pour la génération d\'image — repli suivant :', err.message);
+    }
+  }
   if (FIREBASE_IMAGE_URL) {
     try {
       const { data } = await axios.post(FIREBASE_IMAGE_URL, { prompt }, { headers: firebaseHeaders(), timeout: 30_000 });
@@ -70,6 +83,15 @@ async function generateImage(prompt, { width, height } = {}) {
 }
 
 async function startVideo(imageUrl, { prompt, seed, preferredProvider } = {}) {
+  if (CLOUDFLARE_VIDEO_START_URL) {
+    try {
+      const { data } = await axios.post(CLOUDFLARE_VIDEO_START_URL, { imageUrl, prompt, seed, preferredProvider }, { headers: firebaseHeaders(), timeout: 30_000 });
+      return data; // { jobId, provider }
+    } catch (err) {
+      if (err.response && err.response.data && err.response.data.error) throw new Error(err.response.data.error);
+      console.warn('Cloudflare injoignable pour la vidéo — repli suivant :', err.message);
+    }
+  }
   if (!FIREBASE_VIDEO_START_URL) {
     throw new Error('Génération vidéo IA non configurée (FIREBASE_VIDEO_START_URL absent du .env) — aucun repli VPS pour cette fonctionnalité.');
   }
@@ -82,6 +104,15 @@ async function startVideo(imageUrl, { prompt, seed, preferredProvider } = {}) {
 }
 
 async function pollVideo(jobId) {
+  if (CLOUDFLARE_VIDEO_POLL_URL) {
+    try {
+      const { data } = await axios.post(CLOUDFLARE_VIDEO_POLL_URL, { jobId }, { headers: firebaseHeaders(), timeout: 30_000 });
+      return data;
+    } catch (err) {
+      if (err.response && err.response.data && err.response.data.error) throw new Error(err.response.data.error);
+      console.warn('Cloudflare injoignable pour l\'interrogation vidéo — repli suivant :', err.message);
+    }
+  }
   if (!FIREBASE_VIDEO_POLL_URL) {
     throw new Error('Génération vidéo IA non configurée (FIREBASE_VIDEO_POLL_URL absent du .env).');
   }

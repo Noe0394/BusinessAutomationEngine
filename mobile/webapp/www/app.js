@@ -6,7 +6,7 @@
   const EmbeddedWebView = window.Capacitor.Plugins.EmbeddedWebView;
   const DESKTOP_UA =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
-  const FIREBASE_BASE = 'https://us-central1-rien-afrique.cloudfunctions.net';
+  const FIREBASE_BASE = 'https://cyrus-license.ezechielatannidje.workers.dev'; // Worker Cloudflare (mêmes noms de routes que les anciennes fonctions Firebase)
 
   // ---------- Navigation ----------
   let activeTab = 'whatsapp';

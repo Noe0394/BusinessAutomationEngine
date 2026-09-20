@@ -4,7 +4,7 @@
 // adaptateur de plateforme. Voir webapp-core/adapters/CONTRACT.md pour la
 // règle générale que respecte le reste du cœur applicatif.
 (function () {
-  const FIREBASE_BASE = 'https://us-central1-rien-afrique.cloudfunctions.net';
+  const FIREBASE_BASE = 'https://cyrus-license.ezechielatannidje.workers.dev'; // Worker Cloudflare (mêmes noms de routes que les anciennes fonctions Firebase)
 
   // ---------- Navigation ----------
   document.querySelectorAll('.nav button').forEach((btn) => {

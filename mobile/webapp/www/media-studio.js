@@ -33,7 +33,7 @@
 (function () {
   'use strict';
 
-  const FIREBASE_BASE = 'https://us-central1-rien-afrique.cloudfunctions.net';
+  const FIREBASE_BASE = 'https://cyrus-license.ezechielatannidje.workers.dev'; // Worker Cloudflare (mêmes noms de routes que les anciennes fonctions Firebase)
 
   function getDeviceId() {
     let id = localStorage.getItem('cyrus_device_id');

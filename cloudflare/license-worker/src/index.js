@@ -3,6 +3,7 @@
 
 import { runTextCascade } from './textCascade.js';
 import { ADMIN_PAGE } from './adminPage.js';
+import { generateImage, startVideo, pollVideo } from './media.js';
 
 const ALL_MODULES = ['whatsapp', 'telegram', 'studio_video'];
 const CORS = {
@@ -137,22 +138,134 @@ async function admin(action, request, env) {
   return json({ error: 'Route inconnue.' }, 404);
 }
 
-// Passerelle IA texte : réservée aux clients dont la licence est valide (actif, non expiré,
-// appareil lié ou encore non lié). Aucune écriture D1 ici.
-async function aiText(request, env) {
+// Authentification par licence des passerelles IA : clé active, non expirée, appareil lié ou encore non lié (aucune écriture D1).
+async function licenseAuth(request, env) {
   const key = normKey(request.headers.get('x-license-key'));
   const deviceId = request.headers.get('x-device-id');
   if (!key || !deviceId) return json({ error: 'Licence manquante.' }, 401);
   const row = await getLicense(env, key);
   if (!row || !row.active || (row.expires_at && new Date(row.expires_at).getTime() < Date.now())) return json({ error: 'Licence invalide.' }, 401);
   if (row.bound_device_id && row.bound_device_id !== deviceId) return json({ error: 'Appareil non autorisé.' }, 401);
+  return null;
+}
+
+async function aiText(request, env) {
+  const denied = await licenseAuth(request, env);
+  if (denied) return denied;
   const { prompt } = await request.json().catch(() => ({}));
   if (!prompt || !String(prompt).trim()) return json({ error: 'Prompt manquant.' }, 400);
   try { return json(await runTextCascade(String(prompt).slice(0, 12000), env, env.FETCH)); }
   catch (err) { return json({ error: 'Échec de la génération de texte IA (tous les fournisseurs ont échoué).' }, 502); }
 }
 
+async function aiImage(request, env) {
+  const denied = await licenseAuth(request, env);
+  if (denied) return denied;
+  const { prompt } = await request.json().catch(() => ({}));
+  if (!prompt || !String(prompt).trim()) return json({ error: 'Prompt manquant.' }, 400);
+  try { return json(await generateImage(String(prompt).slice(0, 2000), env, env.FETCH)); }
+  catch (err) { return json({ error: 'Échec de la génération image IA (tous les fournisseurs ont échoué).' }, 502); }
+}
+
+async function videoStart(request, env) {
+  const denied = await licenseAuth(request, env);
+  if (denied) return denied;
+  const { imageUrl, prompt, seed } = await request.json().catch(() => ({}));
+  if (!imageUrl) return json({ error: 'imageUrl manquant.' }, 400);
+  try {
+    const job = await startVideo(imageUrl, prompt, Number.isFinite(seed) ? seed : undefined, env, env.FETCH);
+    const jobId = crypto.randomUUID();
+    await env.DB.prepare('INSERT INTO video_jobs (id, job, created_at) VALUES (?, ?, ?)').bind(jobId, JSON.stringify(job), Date.now()).run();
+    await env.DB.prepare('DELETE FROM video_jobs WHERE created_at < ?').bind(Date.now() - 24 * 3600 * 1000).run();
+    return json({ jobId, provider: `${job.provider} (Cloudflare)` });
+  } catch (err) { return json({ error: err.message }, err.kind === 'not_configured' ? 501 : 502); }
+}
+
+async function videoPoll(request, env) {
+  const denied = await licenseAuth(request, env);
+  if (denied) return denied;
+  const { jobId } = await request.json().catch(() => ({}));
+  if (!jobId) return json({ error: 'jobId manquant.' }, 400);
+  const row = await env.DB.prepare('SELECT * FROM video_jobs WHERE id = ?').bind(jobId).first();
+  if (!row) return json({ error: 'Job vidéo introuvable (expiré ou déjà terminé).' }, 404);
+  const job = JSON.parse(row.job);
+  try {
+    const r = await pollVideo(job, env, env.FETCH);
+    if (!r.done) return json({ done: false });
+    await env.DB.prepare('DELETE FROM video_jobs WHERE id = ?').bind(jobId).run();
+    return json({ done: true, url: r.videoUrl, provider: `${job.provider} (Cloudflare)` });
+  } catch (err) {
+    await env.DB.prepare('DELETE FROM video_jobs WHERE id = ?').bind(jobId).run();
+    return json({ error: err.message }, 502);
+  }
+}
+
+// ---- Mise à jour du client PC (métadonnées seulement ; le binaire est hébergé ailleurs) ----
+async function checkUpdate(env) {
+  const row = await env.DB.prepare("SELECT value FROM app_config WHERE key = 'local-client'").first();
+  const d = row ? JSON.parse(row.value) : {};
+  return json({ latestVersion: d.latestVersion || '0.0.0', downloadUrl: d.downloadUrl || '', notes: d.notes || '', sha256: d.sha256 || '' });
+}
+
+async function publishUpdate(request, env) {
+  const { version, downloadUrl, notes, sha256 } = await request.json().catch(() => ({}));
+  if (!version || !downloadUrl) return json({ error: 'version et downloadUrl requis (URL HTTPS du binaire déjà hébergé).' }, 400);
+  if (!/^https:\/\//.test(String(downloadUrl))) return json({ error: 'downloadUrl doit être une URL https.' }, 400);
+  const value = JSON.stringify({ latestVersion: String(version), downloadUrl: String(downloadUrl), notes: notes || '', sha256: sha256 || '', publishedAt: now() });
+  await env.DB.prepare("INSERT INTO app_config (key, value) VALUES ('local-client', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(value).run();
+  return json({ ok: true, latestVersion: String(version) });
+}
+
+// ---- Élèves / accès (portage de grantAccessOnPurchase et grantModuleAccess) ----
+const ACCESS_KEY_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+function generateAccessKey() {
+  const groups = [];
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  for (let g = 0; g < 6; g += 1) {
+    let part = '';
+    for (let i = 0; i < 4; i += 1) part += ACCESS_KEY_CHARS[bytes[g * 4 + i] % ACCESS_KEY_CHARS.length];
+    groups.push(part);
+  }
+  return groups.join('-');
+}
+
+async function grantAccessOnPurchase(request, env) {
+  const { student, purchase, tenantId, accessKey } = await request.json().catch(() => ({}));
+  if (!student || !purchase) return json({ error: 'student et purchase requis.' }, 400);
+  const ts = now();
+  const studentId = `cyrus_st_${Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('')}`;
+  const generated = !accessKey || accessKey.generate !== false ? generateAccessKey() : null;
+  const stmts = [env.DB.prepare('INSERT INTO cyrus_students (id, full_name, email, phone, sku, amount, currency, transaction_id, paid_at, tenant_id, access_key, modules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(studentId, student.fullName || null, student.email || null, student.phone || null, purchase.sku || null, purchase.amount || null, purchase.currency || 'FCFA', purchase.transactionId || null, purchase.paidAt || ts, tenantId || 'default', generated, '[]', ts)];
+  if (generated) stmts.push(env.DB.prepare('INSERT INTO cyrus_access_keys (access_key, student_id, sku, issued_at) VALUES (?, ?, ?, ?)').bind(generated, studentId, purchase.sku || null, ts));
+  await env.DB.batch(stmts);
+  return json({ studentId, accessKey: generated, status: 'CREATED' }, 201);
+}
+
+async function grantModuleAccess(request, env) {
+  const { student, module: mod } = await request.json().catch(() => ({}));
+  if (!mod || !mod.key) return json({ error: 'module.key requis.' }, 400);
+  if (!student || (!student.id && !student.phone && !student.email)) return json({ error: 'student.id, student.phone ou student.email requis.' }, 400);
+  let row = null;
+  if (student.id) row = await env.DB.prepare('SELECT * FROM cyrus_students WHERE id = ?').bind(student.id).first();
+  else if (student.phone) row = await env.DB.prepare('SELECT * FROM cyrus_students WHERE phone = ? LIMIT 1').bind(student.phone).first();
+  else row = await env.DB.prepare('SELECT * FROM cyrus_students WHERE email = ? LIMIT 1').bind(student.email).first();
+  if (!row) return json({ error: 'Étudiant introuvable.' }, 404);
+  const modules = JSON.parse(row.modules || '[]');
+  if (!modules.includes(mod.key)) modules.push(mod.key);
+  await env.DB.prepare('UPDATE cyrus_students SET modules = ? WHERE id = ?').bind(JSON.stringify(modules), row.id).run();
+  return json({ status: 'GRANTED', moduleKey: mod.key });
+}
+
 const PUBLIC = { '/verify': 'verify', '/verifyLicenseOffline': 'verify' };
+const AI_ROUTES = {
+  '/ai/text': aiText, '/generateTextFallback': aiText,
+  '/ai/image': aiImage, '/generateImageFallback': aiImage,
+  '/ai/video/start': videoStart, '/startVideoFallback': videoStart,
+  '/ai/video/poll': videoPoll, '/pollVideoFallback': videoPoll,
+};
+const ADMIN_POST = { '/publishUpdateOffline': publishUpdate, '/grantAccessOnPurchase': grantAccessOnPurchase, '/grantModuleAccess': grantModuleAccess };
 const ADMIN_ROUTES = {
   '/admin/create': 'create', '/createLicenseOffline': 'create',
   '/admin/list': 'list', '/listLicensesOffline': 'list',
@@ -168,7 +281,14 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     if (url.pathname === '/health') return json({ ok: true });
     if (PUBLIC[url.pathname]) return request.method === 'POST' ? verify(request, env) : json({ error: 'POST requis.' }, 405);
-    if (url.pathname === '/ai/text') return request.method === 'POST' ? aiText(request, env) : json({ error: 'POST requis.' }, 405);
+    if (AI_ROUTES[url.pathname]) return request.method === 'POST' ? AI_ROUTES[url.pathname](request, env) : json({ error: 'POST requis.' }, 405);
+    if (url.pathname === '/checkUpdateOffline') return checkUpdate(env);
+    if (url.pathname === '/generateEbookFallback') return json({ error: 'Génération d’ebook indisponible sur Cloudflare (moteur PDF non portable) : utilisez le VPS ou le client PC.' }, 501);
+    if (ADMIN_POST[url.pathname]) {
+      if (request.method !== 'POST') return json({ error: 'POST requis.' }, 405);
+      if (!isAdmin(request, env)) return json({ error: 'Secret admin invalide.' }, 401);
+      return ADMIN_POST[url.pathname](request, env);
+    }
     if (ADMIN_ROUTES[url.pathname]) {
       if (!isAdmin(request, env)) return json({ error: 'Secret admin invalide.' }, 401);
       return admin(ADMIN_ROUTES[url.pathname], request, env);

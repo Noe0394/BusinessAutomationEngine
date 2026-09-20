@@ -17,7 +17,7 @@ const ACCOUNT = process.env.CLOUDFLARE_ACCOUNT_ID;
 const TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 const NAME = 'cyrus-license';
 const DB_NAME = 'cyrus-licenses';
-const AI_KEYS = ['GROQ_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', 'HUGGINGFACE_API_KEY'];
+const AI_KEYS = ['GROQ_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', 'HUGGINGFACE_API_KEY', 'FAL_KEY', 'REPLICATE_API_TOKEN'];
 
 if (!ACCOUNT || !TOKEN) { console.error('CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN manquants dans .env'); process.exit(1); }
 
@@ -47,13 +47,13 @@ async function uploadWorker(dbId, adminSecret) {
   const html = fs.readFileSync(path.join(W, 'public', 'index.html'), 'utf8');
   fs.writeFileSync(path.join(W, 'src', 'adminPage.js'), `// Généré depuis public/index.html par scripts/cloudflare-deploy.js\nexport const ADMIN_PAGE = ${JSON.stringify(html)};\n`);
 
-  const bindings = [{ type: 'd1', name: 'DB', id: dbId }, { type: 'secret_text', name: 'ADMIN_SECRET', text: adminSecret }];
+  const bindings = [{ type: 'd1', name: 'DB', id: dbId }, { type: 'ai', name: 'AI' }, { type: 'secret_text', name: 'ADMIN_SECRET', text: adminSecret }];
   const aiSent = [];
   for (const k of AI_KEYS) if (process.env[k]) { bindings.push({ type: 'secret_text', name: k, text: process.env[k] }); aiSent.push(k); }
 
   const form = new FormData();
   form.append('metadata', JSON.stringify({ main_module: 'index.js', compatibility_date: '2025-01-01', bindings }));
-  for (const f of ['index.js', 'textCascade.js', 'adminPage.js']) {
+  for (const f of ['index.js', 'textCascade.js', 'adminPage.js', 'media.js']) {
     form.append(f, new Blob([fs.readFileSync(path.join(W, 'src', f), 'utf8')], { type: 'application/javascript+module' }), f);
   }
   await api.put(`/workers/scripts/${NAME}`, form, { maxBodyLength: Infinity });

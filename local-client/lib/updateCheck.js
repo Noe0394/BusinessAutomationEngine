@@ -15,6 +15,7 @@ const { client } = require('./vpsClient');
 const localVersion = require('../package.json').version;
 
 const FIREBASE_UPDATE_URL = process.env.FIREBASE_UPDATE_URL || '';
+const CLOUDFLARE_UPDATE_URL = process.env.CLOUDFLARE_LICENSE_URL ? `${String(process.env.CLOUDFLARE_LICENSE_URL).replace(/\/+$/, '')}/checkUpdateOffline` : '';
 
 function compareVersions(a, b) {
   const pa = a.split('.').map(Number);
@@ -27,6 +28,14 @@ function compareVersions(a, b) {
 }
 
 async function fetchUpdateInfo() {
+  if (CLOUDFLARE_UPDATE_URL) {
+    try {
+      const { data } = await axios.get(CLOUDFLARE_UPDATE_URL, { timeout: 10_000 });
+      return data;
+    } catch (err) {
+      console.warn('Cloudflare injoignable pour la vérification de mise à jour — repli suivant :', err.message);
+    }
+  }
   if (FIREBASE_UPDATE_URL) {
     try {
       const { data } = await axios.get(FIREBASE_UPDATE_URL, { timeout: 10_000 });

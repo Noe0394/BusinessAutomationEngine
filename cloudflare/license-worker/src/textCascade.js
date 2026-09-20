@@ -35,6 +35,13 @@ const PROVIDERS = [
   ['deepseek', chat('https://api.deepseek.com/chat/completions', 'deepseek-chat', 'DEEPSEEK_API_KEY')],
   ['openrouter', (p, env, f) => chat('https://openrouter.ai/api/v1/chat/completions', env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free', 'OPENROUTER_API_KEY')(p, env, f)],
   ['huggingface', chat('https://router.huggingface.co/v1/chat/completions', 'Qwen/Qwen2.5-72B-Instruct', 'HUGGINGFACE_API_KEY')],
+  ['workers-ai', async (prompt, env) => {
+    if (!env.AI || typeof env.AI.run !== 'function') return null;
+    const out = await env.AI.run(env.WORKERS_AI_MODEL || '@cf/meta/llama-3.1-8b-instruct', { messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }] });
+    const text = out && (out.response || out.result || '');
+    if (!text) throw new Error('réponse vide');
+    return String(text).trim();
+  }],
   ['pollinations', async (prompt, env, fetchFn) => {
     const res = await fetchFn(`https://text.pollinations.ai/${encodeURIComponent(`${SYSTEM}\n\nUtilisateur: ${prompt}\nAssistant:`)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
