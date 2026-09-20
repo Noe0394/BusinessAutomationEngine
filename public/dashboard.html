@@ -3970,7 +3970,7 @@
         return;
       }
       if (mode === 'import' && state.importedContacts.length === 0) {
-        showCampaignFeedback('Importez d\'abord une liste de contacts (section "Import Excel/CSV" ci-dessus).', true);
+        showCampaignFeedback((typeof impDiagnostic === 'function' && impDiagnostic('wa-adv-import')) || 'Importez d\'abord une liste de contacts (section "Import Excel/CSV" ci-dessus).', true);
         return;
       }
 
@@ -4855,7 +4855,7 @@
 
       if (!message) { tgDmShowFeedback('Le message ne peut pas être vide.', true); return; }
       if (tgDmImportedContacts.length === 0) {
-        tgDmShowFeedback('Importez d\'abord une liste de contacts.', true);
+        tgDmShowFeedback((typeof impDiagnostic === 'function' && impDiagnostic('tg-adv-import')) || 'Importez d\'abord une liste de contacts.', true);
         return;
       }
 
@@ -10280,6 +10280,14 @@
     // Chargement de numéros avancé, partagé par les onglets WhatsApp et Telegram : coller une liste (formats libres),
     // fichier Excel/CSV, photo d'une liste (OCR). Analyse serveur (normalisation, doublons, validation) puis
     // injection des numéros VALIDES dans la liste existante de l'onglet (les autres flux de lancement restent inchangés).
+    // Explique pourquoi la liste d'envoi est vide alors qu'une analyse vient d'être faite (aucun numéro valide).
+    function impDiagnostic(hostId) {
+      const d = window.__impLast && window.__impLast[hostId];
+      if (!d || !d.counts || d.counts.valid > 0) return null;
+      const c = d.counts;
+      return 'La dernière analyse ne contient aucun numéro valide (' + c.uncertain + ' incertain(s), ' + c.invalid + ' invalide(s), ' + c.duplicate + ' doublon(s)). Ajoutez l\'indicatif pays par défaut et relancez l\'analyse.';
+    }
+
     function impBuild(hostId, opts) {
       const host = document.getElementById(hostId);
       if (!host) return;
@@ -10310,12 +10318,25 @@
           else { out.textContent = 'Collez une liste, choisissez un fichier ou une photo.'; return; }
           if (cc.value.trim()) form.append('defaultCountryCode', cc.value.trim());
           const data = await cmpJson('/api/campaigns/recipients', { method: 'POST', body: form });
-          last = { rows: data.rows || [], text };
+          // Le serveur ne renvoie que les 200 premières lignes : on charge TOUTES les pages, sinon une longue liste
+          // n'entrerait qu'en partie dans la liste d'envoi.
+          let allRows = data.rows || [];
+          while (allRows.length < (data.counts.total || 0)) {
+            const page = await cmpJson('/api/campaigns/recipients/' + encodeURIComponent(data.recipientsId) + '?offset=' + allRows.length + '&limit=500');
+            if (!page.rows || !page.rows.length) break;
+            allRows = allRows.concat(page.rows);
+          }
+          last = { rows: allRows, text };
+          window.__impLast = window.__impLast || {};
+          window.__impLast[hostId] = { counts: data.counts, at: Date.now() };
           cmpState.recipientsId = data.recipientsId;
           out.textContent = '';
           out.appendChild(cmpRenderCounts(data.counts));
           if (data.counts.uncertain) out.appendChild(cmpEl('p', 'Les numéros « incertains » ne sont pas utilisés tant que leur format n’est pas confirmé (aucun chiffre n’est deviné).', { class: 'empty' }));
-          out.appendChild(cmpRenderRows(last.rows, [
+          if (!data.counts.valid && !(opts.extra && opts.extra(text).length)) {
+            out.appendChild(cmpEl('p', '⚠️ Aucun numéro valide : ' + data.counts.uncertain + ' incertain(s) (indicatif pays manquant ou lecture douteuse), ' + data.counts.invalid + ' invalide(s), ' + data.counts.duplicate + ' doublon(s). Renseignez l’indicatif pays par défaut ci-dessus (ex. 226) puis relancez l’analyse : rien n’est deviné.', { style: 'color:#ef4444;' }));
+          }
+          out.appendChild(cmpRenderRows(last.rows.slice(0, 200), [
             { key: 'name', label: 'Nom' }, { key: 'number', label: 'Numéro' },
             { key: 'state', label: 'Statut', map: (s) => CMP_STATUS_LABELS[s] || s }, { key: 'reason', label: 'Détail' },
           ]));
