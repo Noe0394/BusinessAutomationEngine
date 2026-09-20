@@ -224,7 +224,29 @@ async function optedOutSet(tenantId, channel) {
   return out;
 }
 
+async function getContact(tenantId, channel, from) {
+  const doc = await load(tenantId);
+  return doc.contacts[contactKey(channel, identityOf(from))] || null;
+}
+async function updateContact(tenantId, channel, from, patch) {
+  const doc = await load(tenantId);
+  const contact = ensureContact(doc, channel, identityOf(from));
+  const allowed = ['name', 'stage', 'notes', 'fields'];
+  for (const k of allowed) if (patch && patch[k] !== undefined) contact[k] = k === 'fields' ? Object.assign({}, contact.fields || {}, patch[k]) : patch[k];
+  save(tenantId, doc);
+  return contact;
+}
+async function removeContact(tenantId, channel, from) {
+  const doc = await load(tenantId);
+  const key = contactKey(channel, identityOf(from));
+  const existed = !!doc.contacts[key];
+  delete doc.contacts[key];
+  if (existed) save(tenantId, doc);
+  return existed;
+}
+
 module.exports = {
+  getContact, updateContact, removeContact,
   markOptOut, clearOptOut, isOptedOut, optedOutSet, identityOf, TAG_OPTOUT,
   recordSeen, addTags, setStage, markPurchase, list, counts,
   importContacts, normalizePhone,

@@ -421,6 +421,9 @@ const TOOLS = {
   },
 };
 
+// Outils étendus (contacts, campagnes, file, CRM, diagnostic, notifications) — voir toolsExtra.js
+for (const [name, tool] of Object.entries(require('./toolsExtra').TOOLS)) TOOLS[name] = Object.assign({ resultSchema: {}, errorSchema: { code: 'string' } }, tool);
+
 // --------------------------------------------------------------------------
 // API publique
 // --------------------------------------------------------------------------

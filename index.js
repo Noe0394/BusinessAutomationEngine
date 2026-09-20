@@ -5503,6 +5503,14 @@ telegramManager.setHistoryMessageHandler(handleHistoricalMessage);
 // idempotents, sans bloquer les nouveaux messages.
 try { conversationHistory.startMaintenance(); } catch (_) { /* no-op */ }
 
+// Worker de la file de tâches durable (campagnes programmées, envois différés) : indépendant de
+// l'interface, reprend les tâches interrompues (bail expiré) au tick suivant.
+try {
+  const taskQueue = require('./ai-engine/taskQueue');
+  const { queueHandlers } = require('./ai-engine/toolsExtra');
+  taskQueue.startWorker((tenant) => queueHandlers(tenant, intelligenceBridge && intelligenceBridge.runtime), 30000);
+} catch (err) { console.error('taskQueue worker non démarré :', err.message); }
+
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ error: `Erreur de téléversement : ${err.message}` });
