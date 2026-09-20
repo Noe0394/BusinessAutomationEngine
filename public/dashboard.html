@@ -10274,9 +10274,10 @@
     }
 
     tryAutoLogin().then((ok) => { if (ok) init(); });
-  </script>
 
-  <script>
+    // ---- Chargement de numéros multi-méthodes (ex-second bloc <script>) ----
+    // FUSIONNÉ dans le même bloc : le build de production obscurcit chaque bloc séparément avec renameGlobals, ce qui
+    // renommait cmpJson/cmpState/tgDmImportedContacts/renderImportedContacts… dans le 1er bloc et cassait ce code.
     // Chargement de numéros avancé, partagé par les onglets WhatsApp et Telegram : coller une liste (formats libres),
     // fichier Excel/CSV, photo d'une liste (OCR). Analyse serveur (normalisation, doublons, validation) puis
     // injection des numéros VALIDES dans la liste existante de l'onglet (les autres flux de lancement restent inchangés).

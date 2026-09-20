@@ -5414,7 +5414,7 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     }
     const autoOut = await autoResponder.handleIncoming(
       { tenantId, channel, from, name: senderName, text, messageId },
-      { runtime: intelligenceBridge && intelligenceBridge.runtime },
+      { runtime: intelligenceBridge && intelligenceBridge.runtime, identity },
     ).catch((err) => {
       console.error(`autoResponder (tenant "${tenantId}", ${channel}) :`, err.message);
       return { skipped: 'ERROR' };

@@ -223,6 +223,19 @@ async function raise(tenantId, alertIn) {
   return { alert, delivered: res.ok, channel: res.channel || null, messageId: res.messageId || null };
 }
 
+// triggerAdminNotification : une demande dépasse les compétences de l'assistant -> l'administrateur (propriétaire) est
+// prévenu (WhatsApp du propriétaire puis tableau de bord) et la prise en charge est enregistrée. Idempotent par `key`.
+async function triggerAdminNotification(tenantId, { reason, contact, text, key, level }) {
+  const label = contact && contact.label ? contact.label : 'Un contact';
+  return raise(tenantId, {
+    type: 'HUMAN_INTERVENTION_REQUIRED', level: level || 'ACTION_REQUIRED', notify: true,
+    title: `${label} : demande hors de mon périmètre`,
+    body: `${reason || 'Demande à traiter par un humain.'}${text ? `\nMessage : “${String(text).slice(0, 200)}”` : ''}`,
+    hint: 'Prise en charge par l\'administrateur : réponds directement dans la conversation.',
+    contact: contact || null, conversationId: contact && contact.conversationId, idempotencyKey: key || null,
+  });
+}
+
 async function list(tenantId, opts) {
   const o = opts || {};
   const doc = await load(tenantId);
@@ -256,4 +269,4 @@ async function flushAll() {
   }
 }
 
-module.exports = { NAMESPACE, LEVELS, TYPES, DEFAULT_POLICY, rank, getPolicy, shouldNotify, formatAlert, raise, list, resolveAlerts, setDeliverers, addDeliverer, deliver, flushAll, useClock };
+module.exports = { NAMESPACE, LEVELS, TYPES, DEFAULT_POLICY, rank, getPolicy, shouldNotify, formatAlert, raise, triggerAdminNotification, list, resolveAlerts, setDeliverers, addDeliverer, deliver, flushAll, useClock };

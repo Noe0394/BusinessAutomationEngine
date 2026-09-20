@@ -264,6 +264,7 @@ function applyState(state, cls, decision, sent, replyText, items, now) {
   if (decision.reopen) state.refusal.active = false;
   if (intent === 'REFUSAL' || intent === 'DISINTEREST' || intent === 'STOP') {
     state.refusal = { active: true, kind: intent, count: (state.refusal.count || 0) + 1, at: now };
+    state.user_refused_action = true; // drapeau explicite : le contact a refusé -> on n'insiste plus
     if (intent === 'STOP') state.optOut = true;
     const t = (flags.topics || [])[0] || 'offre';
     if (!state.memory.refused.includes(t)) state.memory.refused.push(t);

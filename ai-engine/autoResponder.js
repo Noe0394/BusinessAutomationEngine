@@ -161,6 +161,14 @@ async function handleHumanActivity({ tenantId, channel, from }) {
   return conversationEngine.noteHumanActivity(tenantId, channel, from, settings.humanPauseMinutes);
 }
 
+// Consignes de personnalisation de l'accueil : contact enregistré -> on l'appelle par son nom ; inconnu -> on demande poliment
+// son nom/l'objet de sa demande (sans insister s'il ne répond pas).
+function identityDirectives(identity, name) {
+  if (identity && identity.isSavedContact && identity.contactName) return [`Ce contact est enregistré dans le répertoire du propriétaire sous le nom « ${identity.contactName} » : appelle-le par ce nom, sans le lui redemander.`];
+  if (name) return [`Le contact se fait appeler « ${name} » (nom public, non vérifié) : tu peux l'utiliser naturellement.`];
+  return ["Tu ne connais ni le nom ni l'objet de la demande de ce contact : demande-lui poliment, une seule fois, son nom et ce qu'il souhaite ; n'insiste pas s'il ne répond pas."];
+}
+
 async function processBatch({ tenantId, channel, from, name, items, settings }, d) {
   const knownText = await businessServices.getEngineContextText(tenantId).catch(() => '');
   let history = [];
@@ -183,9 +191,10 @@ async function processBatch({ tenantId, channel, from, name, items, settings }, 
     knownText,
     history,
     settings,
-    compose: (directives, ctx) => composeReply({ tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives }),
+    compose: (directives, ctx) => composeReply({ tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives: (directives || []).concat(identityDirectives(d.identity, name)) }),
     send: async (reply) => { lastOut = await sendAndLog({ tenantId, channel, from, reply }, d); return lastOut; },
-    notify: d.notify || ((msg) => require('./platformOrchestrator').notifyTenantChat(tenantId, `⚠️ ${msg}`, [{ icon: '⚠️', label: 'Conversation à traiter', status: 'warning' }])),
+    // Demande hors périmètre / escalade : triggerAdminNotification (alerte persistante, WhatsApp du propriétaire + tableau de bord).
+    notify: d.notify || ((msg) => require('./alertCenter').triggerAdminNotification(tenantId, { reason: msg, contact: d.identity || null, key: `esc:${tenantId}:${channel}:${from}:${Math.floor(Date.now() / 600000)}` })),
   });
   if (result.action === 'NO_ACTION') {
     try { require('./activityStore').record({ type: 'no_action', action: 'Aucune réponse nécessaire', channel, tenant: tenantId, target: from, status: 'ok', detail: `${result.intent || '-'} / ${result.reason}` }); } catch (e) { /* non bloquant */ }

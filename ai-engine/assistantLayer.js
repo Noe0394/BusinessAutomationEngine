@@ -40,7 +40,7 @@ function create(d) {
       try { const c = await contactCrm.getContact(tenantId, 'WHATSAPP', contactCrm.identityOf(hints.jid)); knownName = (c && c.name) || null; } catch (e) { /* facultatif */ }
     }
     return contactIdentity.resolveContact(tenantId, {
-      channel: 'WHATSAPP', jid: hints.jid, altJids: hints.altJids, pushName: hints.pushName, knownName,
+      channel: 'WHATSAPP', jid: hints.jid, altJids: hints.altJids, contactName: hints.savedName || null, pushName: hints.pushName, knownName,
     });
   }
 

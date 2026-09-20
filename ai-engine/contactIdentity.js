@@ -148,6 +148,9 @@ function resolveIdentity(input) {
     username,
     isGroup,
     identitySource,
+    // Contact ENREGISTRÉ par le propriétaire dans son répertoire (et non simple nom public WhatsApp).
+    isSavedContact: identitySource === 'contact_name' || identitySource === 'address_book',
+    contactName: (identitySource === 'contact_name' || identitySource === 'address_book') ? displayName : null,
     isResolved: identitySource !== 'unidentified',
     label,
     // « Nom (+226 70 12 34 56) » quand les deux sont connus, sinon le meilleur des deux.
@@ -204,6 +207,7 @@ async function resolveContact(tenantId, input) {
   if (merged.lid) rec.lid = merged.lid;
   if (merged.jid) rec.jid = merged.jid;
   if (merged.username) rec.username = merged.username;
+  if (merged.isSavedContact) rec.isSaved = true;
   rec.updatedAt = now;
   dir.contacts[contactId] = rec;
   let changed = !known || before !== JSON.stringify([rec.displayName, rec.phoneNumber, rec.lid, rec.jid, rec.username]);
@@ -217,7 +221,7 @@ async function resolveContact(tenantId, input) {
     }
     await storageAdapter.set(NAMESPACE, sanitizeTenant(tenantId), dir);
   }
-  return Object.assign(merged, { contactId });
+  return Object.assign(merged, { contactId, isSavedContact: !!(merged.isSavedContact || rec.isSaved), contactName: merged.contactName || (rec.isSaved ? rec.displayName : null) });
 }
 
 // Lecture seule : retrouve une identité déjà connue à partir d'un identifiant technique (sans rien apprendre).

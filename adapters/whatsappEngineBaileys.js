@@ -116,6 +116,9 @@ function createSession(tenantId) {
   // ne pas faire fuiter les noms d'un compte vers le suivant sur cette même
   // instance.
   const contactNames = new Map();
+  // Noms ENREGISTRÉS par le propriétaire (champ « name » du répertoire, pas le nom public) : sert à savoir si un contact est
+  // « enregistré » (isSavedContact) et à le nommer comme le propriétaire le fait.
+  const savedNames = new Map();
 
   // Tampon glissant des derniers messages RÉELLEMENT reçus (isolé par tenant,
   // en mémoire, cycle de vie du process). Permet à la couche intelligence de
@@ -166,6 +169,7 @@ function createSession(tenantId) {
       senderJid,
       altJids: alts.map(String),
       pushName: msg && msg.pushName ? String(msg.pushName) : null,
+      savedName: (senderJid && savedNames.get(senderJid)) || (pnJid && savedNames.get(pnJid)) || null,
       knownName: (senderJid && contactNames.get(senderJid)) || (pnJid && contactNames.get(pnJid)) || null,
       phoneNumber: pnJid ? String(pnJid).split('@')[0].split(':')[0] : null,
       isGroup,
@@ -370,6 +374,7 @@ function createSession(tenantId) {
   // alors que le nom est bel et bien connu.
   function rememberContact(c) {
     learnLidPair(c.id, c.jid); learnLidPair(c.id, c.lid); learnLidPair(c.lid, c.jid);
+    if (c.name) { [c.id, c.jid, c.lid].filter(Boolean).forEach((k) => savedNames.set(k, c.name)); }
     const name = bestContactName(c);
     if (!name) return;
     rememberContactName(c.id, name);
