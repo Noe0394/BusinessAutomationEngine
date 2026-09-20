@@ -199,7 +199,8 @@ test('notifications : créer, lister, marquer lue', async () => {
 
 test('OCR : moteur absent -> échec honnête ; moteur présent -> numéros + valeurs incertaines signalées', async () => {
   const up = await chatUploads.save(T, { originalname: 'liste.png', mimetype: 'image/png', buffer: Buffer.from('fakepng') });
-  const missing = await run('extractNumbersFromImage', { fileId: up.id });
+  const noOcr = { recognize: async () => { const e = new Error('absent'); e.code = 'OCR_ENGINE_MISSING'; throw e; } };
+  const missing = await run('extractNumbersFromImage', { fileId: up.id }, { ocr: noOcr });
   assert.equal(missing.state, 'FAILED');
   assert.equal(missing.error.code, 'OCR_ENGINE_MISSING');
   const fakeOcr = { recognize: async () => ({ text: 'Awa 70000031\nKoffi 70000032', words: [{ text: '70000031', confidence: 95 }, { text: '70000032', confidence: 40 }] }) };

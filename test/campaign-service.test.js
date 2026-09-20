@@ -82,7 +82,8 @@ test('destinataires : CSV, Excel réel (.xlsx) et photo (OCR simulé, valeur inc
   assert.equal(img.counts.valid, 1); assert.equal(img.counts.uncertain, 1);
   assert.equal(img.rows.find((x) => x.state === 'uncertain').reason, 'OCR_LOW_CONFIDENCE');
 
-  await assert.rejects(() => svc.prepareRecipients(T, { image: Buffer.from('png') }), (e) => e.code === 'OCR_ENGINE_MISSING' && e.http === 501, 'OCR absent : erreur explicite');
+  const noOcr = { recognize: async () => { const e = new Error('absent'); e.code = 'OCR_ENGINE_MISSING'; throw e; } };
+  await assert.rejects(() => svc.prepareRecipients(T, { image: Buffer.from('png') }, { ocr: noOcr }), (e) => e.code === 'OCR_ENGINE_MISSING' && e.http === 501, 'OCR absent : erreur explicite');
   await assert.rejects(() => svc.prepareRecipients(T, {}), (e) => e.code === 'EMPTY_SOURCE');
 });
 
