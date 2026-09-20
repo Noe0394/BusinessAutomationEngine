@@ -1181,3 +1181,7 @@ vérifiées puis traitées :
 (`FIREBASE_SERVICE_ACCOUNT_PATH` commenté dans le `.env` de la VM ; sauvegarde `/tmp/env.backup.*`). **Le `.env` est copié dans l'image
 Docker au build : toute modification du `.env` de la VM exige un rebuild (`deploy.sh`), pas seulement `docker-compose up`.**
 Ne jamais tester `verify-key` avec un faux appareil sur la clé réelle (voir `docs/TESTS-REELS.md`).
+
+**Compte de test UNIQUE (rappel utilisateur, 2026-09-20)** : tout test réel et tout réglage « propriétaire » (répondeur permanent, campagnes,
+mémoire) utilisent UNIQUEMENT le compte de la clé de test (`.env` : `CYRUS_TEST_LICENSE_KEY`). Il n'y a AUCUN compte admin pour le
+moment : ne jamais ajouter `__admin__` à une configuration (`AUTO_REPLY_ALWAYS_ON_TENANTS` de la VM ne contient que la clé de test).
