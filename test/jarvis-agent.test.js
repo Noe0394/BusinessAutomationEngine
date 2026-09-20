@@ -37,9 +37,10 @@ test('niveaux de risque : chaque outil a un niveau, envoi = WRITE', () => {
   assert.equal(d.find((t) => t.name === 'sendWhatsAppMessage').risk, 'WRITE');
   assert.equal(d.find((t) => t.name === 'searchMessages').risk, 'READ');
   assert.equal(toolRegistry.needsConfirmation('WRITE', { confirmFrom: 'WRITE' }), true);
-  assert.equal(toolRegistry.needsConfirmation('WRITE', {}), false, 'défaut : seul SENSITIVE+ exige');
-  assert.equal(toolRegistry.needsConfirmation('CRITICAL', { confirmFrom: 'CRITICAL' }), true);
-  assert.equal(toolRegistry.needsConfirmation('SENSITIVE', { confirmFrom: 'CRITICAL' }), true, 'SENSITIVE toujours confirmé');
+  assert.equal(toolRegistry.needsConfirmation('WRITE', {}), false, 'défaut : l\u2019ordre de l\u2019utilisateur est exécuté, aucune confirmation imposée');
+  assert.equal(toolRegistry.needsConfirmation('CRITICAL', {}), false, 'même une action critique n\u2019est pas bloquée par défaut');
+  assert.equal(toolRegistry.needsConfirmation('CRITICAL', { confirmFrom: 'CRITICAL' }), true, 'confirmation seulement si configurée');
+  assert.equal(toolRegistry.needsConfirmation('SENSITIVE', { confirmFrom: 'CRITICAL' }), false);
 });
 
 test('multi-outils : lecture puis envoi PRÉPARÉ, jamais exécuté sans confirmation', async () => {
@@ -48,7 +49,7 @@ test('multi-outils : lecture puis envoi PRÉPARÉ, jamais exécuté sans confirm
     { tool: 'countContacts', args: {} },
     { tool: 'sendWhatsAppMessage', args: { to: '22670000001', text: 'Bonjour, voici le prix : 8000 FCFA' } },
   ], 'Message prêt, confirmez-vous ?');
-  const out = await agentLoop.runAgentLoop({ text: 'Compte mes contacts puis écris à 22670000001', tenantId: T, sessionId: 's1' }, { llm, runtime: runtime(rec) });
+  const out = await agentLoop.runAgentLoop({ text: 'Compte mes contacts puis écris à 22670000001', tenantId: T, sessionId: 's1' }, { llm, runtime: runtime(rec), confirmFrom: 'WRITE' });
   assert.equal(out.steps.length, 2);
   assert.equal(out.steps[0].state, 'SUCCESS');
   assert.equal(out.steps[1].state, 'NEEDS_CONFIRMATION');
@@ -59,14 +60,14 @@ test('multi-outils : lecture puis envoi PRÉPARÉ, jamais exécuté sans confirm
 test('confirmation "oui" -> EXECUTE + VERIFY réels ; "non" -> annulé', async () => {
   const rec = [];
   const llm = scripted([{ tool: 'sendWhatsAppMessage', args: { to: '22670000002', text: 'Bonjour' } }]);
-  await agentLoop.runAgentLoop({ text: 'écris à 22670000002', tenantId: T, sessionId: 's2' }, { llm, runtime: runtime(rec) });
+  await agentLoop.runAgentLoop({ text: 'écris à 22670000002', tenantId: T, sessionId: 's2' }, { llm, runtime: runtime(rec), confirmFrom: 'WRITE' });
   assert.equal(rec.length, 0);
   const done = await chatOrchestrator.handle({ text: 'oui', history: [], tenantId: T, sessionId: 's2' }, { runtime: runtime(rec) });
   assert.equal(rec.length, 1);
   assert.equal(done.toolCall.state, 'SUCCESS');
   assert.match(done.text, /WAMID-A-1/);
 
-  await agentLoop.runAgentLoop({ text: 'écris à 22670000003', tenantId: T, sessionId: 's3' }, { llm: scripted([{ tool: 'sendWhatsAppMessage', args: { to: '22670000003', text: 'Salut' } }]), runtime: runtime(rec) });
+  await agentLoop.runAgentLoop({ text: 'écris à 22670000003', tenantId: T, sessionId: 's3' }, { llm: scripted([{ tool: 'sendWhatsAppMessage', args: { to: '22670000003', text: 'Salut' } }]), runtime: runtime(rec), confirmFrom: 'WRITE' });
   const no = await chatOrchestrator.handle({ text: 'non', history: [], tenantId: T, sessionId: 's3' }, { runtime: runtime(rec) });
   assert.match(no.text, /annule/);
   assert.equal(rec.length, 1, 'rien envoyé après refus');
@@ -75,7 +76,7 @@ test('confirmation "oui" -> EXECUTE + VERIFY réels ; "non" -> annulé', async (
 test('vérification : envoi non confirmé -> UNCONFIRMED honnête', async () => {
   const rec = [];
   const llm = scripted([{ tool: 'sendWhatsAppMessage', args: { to: '22670000004', text: 'Test' } }]);
-  await agentLoop.runAgentLoop({ text: 'écris', tenantId: T, sessionId: 's4' }, { llm, runtime: runtime(rec, 'PENDING') });
+  await agentLoop.runAgentLoop({ text: 'écris', tenantId: T, sessionId: 's4' }, { llm, runtime: runtime(rec, 'PENDING'), confirmFrom: 'WRITE' });
   const done = await agentLoop.resolvePending({ tenantId: T, sessionId: 's4', text: 'oui' }, { ctx: { runtime: runtime(rec, 'PENDING') } });
   assert.equal(done.toolCall.state, 'UNCONFIRMED');
   assert.doesNotMatch(done.text, /C'est fait/);
@@ -125,4 +126,28 @@ test('timeout par outil : échec honnête, pas de blocage', async () => {
     assert.equal(out.steps[0].state, 'FAILED');
     assert.equal(out.steps[0].error.code, 'TOOL_TIMEOUT');
   } finally { toolRegistry.execute = orig; }
+});
+
+test('par défaut : l\u2019ordre est exécuté directement, sans confirmation ni contradiction', async () => {
+  const rec = [];
+  const llm = scripted([{ tool: 'sendWhatsAppMessage', args: { to: '22670000010', text: 'Bonjour' } }], 'Envoyé.');
+  const out = await agentLoop.runAgentLoop({ text: 'écris à 22670000010', tenantId: T, sessionId: 's20' }, { llm, runtime: runtime(rec) });
+  assert.equal(out.steps[0].state, 'SUCCESS');
+  assert.equal(rec.length, 1, 'message réellement envoyé sur ordre');
+  assert.notEqual(out.stopReason, 'NEEDS_CONFIRMATION');
+});
+
+test('ordre d\u2019envoi à un contact ayant demandé l\u2019arrêt : exécuté, avec une simple note (plus de blocage)', async () => {
+  const rec = [];
+  await contactCrm.markOptOut(T, 'WHATSAPP', '22670000011', 'REFUSAL');
+  const call = await toolRegistry.execute(T, 'sendWhatsAppMessage', { to: '22670000011', text: 'Bonjour' }, { runtime: runtime(rec) });
+  assert.equal(call.state, 'SUCCESS');
+  assert.equal(rec.length, 1);
+  assert.match(call.result.note, /avait demandé à ne plus être sollicité/);
+});
+
+test('confirmation configurable : cancelCampaign et deleteCustomer ne demandent rien par défaut, et demandent si configuré', async () => {
+  const rt = { stopCampaign: async () => ({ ok: true }) };
+  assert.equal((await toolRegistry.execute(T, 'cancelCampaign', { campaignId: 'c' }, { runtime: rt })).state, 'SUCCESS');
+  assert.equal((await toolRegistry.execute(T, 'cancelCampaign', { campaignId: 'c' }, { runtime: rt, confirmFrom: 'SENSITIVE' })).state, 'NEEDS_CONFIRMATION');
 });

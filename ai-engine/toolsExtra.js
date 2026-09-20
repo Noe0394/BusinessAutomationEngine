@@ -146,11 +146,11 @@ const TOOLS = {
     permission: null, risk: 'LOW_WRITE',
     inputSchema: {
       recipientsDraftId: { type: 'string', required: true }, text: { type: 'string', required: true },
-      channel: { type: 'string' }, name: { type: 'string' }, mediaFileId: { type: 'string' },
+      channel: { type: 'string' }, name: { type: 'string' }, mediaFileId: { type: 'string' }, includeOptOut: { type: 'boolean', description: 'true pour inclure aussi les contacts qui avaient demandé l’arrêt (sur ordre explicite de l’utilisateur).' },
     },
     async execute(args, ctx) {
       try {
-        const c = await campaignService.createCampaign(ctx.tenant, { recipientsId: args.recipientsDraftId, text: args.text, channel: args.channel, name: args.name || `Campagne ${new Date().toISOString().slice(0, 16)}`, mediaFileId: args.mediaFileId }, ctx.allowedModules);
+        const c = await campaignService.createCampaign(ctx.tenant, { recipientsId: args.recipientsDraftId, text: args.text, channel: args.channel, name: args.name || `Campagne ${new Date().toISOString().slice(0, 16)}`, mediaFileId: args.mediaFileId, includeOptOut: args.includeOptOut === true }, ctx.allowedModules);
         return { ok: true, result: { draftId: c.id, channel: c.channel, recipients: c.recipients ? c.recipients.valid : null, hasMedia: c.hasMedia } };
       } catch (e) { return fail(e.code === 'RECIPIENTS_NOT_FOUND' ? 'DRAFT_NOT_FOUND' : (e.code || 'CREATE_FAILED'), e.message); }
     },
@@ -163,7 +163,7 @@ const TOOLS = {
       const doc = await loadDrafts(ctx.tenant);
       const d = doc.drafts[args.draftId];
       if (!d || d.kind !== 'campaign') return { ok: false, preview: {}, warnings: ['DRAFT_NOT_FOUND'] };
-      const opt = await contactCrm.optedOutSet(ctx.tenant, d.channel);
+      const opt = d.includeOptOut ? new Set() : await contactCrm.optedOutSet(ctx.tenant, d.channel);
       const excluded = d.recipients.filter((r) => opt.has(contactCrm.identityOf(r.telephone))).length;
       return { ok: true, preview: { channel: d.channel, recipients: d.recipients.length - excluded, excludedOptOut: excluded, text: d.text.slice(0, 300), media: !!d.mediaFileId }, warnings: d.status === 'launched' ? ['DEJA_LANCEE'] : [] };
     },
@@ -264,6 +264,29 @@ const TOOLS = {
     },
   },
 
+  getAutoReplyStatus: {
+    description: 'État réel du répondeur automatique : réglages (toujours actif, pause), sessions WhatsApp/Telegram et tentatives de reconnexion.',
+    permission: null, risk: 'READ', inputSchema: {},
+    async execute(args, ctx) {
+      const autoResponder = require('./autoResponder');
+      const settings = await autoResponder.getSettings(ctx.tenant);
+      const conn = ctx.runtime && ctx.runtime.getConnectionStatus ? await ctx.runtime.getConnectionStatus({ tenantId: ctx.tenant }) : null;
+      return { ok: true, result: { settings, sessions: conn && conn.ok ? conn.result : null, keeper: require('./responderKeeper').status(ctx.tenant) } };
+    },
+  },
+  setAutoReply: {
+    description: 'Règle le répondeur automatique : alwaysOn=true (actif en permanence sur WhatsApp et Telegram), paused (pause), whatsapp/telegram, groupReplies.',
+    permission: null, risk: 'LOW_WRITE',
+    inputSchema: { alwaysOn: { type: 'boolean' }, paused: { type: 'boolean' }, whatsapp: { type: 'boolean' }, telegram: { type: 'boolean' }, groupReplies: { type: 'boolean' } },
+    async execute(args, ctx) {
+      const patch = {};
+      for (const k of ['alwaysOn', 'paused', 'whatsapp', 'telegram', 'groupReplies']) if (typeof args[k] === 'boolean') patch[k] = args[k];
+      if (!Object.keys(patch).length) return fail('NOTHING_TO_UPDATE', 'Aucun réglage fourni.');
+      const s = await require('./autoResponder').setSettings(ctx.tenant, patch);
+      return { ok: true, result: { whatsapp: s.whatsapp, telegram: s.telegram, alwaysOn: !!s.alwaysOn, paused: !!s.paused, groupReplies: !!s.groupReplies } };
+    },
+  },
+
   // ================= FILE / PLANIFICATION =================
   getQueueStatus: {
     description: 'État de la file de tâches durable (en attente, en cours, terminées, échouées, bloquées).', permission: null, risk: 'READ', inputSchema: {},
@@ -343,6 +366,11 @@ const TOOLS = {
         if (conn.result.whatsapp.available && conn.result.whatsapp.connected === false) problems.push('WHATSAPP_DECONNECTE');
         if (conn.result.telegram.available && conn.result.telegram.connected === false) problems.push('TELEGRAM_DECONNECTE');
       } else problems.push('STATUT_CONNEXION_INDISPONIBLE');
+      try {
+        const rs = await require('./autoResponder').getSettings(ctx.tenant);
+        if (!rs.whatsapp && !rs.telegram) problems.push('REPONDEUR_DESACTIVE');
+        else if (rs.paused) problems.push('REPONDEUR_EN_PAUSE');
+      } catch (e) { /* non bloquant */ }
       if (queue.stuck) problems.push(`TACHES_BLOQUEES:${queue.stuck}`);
       if (queue.overdue) problems.push(`TACHES_EN_RETARD:${queue.overdue}`);
       return { ok: true, result: { connections: conn && conn.result, queue, recentErrors: errors.map((e) => ({ action: e.action, detail: e.detail, at: e.ts })), problems } };

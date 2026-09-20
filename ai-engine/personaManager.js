@@ -49,9 +49,11 @@ function personaSystemPrompt(domain) {
     // câblés (voir ai-engine/chatOrchestrator.js). Cette négation était la
     // cause du signalement le plus grave reçu sur ce module.
     'Le compte WhatsApp/Telegram du vendeur est DÉJÀ connecté à ce système et tu as un accès RÉEL et FONCTIONNEL pour envoyer des messages, lancer des campagnes, générer des liens de paiement, créer des comptes élèves, etc. — ce ne sont PAS de simples suggestions ou modèles à copier-coller manuellement.',
-    'Ne dis JAMAIS "je n\'ai pas accès à WhatsApp/vos comptes/services externes" ni aucune variante — c\'est FAUX ici et déroute gravement l\'utilisateur. Si sa demande est actionnable, dis-lui simplement comment la formuler précisément (ex: "vends 10 formations aujourd\'hui", "génère un accès pour +225...") pour que tu l\'exécutes réellement, ou pose UNE question de clarification — jamais un refus générique de type IA de support.',
+    'Ne dis JAMAIS "je n\'ai pas accès à WhatsApp/vos comptes/services externes" ni aucune variante — c\'est FAUX ici et déroute gravement l\'utilisateur. Si sa demande est actionnable, exécute-la directement (sans lui imposer de formulation), ou pose UNE question de clarification — jamais un refus générique de type IA de support.',
     'Tu ne valides JAMAIS une instruction par une phrase sèche ni ne montres de JSON/format technique : tu parles comme un associé compétent qui connaît déjà le dossier.',
-    'Avant d\'agir, tu reformules TOUJOURS la mission avec tes propres mots pour prouver que tu as compris — jamais un simple accusé de réception.',
+    "Tu EXÉCUTES l'ordre de l'utilisateur tel qu'il le donne. Tu ne le contredis jamais, ne le corriges pas, ne discutes pas ses choix, ne le fais pas changer d'avis et ne moralises pas. Tu n'imposes ni méthode, ni format de phrase, ni étape supplémentaire, ni conseil non demandé.",
+    'Si une information indispensable manque, pose UNE seule question courte. Si tu vois un risque réel, dis-le en UNE phrase puis exécute quand même, sauf impossibilité technique.',
+    "Sois précis et factuel : cite des noms, des dates, des heures, des chiffres et des extraits réels. Si tu n'as pas la donnée, dis-le clairement et propose de la chercher — jamais de réponse floue ni d'invention.",
     TONE_BY_DOMAIN[domain] || TONE_BY_DOMAIN.default,
     // Humanisation (demande explicite de l'utilisateur : « que la conversation
     // soit humaine et non robotique »).
@@ -76,8 +78,8 @@ function extractText(raw) {
 async function rephrase({ kind, rawText, facts, domain, history }) {
   const instructionByKind = {
     question: 'Le brief de la mission est encore incomplet. Reformule chaleureusement ce que tu as déjà compris, puis pose la question suivante de façon naturelle (ne recopie jamais la question technique telle quelle).',
-    confirm_plan: 'Le plan est prêt mais PAS ENCORE lancé. Reformule la mission avec tes mots pour prouver ta compréhension, mentionne les faits concrets du contexte s\'ils sont pertinents, pose éventuellement UNE question de nuance business utile, puis demande confirmation pour lancer — avec assurance, jamais timide.',
-    executing: 'L\'utilisateur vient de confirmer. Annonce avec assurance et enthousiasme que tu lances l\'exécution maintenant — 1 à 2 phrases, sans détail technique.',
+    confirm_plan: 'Le plan est prêt. Annonce brièvement (1 à 2 phrases) ce que tu vas faire exactement — sans demander d\'autorisation ni imposer de choix.',
+    executing: 'Annonce en 1 à 2 phrases que tu exécutes la demande maintenant, sans détail technique ni question.',
     declined: 'L\'utilisateur a annulé ou veut réfléchir. Réponds avec compréhension, sans insister, en laissant la porte ouverte.',
   };
 

@@ -158,7 +158,8 @@ test('campagne : pause/reprise/statut/rapport passent par le moteur réel', asyn
   const ctx = { runtime: rt, permissions: ['messages:send'] };
   assert.equal((await run('pauseCampaign', { campaignId: 'c1' }, ctx)).state, 'SUCCESS');
   assert.equal((await run('resumeCampaign', { campaignId: 'c1' }, ctx)).state, 'SUCCESS');
-  assert.equal((await run('cancelCampaign', { campaignId: 'c1' }, ctx)).state, 'NEEDS_CONFIRMATION', 'annulation = sensible');
+  assert.equal((await run('cancelCampaign', { campaignId: 'c1' }, ctx)).state, 'SUCCESS', 'ordre exécuté sans confirmation imposée');
+  assert.equal((await run('cancelCampaign', { campaignId: 'c1' }, Object.assign({ confirmFrom: 'SENSITIVE' }, ctx))).state, 'NEEDS_CONFIRMATION', 'sauf si une confirmation est configurée');
   assert.equal((await run('getCampaignStatus', { campaignId: 'c1' }, ctx)).result.status, 'running');
   const rep = await run('generateCampaignReport', { campaignId: 'c1' }, ctx);
   assert.match(rep.result.csv, /nom,numero,statut,derniere_tentative,erreur/);
@@ -173,8 +174,8 @@ test('CRM : créer, lire, mettre à jour, étiqueter, segmenter, supprimer', asy
   await run('tagCustomer', { phone: '22670001111', tags: ['relance'] });
   const seg = await run('segmentCustomers', { tag: 'vip', stage: 'negociation' });
   assert.equal(seg.result.count, 1);
-  assert.equal((await run('deleteCustomer', { phone: '22670001111' })).state, 'NEEDS_CONFIRMATION');
-  assert.equal((await run('deleteCustomer', { phone: '22670001111' }, { confirmed: true })).state, 'SUCCESS');
+  assert.equal((await run('deleteCustomer', { phone: '22670001111' }, { confirmFrom: 'SENSITIVE' })).state, 'NEEDS_CONFIRMATION');
+  assert.equal((await run('deleteCustomer', { phone: '22670001111' })).state, 'SUCCESS', 'exécuté directement par défaut');
   assert.equal((await run('getCustomer', { phone: '22670001111' })).error.code, 'CUSTOMER_NOT_FOUND');
 });
 

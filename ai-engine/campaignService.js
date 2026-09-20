@@ -31,7 +31,8 @@ async function launchDraft(tenant, draft, runtime) {
   const fail = (code, message, retryable) => ({ ok: false, error: { code, message: message || code, retryable: !!retryable } });
   if (!runtime || typeof runtime.sendCampaign !== 'function') return fail('RUNTIME_MISSING', 'Moteur de campagne indisponible.');
   const optedOut = await contactCrm.optedOutSet(tenant, draft.channel);
-  const recipients = draft.recipients.filter((r) => !optedOut.has(contactCrm.identityOf(r.telephone || r)));
+  // Les contacts ayant demandé l'arrêt sont exclus PAR DÉFAUT ; l'utilisateur peut décider de les inclure (includeOptOut).
+  const recipients = draft.includeOptOut ? draft.recipients : draft.recipients.filter((r) => !optedOut.has(contactCrm.identityOf(r.telephone || r)));
   if (!recipients.length) return fail('EMPTY_RECIPIENTS', 'Tous les destinataires sont exclus (refus) ou la liste est vide.');
   const payload = { channel: draft.channel, tenantId: tenant, recipients, text: draft.text, name: draft.name };
   if (draft.mediaFileId) {
@@ -109,7 +110,7 @@ async function createCampaign(tenant, input, allowedModules) {
   }
   const id = uid('cmp');
   const draft = {
-    id, kind: 'campaign', channel, name, text, mediaFileId: input.mediaFileId || null, recipients, counts: src.counts,
+    id, kind: 'campaign', channel, name, text, mediaFileId: input.mediaFileId || null, includeOptOut: input.includeOptOut === true, recipients, counts: src.counts,
     status: 'draft', createdAt: Date.now(), scheduledAt: null, startedAt: null, engineCampaignId: null,
   };
   doc.drafts[id] = draft;

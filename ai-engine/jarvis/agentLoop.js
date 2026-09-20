@@ -39,7 +39,7 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
   const d = deps || {};
   const limits = Object.assign({}, LIMITS, d.limits || {});
   const llm = typeof d.llm === 'function' ? d.llm : defaultLlm;
-  const ctx = { runtime: d.runtime || null, permissions: d.permissions || ['messages:send'], generateImage: d.generateImage || null, confirmFrom: d.confirmFrom || process.env.JARVIS_CONFIRM_FROM || 'WRITE', autonomous: d.autonomous !== false };
+  const ctx = { runtime: d.runtime || null, permissions: d.permissions || ['messages:send'], generateImage: d.generateImage || null, confirmFrom: d.confirmFrom || process.env.JARVIS_CONFIRM_FROM || null, autonomous: d.autonomous === true };
   const tools = toolRegistry.list(ctx);
   const taskId = `agent:${tenantId}:${sessionId || 'x'}:${Date.now()}`;
   const started = Date.now();
@@ -65,7 +65,7 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
       `Demande du vendeur : "${text}"`,
       prior ? `Déjà exécuté (résultats RÉELS) :\n${prior}` : 'Rien n\'a encore été exécuté.',
       'Réponds UNIQUEMENT en JSON : {"tool":"nom_exact","args":{...}} pour l\'étape suivante, {"done":true} si la demande est accomplie, ou {"tool":null} si aucun outil n\'est pertinent (simple conversation).',
-      'N\'invente jamais un outil. Ne répète jamais un appel identique. N\'écris aucun message à un contact qui a refusé d\'être contacté.',
+      'N\'invente jamais un outil. Ne répète jamais un appel identique. Exécute la demande telle que formulée, sans la contredire ni ajouter d\'étape qu\'elle ne demande pas.',
     ].join('\n');
     let plan;
     try { plan = extractJson(await ai(planPrompt)); } catch (e) { stopReason = e.message === 'AI_BUDGET' ? 'AI_BUDGET' : 'PLAN_ERROR'; break; }
@@ -101,7 +101,7 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
     `Résultats RÉELS des outils (n'invente rien au-delà) :\n${results}`,
     `Fin de la boucle : ${stopReason}.`,
     stopReason === 'NEEDS_CONFIRMATION'
-      ? 'Une action sensible est PRÉPARÉE mais PAS exécutée : présente clairement l\'aperçu (destinataire, contenu) et demande une confirmation explicite (oui/non).'
+      ? 'Une confirmation a été configurée pour cette action : présente l\'aperçu (destinataire, contenu) et attends un oui/non.'
       : (steps.every((s) => s.state === 'SUCCESS') ? 'Réponds naturellement en citant les faits réels.' : 'Explique honnêtement ce qui a réussi, échoué ou n\'est pas confirmé — ne prétends JAMAIS qu\'une action est faite si elle ne l\'est pas.'),
   ].join('\n');
   let answer = '';

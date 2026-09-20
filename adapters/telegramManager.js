@@ -77,7 +77,7 @@ function getOrCreate(rawTenantId) {
     }
     tenants.set(tenantId, { session, campaignEngine, initStarted: false });
     sessionRegulator.register('telegram', tenantId, {
-      protected: tenantId === ADMIN_TENANT_ID,
+      protected: tenantId === ADMIN_TENANT_ID || require('../ai-engine/alwaysOn').isAlwaysOn(tenantId),
       hasActiveCampaign: () => (campaignEngine.getStatus() || {}).status === 'running',
       // NE JAMAIS annuler une campagne juste parce que sa session est
       // libérée (limite de sessions simultanées atteinte, voir
@@ -308,6 +308,7 @@ function getStorageStatus() {
 }
 
 module.exports = {
+  ensureConnected,
   ADMIN_TENANT_ID,
   sanitizeTenantId,
   getOrCreate,

@@ -23,6 +23,7 @@ const modelRouter = require('./modelRouter');
 const contactCrm = require('./contactCrm');
 const conversationEngine = require('./jarvis/conversationEngine');
 const { shared: conversationQueue } = require('./jarvis/conversationQueue');
+const alwaysOn = require('./alwaysOn');
 
 const DEFAULT_DEBOUNCE_MS = Math.max(0, parseInt(process.env.AUTO_REPLY_DEBOUNCE_MS, 10) || 1500);
 
@@ -43,14 +44,29 @@ function markProcessed(tenant, id) {
 
 function sanitizeTenant(t) { return String(t || '').trim().replace(/[^A-Za-z0-9_-]/g, '_') || 'unknown'; }
 
+// Politique de réglage : un compte « toujours actif » (alwaysOn) répond en permanence sur WhatsApp ET Telegram, sauf pause
+// explicite (paused). AUTO_REPLY_DEFAULT_ON=true active aussi le répondeur par défaut des comptes sans réglage.
+const defaultOn = () => process.env.AUTO_REPLY_DEFAULT_ON === 'true';
+function applyPolicy(doc, tenant) {
+  const d = Object.assign({}, doc);
+  if (d.alwaysOn === true || alwaysOn.isAlwaysOn(tenant)) {
+    d.alwaysOn = true;
+    if (d.paused !== true) { d.whatsapp = true; d.telegram = true; }
+  }
+  return d;
+}
 async function getSettings(tenant) {
-  return storageAdapter.get(SETTINGS_NS, sanitizeTenant(tenant), { tenant: sanitizeTenant(tenant), whatsapp: false, telegram: false });
+  const t = sanitizeTenant(tenant);
+  const doc = await storageAdapter.get(SETTINGS_NS, t, { tenant: t, whatsapp: defaultOn(), telegram: defaultOn() });
+  return applyPolicy(doc, t);
 }
 async function setSettings(tenant, patch) {
-  const cur = await getSettings(tenant);
-  const next = Object.assign({}, cur, patch || {}, { tenant: sanitizeTenant(tenant), updatedAt: new Date().toISOString() });
-  storageAdapter.set(SETTINGS_NS, sanitizeTenant(tenant), next);
-  return next;
+  const t = sanitizeTenant(tenant);
+  const cur = await storageAdapter.get(SETTINGS_NS, t, { tenant: t, whatsapp: defaultOn(), telegram: defaultOn() });
+  const next = Object.assign({}, cur, patch || {}, { tenant: t, updatedAt: new Date().toISOString() });
+  if (typeof next.alwaysOn === 'boolean') alwaysOn.mark(t, next.alwaysOn);
+  storageAdapter.set(SETTINGS_NS, t, next);
+  return applyPolicy(next, t);
 }
 function isEnabled(settings, channel) {
   return String(channel).toUpperCase() === 'TELEGRAM' ? !!(settings && settings.telegram) : !!(settings && settings.whatsapp);

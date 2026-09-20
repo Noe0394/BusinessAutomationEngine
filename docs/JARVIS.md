@@ -66,3 +66,26 @@ par la session liée reviendrait à contourner la protection réseau, ce qui est
 
 Non fait : envoi automatique des liens `wa.me` ; onglet Campagnes dans l'application mobile/PC (`webapp-core`) ; OCR image
 (moteur `tesseract.js` à installer) ; interface non vérifiée visuellement dans un navigateur (syntaxe et API testées).
+
+## Mémoire 7 jours refondue, Chat Intelligent sans contrainte, répondeur permanent (2026-09-20)
+
+**Mémoire** (`ai-engine/messageHistory.js`) : un document PAR JOUR (plus de fichier unique plafonné à 2000 messages), écritures
+sérialisées par conversation (plus de message perdu en cas de messages simultanés), idempotence par identifiant de message (envoi
+Cyrus + écho, import d'historique), vue toujours limitée à [maintenant − 7×24 h, maintenant], purge exacte par jour. L'ancien format
+est migré automatiquement au premier accès. Nouvelles sources : historique WhatsApp de la synchronisation initiale, messages rattachés
+hors ligne (`append`), messages écrits depuis le téléphone (`fromMe`) et envois de Cyrus (campagnes comprises).
+Limite réelle : WhatsApp ne fournit l'historique qu'au tout premier appairage complet ; il n'est pas récupérable rétroactivement.
+
+**Questions sur la mémoire** (`ai-engine/memoryQuery.js`, intention `memory` du chat, outil `queryMemory`) : périodes exactes (hier,
+avant-hier, aujourd'hui, il y a N jours, cette semaine), contact, sujet, listes, décomptes, résumé (IA limitée à l'extrait fourni,
+repli déterministe). Chaque réponse indique l'étendue réelle de la mémoire et signale ce qui n'est pas couvert.
+
+**Chat Intelligent** : il exécute l'ordre tel que donné (consignes communes dans `personaManager` et `llmFallbackEngine`). Plus de
+confirmation par défaut (`JARVIS_CONFIRM_FROM` pour la réactiver), plus de blocage d'un envoi ordonné vers un contact ayant demandé
+l'arrêt (simple note), les plans d'objectif sont exécutés directement (`CHAT_CONFIRM_PLANS=true` pour l'ancien comportement),
+`includeOptOut` pour inclure ces contacts dans une campagne. Les REFUS des clients restent respectés par le répondeur automatique.
+
+**Répondeur permanent** : `AUTO_REPLY_ALWAYS_ON_TENANTS` (liste) ou réglage `alwaysOn` (outil `setAutoReply`, `POST /api/auto-responder`).
+Un compte permanent répond en continu sur WhatsApp ET Telegram (pause explicite possible : `paused`). Le gardien
+(`ai-engine/responderKeeper.js`) vérifie chaque minute les sessions, relance une session appairée mais coupée (au plus une tentative
+toutes les 5 min), et ces sessions ne sont jamais évincées. État : `GET /api/auto-responder/status`, outil `getAutoReplyStatus`.

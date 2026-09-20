@@ -5084,7 +5084,20 @@ app.post('/api/auto-responder', requireAccess, async (req, res) => {
     const patch = {};
     if (typeof b.whatsapp === 'boolean') patch.whatsapp = b.whatsapp;
     if (typeof b.telegram === 'boolean') patch.telegram = b.telegram;
+    if (typeof b.alwaysOn === 'boolean') patch.alwaysOn = b.alwaysOn;
+    if (typeof b.paused === 'boolean') patch.paused = b.paused;
+    if (typeof b.groupReplies === 'boolean') patch.groupReplies = b.groupReplies;
     res.json({ ok: true, settings: await autoResponder.setSettings(resolveTenantId(req), patch) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+// État réel du répondeur : réglages, sessions (connectées/appairées) et dernières tentatives de reconnexion du gardien.
+app.get('/api/auto-responder/status', requireAccess, async (req, res) => {
+  try {
+    const tenant = resolveTenantId(req);
+    const responderKeeper = require('./ai-engine/responderKeeper');
+    const settings = await autoResponder.getSettings(tenant);
+    const live = (mgr, ch) => { try { const e = mgr.getOrCreate(tenant); return { connected: !!e.session.isConnected(), paired: e.session.isPaired ? e.session.isPaired() : null }; } catch (err) { return { connected: false, paired: null, error: err.message }; } };
+    res.json({ ok: true, settings, alwaysOn: !!settings.alwaysOn, sessions: { whatsapp: live(whatsappManager), telegram: live(telegramManager) }, keeper: responderKeeper.status(tenant) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 // DIAG (admin) : injecte un message entrant SYNTHÉTIQUE dans la VRAIE chaîne
@@ -5633,6 +5646,20 @@ telegramManager
       console.error('Erreur lors de la reprise des campagnes Telegram interrompues :', err);
     });
   });
+
+// RÉPONDEUR PERMANENT : les comptes « toujours actifs » (AUTO_REPLY_ALWAYS_ON_TENANTS ou réglage alwaysOn) gardent leurs
+// sessions WhatsApp/Telegram démarrées et reconnectées en continu (jamais évincées, relance contrôlée toutes les 5 min max).
+(async () => {
+  try {
+    const alwaysOnStore = require('./ai-engine/alwaysOn');
+    await alwaysOnStore.loadFromStorage(require('./ai-engine/storageAdapter'), 'auto_settings');
+    require('./ai-engine/responderKeeper').start({ whatsapp: whatsappManager, telegram: telegramManager }, {
+      onChange: (e) => console.log(`Répondeur permanent — ${e.tenant} ${e.channel} : ${e.from || '?'} -> ${e.to}`),
+    });
+    const list = alwaysOnStore.list();
+    if (list.length) console.log(`Répondeur permanent actif pour ${list.length} compte(s).`);
+  } catch (err) { console.error('Répondeur permanent non démarré :', err.message); }
+})();
 
 // Arrêt propre du process (SIGTERM envoyé par Render avant de remplacer le
 // conteneur lors d'un redéploiement, SIGINT en local) : met en PAUSE (jamais

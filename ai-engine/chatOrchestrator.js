@@ -277,6 +277,18 @@ async function handleGoal(text, sessionKey, tenantId, deps) {
     return { text: warm, isPlanningQuestion: true, intent: 'goal' };
   }
 
+  // Ordre compris : exécution DIRECTE (aucune validation imposée). Ancien comportement (plan puis « oui ») :
+  // CHAT_CONFIRM_PLANS=true.
+  if (process.env.CHAT_CONFIRM_PLANS !== 'true') {
+    const eng = deps.engineFor ? deps.engineFor(tenantId) : null;
+    const planLine = out.reply.text.replace(/\n\nPrêt à exécuter \? Choisis une action ci-dessous\.$/, '');
+    const ack = await personaManager.rephrase({ kind: 'executing', rawText: `Je m'en occupe : ${planLine}`, facts, domain });
+    goalSessions.delete(sessionKey);
+    if (!eng) return { text: ack, actionLog: [{ icon: '⚠️', label: 'Exécution indisponible (moteur non injecté)', status: 'error' }] };
+    runGoalPlanInBackground(freshState, eng, tenantId);
+    return { text: ack, actionLog: [{ icon: '🚀', label: 'Exécution démarrée en arrière-plan', status: 'pending' }] };
+  }
+
   // Prêt : reformulation + demande de confirmation — freshState.phase est
   // déjà passé à 'ready' par goalChat.step() ci-dessus (persiste dans
   // goalSessions), aucune exécution ici.

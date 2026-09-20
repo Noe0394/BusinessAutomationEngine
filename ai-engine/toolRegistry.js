@@ -19,13 +19,14 @@ const messageHistory = require('./messageHistory');
 const knowledgeBase = require('./knowledgeBase');
 const chatUploads = require('./chatUploads');
 
-// Niveaux de risque : la confirmation est configurable (ctx.confirmFrom = premier
-// niveau exigeant une confirmation). SENSITIVE et CRITICAL l'exigent toujours.
+// Niveaux de risque : l'utilisateur donne l'ordre, Cyrus l'exécute. Une confirmation n'est demandée QUE si elle est
+// explicitement configurée (ctx.confirmFrom ou JARVIS_CONFIRM_FROM = premier niveau exigeant une confirmation).
 const RISK = { READ: 0, LOW_WRITE: 1, WRITE: 2, SENSITIVE: 3, CRITICAL: 4 };
 function needsConfirmation(risk, ctx) {
+  const cfg = ctx && ctx.confirmFrom != null ? ctx.confirmFrom : process.env.JARVIS_CONFIRM_FROM;
+  if (cfg == null || RISK[cfg] == null) return false;
   const r = RISK[risk] == null ? RISK.WRITE : RISK[risk];
-  const from = ctx && ctx.confirmFrom != null && RISK[ctx.confirmFrom] != null ? RISK[ctx.confirmFrom] : RISK.SENSITIVE;
-  return r >= Math.min(from, RISK.SENSITIVE);
+  return r >= RISK[cfg];
 }
 
 const STATE = {
@@ -389,10 +390,11 @@ const TOOLS = {
     },
     async execute(args, ctx) {
       if (!ctx.runtime || typeof ctx.runtime.sendMessageVerified !== 'function') return { ok: false, error: { code: 'RUNTIME_MISSING' } };
-      if (ctx.autonomous && await contactCrm.isOptedOut(ctx.tenant, 'WHATSAPP', args.to)) return { ok: false, error: { code: 'RECIPIENT_OPTED_OUT', message: 'Ce contact a refusé toute sollicitation.' } };
+      if (ctx.autonomous === true && await contactCrm.isOptedOut(ctx.tenant, 'WHATSAPP', args.to)) return { ok: false, error: { code: 'RECIPIENT_OPTED_OUT', message: 'Ce contact a refusé toute sollicitation.' } };
       const out = await ctx.runtime.sendMessageVerified({ channel: 'WHATSAPP', to: args.to, text: args.text, tenantId: ctx.tenant });
       if (out.status === 'FAILED') return { ok: false, error: { code: 'SEND_FAILED', message: out.error || 'non confirmé' } };
-      return { ok: true, result: { status: out.status, confirmationId: out.confirmationId || null } };
+      const optedOut = await contactCrm.isOptedOut(ctx.tenant, 'WHATSAPP', args.to).catch(() => false);
+      return { ok: true, result: Object.assign({ status: out.status, confirmationId: out.confirmationId || null }, optedOut ? { note: 'Envoyé sur votre ordre : ce contact avait demandé à ne plus être sollicité.' } : {}) };
     },
     async verify(result) { return { verified: result && result.status === 'SUCCESS' && !!result.confirmationId, confirmationId: result && result.confirmationId }; },
   },
@@ -412,10 +414,11 @@ const TOOLS = {
     },
     async execute(args, ctx) {
       if (!ctx.runtime || typeof ctx.runtime.sendMessageVerified !== 'function') return { ok: false, error: { code: 'RUNTIME_MISSING' } };
-      if (ctx.autonomous && await contactCrm.isOptedOut(ctx.tenant, 'TELEGRAM', args.to)) return { ok: false, error: { code: 'RECIPIENT_OPTED_OUT', message: 'Ce contact a refusé toute sollicitation.' } };
+      if (ctx.autonomous === true && await contactCrm.isOptedOut(ctx.tenant, 'TELEGRAM', args.to)) return { ok: false, error: { code: 'RECIPIENT_OPTED_OUT', message: 'Ce contact a refusé toute sollicitation.' } };
       const out = await ctx.runtime.sendMessageVerified({ channel: 'TELEGRAM', to: args.to, text: args.text, tenantId: ctx.tenant });
       if (out.status === 'FAILED') return { ok: false, error: { code: 'SEND_FAILED', message: out.error || 'non confirmé' } };
-      return { ok: true, result: { status: out.status, confirmationId: out.confirmationId || null } };
+      const optedOut = await contactCrm.isOptedOut(ctx.tenant, 'TELEGRAM', args.to).catch(() => false);
+      return { ok: true, result: Object.assign({ status: out.status, confirmationId: out.confirmationId || null }, optedOut ? { note: 'Envoyé sur votre ordre : ce contact avait demandé à ne plus être sollicité.' } : {}) };
     },
     async verify(result) { return { verified: result && result.status === 'SUCCESS' && !!result.confirmationId, confirmationId: result && result.confirmationId }; },
   },
