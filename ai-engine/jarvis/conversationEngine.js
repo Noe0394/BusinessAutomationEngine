@@ -9,6 +9,7 @@ const POSITIVE_REENGAGE = new Set([
   'PAYMENT_INTENT', 'PRICE_OBJECTION', 'OBJECTION', 'SUPPORT', 'COMPLAINT', 'HESITATION',
 ]);
 const NO_SELL_KINDS = new Set(['CLOSE', 'WAIT', 'ACK', 'COURTESY']);
+const GREET_VARIANTS = ['Bonjour ! 😊 Comment puis-je vous aider ?', 'Bonjour, ravi de vous lire ! Que puis-je faire pour vous ?', 'Bonjour ! Je vous écoute 🙂', 'Salut ! Comment puis-je vous être utile ?'];
 const ACK_VARIANTS = ['Avec plaisir 😊', 'Je vous en prie 😊', 'Ravi d\'avoir pu vous aider 🙏', 'Pas de souci, à votre service 😊'];
 
 const TEMPLATES = {
@@ -20,7 +21,35 @@ const TEMPLATES = {
   AMOUNT_UNVERIFIED: 'Je préfère vérifier le montant exact avant de vous répondre pour ne pas me tromper — je reviens vers vous très vite.',
   COURTESY: 'Bonjour ! 😊 Comment puis-je vous aider ?',
   HOLD: 'Merci pour votre message 🙏 Je reviens vers vous très vite avec une réponse précise.',
+  SMALLTALK: 'Ça va bien, merci ! 😊 Et vous ?',
+  SENSITIVE: 'Toutes mes pensées vous accompagnent 🙏',
 };
+
+// Contenu commercial (montants, offres, inscription...) : interdit hors contexte commercial.
+const PROMO_RE = /(\d[\d\s.,]*\s?(?:fcfa|f\s?cfa|cfa|xof|xaf|€|eur|usd|\$)|\bprix\b|\btarifs?\b|\bformations?\b|\boffres?\b|\bpromo\w*|\bremises?\b|\br[ée]ductions?\b|\binscri\w+|\bcatalogue\b|\bproduits?\b|\bcommander\b|\bacheter\b|\bpaiement\b)/i;
+const STRONG_COMMERCIAL = new Set(['PURCHASE_INTENT', 'PAYMENT_INTENT', 'INTEREST', 'PRICE_OBJECTION', 'OBJECTION', 'REQUEST_INFORMATION', 'REQUEST_MORE_INFORMATION']);
+const COMMERCIAL_WINDOW_MS = 30 * 60 * 1000;
+
+// La promotion n'est légitime que si le client l'a lui-même ouverte (ou vient de le faire) — jamais dans
+// un contexte sensible ni en simple conversation.
+function commercialAllowed(cls, state, now) {
+  const { intent, flags } = cls;
+  if (flags.sensitive) return false;
+  if (STRONG_COMMERCIAL.has(intent) || cls.intents.some((i) => ['PURCHASE_INTENT', 'PAYMENT_INTENT'].includes(i))) return true;
+  if (intent === 'QUESTION' && (flags.topics || []).some((t) => t !== 'location')) return true;
+  if (flags.smalltalk) return false;
+  return !!(state.memory && state.memory.commercialUntil > now && !['GREETING', 'THANKS', 'UNKNOWN'].includes(intent));
+}
+
+// Coordonnées absentes des données métier et du message du client = fuite potentielle d'informations privées.
+function privateLeak(reply, knownText, clientText) {
+  const found = (String(reply || '').match(/[\w.+-]+@[\w-]+\.[\w.]+|\+?\d[\d\s().-]{7,}\d/g) || []).map((s) => s.replace(/\D/g, '') || s.toLowerCase());
+  if (!found.length) return false;
+  const hay = `${String(knownText || '')} ${String(clientText || '')}`;
+  const digits = hay.replace(/\D/g, ' ').replace(/\s+/g, '');
+  const low = hay.toLowerCase();
+  return found.filter((f) => !/^\d+$/.test(f) || f.length >= 9).some((f) => (/^\d+$/.test(f) ? !digits.includes(f) : !low.includes(f)));
+}
 
 function pickVariant(list, recent) {
   const used = new Set((recent || []).map((r) => r.text));
@@ -63,8 +92,39 @@ function memoryLines(state) {
   return lines;
 }
 
-// Décision pré-rédaction (100 % code).
+// Décision pré-rédaction (100 % code) : garde-fous de contexte (humain, boucle, groupe, sensible) puis règles de fond.
 function decide(state, cls, ctx) {
+  const c = ctx || {};
+  const now = c.now || Date.now();
+  const { intent, flags } = cls;
+  const commercial = commercialAllowed(cls, state, now);
+  const base = ['Réponds à la DERNIÈRE intention exprimée par le client, pas à une intention précédente.'].concat(memoryLines(state));
+  if (state.memory && state.memory.subject) base.push(`Sujet courant de la conversation : ${state.memory.subject}. Les mots courts (« ça », « cette formation », « combien ») s'y rapportent.`);
+  const stop = (reason) => ({ action: 'NO_ACTION', kind: 'ACK', reason, directives: base.slice(), reopen: false, escalate: false });
+
+  if (intent !== 'STOP') {
+    if (c.humanActive) return stop('HUMAN_ACTIVE');
+    if (c.loopSuspected) return stop('LOOP_PROTECTION');
+    if (c.isGroup && (!c.groupReplies || !commercial || flags.sensitive)) return stop('GROUP_NOT_ADDRESSED');
+    if (flags.sensitive && !state.refusal.active) {
+      return {
+        action: 'REPLY', kind: 'COURTESY', template: 'SENSITIVE', reason: `SENSITIVE_${flags.sensitive}`, reopen: false, escalate: flags.sensitive === 'URGENT', noPromo: true,
+        directives: base.concat([`Contexte sensible (${flags.sensitive}) : réponse humaine, brève (1-2 phrases) et respectueuse. AUCUNE promotion, aucun prix, aucune offre, aucune allusion commerciale.`]),
+      };
+    }
+  }
+  const d = decideCore(state, cls, c);
+  if (d.action === 'REPLY' && intent === 'GREETING' && cls.intents.length === 1 && !flags.smalltalk && !d.template) { d.variants = 'GREET'; d.kind = 'COURTESY'; }
+  if (d.action === 'REPLY' && !commercial && !['CLOSE', 'SUPPORT'].includes(d.kind)) {
+    d.noPromo = true;
+    d.directives = d.directives.concat(['Conversation NON commerciale : réponds naturellement à ce que dit le client. AUCUNE promotion non sollicitée : ne cite ni prix, ni formation, ni offre, ni produit.']);
+    if (flags.smalltalk && !d.template) d.template = 'SMALLTALK';
+  }
+  if (state.memory && state.memory.subject && d.action === 'REPLY') d.directives = d.directives.concat([`Sujet courant de la conversation : ${state.memory.subject}.`]);
+  return d;
+}
+
+function decideCore(state, cls, ctx) {
   const c = ctx || {};
   const now = c.now || Date.now();
   const { intent, flags } = cls;
@@ -144,6 +204,7 @@ async function draft(decision, ctx) {
   const d = ctx.deps;
   const recent = ctx.state.recentReplies;
   if (decision.variants === 'ACK') return pickVariant(ACK_VARIANTS, recent);
+  if (decision.variants === 'GREET') return pickVariant(GREET_VARIANTS, recent);
   if (decision.template && (decision.template === 'STOP' || decision.template === 'COURTESY')) return TEMPLATES[decision.template];
   const fallback = decision.template ? TEMPLATES[decision.template] : (decision.kind === 'ANSWER' ? TEMPLATES.HOLD : null);
   if (!d.compose) return fallback;
@@ -158,6 +219,8 @@ async function guard(text, decision, ctx) {
   const problems = (t) => {
     if (!t) return 'EMPTY';
     if (noSell && repetitionGuard.SALES_PUSH_RE.test(t)) return 'SALES_PUSH';
+    if (decision.noPromo && PROMO_RE.test(t)) return 'UNSOLICITED_PROMO';
+    if (privateLeak(t, d.knownText, ctx.text)) return 'PRIVATE_DATA';
     const rep = repetitionGuard.check(t, ctx.state.recentReplies);
     if (rep.repeated) return `REPEAT_${rep.kind}`;
     if (unverifiedAmount(t, d.knownText)) return 'AMOUNT_UNVERIFIED';
@@ -170,6 +233,8 @@ async function guard(text, decision, ctx) {
       SALES_PUSH: 'Ta réponse précédente contenait une relance commerciale interdite: reformule sans aucune invitation à acheter/s\'inscrire/payer.',
       REPEAT_REPLY: 'Ta réponse précédente répétait ce qui a déjà été dit: change d\'angle, apporte quelque chose de nouveau ou clôture simplement.',
       REPEAT_QUESTION: 'Ne repose PAS une question déjà posée au client.',
+      UNSOLICITED_PROMO: 'Ta réponse précédente contenait une promotion/un prix/une offre NON sollicités : reformule en répondant uniquement à ce que dit le client, sans aucun contenu commercial.',
+      PRIVATE_DATA: 'Ta réponse précédente contenait des coordonnées (numéro/e-mail) absentes des données réelles : retire-les.',
       AMOUNT_UNVERIFIED: 'Ta réponse citait un montant absent des données réelles: retire tout montant non présent dans les informations configurées.',
     }[issue];
     try {
@@ -178,6 +243,10 @@ async function guard(text, decision, ctx) {
       if (!again) return { text: retry, issue: null, regenerated: true };
       issue = again;
     } catch (e) { /* on retombe sur le filet déterministe */ }
+  }
+  if (issue === 'UNSOLICITED_PROMO' || issue === 'PRIVATE_DATA') {
+    const safe = decision.template && TEMPLATES[decision.template] && !PROMO_RE.test(TEMPLATES[decision.template]) ? TEMPLATES[decision.template] : null;
+    return { text: safe || (ctx.cls.flags.greeting ? TEMPLATES.COURTESY : (decision.kind === 'ANSWER' ? TEMPLATES.HOLD : null)), issue };
   }
   if (issue === 'AMOUNT_UNVERIFIED') return { text: TEMPLATES.AMOUNT_UNVERIFIED, issue };
   if (issue === 'SALES_PUSH') return { text: decision.template ? TEMPLATES[decision.template] : TEMPLATES.WAIT, issue };
@@ -202,6 +271,8 @@ function applyState(state, cls, decision, sent, replyText, items, now) {
   if (intent === 'PURCHASE_INTENT' || intent === 'PAYMENT_INTENT') {
     if (!state.memory.accepted.includes('achat')) state.memory.accepted.push('achat');
   }
+  if (STRONG_COMMERCIAL.has(intent) || (intent === 'QUESTION' && (flags.topics || []).some((t) => t !== 'location'))) state.memory.commercialUntil = now + COMMERCIAL_WINDOW_MS;
+  if (['REFUSAL', 'DISINTEREST', 'STOP'].includes(intent)) state.memory.commercialUntil = 0;
   if (decision.kind === 'WAIT') state.memory.waiting = { kind: intent, when: flags.deferral || null, since: now };
   else if (['PURCHASE_INTENT', 'PAYMENT_INTENT', 'QUESTION', 'INTEREST'].includes(intent) && !flags.deferral) state.memory.waiting = null;
   for (const t of (flags.topics || [])) state.memory.questions[t] = (state.memory.questions[t] || 0) + 1;
@@ -216,6 +287,26 @@ function applyState(state, cls, decision, sent, replyText, items, now) {
   state.turns += 1;
 }
 
+const MUTED = new Set(['HUMAN_ACTIVE', 'GROUP_NOT_ADDRESSED', 'LOOP_PROTECTION']);
+
+// Sujet courant : nom de produit/offre configuré cité par le client (les mots courts s'y rapportent ensuite).
+function detectSubject(text, productNames) {
+  const n = intentClassifier.norm(text);
+  for (const name of productNames || []) {
+    const nn = intentClassifier.norm(name);
+    if (nn.length >= 3 && n.includes(nn)) return String(name);
+  }
+  return null;
+}
+
+// L'utilisateur écrit lui-même dans la conversation : Cyrus se tait pendant `minutes` (défaut 30).
+async function noteHumanActivity(tenantId, channel, from, minutes) {
+  const state = await conversationState.get(tenantId, channel, from);
+  state.humanUntil = Date.now() + (Number(minutes) > 0 ? Number(minutes) : 30) * 60 * 1000;
+  await conversationState.save(state);
+  return state.humanUntil;
+}
+
 // Point d'entrée : traite un LOT de messages d'une même conversation.
 async function handleBatch({ tenantId, channel, from, name, items }, deps) {
   const d = deps || {};
@@ -228,7 +319,13 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
   let cls = intentClassifier.classify(text, { state });
   if (cls.needsArbitration && d.llm) cls = await intentClassifier.arbitrate({ text, history: d.history, llm: d.llm, base: cls });
 
-  const decision = decide(state, cls, { now });
+  const recentTs = (state.recentTs || []).filter((t) => now - t < 120000);
+  const subject = detectSubject(text, d.productNames);
+  if (subject) state.memory.subject = subject;
+  const decision = decide(state, cls, {
+    now, humanActive: state.humanUntil > now, loopSuspected: recentTs.length >= 8,
+    isGroup: !!d.isGroup, groupReplies: !!d.groupReplies,
+  });
   const ctx = { tenantId, channel, from, name, text, cls, state, deps: d, decision };
   let replyText = null; let guardInfo = null; let out = null; let sent = false;
 
@@ -244,7 +341,15 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
     out = await d.send(replyText);
     sent = !!out && out.status !== 'FAILED';
   }
-  applyState(state, cls, decision, sent, replyText, fresh, now);
+  if (MUTED.has(decision.reason)) {
+    // Silence de contexte (humain actif, groupe, boucle) : on ne fait pas évoluer l'état commercial.
+    for (const it of fresh) if (it.messageId) state.processedIds.push(String(it.messageId));
+    state.recentTs = recentTs.concat(now);
+    state.lastMessageTs = now;
+  } else {
+    applyState(state, cls, decision, sent, replyText, fresh, now);
+    state.recentTs = recentTs.concat(now).slice(-30);
+  }
   await conversationState.save(state);
 
   const crm = d.crm;
@@ -260,4 +365,4 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
   return { action, reason, intent: cls.intent, intents: cls.intents, state: state.state, kind: decision.kind, text: replyText, out, sent, guard: guardInfo && guardInfo.issue };
 }
 
-module.exports = { handleBatch, decide, unverifiedAmount, amountsIn, TEMPLATES };
+module.exports = { handleBatch, decide, noteHumanActivity, commercialAllowed, privateLeak, unverifiedAmount, amountsIn, TEMPLATES };

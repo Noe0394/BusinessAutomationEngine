@@ -28,6 +28,12 @@ function setIncomingMessageHandler(fn) {
   incomingMessageHandler = typeof fn === 'function' ? fn : null;
 }
 
+// Activité humaine (l'utilisateur écrit lui-même depuis son téléphone) : callback unique réglé par index.js.
+let outgoingMessageHandler = null;
+function setOutgoingMessageHandler(fn) {
+  outgoingMessageHandler = typeof fn === 'function' ? fn : null;
+}
+
 function sanitizeTenantId(rawId) {
   const cleaned = String(rawId || '').trim().replace(/[^A-Za-z0-9_-]/g, '_');
   return cleaned || 'unknown';
@@ -60,6 +66,12 @@ function getOrCreate(rawTenantId) {
         Promise.resolve(incomingMessageHandler({ channel: 'WHATSAPP', tenantId, session, msg })).catch((err) => {
           console.error(`Erreur dans le filtrage privé/pro WhatsApp (tenant "${tenantId}") :`, err.message);
         });
+      });
+    }
+    if (typeof session.onOutgoingMessage === 'function') {
+      session.onOutgoingMessage((msg) => {
+        if (!outgoingMessageHandler) return;
+        Promise.resolve(outgoingMessageHandler({ channel: 'WHATSAPP', tenantId, msg })).catch(() => {});
       });
     }
     tenants.set(tenantId, { session, campaignEngine, initStarted: false });
@@ -340,4 +352,5 @@ module.exports = {
   listActiveEntries,
   getStorageStatus,
   setIncomingMessageHandler,
+  setOutgoingMessageHandler,
 };

@@ -55,7 +55,18 @@ const TOPICS = [
   ['location', /(?:^|\s)(?:ou|lieu|adresse|localisation|ville)(?=\s|$|[?!])/],
 ];
 
-const QUESTION_START = /^(?:comment|quand|ou|quel|quelle|quels|quelles|combien|pourquoi|est ce|y a t il|avez vous|vous faites|faites vous|peut on|puis je|je peux|c est quoi|qu est ce|quoi|qui|est il|est elle|c est combien)(?:\s|$)/;
+// Contextes où une promotion commerciale serait déplacée (deuil, prière, santé, juridique, conflit, urgence).
+const SENSITIVE = [
+  ['GRIEF', /(?:^|\s)(?:deces|decede\w*|mort|morte|enterrement|obseques|condoleances|repose en paix|paix a son ame|rip|nous a quittes?|perdu (?:mon|ma|son|sa|notre) (?:pere|mere|frere|soeur|fils|fille|mari|femme|epoux|epouse|ami\w*))(?=\s|$|[?!])/],
+  ['PRAYER', /(?:^|\s)(?:dieu|allah|amen|seigneur|priere\w*|prions|beni\w*|inchallah|insha allah|jesus|christ|que le bon dieu)(?=\s|$|[?!])/],
+  ['HEALTH', /(?:^|\s)(?:malade\w*|maladie|hopital|hospitalise\w*|cancer|chirurgie|diagnostic|urgences? medicales?|sante fragile)(?=\s|$|[?!])/],
+  ['LEGAL', /(?:^|\s)(?:avocat|tribunal|proces|police|gendarmerie|plainte|garde a vue|huissier)(?=\s|$|[?!])/],
+  ['CONFLICT', /(?:^|\s)(?:dispute|bagarre|insulte\w*|menace\w*|violence|harcel\w*|divorce|separation)(?=\s|$|[?!])/],
+  ['URGENT', /(?:^|\s)(?:urgence|au secours|accident|incendie|danger|a l aide)(?=\s|$|[?!])/],
+];
+const SMALLTALK_RE = /(?:^|\s)(?:ca va|comment (?:vas?|allez)[ -]?(?:tu|vous)|et toi|et vous|tu vas bien|vous allez bien|la forme|bonne (?:journee|soiree|nuit|semaine|fete|continuation)|bon week end|a bientot|a plus|belle journee)(?=\s|$|[?!])/;
+
+const QUESTION_START =/^(?:comment|quand|ou|quel|quelle|quels|quelles|combien|pourquoi|est ce|y a t il|avez vous|vous faites|faites vous|peut on|puis je|je peux|c est quoi|qu est ce|quoi|qui|est il|est elle|c est combien)(?:\s|$)/;
 
 function has(re, s) { return re.test(s); }
 
@@ -76,6 +87,8 @@ function classify(text, opts) {
     topicChange: /(?:^|\s)(?:finalement|en fait|sinon|au fait|autre chose)(?=\s|$|,)/.test(n),
     understood: /(?:j ai compris|compris|c est note|bien recu)/.test(n),
     negative: false,
+    sensitive: (SENSITIVE.find(([, re]) => re.test(n)) || [null])[0],
+    smalltalk: SMALLTALK_RE.test(n),
   };
   if (!n) return { intent: 'UNKNOWN', intents: ['UNKNOWN'], flags, confidence: 0, needsArbitration: false };
 
@@ -94,7 +107,9 @@ function classify(text, opts) {
   if (has(P.requestTime, n)) hit.add('REQUEST_TIME');
   if (has(P.support, n)) hit.add('SUPPORT');
   if (has(P.moreInfo, n)) hit.add('REQUEST_MORE_INFORMATION');
-  if (has(P.info, n) || (flags.question && flags.topics.length)) hit.add(flags.question ? 'QUESTION' : 'REQUEST_INFORMATION');
+  // « je voudrais connaître le prix » (sans point d'interrogation) reste une demande d'information commerciale.
+  const askedTopic = flags.topics.some((t) => ['price', 'enrollment', 'payment', 'delivery'].includes(t));
+  if (has(P.info, n) || (flags.question && flags.topics.length) || askedTopic) hit.add(flags.question ? 'QUESTION' : 'REQUEST_INFORMATION');
   else if (flags.question) hit.add('QUESTION');
   if (has(P.interest, n) && !hit.has('DISINTEREST')) hit.add('INTEREST');
   if (has(P.confirm, n)) hit.add('CONFIRMATION');

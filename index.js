@@ -5494,6 +5494,8 @@ async function handleHistoricalMessage({ channel, tenantId, session, msg }) {
 }
 
 whatsappManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
+// Activité humaine : l'utilisateur écrit lui-même depuis son téléphone -> l'auto-réponse se tait sur cette conversation.
+whatsappManager.setOutgoingMessageHandler(({ tenantId, msg }) => autoResponder.handleHumanActivity({ tenantId, channel: 'WHATSAPP', from: msg && msg.key && msg.key.remoteJid }));
 telegramManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
 telegramManager.setHistoryMessageHandler(handleHistoricalMessage);
 

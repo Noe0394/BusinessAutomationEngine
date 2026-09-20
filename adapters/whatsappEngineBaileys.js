@@ -207,6 +207,24 @@ function createSession(tenantId) {
     incomingMessageListeners.push(callback);
   }
 
+  // Activité humaine : messages « fromMe » qui ne viennent pas de Cyrus (l'utilisateur écrit depuis son téléphone).
+  const sentByCyrus = new Set();
+  function rememberSent(id) {
+    sentByCyrus.add(String(id));
+    if (sentByCyrus.size > 2000) sentByCyrus.delete(sentByCyrus.values().next().value);
+  }
+  const humanActivityListeners = [];
+  function onOutgoingMessage(callback) { humanActivityListeners.push(callback); }
+  function checkHumanActivity(msg) {
+    // Délai : l'évènement peut précéder la fin de sock.sendMessage (qui enregistre l'identifiant).
+    setTimeout(() => {
+      if (!msg.key || sentByCyrus.has(String(msg.key.id))) return;
+      humanActivityListeners.forEach((callback) => {
+        try { callback(msg); } catch (err) { console.error(`Erreur dans un écouteur d'activité humaine (tenant "${tenantId}") :`, err.message); }
+      });
+    }, 3000);
+  }
+
   function notifyIncomingMessage(msg) {
     incomingMessageListeners.forEach((callback) => {
       try {
@@ -425,6 +443,15 @@ function createSession(tenantId) {
       syncFullHistory: true,
     });
 
+    // Mémorise l'identifiant de TOUT message envoyé par Cyrus (réponses, campagnes, relances) : un message
+    // « fromMe » absent de cet ensemble a été écrit par l'utilisateur lui-même (activité humaine).
+    const originalSend = sock.sendMessage.bind(sock);
+    sock.sendMessage = async (...args) => {
+      const res = await originalSend(...args);
+      try { if (res && res.key && res.key.id) rememberSent(res.key.id); } catch (e) { /* non bloquant */ }
+      return res;
+    };
+
     sock.ev.on('creds.update', async () => {
       if (isStale()) return;
       await saveCreds();
@@ -546,6 +573,8 @@ function createSession(tenantId) {
         if (m.type === 'notify' && msg.key && !msg.key.fromMe && msg.key.remoteJid !== 'status@broadcast') {
           recordIncomingMessage(msg);
           notifyIncomingMessage(msg);
+        } else if (m.type === 'notify' && msg.key && msg.key.fromMe && msg.key.remoteJid !== 'status@broadcast') {
+          checkHumanActivity(msg);
         }
       });
     });
@@ -945,6 +974,7 @@ function createSession(tenantId) {
     getConnectedNumber,
     isPaired,
     onIncomingMessage,
+    onOutgoingMessage,
     onAccountReset,
     logout,
     dispose,

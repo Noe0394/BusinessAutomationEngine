@@ -129,12 +129,35 @@ async function sendAndLog({ tenantId, channel, from, reply }, d) {
   return out;
 }
 
+function isGroupChat(channel, from) {
+  const id = String(from || '');
+  return String(channel).toUpperCase() === 'TELEGRAM' ? /^-\d+$/.test(id) : /@(?:g\.us|broadcast)$/i.test(id);
+}
+
+// L'utilisateur écrit lui-même depuis son téléphone : Cyrus se tait sur cette conversation (settings.humanPauseMinutes, 0 = désactivé).
+async function handleHumanActivity({ tenantId, channel, from }) {
+  const settings = await getSettings(tenantId);
+  if (!isEnabled(settings, channel) || settings.humanPauseMinutes === 0 || !from) return null;
+  return conversationEngine.noteHumanActivity(tenantId, channel, from, settings.humanPauseMinutes);
+}
+
 async function processBatch({ tenantId, channel, from, name, items, settings }, d) {
   const knownText = await businessServices.getEngineContextText(tenantId).catch(() => '');
   let history = [];
   try { history = await messageHistory.getConversation(tenantId, channel, from, 8); } catch (e) { history = []; }
   let lastOut = null;
+  let productNames = [];
+  try {
+    const ctxData = await businessServices.getEngineContext(tenantId);
+    for (const svc of ctxData || []) {
+      if (svc.name) productNames.push(svc.name);
+      for (const p of (svc.products || [])) if (p && (p.name || typeof p === 'string')) productNames.push(p.name || String(p));
+    }
+  } catch (e) { productNames = []; }
   const result = await conversationEngine.handleBatch({ tenantId, channel, from, name, items }, {
+    isGroup: isGroupChat(channel, from),
+    groupReplies: settings.groupReplies === true,
+    productNames,
     llm: d.llm,
     crm: d.crm || contactCrm,
     knownText,
@@ -162,4 +185,4 @@ async function legacyReply({ tenantId, channel, from, name, text }, d) {
   return { sent, status: out.status, confirmationId: out.confirmationId || null, error: out.error || null, reply };
 }
 
-module.exports = { handleIncoming, composeReply, getSettings, setSettings, isEnabled, markProcessed, SETTINGS_NS };
+module.exports = { handleHumanActivity, isGroupChat, handleIncoming, composeReply, getSettings, setSettings, isEnabled, markProcessed, SETTINGS_NS };
