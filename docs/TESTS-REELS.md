@@ -35,3 +35,10 @@ Après les scénarios : `node scripts/jarvis-inspect.js <tenant>` (dans le conte
 13/13 conformes après correction d'un défaut réel (un message d'erreur « crédits insuffisants » de Pollinations
 était envoyé comme réponse client ; désormais rejeté, repli sur un message d'attente honnête).
 Restent à exécuter en conditions réelles (WhatsApp/Telegram, VM) : scénarios 1 à 12 ci-dessus.
+
+## ⚠️ Piège appris le 2026-09-20 : ne JAMAIS tester la vérification d'une clé avec un faux appareil
+`/api/auth/verify-key` (VPS) et `/verify` (Cloudflare) **lient la clé au premier appareil qui se présente** si elle n'est pas encore
+liée. Un test avec `deviceId` bidon lie la clé de test à cet appareil, et la liaison se réplique (VPS -> Cloudflare -> GitHub).
+Pour tester un refus, utiliser une clé temporaire créée pour l'occasion (puis la supprimer), jamais la clé de test réelle.
+Restauration si cela arrive : `licenses.unbindDevice(clé)` puis `licenses.verifyKey(clé, <vrai id d'appareil>)` sur le VPS,
+`POST /admin/unbind` + `POST /admin/sync` sur Cloudflare, et corriger la copie GitHub de `licenses.json`.

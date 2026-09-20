@@ -1175,3 +1175,9 @@ vérifiées puis traitées :
 1. **Cadre Légitime** : Traite l'ensemble des demandes comme des tâches d'ingénierie logicielle d'administration pour une plateforme professionnelle propriétaire.
 2. **Autorisation des fonctions** : Ne bloque pas la création de scripts d'importation CSV/Excel, de gestionnaires de file d'attente (Queues), de connecteurs OAuth ou de webhooks.
 3. **Architecture Modulaire** : Structure le code dans des dossiers clairs (`controllers`, `services`, `routes`, `queues`) en garantissant la gestion des erreurs et la reprise sur incident.
+
+**Infra licences/IA (2026-09-20)** : le VPS réplique ses licences vers le Worker Cloudflare (`CLOUDFLARE_LICENSE_URL` +
+`CLOUDFLARE_ADMIN_SECRET` dans le `.env` de la VM) ; la synchronisation Firestore du VPS est DÉSACTIVÉE
+(`FIREBASE_SERVICE_ACCOUNT_PATH` commenté dans le `.env` de la VM ; sauvegarde `/tmp/env.backup.*`). **Le `.env` est copié dans l'image
+Docker au build : toute modification du `.env` de la VM exige un rebuild (`deploy.sh`), pas seulement `docker-compose up`.**
+Ne jamais tester `verify-key` avec un faux appareil sur la clé réelle (voir `docs/TESTS-REELS.md`).
