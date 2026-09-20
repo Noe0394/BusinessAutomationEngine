@@ -124,4 +124,29 @@ function runPipeline(input, opts) {
   };
 }
 
-module.exports = { parseContacts, extractPhoneNumbers, normalizeContacts, deduplicateContacts, validateContacts, prepareRecipients, runPipeline, normalizeOne };
+// Table complète pour l'interface : chaque ligne importée avec son état (valid | duplicate | invalid | uncertain).
+// `uncertain` : numéros dont le format ne peut pas être déterminé avec confiance (indicatif pays inconnu) ou signalés
+// par l'OCR (opts.uncertainNumbers, chiffres seuls) — jamais corrigés ni « devinés ».
+function classify(input, opts) {
+  const o = opts || {};
+  const flagged = new Set((o.uncertainNumbers || []).map((n) => String(n).replace(/\D/g, '')));
+  const parsed = normalizeContacts(parseContacts(input), o);
+  const seen = new Set();
+  const rows = parsed.map((c) => {
+    const base = { name: c.name || '', raw: c.phone, number: c.normalized || null };
+    const check = validateContacts([c]);
+    if (check.invalid.length) {
+      const reason = check.invalid[0].reason;
+      return Object.assign(base, { state: reason === 'COUNTRY_CODE_UNKNOWN' ? 'uncertain' : 'invalid', reason });
+    }
+    if (flagged.size && [...flagged].some((f) => f && c.normalized.includes(f))) return Object.assign(base, { state: 'uncertain', reason: 'OCR_LOW_CONFIDENCE' });
+    if (seen.has(c.normalized)) return Object.assign(base, { state: 'duplicate', reason: 'DUPLICATE' });
+    seen.add(c.normalized);
+    return Object.assign(base, { state: 'valid', reason: null });
+  });
+  const counts = { total: rows.length, valid: 0, duplicate: 0, invalid: 0, uncertain: 0 };
+  for (const r of rows) counts[r.state] += 1;
+  return { rows, counts };
+}
+
+module.exports = { classify, parseContacts, extractPhoneNumbers, normalizeContacts, deduplicateContacts, validateContacts, prepareRecipients, runPipeline, normalizeOne };

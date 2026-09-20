@@ -43,3 +43,26 @@ migration des fonctions IA de secours Firebase (`generateTextFallback`…) vers 
 | 12 Diagnostics / sécurité / audit | `getSystemStatus` (connexions, file, erreurs réelles), journal d'activité des appels d'outils, coffre existant | pas de couche `SecurityService` unifiée |
 
 Couche AIProvider : cascade existante + OpenAI, Mistral, Claude (activés par `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`).
+
+## Onglet Campagnes unifié (2026-09-20)
+
+Code : `ai-engine/campaignService.js`, `lib/campaignStatus.js`, routes `/api/campaigns*` (index.js), onglet « 📣 Campagnes »
+(`public/dashboard.html`). Les outils Smart Chat (`createCampaignDraft`, `launchCampaign`, `scheduleCampaign`, `monitorCampaign`,
+`getCampaignProgress`, `generateCampaignReport`…) utilisent le MÊME service : une campagne créée dans le chat apparaît dans l'onglet.
+
+Chaîne : source (liste collée / Excel / CSV / photo OCR) -> parse -> normalisation -> doublons -> validation -> table
+(valid / duplicate / invalid / uncertain) -> campagne (message + média WhatsApp + programmation) -> lancement par les moteurs
+existants (`campaignEngine` / `telegramCampaignEngine` : cadence, protections, persistance, reprise) -> suivi réel -> rapport CSV.
+
+**Ce que « manuel / continuité » signifie techniquement (à lire avant de tester) :**
+le mode manuel existant ouvre un lien `wa.me/...?text=` (ou `t.me/...`) sur l'appareil de l'utilisateur ; l'envoi est validé
+dans l'application WhatsApp/Telegram de cet appareil. Le serveur ne peut ni cliquer ni valider ce lien. Automatiser l'envoi
+par la session liée reviendrait à contourner la protection réseau, ce qui est exclu. La continuité automatique est donc :
+1. détection (`circuit_open`, puis mode assisté au 2e échec de surcharge), arrêt propre, état conservé ;
+2. UNE fiche de continuité idempotente + notification ;
+3. reprise AUTOMATIQUE par le moteur existant après la temporisation de protection (contrôle de santé de la session),
+   uniquement sur les destinataires restants ;
+4. la file de relance manuelle (deep-link) reste disponible, avec les restants, si l'utilisateur veut l'utiliser.
+
+Non fait : envoi automatique des liens `wa.me` ; onglet Campagnes dans l'application mobile/PC (`webapp-core`) ; OCR image
+(moteur `tesseract.js` à installer) ; interface non vérifiée visuellement dans un navigateur (syntaxe et API testées).

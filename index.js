@@ -5513,6 +5513,47 @@ try {
   taskQueue.startWorker((tenant) => queueHandlers(tenant, intelligenceBridge && intelligenceBridge.runtime), 30000);
 } catch (err) { console.error('taskQueue worker non démarré :', err.message); }
 
+// ---------- Onglet Campagnes unifié (WhatsApp + Telegram) : voir ai-engine/campaignService.js ----------
+// Aucun envoi ici : les routes préparent/pilotent des campagnes exécutées par les moteurs existants (cadence,
+// protections, persistance). Les statuts renvoyés viennent des moteurs.
+{
+  const campaignService = require('./ai-engine/campaignService');
+  const chatUploadsStore = require('./ai-engine/chatUploads');
+  const cmpRuntime = () => (intelligenceBridge && intelligenceBridge.runtime) || null;
+  const cmpRoute = (fn) => async (req, res) => {
+    try { res.json(await fn(req, resolveTenantId(req))); }
+    catch (err) {
+      if (!err.http) console.error('campagnes :', err);
+      res.status(err.http || 500).json({ error: err.message || 'Erreur interne.', code: err.code || 'INTERNAL' });
+    }
+  };
+
+  app.post('/api/campaigns/recipients', requireAccess, upload.single('file'), cmpRoute(async (req, tenant) => {
+    const file = req.file;
+    const isImage = file && /^image\//.test(file.mimetype || '');
+    return campaignService.prepareRecipients(tenant, {
+      text: req.body && req.body.text,
+      image: isImage ? file.buffer : null,
+      file: file && !isImage ? { buffer: file.buffer, name: file.originalname, type: file.mimetype } : null,
+    }, { defaultCountryCode: req.body && req.body.defaultCountryCode });
+  }));
+  app.get('/api/campaigns/recipients/:id', requireAccess, cmpRoute((req, tenant) => campaignService.getRecipientsPage(tenant, req.params.id, req.query)));
+  app.post('/api/campaigns/media', requireAccess, upload.single('file'), cmpRoute(async (req, tenant) => {
+    if (!req.file) throw Object.assign(new Error('Aucun fichier fourni (champ "file").'), { http: 400, code: 'NO_FILE' });
+    const meta = await chatUploadsStore.save(tenant, req.file);
+    return { mediaFileId: meta.id, name: meta.name, type: meta.type, size: meta.size };
+  }));
+  app.post('/api/campaigns', requireAccess, cmpRoute((req, tenant) => campaignService.createCampaign(tenant, req.body || {}, req.allowedModules)));
+  app.get('/api/campaigns', requireAccess, cmpRoute(async (req, tenant) => ({ campaigns: await campaignService.list(tenant, cmpRuntime()) })));
+  app.get('/api/campaigns/:id', requireAccess, cmpRoute((req, tenant) => campaignService.get(tenant, req.params.id, cmpRuntime(), req.query)));
+  app.post('/api/campaigns/:id/launch', requireAccess, cmpRoute((req, tenant) => campaignService.launch(tenant, req.params.id, cmpRuntime(), req.allowedModules)));
+  app.post('/api/campaigns/:id/schedule', requireAccess, cmpRoute((req, tenant) => campaignService.schedule(tenant, req.params.id, req.body && req.body.at)));
+  app.post('/api/campaigns/:id/pause', requireAccess, cmpRoute((req, tenant) => campaignService.control(tenant, req.params.id, 'pause', cmpRuntime())));
+  app.post('/api/campaigns/:id/resume', requireAccess, cmpRoute((req, tenant) => campaignService.control(tenant, req.params.id, 'resume', cmpRuntime())));
+  app.post('/api/campaigns/:id/cancel', requireAccess, cmpRoute((req, tenant) => campaignService.control(tenant, req.params.id, 'cancel', cmpRuntime())));
+  app.get('/api/campaigns/:id/report', requireAccess, cmpRoute((req, tenant) => campaignService.report(tenant, req.params.id, cmpRuntime())));
+}
+
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ error: `Erreur de téléversement : ${err.message}` });

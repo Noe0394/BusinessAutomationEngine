@@ -11,6 +11,8 @@ const storageAdapter = require('./storageAdapter');
 const activityStore = require('./activityStore');
 const notifications = require('./notifications');
 const continuity = require('./campaignContinuity');
+const campaignService = require('./campaignService');
+const { launchDraft } = campaignService;
 
 const fail = (code, message, retryable) => ({ ok: false, error: { code, message: message || code, retryable: !!retryable } });
 const sanitize = (id) => String(id || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'default';
@@ -44,23 +46,6 @@ async function rowsFromUpload(tenant, fileId) {
 async function loadDrafts(tenant) { return storageAdapter.get('campaign_drafts', sanitize(tenant), { tenant: sanitize(tenant), drafts: {} }); }
 async function saveDrafts(tenant, doc) { return storageAdapter.set('campaign_drafts', sanitize(tenant), doc); }
 
-async function launchDraft(tenant, draft, runtime) {
-  if (!runtime || typeof runtime.sendCampaign !== 'function') return fail('RUNTIME_MISSING');
-  const optedOut = await contactCrm.optedOutSet(tenant, draft.channel);
-  const recipients = draft.recipients.filter((r) => !optedOut.has(contactCrm.identityOf(r.telephone || r)));
-  if (!recipients.length) return fail('EMPTY_RECIPIENTS', 'Tous les destinataires sont exclus (refus) ou la liste est vide.');
-  const payload = { channel: draft.channel, tenantId: tenant, recipients, text: draft.text, name: draft.name };
-  if (draft.mediaFileId) {
-    if (draft.channel !== 'WHATSAPP') return fail('MEDIA_NOT_SUPPORTED_CHANNEL', 'Média de campagne géré uniquement pour WhatsApp.');
-    const f = await chatUploads.readFile(tenant, draft.mediaFileId);
-    if (!f) return fail('MEDIA_NOT_FOUND');
-    payload.sequence = [{ type: 'media', buffer: f.buffer, mimetype: f.meta.type, filename: f.meta.name }, { type: 'text', text: draft.text }];
-  }
-  const out = await runtime.sendCampaign(payload);
-  if (!out || out.ok === false) return fail('LAUNCH_FAILED', (out && out.error) || 'échec du lancement', true);
-  return { ok: true, result: Object.assign({ excludedOptOut: draft.recipients.length - recipients.length }, out.result || {}) };
-}
-
 // Gestionnaires de la file durable (utilisés par le worker) : exécutent réellement l'action.
 function queueHandlers(tenant, runtime) {
   return {
@@ -69,7 +54,7 @@ function queueHandlers(tenant, runtime) {
       const draft = doc.drafts[task.payload.draftId];
       if (!draft) return { ok: false, error: 'DRAFT_NOT_FOUND', retryable: false };
       const out = await launchDraft(tenant, draft, runtime);
-      if (out.ok) { draft.status = 'launched'; draft.launchedAt = Date.now(); await saveDrafts(tenant, doc); }
+      if (out.ok) { draft.status = 'launched'; draft.launchedAt = Date.now(); draft.startedAt = draft.launchedAt; draft.engineCampaignId = out.result.campaignId || null; await saveDrafts(tenant, doc); }
       return out.ok ? { ok: true, result: out.result } : { ok: false, error: out.error.message, retryable: out.error.retryable };
     },
     SEND_MESSAGE: async (task) => {
@@ -123,66 +108,55 @@ const TOOLS = {
     },
   },
   prepareContactsFromSource: {
-    description: 'Pipeline complet (lecture -> normalisation -> doublons -> validation -> destinataires) depuis un texte collé OU un fichier joint (Excel/CSV, fileId). Renvoie un rapport réel et un brouillon de destinataires (draftId) utilisable pour une campagne.',
+    description: 'Pipeline complet (lecture -> normalisation -> doublons -> validation -> destinataires) depuis un texte collé OU un fichier joint (Excel/CSV, fileId). Renvoie un rapport réel (valides, doublons, invalides, incertains) et un identifiant de liste (recipientsDraftId) utilisable pour créer une campagne.',
     permission: null, risk: 'LOW_WRITE',
     inputSchema: { text: { type: 'string' }, fileId: { type: 'string' }, defaultCountryCode: { type: 'string' } },
     async execute(args, ctx) {
-      let input = args.text;
-      if (!input && args.fileId) {
+      let src = { text: args.text };
+      if (!args.text && args.fileId) {
         const r = await rowsFromUpload(ctx.tenant, args.fileId);
         if (r.error) return r.error;
-        input = r.rows;
+        src = { rows: r.rows };
       }
-      if (!input || (Array.isArray(input) && !input.length)) return fail('EMPTY_SOURCE', 'Aucune source de contacts fournie.');
-      const out = pipeline.runPipeline(input, { defaultCountryCode: args.defaultCountryCode });
-      const doc = await loadDrafts(ctx.tenant);
-      const id = uid('rcp');
-      doc.drafts[id] = { id, kind: 'recipients', recipients: out.recipients, createdAt: Date.now(), status: 'prepared' };
-      await saveDrafts(ctx.tenant, doc);
-      return { ok: true, result: { recipientsDraftId: id, report: out.report, invalidSample: out.invalid.slice(0, 10) } };
+      try {
+        const out = await campaignService.prepareRecipients(ctx.tenant, src, { defaultCountryCode: args.defaultCountryCode });
+        const c = out.counts;
+        return { ok: true, result: { recipientsDraftId: out.recipientsId, report: { parsed: c.total, duplicates: c.duplicate, invalid: c.invalid, uncertain: c.uncertain, valid: c.valid }, invalidSample: out.rows.filter((r) => r.state !== 'valid' && r.state !== 'duplicate').slice(0, 10).map((r) => ({ raw: r.raw, reason: r.reason })) } };
+      } catch (e) { return fail(e.code || 'PREPARE_FAILED', e.message); }
     },
   },
   extractNumbersFromImage: {
-    description: 'Extrait les numéros de téléphone d\'une photo jointe (OCR déterministe). Signale uniquement les valeurs incertaines à valider.',
+    description: 'Extrait les numéros de téléphone d’une photo jointe (OCR déterministe). Les valeurs incertaines sont marquées « incertain » (jamais devinées) et exclues de l’envoi.',
     permission: null, risk: 'LOW_WRITE',
     inputSchema: { fileId: { type: 'string', required: true }, defaultCountryCode: { type: 'string' } },
     async execute(args, ctx) {
       const f = await chatUploads.readFile(ctx.tenant, args.fileId).catch(() => null);
       if (!f) return fail('FILE_NOT_FOUND');
-      let ocr;
-      try { ocr = await (ctx.ocr || ocrProvider).recognize(f.buffer); } catch (e) { return fail(e.code || 'OCR_FAILED', e.message); }
-      const numbers = pipeline.extractPhoneNumbers(ocr.text);
-      const low = new Set((ocr.words || []).filter((w) => w.confidence < 70 && /\d/.test(w.text)).map((w) => w.text.replace(/\D/g, '')));
-      const out = pipeline.runPipeline(numbers.join('\n'), { defaultCountryCode: args.defaultCountryCode });
-      const uncertain = out.recipients.filter((r) => [...low].some((l) => l && r.telephone.includes(l))).map((r) => r.telephone);
-      const doc = await loadDrafts(ctx.tenant);
-      const id = uid('rcp');
-      doc.drafts[id] = { id, kind: 'recipients', recipients: out.recipients, createdAt: Date.now(), status: 'prepared', source: 'image' };
-      await saveDrafts(ctx.tenant, doc);
-      return { ok: true, result: { recipientsDraftId: id, report: out.report, needsReview: uncertain } };
+      try {
+        const out = await campaignService.prepareRecipients(ctx.tenant, { image: f.buffer }, { ocr: ctx.ocr || ocrProvider, defaultCountryCode: args.defaultCountryCode });
+        const c = out.counts;
+        return { ok: true, result: { recipientsDraftId: out.recipientsId, report: { parsed: c.total, duplicates: c.duplicate, invalid: c.invalid, uncertain: c.uncertain, valid: c.valid }, needsReview: out.rows.filter((r) => r.state === 'uncertain').map((r) => r.number) } };
+      } catch (e) { return fail(e.code || 'OCR_FAILED', e.message); }
     },
   },
 
   // ================= CAMPAGNES =================
   createCampaignDraft: {
-    description: 'Crée/configure un brouillon de campagne (canal, destinataires issus de prepareContactsFromSource, message, média joint facultatif). N\'envoie rien.',
+    description: 'Crée/configure une campagne (brouillon) : canal, destinataires issus de prepareContactsFromSource, message, média joint facultatif, programmation facultative. N’envoie rien. Elle apparaît dans l’onglet Campagnes.',
     permission: null, risk: 'LOW_WRITE',
     inputSchema: {
       recipientsDraftId: { type: 'string', required: true }, text: { type: 'string', required: true },
       channel: { type: 'string' }, name: { type: 'string' }, mediaFileId: { type: 'string' },
     },
     async execute(args, ctx) {
-      const doc = await loadDrafts(ctx.tenant);
-      const src = doc.drafts[args.recipientsDraftId];
-      if (!src || !src.recipients) return fail('DRAFT_NOT_FOUND');
-      const id = uid('cmp');
-      doc.drafts[id] = { id, kind: 'campaign', channel: chan(args.channel), name: args.name || null, text: String(args.text), mediaFileId: args.mediaFileId || null, recipients: src.recipients, status: 'draft', createdAt: Date.now() };
-      await saveDrafts(ctx.tenant, doc);
-      return { ok: true, result: { draftId: id, channel: doc.drafts[id].channel, recipients: src.recipients.length, hasMedia: !!args.mediaFileId } };
+      try {
+        const c = await campaignService.createCampaign(ctx.tenant, { recipientsId: args.recipientsDraftId, text: args.text, channel: args.channel, name: args.name || `Campagne ${new Date().toISOString().slice(0, 16)}`, mediaFileId: args.mediaFileId }, ctx.allowedModules);
+        return { ok: true, result: { draftId: c.id, channel: c.channel, recipients: c.recipients ? c.recipients.valid : null, hasMedia: c.hasMedia } };
+      } catch (e) { return fail(e.code === 'RECIPIENTS_NOT_FOUND' ? 'DRAFT_NOT_FOUND' : (e.code || 'CREATE_FAILED'), e.message); }
     },
   },
   launchCampaign: {
-    description: 'Lance réellement un brouillon de campagne (moteur de campagne existant, protections anti-blocage conservées). Action sensible : nécessite confirmation.',
+    description: 'Lance réellement une campagne (moteur de campagne existant : cadence, protections anti-blocage, reprise conservées). Action sensible : nécessite confirmation.',
     permission: 'messages:send', risk: 'WRITE',
     inputSchema: { draftId: { type: 'string', required: true } },
     async prepare(args, ctx) {
@@ -194,31 +168,44 @@ const TOOLS = {
       return { ok: true, preview: { channel: d.channel, recipients: d.recipients.length - excluded, excludedOptOut: excluded, text: d.text.slice(0, 300), media: !!d.mediaFileId }, warnings: d.status === 'launched' ? ['DEJA_LANCEE'] : [] };
     },
     async execute(args, ctx) {
-      const doc = await loadDrafts(ctx.tenant);
-      const d = doc.drafts[args.draftId];
-      if (!d || d.kind !== 'campaign') return fail('DRAFT_NOT_FOUND');
-      if (d.status === 'launched') return fail('ALREADY_LAUNCHED', 'Ce brouillon a déjà été lancé.');
-      const out = await launchDraft(ctx.tenant, d, ctx.runtime);
-      if (out.ok) { d.status = 'launched'; d.launchedAt = Date.now(); await saveDrafts(ctx.tenant, doc); }
-      return out;
+      try {
+        const c = await campaignService.launch(ctx.tenant, args.draftId, ctx.runtime, ctx.allowedModules);
+        return { ok: true, result: { status: 'started', campaignId: c.engineCampaignId, recipients: c.recipients ? c.recipients.valid : null } };
+      } catch (e) { return fail(e.code === 'INVALID_STATE' ? 'ALREADY_LAUNCHED' : (e.code === 'NOT_FOUND' ? 'DRAFT_NOT_FOUND' : (e.code || 'LAUNCH_FAILED')), e.message); }
     },
-    async verify(result) { return { verified: !!result && (result.status === 'started' || result.recipients > 0) }; },
+    async verify(result) { return { verified: !!result && result.status === 'started' }; },
   },
   scheduleCampaign: {
-    description: 'Programme le lancement d\'un brouillon de campagne à une date/heure (ISO). La file durable l\'exécutera même si l\'interface est fermée.',
+    description: 'Programme le lancement d’une campagne à une date/heure (ISO). La file durable la lancera même si l’interface est fermée.',
     permission: 'messages:send', risk: 'WRITE',
     inputSchema: { draftId: { type: 'string', required: true }, at: { type: 'string', required: true, description: 'Date/heure ISO 8601 (ex. 2026-09-21T18:00:00Z).' } },
     async execute(args, ctx) {
-      const at = new Date(args.at).getTime();
-      if (!Number.isFinite(at)) return fail('INVALID_DATE');
-      if (at < Date.now() - 60000) return fail('DATE_IN_PAST');
-      const doc = await loadDrafts(ctx.tenant);
-      if (!doc.drafts[args.draftId] || doc.drafts[args.draftId].kind !== 'campaign') return fail('DRAFT_NOT_FOUND');
-      const { task, deduplicated } = await taskQueue.enqueue(ctx.tenant, { type: 'LAUNCH_CAMPAIGN', payload: { draftId: args.draftId }, runAt: at, ref: args.draftId, dedupeKey: `launch:${args.draftId}` });
-      doc.drafts[args.draftId].status = 'scheduled';
-      await saveDrafts(ctx.tenant, doc);
-      return { ok: true, result: { taskId: task.id, runAt: new Date(task.runAt).toISOString(), deduplicated } };
+      try {
+        const c = await campaignService.schedule(ctx.tenant, args.draftId, args.at);
+        return { ok: true, result: { taskId: c.taskId, runAt: c.runAt, deduplicated: c.deduplicated } };
+      } catch (e) { return fail(e.code === 'NOT_FOUND' ? 'DRAFT_NOT_FOUND' : (e.code || 'SCHEDULE_FAILED'), e.message); }
     },
+  },
+  monitorCampaign: {
+    description: 'Suivi réel d’une campagne : état (en cours, protection détectée, mode continuité...), progression, tableau des destinataires.',
+    permission: null, risk: 'READ', inputSchema: { campaignId: { type: 'string', required: true } },
+    async execute(args, ctx) {
+      try { return { ok: true, result: await campaignService.get(ctx.tenant, args.campaignId, ctx.runtime, { limit: 20 }) }; }
+      catch (e) { return fail(e.code || 'NOT_FOUND', e.message); }
+    },
+  },
+  getCampaignProgress: {
+    description: 'Progression chiffrée d’une campagne (total, envoyés, en attente, échecs, pourcentage).',
+    permission: null, risk: 'READ', inputSchema: { campaignId: { type: 'string', required: true } },
+    async execute(args, ctx) {
+      try { const c = await campaignService.get(ctx.tenant, args.campaignId, ctx.runtime, { limit: 1 }); return { ok: true, result: { state: c.state, progress: c.progress } }; }
+      catch (e) { return fail(e.code || 'NOT_FOUND', e.message); }
+    },
+  },
+  listCampaigns: {
+    description: 'Liste toutes les campagnes (brouillons, programmées, en cours, terminées) avec leur état réel.',
+    permission: null, risk: 'READ', inputSchema: {},
+    async execute(args, ctx) { const list = await campaignService.list(ctx.tenant, ctx.runtime); return { ok: true, result: { count: list.length, campaigns: list.slice(0, 50).map((c) => ({ id: c.id, name: c.name, channel: c.channel, state: c.state, progress: c.progress || null })) } }; },
   },
   pauseCampaign: {
     description: 'Met en pause une campagne en cours.', permission: 'messages:send', risk: 'LOW_WRITE',
@@ -258,16 +245,12 @@ const TOOLS = {
     },
   },
   generateCampaignReport: {
-    description: 'Rapport d\'une campagne : totaux réels et export CSV des résultats par destinataire.',
+    description: 'Rapport d’une campagne : totaux réels, durée, canal, continuité utilisée, erreurs, et export CSV par destinataire.',
     permission: null, risk: 'READ',
-    inputSchema: { channel: { type: 'string' }, campaignId: { type: 'string', required: true } },
+    inputSchema: { campaignId: { type: 'string', required: true } },
     async execute(args, ctx) {
-      if (!ctx.runtime || !ctx.runtime.getCampaignStatus) return fail('RUNTIME_MISSING');
-      const out = await ctx.runtime.getCampaignStatus({ channel: chan(args.channel), campaignId: args.campaignId, tenantId: ctx.tenant, withResults: true });
-      if (!out.ok) return fail('STATUS_FAILED', out.error);
-      const c = out.result;
-      const rows = (c.results || []).map((r) => [r.to, r.status, r.timestamp || ''].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','));
-      return { ok: true, result: { id: c.id, name: c.name, status: c.status, total: c.total, success: c.success, failed: c.failed, skippedDuplicates: c.skippedDuplicates, pending: c.pendingCount, manualQueue: c.manualQueue, csv: ['destinataire,statut,horodatage'].concat(rows).join('\n') } };
+      try { return { ok: true, result: await campaignService.report(ctx.tenant, args.campaignId, ctx.runtime) }; }
+      catch (e) { return fail(e.code || 'REPORT_FAILED', e.message); }
     },
   },
 

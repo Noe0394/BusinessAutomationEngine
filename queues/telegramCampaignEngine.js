@@ -410,6 +410,7 @@ class TelegramCampaignEngine {
       lastProcessedIndex,
       sentCount: (sentContactIds || []).length,
       pendingCount: (pendingContactIds || []).length,
+      assistedMode: Boolean(campaign.assistedMode),
       isActive,
       networkStatus: isActive ? this.networkHealth.networkStatus : 'normal',
       retryAfterSeconds: isActive ? this.networkHealth.getRetryAfterSeconds() : 0,
@@ -435,6 +436,23 @@ class TelegramCampaignEngine {
   // Relance Manuelle Express : liste des destinataires encore 'pending' ou
   // 'failed' d'une campagne DIRECTE (contacts, pas groupes/canaux — un deep
   // link t.me n'a de sens que pour un contact individuel).
+  // Table des destinataires (statuts traduits par lib/campaignStatus.js).
+  getRecipients(id) {
+    const campaign = id ? this.campaigns.get(id) : this._resolveDefaultCampaign();
+    if (!campaign) return null;
+    const { recipientStatus } = require('../lib/campaignStatus');
+    const running = campaign.status === 'running' && !campaign.paused;
+    return (campaign.recipients || []).map((r, index) => {
+      const res = (campaign.results || [])[index] || {};
+      const rec = r && typeof r === 'object' ? r : { telephone: r };
+      return {
+        index, name: rec.nom || rec.prenom || rec.name || '', number: String(res.to || rec.telephone || rec.username || r),
+        status: recipientStatus(res.status, running && index === (campaign.nextIndex || 0)),
+        lastAttemptAt: res.timestamp || null, error: res.error || null,
+      };
+    });
+  }
+
   getManualRelaunchQueue(id) {
     const campaign = id ? this.campaigns.get(id) : this._resolveDefaultCampaign();
     if (!campaign || campaign.recipientType !== 'contacts') return [];

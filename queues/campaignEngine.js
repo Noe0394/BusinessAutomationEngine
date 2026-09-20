@@ -564,6 +564,7 @@ class CampaignEngine {
       lastProcessedIndex,
       sentCount: (sentContactIds || []).length,
       pendingCount: (pendingContactIds || []).length,
+      assistedMode: Boolean(campaign.assistedMode),
       isActive,
       networkStatus: isActive ? this.networkHealth.networkStatus : 'normal',
       retryAfterSeconds: isActive ? this.networkHealth.getRetryAfterSeconds() : 0,
@@ -590,6 +591,24 @@ class CampaignEngine {
       .slice()
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
       .map((c) => this._publicStatus(c));
+  }
+
+  // Table des destinataires (statuts traduits par lib/campaignStatus.js) : nom, numéro, statut réel, dernière tentative, erreur.
+  getRecipients(id) {
+    const campaign = id ? this.campaigns.get(id) : this._resolveDefaultCampaign();
+    if (!campaign) return null;
+    const { recipientStatus } = require('../lib/campaignStatus');
+    const running = campaign.status === 'running' && !campaign.paused;
+    return (campaign.recipients || []).map((r, index) => {
+      const res = (campaign.results || [])[index] || {};
+      const rec = r && typeof r === 'object' ? r : { telephone: r };
+      const to = res.to || normalizeRecipientEntry(r, this.session.getContactName).to;
+      return {
+        index, name: rec.nom || rec.prenom || '', number: jidToE164(to),
+        status: recipientStatus(res.status, running && index === (campaign.nextIndex || 0)),
+        lastAttemptAt: res.timestamp || null, error: res.error || null,
+      };
+    });
   }
 
   getManualRelaunchQueue(id) {
@@ -746,6 +765,7 @@ class CampaignEngine {
 
       const { to, vars } = normalizeRecipientEntry(recipients[i], this.session.getContactName);
       let status = 'failed';
+      let failureReason = null;
       let overloadDetected = false;
 
       try {
@@ -796,6 +816,7 @@ class CampaignEngine {
           );
         } else {
           campaign.failed += 1;
+          failureReason = String((err && err.message) || err).slice(0, 200);
           console.error(`Campagne (tenant "${this.tenantId}", "${campaign.name}"): échec de l'envoi à ${to}:`, err);
         }
       }
@@ -808,7 +829,7 @@ class CampaignEngine {
 
       campaign.sent += 1;
       campaign.nextIndex = i + 1;
-      campaign.results[i] = { to, status, timestamp: new Date().toISOString() };
+      campaign.results[i] = { to, status, error: failureReason, timestamp: new Date().toISOString() };
       this._persist(campaign);
       if (this.onActivity) this.onActivity();
 

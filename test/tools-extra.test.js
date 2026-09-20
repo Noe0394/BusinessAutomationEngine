@@ -27,6 +27,7 @@ function runtime(rec) {
     sendCampaign: async (p) => { rec.push(p); return { ok: true, result: { channel: p.channel, recipients: p.recipients.length, status: 'started', campaignId: 'c1' } }; },
     pauseCampaign: async () => ({ ok: true }), resumeCampaign: async () => ({ ok: true }), stopCampaign: async () => ({ ok: true }),
     getCampaignStatus: async (p) => ({ ok: true, result: { id: p.campaignId || 'c1', name: 'n', status: 'running', total: 2, success: 1, failed: 0, skippedDuplicates: 0, pendingCount: 1, manualQueue: 0, results: p.withResults ? [{ to: '22670000001', status: 'sent', timestamp: 't' }, { to: '22670000002', status: 'pending' }] : undefined } }),
+    getCampaignRecipients: async () => ({ ok: true, result: { recipients: [{ index: 0, name: '', number: '22670000001', status: 'sent', lastAttemptAt: 't', error: null }, { index: 1, name: '', number: '22670000002', status: 'pending', lastAttemptAt: null, error: null }] } }),
     getConnectionStatus: async () => ({ ok: true, result: { whatsapp: { available: true, connected: false }, telegram: { available: true, connected: true } } }),
     sendMessageVerified: async (p) => { rec.push(p); return { status: 'SUCCESS', confirmationId: 'W-1' }; },
   };
@@ -160,8 +161,9 @@ test('campagne : pause/reprise/statut/rapport passent par le moteur réel', asyn
   assert.equal((await run('cancelCampaign', { campaignId: 'c1' }, ctx)).state, 'NEEDS_CONFIRMATION', 'annulation = sensible');
   assert.equal((await run('getCampaignStatus', { campaignId: 'c1' }, ctx)).result.status, 'running');
   const rep = await run('generateCampaignReport', { campaignId: 'c1' }, ctx);
-  assert.match(rep.result.csv, /destinataire,statut,horodatage/);
-  assert.match(rep.result.csv, /22670000001,"sent"|"22670000001","sent"/);
+  assert.match(rep.result.csv, /nom,numero,statut,derniere_tentative,erreur/);
+  assert.match(rep.result.csv, /"22670000001","sent"/);
+  assert.equal(rep.result.total, 2);
 });
 
 test('CRM : créer, lire, mettre à jour, étiqueter, segmenter, supprimer', async () => {
@@ -203,7 +205,8 @@ test('OCR : moteur absent -> échec honnête ; moteur présent -> numéros + val
   const fakeOcr = { recognize: async () => ({ text: 'Awa 70000031\nKoffi 70000032', words: [{ text: '70000031', confidence: 95 }, { text: '70000032', confidence: 40 }] }) };
   const ok = await run('extractNumbersFromImage', { fileId: up.id }, { ocr: fakeOcr });
   assert.equal(ok.state, 'SUCCESS');
-  assert.equal(ok.result.report.valid, 2);
+  assert.equal(ok.result.report.valid, 1, 'la valeur incertaine est exclue de l’envoi');
+  assert.equal(ok.result.report.uncertain, 1);
   assert.deepEqual(ok.result.needsReview, ['22670000032']);
 });
 
