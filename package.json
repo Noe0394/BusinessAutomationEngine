@@ -13,6 +13,7 @@
   "dependencies": {
     "@gradio/client": "^1.19.1",
     "@resvg/resvg-js": "^2.6.2",
+    "@tesseract.js-data/eng": "^1.0.0",
     "@whiskeysockets/baileys": "^6.7.24",
     "axios": "^1.7.7",
     "dejavu-fonts-ttf": "^2.37.3",
@@ -30,6 +31,7 @@
     "qrcode-terminal": "^0.12.0",
     "satori": "^0.10.13",
     "telegram": "^2.26.22",
+    "tesseract.js": "^7.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
