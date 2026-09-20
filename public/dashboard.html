@@ -614,6 +614,7 @@
         <button type="button" id="import-btn">Importer (cible de campagne)</button>
         <button type="button" id="import-crm-btn" title="Ajoute les contacts au CRM pour que le Chat Intelligent puisse les interroger et agir dessus">📇 Importer dans le CRM (interrogeable par le chat)</button>
         <div id="import-result" hidden></div>
+        <div id="wa-adv-import" class="adv-import"></div>
 
         <div class="table-wrap">
           <table style="margin-top: 1rem;">
@@ -828,7 +829,8 @@
           <input type="file" id="tg-dm-import-file" accept=".csv,.xlsx" hidden />
           <p id="tg-dm-import-file-name" class="empty">Aucun fichier sélectionné.</p>
           <button type="button" id="tg-dm-import-btn">Importer</button>
-          <p id="tg-dm-import-count" class="empty">Aucun contact importé.</p>
+          <p id="tg-dm-import-count" class="empty">Aucun contact importé.</p>          <div id="tg-adv-import" class="adv-import"></div>
+
 
           <div class="table-wrap">
             <table>
@@ -10300,6 +10302,88 @@
     }
 
     tryAutoLogin().then((ok) => { if (ok) init(); });
+  </script>
+
+  <script>
+    // Chargement de numéros avancé, partagé par les onglets WhatsApp et Telegram : coller une liste (formats libres),
+    // fichier Excel/CSV, photo d'une liste (OCR). Analyse serveur (normalisation, doublons, validation) puis
+    // injection des numéros VALIDES dans la liste existante de l'onglet (les autres flux de lancement restent inchangés).
+    function impBuild(hostId, opts) {
+      const host = document.getElementById(hostId);
+      if (!host) return;
+      const el = (tag, text, attrs) => { const e = document.createElement(tag); if (text != null) e.textContent = text; Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, v)); return e; };
+      const box = el('div', null, { style: 'border:1px solid #d9d4ec;border-radius:10px;padding:.75rem;margin:.75rem 0;' });
+      box.appendChild(el('strong', '➕ Autres méthodes de chargement de numéros'));
+      box.appendChild(el('p', 'Collez une liste (un numéro par ligne, formats libres), choisissez un fichier Excel/CSV ou photographiez une liste : les numéros sont normalisés, dédoublonnés et validés avant utilisation.', { class: 'empty' }));
+      const paste = el('textarea', null, { rows: '4', placeholder: 'Jean : +226 70 12 34 56 / 0022676123456 / 70 12 34 56', style: 'width:100%;' });
+      const file = el('input', null, { type: 'file', accept: '.xlsx,.xls,.csv,.txt' });
+      const photo = el('input', null, { type: 'file', accept: 'image/*', capture: 'environment' });
+      const cc = el('input', null, { type: 'text', placeholder: 'Indicatif pays par défaut (ex. 226)', style: 'max-width:16rem;' });
+      const btn = el('button', 'Analyser la liste', { type: 'button' });
+      const use = el('button', 'Utiliser les numéros valides', { type: 'button' });
+      use.hidden = true;
+      const out = el('div');
+      box.appendChild(paste);
+      const r1 = el('div', null, { style: 'margin:.4rem 0;' }); r1.appendChild(el('label', 'Fichier : ')); r1.appendChild(file); box.appendChild(r1);
+      const r2 = el('div', null, { style: 'margin:.4rem 0;' }); r2.appendChild(el('label', '📷 Photo d’une liste : ')); r2.appendChild(photo); box.appendChild(r2);
+      box.appendChild(cc); box.appendChild(el('br')); box.appendChild(btn); box.appendChild(document.createTextNode(' ')); box.appendChild(use); box.appendChild(out);
+      host.appendChild(box);
+      let last = null;
+      btn.addEventListener('click', async () => {
+        out.textContent = 'Analyse en cours...'; use.hidden = true; last = null;
+        try {
+          const form = new FormData();
+          const text = paste.value.trim();
+          if (photo.files[0]) form.append('file', photo.files[0]); else if (file.files[0]) form.append('file', file.files[0]); else if (text) form.append('text', text);
+          else { out.textContent = 'Collez une liste, choisissez un fichier ou une photo.'; return; }
+          if (cc.value.trim()) form.append('defaultCountryCode', cc.value.trim());
+          const data = await cmpJson('/api/campaigns/recipients', { method: 'POST', body: form });
+          last = { rows: data.rows || [], text };
+          out.textContent = '';
+          out.appendChild(cmpRenderCounts(data.counts));
+          if (data.counts.uncertain) out.appendChild(cmpEl('p', 'Les numéros « incertains » ne sont pas utilisés tant que leur format n’est pas confirmé (aucun chiffre n’est deviné).', { class: 'empty' }));
+          out.appendChild(cmpRenderRows(last.rows, [
+            { key: 'name', label: 'Nom' }, { key: 'number', label: 'Numéro' },
+            { key: 'state', label: 'Statut', map: (s) => CMP_STATUS_LABELS[s] || s }, { key: 'reason', label: 'Détail' },
+          ]));
+          use.hidden = !(data.counts.valid > 0 || (opts.extra && opts.extra(text).length));
+        } catch (err) {
+          if (err.message !== 'unauthorized') out.textContent = err.message;
+        }
+      });
+      use.addEventListener('click', () => {
+        if (!last) return;
+        const valid = last.rows.filter((r) => r.state === 'valid');
+        const n = opts.onValid(valid, last.text);
+        out.appendChild(cmpEl('p', n + ' contact(s) ajouté(s) à la liste de cet onglet et prêts à être utilisés.', { style: 'color:#22c55e;' }));
+        use.hidden = true;
+      });
+    }
+
+    impBuild('wa-adv-import', {
+      onValid(valid) {
+        const seen = new Set(state.importedContacts.map((c) => String(c.telephone)));
+        let added = 0;
+        valid.forEach((r) => { if (!seen.has(String(r.number))) { seen.add(String(r.number)); state.importedContacts.push({ telephone: r.number, nom: r.name || '' }); added += 1; } });
+        renderImportedContacts();
+        return added;
+      },
+    });
+
+    impBuild('tg-adv-import', {
+      extra(text) { return (String(text || '').match(/@[A-Za-z0-9_]{4,32}/g) || []); },
+      onValid(valid, text) {
+        const seen = new Set(tgDmImportedContacts.map((c) => String(c.identifier)));
+        let added = 0;
+        const add = (identifier, name) => { if (!seen.has(identifier)) { seen.add(identifier); tgDmImportedContacts.push({ identifier, name: name || '' }); added += 1; } };
+        valid.forEach((r) => add(String(r.number), r.name));
+        (String(text || '').match(/@[A-Za-z0-9_]{4,32}/g) || []).forEach((u) => add(u, ''));
+        tgDmRenderContactsPreview();
+        const cnt = document.getElementById('tg-dm-import-count');
+        if (cnt) cnt.textContent = tgDmImportedContacts.length + ' contact(s) importé(s) et prêt(s) à être contactés.';
+        return added;
+      },
+    });
   </script>
 </body>
 </html>
