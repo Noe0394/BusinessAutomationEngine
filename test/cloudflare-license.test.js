@@ -240,3 +240,18 @@ test('Workers AI : image et texte sans aucune clé externe (fournisseurs tiers h
   assert.match(txt.provider, /workers-ai/);
   assert.ok(AI.calls.some((m) => m.includes('llama')));
 });
+
+test('démarrage du VPS : les licences locales sont poussées vers Cloudflare sans écraser une liaison distante', async () => {
+  const sync = require('../lib/cloudflareSync');
+  const local = [{ key: 'KEY-CCCC0003-2026', createdAt: '2026-02-01T00:00:00.000Z', expiresAt: null, active: true, note: 'vps', allowedModules: ['whatsapp'], boundDeviceId: null, boundAt: null }];
+  await call('POST', '/admin/sync', { upserts: [Object.assign({}, local[0], { boundDeviceId: 'phone-cf', boundAt: '2026-02-02T00:00:00.000Z' })], deletes: [] });
+  let saved = null;
+  sync.startPull(() => local, (l) => { saved = l; }, 3600000);
+  await new Promise((r) => setTimeout(r, 400));
+  const list = (await call('GET', '/admin/list')).body;
+  const row = list.find((l) => l.key === 'KEY-CCCC0003-2026');
+  assert.ok(row, 'licence du VPS présente sur Cloudflare');
+  assert.equal(row.note, 'vps');
+  assert.equal(row.boundDeviceId, 'phone-cf', 'liaison faite côté Cloudflare conservée');
+  assert.ok(saved && saved.find((l) => l.key === 'KEY-CCCC0003-2026').boundDeviceId === 'phone-cf', 'et remontée au VPS');
+});
