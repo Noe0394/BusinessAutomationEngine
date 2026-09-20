@@ -30,3 +30,8 @@ Après les scénarios : `node scripts/jarvis-inspect.js <tenant>` (dans le conte
 
 ## Résultats
 À remplir après exécution (statut réel de chaque ligne, jamais « simulé »).
+
+### Passage du 2026-09-20 — vrai modèle IA, transport SIMULÉ (`node scripts/jarvis-live-scenarios.js`)
+13/13 conformes après correction d'un défaut réel (un message d'erreur « crédits insuffisants » de Pollinations
+était envoyé comme réponse client ; désormais rejeté, repli sur un message d'attente honnête).
+Restent à exécuter en conditions réelles (WhatsApp/Telegram, VM) : scénarios 1 à 12 ci-dessus.
