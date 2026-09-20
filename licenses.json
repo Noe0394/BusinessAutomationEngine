@@ -40,5 +40,19 @@
     ],
     "boundDeviceId": null,
     "boundAt": null
+  },
+  {
+    "key": "KEY-B5D52C04-2026",
+    "active": true,
+    "createdAt": "2026-09-20T12:15:33.970Z",
+    "expiresAt": "2026-12-20T00:00:00.000Z",
+    "note": "",
+    "allowedModules": [
+      "whatsapp",
+      "telegram",
+      "studio_video"
+    ],
+    "boundDeviceId": "e1db0e22-2bf4-49a1-b8a7-fb684ef055f0",
+    "boundAt": "2026-09-20T12:15:51.965Z"
   }
 ]
