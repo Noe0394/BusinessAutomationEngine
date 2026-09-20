@@ -85,6 +85,8 @@ function normalizeService(data) {
     rules: Array.isArray(d.rules) ? d.rules : [],
     objectives: Array.isArray(d.objectives) ? d.objectives : [],
     capabilities: Array.isArray(d.capabilities) ? d.capabilities : [],
+    // Campagnes d'entrée (Facebook Ads…) rattachées à ce service : voir ai-engine/adCampaigns.js.
+    adCampaigns: Array.isArray(d.adCampaigns) ? d.adCampaigns : [],
     status: d.status || STATUS.DRAFT,
     lastTest: d.lastTest || null,
     history: Array.isArray(d.history) ? d.history : [],

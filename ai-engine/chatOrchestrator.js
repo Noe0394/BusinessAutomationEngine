@@ -113,6 +113,9 @@ const REPLY_RE = /(r[ée]ponds?(?:\s|-)?(?:lui|leur|[àa]\b)|r[ée]pondre\s+[àa
 // File d'attente du propriétaire : conversations qui attendent son intervention, paiements à valider, messages/alertes
 // importants (états RÉELS lus dans les conversations, actions en attente et alertes — jamais inventés).
 const OWNERQUEUE_RE = /((conversations?|discussions?|personnes?|contacts?|gens|messages?)[^]{0,40}(n[ée]cessit\w*|attend\w*|demand\w*|requi\w*|exig\w*)[^]{0,25}\b(mon|ma|ton|ta)\s+(intervention|r[ée]ponse|attention))|(qui\s+attend\w*\s+(ma|mon|ta|ton)\s+(r[ée]ponse|intervention))|((paiements?|preuves?\s+de\s+paiement)[^]{0,30}(en\s+attente|[àa]\s+valider|non\s+valid[ée]s?))|(en\s+attente\s+de\s+(validation|ma\s+d[ée]cision))|(ai[- ]?je\s+(re[çc]u|des?)[^]{0,30}(message|alerte)s?[^]{0,15}important\w*)|(j.?ai\s+(re[çc]u|des?)[^]{0,30}(message|alerte)s?[^]{0,15}important\w*)|(messages?\s+importants?)|(qu.?est[- ]ce\s+qui\s+(m.?attend|attend\s+ma|est\s+urgent))|(mes\s+alertes)|(reste[- ]t[- ]il\s+quelque\s+chose\s+[àa]\s+traiter)|(\b[àa]\s+traiter\b)/i;
+// Configuration d'une campagne publicitaire Facebook/Meta (Click-to-WhatsApp) : message d'accueil exact pour les nouveaux
+// contacts qui en proviennent. Exige à la fois la publicité Facebook ET une notion de contacts/messages reçus.
+const ADCAMPAIGN_RE = /((facebook|meta|\bfb\b)\s*ads?\b|publicit[ée]s?\s+(?:sur\s+)?(?:facebook|meta)|\bpub\s+(?:sur\s+)?facebook|campagne\s+(?:publicitaire\s+)?(?:sur\s+)?(?:facebook|meta)|annonces?\s+(?:sur\s+)?facebook)[^]{0,600}(nouveau|nouveaux|contacts?|prospects?|[ée]cri(?:vent|ront|t)\b|arriv\w+|re[çc]oiv\w+|message\s+d.accueil|message\s+automatique|message\s+pr[ée]par[ée])|((nouveau|nouveaux|contacts?|prospects?)[^]{0,120}(facebook|meta)\s*ads?\b)/i;
 // Supervision : "qu'as-tu fait / statut de tes actions / rapport de tes envois".
 const ACTIONS_RE = /(qu.?as-?tu\s+fait|tes\s+actions|actions\s+r[ée]centes|statut\s+de[s]?\s+actions|rapport\s+de[s]?\s+(?:tes\s+)?(?:actions|envois)|historique\s+de[s]?\s+actions)/i;
 const GOAL_RE = /(\bvend|\bvente|prospect|groupes?|membres?|publier|poster|\bcontenu|relanc|follow\s?up|\bsuivi|rappel|analys|\brapport|\bbilan)/i;
@@ -140,10 +143,12 @@ const GENMEDIA_RE = /(g[ée]n[èe]re?r?|cr[ée]e?r?|fabrique?r?|dessine?r?|fais(
 // intention en cours sur toute reclassification par mots-clés du nouveau
 // message, exactement comme pour image/vidéo/livre.
 function detectIntent(text, lastAssistantMessage) {
-  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply'];
+  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply', 'adcampaign'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
     return lastAssistantMessage.intent;
   }
+  // Campagne Facebook Ads (message d'accueil des nouveaux contacts) : AVANT « offer » / « goal » qui la happaient.
+  if (ADCAMPAIGN_RE.test(text)) return 'adcampaign';
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
   // 'reply' (répondre réellement au dernier message) AVANT 'inbox' : "réponds-lui"
   // est une action d'envoi, pas une lecture. AVANT 'report' aussi (répond ≠ rapport).
@@ -370,6 +375,79 @@ async function handleReport(text, tenantId, deps) {
 // honnêtement : non connecté / connecté mais tampon vide (après redémarrage) /
 // messages disponibles.
 // ---------------------------------------------------------------------------
+// 'adcampaign' — configure une campagne Facebook Ads dans un SERVICE MÉTIER (outil configureFacebookAdCampaign).
+// Le message initial est extrait de façon DÉTERMINISTE (exact au caractère près) ; l'IA n'aide que pour les champs annexes.
+async function handleAdCampaign(text, history, tenantId, deps, last) {
+  const parser = require('./adCampaignParser');
+  const draft = last && last.isPlanningQuestion && last.intent === 'adcampaign' && last.adDraft ? Object.assign({}, last.adDraft) : null;
+  const d = deps || {};
+  let args = draft ? Object.assign({}, draft.args) : {};
+  const ask = (question, newDraft) => ({ text: question, isPlanningQuestion: true, intent: 'adcampaign', adDraft: newDraft, actionLog: [{ icon: '📣', label: 'Campagne Facebook Ads : information manquante', status: 'warning' }] });
+
+  if (draft && draft.awaiting === 'message') {
+    // La réponse EST le message exact (repris tel quel ; un éventuel encadrement par guillemets est retiré).
+    const q = parser.quotedBlocks(text);
+    args.initialMessage = (q.length === 1 && q[0].start === 0 && q[0].end === text.trim().length) ? q[0].text : text.trim();
+  } else if (draft && draft.awaiting === 'service') {
+    args.serviceName = text.trim().replace(/^["«“]|["»”]$/g, '');
+    args.createService = /^(nouveau|cr[ée]e)/i.test(text.trim()) ? true : args.createService;
+  } else {
+    const p = parser.extractInitialMessage(text);
+    if (p.message) args.initialMessage = p.message;
+    args.entryMessages = (p.entryMessages || []).filter((m) => m.length <= 200 && m !== p.message).join('\n');
+    // Champs annexes : IA optionnelle (jamais le message initial). Échec -> valeurs par défaut honnêtes.
+    let extra = {};
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const prompt = [
+        'Extrais d\'une instruction de campagne Facebook Ads ces champs annexes. NE FOURNIS PAS le message à envoyer. Réponds UNIQUEMENT en JSON :',
+        `{"name":"nom de la campagne ou de la publication","productName":"produit/formation concerné","serviceName":"service métier si nommé","startDate":"AAAA-MM-JJ ou vide","endDate":"AAAA-MM-JJ ou vide","adIds":"identifiants d'annonce cités","sourceUrls":"liens d'annonce cités","continuationRules":"règles pour la suite de la conversation, séparées par ;"}`,
+        `Date du jour : ${today}. Ne remplis que ce qui est explicitement dit ; sinon chaîne vide.`,
+        `Instruction : "${String(text).slice(0, 1500)}"`,
+      ].join('\n');
+      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'ad_campaign_parse', tenant: tenantId }).then((r) => r.text));
+      extra = extractJsonBlock(String(await llm(prompt) || '').trim()) || {};
+    } catch (e) { extra = {}; }
+    const per = parser.detectPeriod(text);
+    args.name = extra.name || args.name || null;
+    args.productName = extra.productName || args.productName || null;
+    args.serviceName = extra.serviceName || args.serviceName || null;
+    args.adIds = extra.adIds || ''; args.sourceUrls = extra.sourceUrls || '';
+    args.continuationRules = extra.continuationRules || '';
+    args.startDate = per ? new Date(per.startAt).toISOString().slice(0, 10) : (extra.startDate || '');
+    args.endDate = per ? new Date(per.endAt).toISOString().slice(0, 10) : (extra.endDate || '');
+    if (!args.name) args.name = `Facebook Ads${args.productName ? ' — ' + args.productName : ''} (${new Date().toISOString().slice(0, 10)})`;
+  }
+
+  if (!String(args.initialMessage || '').trim()) {
+    return ask('Quel est le texte EXACT à envoyer aux nouveaux contacts de cette campagne ? Écris-le tel que tu veux qu\'il parte : je ne le reformulerai pas.', { awaiting: 'message', args });
+  }
+
+  let call = await toolRegistry.execute(tenantId, 'configureFacebookAdCampaign', args, {});
+  if (call.state !== 'SUCCESS' && call.error && call.error.code === 'SERVICE_REQUIRED') {
+    const choices = call.error.choices || [];
+    if (!choices.length && (args.serviceName || args.productName)) {
+      call = await toolRegistry.execute(tenantId, 'configureFacebookAdCampaign', Object.assign({}, args, { createService: true }), {});
+    } else {
+      return ask(`À quel service métier rattacher cette campagne ?${choices.length ? ` Services existants : ${choices.map((c) => `« ${c} »`).join(', ')}. Réponds par le nom, ou « nouveau <nom> » pour en créer un.` : ' Donne-moi le nom du produit/service.'}`, { awaiting: 'service', args });
+    }
+  }
+  if (call.state !== 'SUCCESS') {
+    return { text: `Je n'ai pas pu enregistrer la campagne (${(call.error && (call.error.message || call.error.code)) || call.state}).`, actionLog: [{ icon: '⚠️', label: 'Échec configuration campagne Facebook Ads', status: 'error' }] };
+  }
+  const r = call.result; const c = r.campaign;
+  const fmt = (t) => (t ? new Date(t).toLocaleDateString('fr-FR') : null);
+  const lines = [
+    `✅ Campagne Facebook Ads « ${c.name} » ${r.updated ? 'mise à jour' : 'enregistrée'} dans le service « ${r.serviceName} »${r.serviceCreated ? ' (service créé)' : ''}.`,
+    `• Période : ${c.startAt || c.endAt ? `${fmt(c.startAt) || '—'} → ${fmt(c.endAt) || 'sans fin'}` : 'sans limite (aucune date donnée)'} · statut : ${c.status === 'active' ? 'actif' : 'inactif'}`,
+    `• Messages d'entrée reconnus : ${c.criteria.entryMessages.length ? c.criteria.entryMessages.map((m) => `« ${m} »`).join(' ; ') + ' (et variantes raisonnables)' : 'aucun — seule la donnée d\'annonce fournie par WhatsApp déclenchera l\'envoi'}`,
+    `• Message envoyé aux NOUVEAUX contacts (exactement, sans reformulation) :\n«${c.initialMessage}»`,
+    `• Ensuite le Chat Intelligent reprend la conversation avec le contexte du service${c.continuation.rules.length ? ` et tes règles : ${c.continuation.rules.join(' ; ')}` : ''}.`,
+    c.criteria.adIds.length || c.criteria.sourceUrls.length ? `• Annonce reconnue par : ${[...c.criteria.adIds, ...c.criteria.sourceUrls].join(', ')}` : 'ℹ️ L\'origine Facebook n\'est marquée « vérifiée » que si WhatsApp fournit réellement les données de l\'annonce ; un contact reconnu seulement par son message d\'entrée est marqué « source déclarée », jamais présenté comme prouvé.',
+  ];
+  return { text: lines.join('\n'), toolCall: { name: 'configureFacebookAdCampaign', state: call.state, result: { campaignId: r.campaignId, serviceId: r.serviceId } }, actionLog: [{ icon: '📣', label: `Campagne « ${c.name} » configurée`, status: 'done' }] };
+}
+
 // 'ownerqueue' — ce qui attend le propriétaire : lecture des états RÉELS (aucune liste inventée).
 async function handleOwnerQueue(text, tenantId) {
   const wantsPayments = /paiement|preuve/i.test(text);
@@ -1152,6 +1230,7 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     case 'goal': return handleGoal(text, sessionKey, tenantId, d);
     case 'report': return handleReport(text, tenantId, d);
     case 'inbox': return handleInbox(text, tenantId, d);
+    case 'adcampaign': return handleAdCampaign(text, history, tenantId, d, lastAssistantMessage);
     case 'ownerqueue': return handleOwnerQueue(text, tenantId);
     case 'memory': return handleMemory(text, tenantId, d);
     case 'reply': return handleReply(text, tenantId, d);

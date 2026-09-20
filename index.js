@@ -5396,6 +5396,14 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       ? (msg && msg.pushName) || null
       : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null);
 
+    // CAMPAGNES D'ENTRÉE (Facebook Ads) : nouveau contact reconnu -> message initial EXACT du propriétaire (idempotent).
+    try {
+      const ad = await assistant.adEntry({ tenantId, channel, msg, text, from, messageId, identity });
+      if (ad && ad.handled) return;
+    } catch (err) {
+      console.error(`adCampaigns (tenant "${tenantId}", ${channel}) :`, err.message);
+    }
+
     // COUCHE D'ASSISTANCE GÉNÉRALE : conversations privées/quotidiennes (réponse sûre, alerte du propriétaire, handoff)
     // avant le moteur commercial. Les conversations métier retombent sur autoResponder/Jarvis, inchangés.
     try {

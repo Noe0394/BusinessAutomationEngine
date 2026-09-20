@@ -111,3 +111,13 @@ dans la réponse ; sinon FAILED et le client n'est pas prévenu). Tests : `conta
 `payment-owner-flow`, `owner-channel`.
 Limites connues : Telegram n'a pas de self-chat exploitable ici (canal propriétaire = WhatsApp) ; routage privé désactivé si le
 répondeur du canal est désactivé ; classification par signaux + contexte (pas un LLM) ; tests réels WhatsApp/RIEA non exécutés.
+
+## Campagnes Facebook Ads (Service Métier) — 2026-09-20
+Configuration par le Chat Intelligent (intention `adcampaign` -> outil `configureFacebookAdCampaign`, aussi `listFacebookAdCampaigns`,
+`setFacebookAdCampaignStatus`) ; stockée dans `service.adCampaigns` (`businessServices.js`). Code : `ai-engine/adCampaigns.js`
+(origine, règle, envoi idempotent, tags, mémoire, contexte de continuation), `adCampaignParser.js` (message EXACT extrait sans IA).
+Origine RÉELLE seulement : `contextInfo.externalAdReply` (sourceType=ad, sourceId, sourceUrl, ref, ctwaClid), `conversionSource`,
+`entryPointConversionSource`. Sans ces données, un contact reconnu par son message d'entrée est étiqueté `source_declared_facebook_ads`
+(jamais `source_facebook_ads`). Nouveau contact strict : aucun CRM, aucun message en mémoire (7 j), aucun état, aucun passage au registre.
+Limite : la mémoire ne remonte qu'à 7 jours ; un contact plus ancien sans trace locale peut être vu comme nouveau. Hook : `index.js`
+(`assistant.adEntry`, avant le routage privé et le répondeur). Tests : `test/ad-campaigns.test.js`.

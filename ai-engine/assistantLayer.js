@@ -12,6 +12,7 @@ const { shared: conversationQueue } = require('./jarvis/conversationQueue');
 const alertCenter = require('./alertCenter');
 const ownerChannel = require('./ownerChannel');
 const contactCrm = require('./contactCrm');
+const adCampaigns = require('./adCampaigns');
 
 const DEFAULT_DEBOUNCE_MS = Math.max(0, parseInt(process.env.AUTO_REPLY_DEBOUNCE_MS, 10) || 1500);
 const sanitize = (t) => String(t || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'unknown';
@@ -61,6 +62,7 @@ function create(d) {
 
     // Classification rapide par message : le métier suit le flux existant, inchangé.
     const state = await conversationState.get(tenantId, channel, from);
+    if (state.ad) return { handled: false, reason: 'AD_CONTACT' }; // contact issu d'une campagne : conversation commerciale
     let crm = null; try { crm = await contactCrm.getContact(tenantId, channel, contactCrm.identityOf(from)); } catch (e) { crm = null; }
     const quick = conversationRouter.classify(text, { crmContact: crm, state, hasAttachment });
     if (BUSINESS_CATS.has(quick.category)) return { handled: false, reason: 'BUSINESS' };
@@ -88,6 +90,12 @@ function create(d) {
         return out;
       }, { debounceMs }).catch((err) => console.error(`conversationRouter (tenant "${tenantId}", ${channel}) :`, err.message));
     return { handled: true };
+  }
+
+  // --- Campagnes d'entrée (Facebook Ads) : message initial EXACT pour un nouveau contact reconnu ------------------
+  async function adEntry({ tenantId, channel, msg, text, from, messageId, identity }) {
+    if (String(channel).toUpperCase() !== 'WHATSAPP' || !from || d.autoResponder.isGroupChat(channel, from)) return { handled: false, reason: 'NOT_APPLICABLE' };
+    return adCampaigns.handleEntry({ tenantId, channel, from, messageId, text, msg, identity }, { send: (reply) => sendVia(tenantId, channel, from, reply) });
   }
 
   // --- Canal propriétaire ------------------------------------------------------------------------------------
@@ -149,7 +157,7 @@ function create(d) {
     }
   }
 
-  return { resolveIdentity, route, handleOwnerMessage, start, ownerDeps, isConfiguredOwner: ownerChannel.isConfiguredOwner };
+  return { resolveIdentity, route, adEntry, handleOwnerMessage, start, ownerDeps, isConfiguredOwner: ownerChannel.isConfiguredOwner };
 }
 
 module.exports = { create };

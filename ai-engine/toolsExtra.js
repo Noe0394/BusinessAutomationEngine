@@ -438,6 +438,47 @@ const TOOLS = {
     async execute(args, ctx) { return (await notifications.markRead(ctx.tenant, args.id)) ? { ok: true, result: { read: true } } : fail('NOTIFICATION_NOT_FOUND'); },
   },
 
+  // ================= CAMPAGNES D'ENTRÉE FACEBOOK ADS (Service Métier) =================
+  configureFacebookAdCampaign: {
+    description: 'Crée ou met à jour, dans un SERVICE MÉTIER, une campagne Facebook Ads : période, produit, critères d\'entrée (message d\'entrée + variantes, identifiants/liens d\'annonce), MESSAGE INITIAL EXACT envoyé aux nouveaux contacts, règles de continuation, statut. Le message initial n\'est jamais reformulé.',
+    permission: null, risk: 'LOW_WRITE',
+    inputSchema: {
+      initialMessage: { type: 'string', required: true, description: 'Texte EXACT à envoyer au nouveau contact (conservé tel quel).' },
+      name: { type: 'string', description: 'Nom de la campagne / publication.' },
+      serviceName: { type: 'string', description: 'Service métier concerné (créé s\'il n\'existe pas et createService=true).' },
+      productName: { type: 'string' }, startDate: { type: 'string', description: 'AAAA-MM-JJ' }, endDate: { type: 'string', description: 'AAAA-MM-JJ' },
+      entryMessages: { type: 'string', description: 'Messages d\'entrée reconnus (séparés par « ; » ou retour ligne).' },
+      adIds: { type: 'string' }, sourceUrls: { type: 'string' }, refs: { type: 'string' },
+      continuationRules: { type: 'string' }, requireAdReferral: { type: 'boolean' }, matchAnyFacebookAd: { type: 'boolean' }, newContactsOnly: { type: 'boolean' },
+      createService: { type: 'boolean' }, status: { type: 'string', description: 'active | inactive' },
+    },
+    resultSchema: { campaignId: 'string', serviceId: 'string' }, errorSchema: { code: 'string' },
+    async execute(args, ctx) {
+      const ads = require('./adCampaigns');
+      const day = (v, end) => { if (!v) return undefined; const t = Date.parse(String(v).length <= 10 ? `${v}T${end ? '23:59:59.999' : '00:00:00'}` : v); return Number.isFinite(t) ? t : undefined; };
+      return ads.configure(ctx.tenant, {
+        initialMessage: args.initialMessage, name: args.name, serviceName: args.serviceName, productName: args.productName,
+        startAt: day(args.startDate, false), endAt: day(args.endDate, true), entryMessages: args.entryMessages, adIds: args.adIds, sourceUrls: args.sourceUrls, refs: args.refs,
+        continuationRules: args.continuationRules, requireAdReferral: args.requireAdReferral, matchAnyFacebookAd: args.matchAnyFacebookAd,
+        newContactsOnly: args.newContactsOnly, createService: args.createService, status: args.status,
+      });
+    },
+  },
+  listFacebookAdCampaigns: {
+    description: 'Liste les campagnes Facebook Ads configurées (service, période, statut réel ACTIVE/EXPIRED/INACTIVE, message initial).',
+    permission: null, risk: 'READ', inputSchema: {},
+    async execute(args, ctx) {
+      const ads = require('./adCampaigns');
+      const all = await ads.listAll(ctx.tenant);
+      return { ok: true, result: { count: all.length, campaigns: all.map((c) => ({ id: c.id, name: c.name, service: c.serviceName, product: c.productName, status: ads.statusOf(c), startAt: c.startAt, endAt: c.endAt, initialMessage: c.initialMessage, entryMessages: c.criteria.entryMessages })) } };
+    },
+  },
+  setFacebookAdCampaignStatus: {
+    description: 'Active ou désactive une campagne Facebook Ads (par nom ou identifiant).',
+    permission: null, risk: 'LOW_WRITE', inputSchema: { campaign: { type: 'string', required: true }, active: { type: 'boolean', required: true } },
+    async execute(args, ctx) { return require('./adCampaigns').setStatus(ctx.tenant, args.campaign, args.active === true); },
+  },
+
   // ================= CONTINUITÉ (protection -> mode assisté) =================
   getCampaignFallback: {
     description: 'Liste les campagnes basculées en mode assisté (protection réseau) avec leur fiche de continuité et la file manuelle restante.',

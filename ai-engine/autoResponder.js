@@ -88,8 +88,12 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
     const conv = await messageHistory.getConversation(tenant, channel, from, route.maxContextMessages);
     if (conv && conv.length) history = conv.map((m) => `${m.direction === 'in' ? 'Client' : 'Moi'}: ${m.text}`).join('\n');
   } catch (e) { history = ''; }
+  // Contact issu d'une campagne Facebook Ads : le message d'accueil exact est déjà parti ; on continue à partir de là.
+  let adCtx = '';
+  try { adCtx = await require('./adCampaigns').continuationContext(tenant, channel, from); } catch (e) { adCtx = ''; }
   const prompt = [
     personaManager.personaSystemPrompt('default'),
+    adCtx,
     'Tu réponds DIRECTEMENT à un client/prospect qui vient d\'écrire au vendeur — tu réponds EN SON NOM, comme le vendeur lui-même. Sois chaleureux, humain et utile.',
     bizCtx
       ? `Informations RÉELLES de l'activité (produits, prix, règles — SEULE source autorisée, n'invente jamais au-delà de ceci) :\n${bizCtx}`
