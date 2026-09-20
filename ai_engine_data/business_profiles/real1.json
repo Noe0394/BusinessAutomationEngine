@@ -1,0 +1,17 @@
+{
+  "tenantId": "real1",
+  "offers": [
+    {
+      "source": "service_metier",
+      "serviceId": "svc_mua3s1uj50gg9",
+      "name": "Épicerie et Charcuterie",
+      "category": "ecommerce",
+      "price": "8000 FCFA",
+      "description": "",
+      "options": "",
+      "advantages": "",
+      "objections": ""
+    }
+  ],
+  "faq": []
+}
