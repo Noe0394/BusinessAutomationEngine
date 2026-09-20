@@ -42,6 +42,25 @@ function isAdmin(request, env) {
   return !!(env.ADMIN_SECRET && provided && timingSafeEqual(provided, env.ADMIN_SECRET));
 }
 
+// Protection anti-force-brute : 5 secrets erronés en 15 min depuis une même adresse => blocage 15 min (429).
+// Une écriture D1 seulement lors d'un échec ; aucune écriture pour les requêtes légitimes.
+const ADMIN_MAX_FAILS = 5;
+const ADMIN_WINDOW_MS = 15 * 60 * 1000;
+async function adminGate(request, env) {
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+  const t = Date.now();
+  const row = await env.DB.prepare('SELECT fails, first_at FROM admin_attempts WHERE ip = ?').bind(ip).first();
+  const active = !!row && t - row.first_at < ADMIN_WINDOW_MS;
+  if (active && row.fails >= ADMIN_MAX_FAILS) return json({ error: 'Trop de tentatives. Réessayez dans quelques minutes.' }, 429);
+  if (isAdmin(request, env)) {
+    if (row) await env.DB.prepare('DELETE FROM admin_attempts WHERE ip = ?').bind(ip).run();
+    return null;
+  }
+  await env.DB.prepare('INSERT INTO admin_attempts (ip, fails, first_at) VALUES (?, 1, ?) ON CONFLICT(ip) DO UPDATE SET fails = CASE WHEN ? - first_at < ? THEN fails + 1 ELSE 1 END, first_at = CASE WHEN ? - first_at < ? THEN first_at ELSE ? END')
+    .bind(ip, t, t, ADMIN_WINDOW_MS, t, ADMIN_WINDOW_MS, t).run();
+  return json({ error: 'Secret admin invalide.' }, 401);
+}
+
 const KNOWN = new Set(['key', 'active', 'createdAt', 'expiresAt', 'note', 'allowedModules', 'boundDeviceId', 'boundAt', 'updatedAt']);
 
 function rowToLicense(r) {
@@ -286,11 +305,13 @@ export default {
     if (url.pathname === '/generateEbookFallback') return json({ error: 'Génération d’ebook indisponible sur Cloudflare (moteur PDF non portable) : utilisez le VPS ou le client PC.' }, 501);
     if (ADMIN_POST[url.pathname]) {
       if (request.method !== 'POST') return json({ error: 'POST requis.' }, 405);
-      if (!isAdmin(request, env)) return json({ error: 'Secret admin invalide.' }, 401);
+      const denied = await adminGate(request, env);
+      if (denied) return denied;
       return ADMIN_POST[url.pathname](request, env);
     }
     if (ADMIN_ROUTES[url.pathname]) {
-      if (!isAdmin(request, env)) return json({ error: 'Secret admin invalide.' }, 401);
+      const denied = await adminGate(request, env);
+      if (denied) return denied;
       return admin(ADMIN_ROUTES[url.pathname], request, env);
     }
     if (url.pathname === '/' || url.pathname === '/index.html') return new Response(ADMIN_PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } });

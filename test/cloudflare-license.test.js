@@ -26,9 +26,9 @@ function makeD1() {
   };
 }
 
-let worker; let env; let writes;
+let worker; let env; let writes; let ipSeq = 0;
 const call = async (method, p, body, admin) => {
-  const headers = { 'content-type': 'application/json' };
+  const headers = { 'content-type': 'application/json', 'cf-connecting-ip': `ip-${++ipSeq}` };
   if (admin !== false) headers['x-admin-secret'] = admin || 'secret-test';
   const res = await worker.fetch(new Request(`https://worker.test${p}`, { method, headers, body: body ? JSON.stringify(body) : undefined }), env);
   return { status: res.status, body: await res.json() };
@@ -254,4 +254,17 @@ test('démarrage du VPS : les licences locales sont poussées vers Cloudflare sa
   assert.equal(row.note, 'vps');
   assert.equal(row.boundDeviceId, 'phone-cf', 'liaison faite côté Cloudflare conservée');
   assert.ok(saved && saved.find((l) => l.key === 'KEY-CCCC0003-2026').boundDeviceId === 'phone-cf', 'et remontée au VPS');
+});
+
+test('anti-force-brute : 5 secrets erronés = blocage 429 même avec le bon secret ; une autre adresse reste servie', async () => {
+  const hit = (secret, ip) => worker.fetch(new Request('https://worker.test/admin/list', { headers: { 'x-admin-secret': secret, 'cf-connecting-ip': ip } }), env);
+  for (let i = 0; i < 5; i += 1) assert.equal((await hit('mauvais' + i, '9.9.9.9')).status, 401);
+  assert.equal((await hit('mauvais', '9.9.9.9')).status, 429, 'bloqué');
+  assert.equal((await hit('secret-test', '9.9.9.9')).status, 429, 'le bon secret ne passe pas pendant le blocage');
+  assert.equal((await hit('secret-test', '8.8.8.8')).status, 200, 'autre adresse non affectée');
+  // succès efface l'historique d'échecs
+  await hit('faux', '7.7.7.7'); await hit('faux', '7.7.7.7');
+  assert.equal((await hit('secret-test', '7.7.7.7')).status, 200);
+  const row = await env.DB.prepare('SELECT * FROM admin_attempts WHERE ip = ?').bind('7.7.7.7').first();
+  assert.equal(row, null);
 });

@@ -49,3 +49,10 @@ CREATE TABLE IF NOT EXISTS app_config (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Anti-force-brute de l'administration (échecs par adresse)
+CREATE TABLE IF NOT EXISTS admin_attempts (
+  ip       TEXT PRIMARY KEY,
+  fails    INTEGER NOT NULL,
+  first_at INTEGER NOT NULL
+);
