@@ -218,7 +218,11 @@ function lockCorsToOfficialDashboard(req, res, next) {
     return next();
   }
 
-  if (!ALLOWED_DASHBOARD_ORIGINS.includes(origin.replace(/\/$/, ''))) {
+  // Même origine : le dashboard est servi par ce serveur sous le domaine utilisé (ex. domaine DuckDNS ajouté après coup).
+  let sameHost = false;
+  try { sameHost = new URL(origin).host === req.get('host'); } catch (e) { sameHost = false; }
+
+  if (!sameHost && !ALLOWED_DASHBOARD_ORIGINS.includes(origin.replace(/\/$/, ''))) {
     return res.status(403).json({ error: 'Origine non autorisée.' });
   }
 
