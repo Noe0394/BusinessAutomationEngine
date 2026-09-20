@@ -4,6 +4,8 @@ const personaManager = require('./personaManager');
 const offerClarifier = require('./offerClarifier');
 const storageAdapter = require('./storageAdapter');
 const platformOrchestrator = require('./platformOrchestrator');
+const contactCrm = require('./contactCrm');
+const conversationEngine = require('./jarvis/conversationEngine');
 
 // MOTEUR DE CLOSING HUMANISÉ ET ÉMOTIONNEL — ai-engine/emotionalCloser.js
 // ---------------------------------------------------------------------------
@@ -83,31 +85,7 @@ function buildBusinessFacts(businessProfile) {
   return { facts: parts.join(' '), offer };
 }
 
-// Cache COURT (10 min, par tenant+expéditeur+texte normalisé) — protège des
-// messages dupliqués/renvoyés très vite (fréquent en usage réel WhatsApp),
-// PAS une garantie de latence <2s (dépend du fournisseur LLM réellement
-// utilisé — Groq est généralement rapide, Pollinations beaucoup moins ;
-// aucun appel réseau n'a de garantie de latence stricte, promesse volontairement
-// non reprise ici pour ne rien affirmer de faux).
-const REPLY_CACHE = new Map();
-const CACHE_TTL_MS = 10 * 60 * 1000;
-function cacheKey(tenantId, from, text) {
-  return `${tenantId}__${from}__${String(text || '').trim().toLowerCase().slice(0, 200)}`;
-}
-function getCached(key) {
-  const entry = REPLY_CACHE.get(key);
-  if (!entry || Date.now() > entry.expiresAt) return null;
-  return entry.reply;
-}
-function setCached(key, reply) {
-  REPLY_CACHE.set(key, { reply, expiresAt: Date.now() + CACHE_TTL_MS });
-  if (REPLY_CACHE.size > 500) { // garde-fou anti-croissance illimitée
-    const oldestKey = REPLY_CACHE.keys().next().value;
-    REPLY_CACHE.delete(oldestKey);
-  }
-}
-
-async function composeClosingReply({ text, history, analysis, strategy, facts, domain }) {
+async function composeClosingReply({ text, history, analysis, strategy, facts, domain, directives }) {
   const prompt = [
     personaManager.personaSystemPrompt(domain),
     'Tu es EN CONVERSATION DIRECTE avec un PROSPECT/CLIENT final sur WhatsApp/Telegram (pas le vendeur) — posture de Conseiller-Vendeur empathique et persuasif (Closer), jamais un bot de support froid ni scolaire.',
@@ -117,7 +95,8 @@ async function composeClosingReply({ text, history, analysis, strategy, facts, d
     `Faits réels sur l'offre (n'invente RIEN au-delà) : ${facts}`,
     'Écoute active : reformule brièvement ce que tu comprends de sa situation/douleur AVANT de répondre à l\'objection ou de relancer.',
     'Termine par un appel à l\'action doux mais assertif qui fait avancer vers l\'étape suivante — jamais "voulez-vous acheter ?", plutôt un choix concret (ex: "on valide maintenant ou tu as une dernière question ?").',
-  ].join('\n');
+    directives && directives.length ? `CONSIGNES DE CONVERSATION (OBLIGATOIRES, prioritaires sur l'appel à l'action ci-dessus) :\n- ${directives.join('\n- ')}` : '',
+  ].filter(Boolean).join('\n');
   const { text: reply } = await llmFallbackEngine.generateAIResponse(prompt, history);
   return reply.trim();
 }
@@ -191,35 +170,23 @@ async function handleCustomerMessage({ tenantId, channel, from, text }) {
     return 'Je transmets votre demande directement à notre équipe pour un suivi personnalisé — on revient vers vous très vite !';
   }
 
-  if (analysis.intent === 'DECLINE') {
-    session.awaitingFeedback = true;
-    await saveSession(tenantId, channel, from, session);
-    return personaManager.rephrase({
-      kind: 'question',
-      rawText: 'Le client décline définitivement. Remercie-le pour sa franchise, dis que tu respectes son choix, puis demande chaleureusement, sans insister sur la vente, ce qui aurait pu faire la différence pour lui aujourd\'hui.',
-      domain,
-    });
-  }
-
   await saveSession(tenantId, channel, from, session);
 
-  const key = cacheKey(tenantId, from, text);
-  const cached = getCached(key);
-  if (cached) return cached;
-
+  // Refus, répétition, NO_ACTION, montants : décidés par le moteur Jarvis
+  // (même logique que l'auto-réponse), l'IA ne fait que rédiger.
   const strategy = humanContext.selectStrategy(analysis);
   const { facts } = buildBusinessFacts(businessProfile);
-  try {
-    const reply = await composeClosingReply({ text, history: [], analysis, strategy, facts, domain });
-    setCached(key, reply);
-    return reply;
-  } catch (err) {
-    console.warn('emotionalCloser — cascade LLM indisponible, repli sur le gabarit de stratégie :', err.message);
-    // Filet de sécurité ultime (panne réseau totale) : le gabarit brut de la
-    // stratégie, MOINS bien que la version LLM (placeholders non remplis
-    // possibles) mais jamais un silence total envers un vrai client.
-    return humanContext.generateFollowUp(analysis, strategy, { first_name: '' }) || 'Merci pour votre message, je reviens vers vous très vite !';
-  }
+  const out = await conversationEngine.handleBatch({ tenantId, channel, from, items: [{ text }] }, {
+    crm: contactCrm,
+    knownText: facts,
+    compose: (directives, ctx) => composeClosingReply({ text: ctx.text, history: [], analysis, strategy, facts, domain, directives }),
+    send: async () => ({ status: 'SUCCESS' }), // l'envoi réel est fait par l'appelant (index.js)
+    notify: (msg) => platformOrchestrator.notifyTenantChat(tenantId, `⚠️ ${msg}`, [{ icon: '⚠️', label: 'Conversation à traiter', status: 'warning' }]),
+  }).catch((err) => {
+    console.warn('emotionalCloser — moteur Jarvis indisponible, repli sur le gabarit de stratégie :', err.message);
+    return { action: 'REPLY', text: humanContext.generateFollowUp(analysis, strategy, { first_name: '' }) || 'Merci pour votre message, je reviens vers vous très vite !' };
+  });
+  return out.action === 'REPLY' ? out.text : null;
 }
 
 module.exports = { handleCustomerMessage, shouldEscalate, buildBusinessFacts };

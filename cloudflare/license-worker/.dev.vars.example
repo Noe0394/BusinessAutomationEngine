@@ -1,0 +1,8 @@
+# Copier en .dev.vars pour `wrangler dev` (test local). Ne jamais commiter .dev.vars.
+ADMIN_SECRET=change-me
+# Clés IA facultatives (chaque niveau sans clé est simplement sauté) :
+GROQ_API_KEY=
+GEMINI_API_KEY=
+DEEPSEEK_API_KEY=
+OPENROUTER_API_KEY=
+HUGGINGFACE_API_KEY=

@@ -16,6 +16,8 @@ const { client, LICENSE_KEY } = require('./vpsClient');
 const { getDeviceId } = require('./deviceId');
 
 const FIREBASE_TEXT_URL = process.env.FIREBASE_TEXT_URL || '';
+// Cloudflare (Worker, gratuit) : voie principale du texte quand configurée, avant Firebase puis le VPS.
+const CLOUDFLARE_TEXT_URL = process.env.CLOUDFLARE_LICENSE_URL ? `${String(process.env.CLOUDFLARE_LICENSE_URL).replace(/\/+$/, '')}/ai/text` : '';
 const FIREBASE_IMAGE_URL = process.env.FIREBASE_IMAGE_URL || '';
 // Pas d'équivalent VPS pour la vidéo (jamais exposée côté VPS à ce client) —
 // Firebase uniquement, voir firebase-functions/index.js#startVideoFallback/
@@ -31,6 +33,14 @@ function firebaseHeaders() {
 }
 
 async function generateText(prompt, { history, mode, skillKey } = {}) {
+  if (CLOUDFLARE_TEXT_URL) {
+    try {
+      const { data } = await axios.post(CLOUDFLARE_TEXT_URL, { prompt }, { headers: firebaseHeaders(), timeout: 30_000 });
+      return data; // { text, provider }
+    } catch (err) {
+      console.warn('Cloudflare injoignable pour la génération de texte — repli suivant :', err.message);
+    }
+  }
   if (FIREBASE_TEXT_URL) {
     try {
       const { data } = await axios.post(FIREBASE_TEXT_URL, { prompt }, { headers: firebaseHeaders(), timeout: 30_000 });

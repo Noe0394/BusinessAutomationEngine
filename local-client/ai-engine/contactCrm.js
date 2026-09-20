@@ -135,7 +135,55 @@ async function counts(tenantId) {
   return { total: Object.keys(doc.contacts || {}).length, byTag };
 }
 
+// Registre de refus : un contact qui a refusé/demandé l'arrêt ne doit plus être
+// sollicité (campagnes, relances, envois autonomes) tant qu'il ne revient pas.
+const TAG_OPTOUT = 'ne_pas_contacter';
+function identityOf(from) {
+  const raw = String(from == null ? '' : from).split('@')[0];
+  return (String(raw).replace(/\D/g, '').length >= 8 ? String(raw).replace(/\D/g, '') : raw);
+}
+
+async function markOptOut(tenantId, channel, from, reason) {
+  const doc = await load(tenantId);
+  const contact = ensureContact(doc, channel, identityOf(from));
+  contact.optOut = { at: new Date().toISOString(), reason: String(reason || 'REFUSAL') };
+  addTagsTo(contact, [TAG_OPTOUT]);
+  contact.stage = 'refused';
+  save(tenantId, doc);
+  return contact;
+}
+
+async function clearOptOut(tenantId, channel, from) {
+  const doc = await load(tenantId);
+  const key = contactKey(channel, identityOf(from));
+  const contact = doc.contacts[key];
+  if (!contact || !contact.optOut) return false;
+  contact.optOut = null;
+  contact.tags = (contact.tags || []).filter((t) => t !== TAG_OPTOUT);
+  contact.stage = 'new';
+  save(tenantId, doc);
+  return true;
+}
+
+async function isOptedOut(tenantId, channel, from) {
+  const doc = await load(tenantId);
+  const c = doc.contacts[contactKey(channel, identityOf(from))];
+  return !!(c && c.optOut);
+}
+
+// Ensemble des identités refusantes d'un canal (pour filtrer un lot d'envoi)
+async function optedOutSet(tenantId, channel) {
+  const doc = await load(tenantId);
+  const ch = String(channel || '').toUpperCase();
+  const out = new Set();
+  for (const c of Object.values(doc.contacts || {})) {
+    if (c.optOut && (!ch || c.channel === ch)) out.add(identityOf(c.from));
+  }
+  return out;
+}
+
 module.exports = {
+  markOptOut, clearOptOut, isOptedOut, optedOutSet, identityOf, TAG_OPTOUT,
   recordSeen, addTags, setStage, markPurchase, list, counts,
   TAG_NEW, TAG_PROSPECT, TAG_CLIENT, NAMESPACE,
 };

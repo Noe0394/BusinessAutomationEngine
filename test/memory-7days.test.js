@@ -165,11 +165,21 @@ describe('messageHistory — fenêtre glissante 7 jours', () => {
     assert.equal(kept.length, 2);
   });
 
-  it('prune protège les horloges douteuses en gardant les MAX', () => {
+  it('prune détruit TOUT ce qui est hors fenêtre (aucun filet de sécurité)', () => {
     const msgs = Array.from({ length: 10 }, (_, i) => ({ tsMs: 1000 + i, text: `m${i}` }));
-    const kept = messageHistory.prune(msgs);
-    // Tous hors fenêtre MAIS fallback garde les MAX derniers
-    assert.ok(kept.length > 0, 'garde au moins les MAX derniers en fallback');
+    assert.equal(messageHistory.prune(msgs).length, 0, 'données de > 7 jours détruites');
+  });
+
+  it('prune : bornes exactes de la fenêtre 7×24 h', () => {
+    const NOW = Date.now();
+    const W = 7 * 24 * 3600 * 1000;
+    const kept = messageHistory.prune([
+      { tsMs: NOW - W - 1000, text: 'cutoff-1s' },
+      { tsMs: NOW - W, text: 'cutoff' },
+      { tsMs: NOW - 1000, text: 'now-1s' },
+      { tsMs: NOW + 1000, text: 'now+1s' },
+    ], NOW).map((m) => m.text);
+    assert.deepEqual(kept, ['cutoff', 'now-1s']);
   });
 
   it('cleanupExpired retire les messages hors fenêtre', async () => {

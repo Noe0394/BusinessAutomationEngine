@@ -19,12 +19,34 @@ const messageHistory = require('./messageHistory');
 const knowledgeBase = require('./knowledgeBase');
 const chatUploads = require('./chatUploads');
 
+// Niveaux de risque : la confirmation est configurable (ctx.confirmFrom = premier
+// niveau exigeant une confirmation). SENSITIVE et CRITICAL l'exigent toujours.
+const RISK = { READ: 0, LOW_WRITE: 1, WRITE: 2, SENSITIVE: 3, CRITICAL: 4 };
+function needsConfirmation(risk, ctx) {
+  const r = RISK[risk] == null ? RISK.WRITE : RISK[risk];
+  const from = ctx && ctx.confirmFrom != null && RISK[ctx.confirmFrom] != null ? RISK[ctx.confirmFrom] : RISK.SENSITIVE;
+  return r >= Math.min(from, RISK.SENSITIVE);
+}
+
 const STATE = {
+  NEEDS_CONFIRMATION: 'NEEDS_CONFIRMATION',
   PENDING: 'PENDING', RUNNING: 'RUNNING', SUCCESS: 'SUCCESS',
   FAILED: 'FAILED', BLOCKED: 'BLOCKED', UNCONFIRMED: 'UNCONFIRMED',
 };
 
 function norm(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
+
+// PREPARE d'un envoi : aucune émission, seulement un aperçu vérifiable.
+async function prepareSend(channel, args, ctx) {
+  const to = String((args && args.to) || '').trim();
+  const text = String((args && args.text) || '').trim();
+  const warnings = [];
+  if (!to) warnings.push('DESTINATAIRE_MANQUANT');
+  if (!text) warnings.push('TEXTE_VIDE');
+  if (text.length > 4000) warnings.push('TEXTE_TROP_LONG');
+  if (to && await contactCrm.isOptedOut(ctx.tenant, channel, to)) warnings.push('CONTACT_OPT_OUT');
+  return { ok: !warnings.length, preview: { channel, to, text: text.slice(0, 500) }, warnings };
+}
 
 // --------------------------------------------------------------------------
 // Définition des outils réels
@@ -34,6 +56,7 @@ const TOOLS = {
   getBusinessServices: {
     description: 'Liste les Services Métiers configurés (nom, activité, prix, statut de connexion) — sans aucun secret.',
     permission: null,
+    risk: 'READ',
     inputSchema: {},
     resultSchema: { services: 'array<{id,name,type,price,connected}>' },
     errorSchema: { code: 'string' },
@@ -51,6 +74,7 @@ const TOOLS = {
   getProductPrice: {
     description: 'Donne le prix RÉEL d\'un produit/formation/service configuré, recherché par nom. Ne renvoie jamais un prix inventé.',
     permission: null,
+    risk: 'READ',
     inputSchema: { query: { type: 'string', required: true, description: 'Nom (ou partie du nom) du produit/service recherché.' } },
     resultSchema: { found: 'boolean', name: 'string', price: 'number', currency: 'string' },
     errorSchema: { code: 'string' },
@@ -75,6 +99,7 @@ const TOOLS = {
   getBusinessContext: {
     description: 'Renvoie le contexte métier complet (produits, prix, règles, objectifs, capacités) prêt pour le raisonnement de l\'IA.',
     permission: null,
+    risk: 'READ',
     inputSchema: {},
     resultSchema: { text: 'string' },
     errorSchema: { code: 'string' },
@@ -88,6 +113,7 @@ const TOOLS = {
   getDocumentation: {
     description: 'Cherche dans la documentation officielle de CYRUS comment faire quelque chose (configurer un Service Métier, importer des contacts, connecter WhatsApp, etc.). À utiliser pour toute question « comment… ? » sur le fonctionnement du produit.',
     permission: null,
+    risk: 'READ',
     inputSchema: { query: { type: 'string', required: true, description: 'La question ou le sujet (ex. « configurer un service métier », « importer contacts »).' } },
     resultSchema: { found: 'boolean', articles: 'array<{title,summary,steps,body}>' },
     errorSchema: { code: 'string' },
@@ -102,6 +128,7 @@ const TOOLS = {
   configureBusinessService: {
     description: 'Crée (et éventuellement connecte l\'API + teste) un Service Métier à partir d\'instructions en langage naturel : nom, type d\'activité, prix, produits, règles, objectifs, et connexion API (URL + clé + permissions). Retourne le service créé et, si une API est fournie, le résultat RÉEL du test de connexion.',
     permission: null,
+    risk: 'LOW_WRITE',
     inputSchema: {
       name: { type: 'string', required: true, description: 'Nom du service/projet.' },
       type: { type: 'string', required: false, description: 'Type d\'activité (formation, ecommerce, service…).' },
@@ -143,6 +170,7 @@ const TOOLS = {
   importContactsFromFile: {
     description: 'Importe en masse les contacts d\'un fichier déjà joint à la discussion (CSV ou Excel), dans le CRM. À utiliser quand l\'utilisateur joint un fichier de contacts et demande de l\'importer. Retourne un rapport réel (importés / doublons / rejetés).',
     permission: null,
+    risk: 'LOW_WRITE',
     inputSchema: { fileId: { type: 'string', required: true, description: 'Identifiant du fichier joint (fourni dans le contexte des pièces jointes, ex. f_xxx).' } },
     resultSchema: { imported: 'number', duplicates: 'number', invalid: 'number' },
     errorSchema: { code: 'string' },
@@ -175,6 +203,7 @@ const TOOLS = {
   generateImage: {
     description: 'Génère une image / affiche à partir d\'une description, et la renvoie TÉLÉCHARGEABLE dans la discussion. À utiliser quand l\'utilisateur demande de générer/créer une image, une affiche ou un visuel.',
     permission: null,
+    risk: 'LOW_WRITE',
     inputSchema: { prompt: { type: 'string', required: true, description: 'Description du visuel à générer.' } },
     resultSchema: { fileId: 'string', name: 'string', type: 'string', media: 'boolean' },
     errorSchema: { code: 'string' },
@@ -191,6 +220,7 @@ const TOOLS = {
   countContacts: {
     description: 'Compte les contacts connus, avec répartition par étiquette (prospect/client/…).',
     permission: null,
+    risk: 'READ',
     inputSchema: {},
     resultSchema: { total: 'number', byTag: 'object' },
     errorSchema: { code: 'string' },
@@ -203,6 +233,7 @@ const TOOLS = {
   searchContacts: {
     description: 'Recherche des contacts par nom/numéro, filtrable par étiquette et canal.',
     permission: null,
+    risk: 'READ',
     inputSchema: {
       query: { type: 'string', required: false, description: 'Texte à chercher dans le nom ou le numéro.' },
       tag: { type: 'string', required: false, description: 'Filtre par étiquette (ex. prospect, client).' },
@@ -226,6 +257,7 @@ const TOOLS = {
   getLastMessage: {
     description: 'Renvoie le dernier message REÇU sur un canal (expéditeur réel + contenu).',
     permission: null,
+    risk: 'READ',
     inputSchema: { channel: { type: 'string', required: false, description: 'WHATSAPP (défaut) ou TELEGRAM.' } },
     resultSchema: { found: 'boolean', name: 'string', number: 'string', text: 'string', ts: 'number' },
     errorSchema: { code: 'string' },
@@ -240,6 +272,7 @@ const TOOLS = {
   getConversationHistory: {
     description: 'Renvoie l\'historique récent d\'un canal (ou d\'un contact précis), sur N jours quand disponible.',
     permission: null,
+    risk: 'READ',
     inputSchema: {
       channel: { type: 'string', required: false, description: 'WHATSAPP (défaut) ou TELEGRAM.' },
       party: { type: 'string', required: false, description: 'Identifiant du contact (numéro/JID) pour cibler une conversation.' },
@@ -264,6 +297,7 @@ const TOOLS = {
   searchMessages: {
     description: 'Recherche un mot/expression dans l\'historique persistant des messages d\'un canal.',
     permission: null,
+    risk: 'READ',
     inputSchema: {
       query: { type: 'string', required: true, description: 'Mot ou expression à chercher.' },
       channel: { type: 'string', required: false, description: 'WHATSAPP (défaut) ou TELEGRAM.' },
@@ -283,6 +317,7 @@ const TOOLS = {
   getMessagesByDate: {
     description: 'Renvoie les messages d\'un canal reçus/envoyés sur les N derniers jours (ex. avant-hier = 2).',
     permission: null,
+    risk: 'READ',
     inputSchema: {
       sinceDays: { type: 'number', required: true, description: 'Nombre de jours en arrière (1 = aujourd\'hui, 2 = hier inclus…).' },
       channel: { type: 'string', required: false, description: 'WHATSAPP (défaut) ou TELEGRAM.' },
@@ -300,6 +335,7 @@ const TOOLS = {
   searchConversations: {
     description: 'Liste les conversations récentes (7 jours) — par nom, numéro ou nom de groupe. Source rapide (index, pas les messages bruts).',
     permission: null,
+    risk: 'READ',
     inputSchema: {
       query: { type: 'string', required: false, description: 'Nom/numéro/nom de groupe à chercher.' },
       channel: { type: 'string', required: false, description: 'WHATSAPP ou TELEGRAM (tous si absent).' },
@@ -319,6 +355,7 @@ const TOOLS = {
   getGroupConversation: {
     description: 'Renvoie les messages récents d\'un groupe (par groupId), avec l\'expéditeur de chacun.',
     permission: null,
+    risk: 'READ',
     inputSchema: {
       groupId: { type: 'string', required: true, description: 'Identifiant du groupe (JID WhatsApp ou ID Telegram).' },
       channel: { type: 'string', required: false, description: 'WHATSAPP (défaut) ou TELEGRAM.' },
@@ -340,14 +377,19 @@ const TOOLS = {
   sendWhatsAppMessage: {
     description: 'Envoie un message WhatsApp et VÉRIFIE l\'envoi (identifiant réel). SUCCESS seulement si confirmé.',
     permission: 'messages:send',
+    risk: 'WRITE',
     inputSchema: {
       to: { type: 'string', required: true, description: 'Destinataire (numéro ou JID).' },
       text: { type: 'string', required: true, description: 'Texte à envoyer.' },
     },
     resultSchema: { status: 'string', confirmationId: 'string' },
     errorSchema: { code: 'string', message: 'string' },
+    async prepare(args, ctx) {
+      return prepareSend('WHATSAPP', args, ctx);
+    },
     async execute(args, ctx) {
       if (!ctx.runtime || typeof ctx.runtime.sendMessageVerified !== 'function') return { ok: false, error: { code: 'RUNTIME_MISSING' } };
+      if (ctx.autonomous && await contactCrm.isOptedOut(ctx.tenant, 'WHATSAPP', args.to)) return { ok: false, error: { code: 'RECIPIENT_OPTED_OUT', message: 'Ce contact a refusé toute sollicitation.' } };
       const out = await ctx.runtime.sendMessageVerified({ channel: 'WHATSAPP', to: args.to, text: args.text, tenantId: ctx.tenant });
       if (out.status === 'FAILED') return { ok: false, error: { code: 'SEND_FAILED', message: out.error || 'non confirmé' } };
       return { ok: true, result: { status: out.status, confirmationId: out.confirmationId || null } };
@@ -358,14 +400,19 @@ const TOOLS = {
   sendTelegramMessage: {
     description: 'Envoie un message Telegram et VÉRIFIE l\'envoi (identifiant réel). SUCCESS seulement si confirmé.',
     permission: 'messages:send',
+    risk: 'WRITE',
     inputSchema: {
       to: { type: 'string', required: true, description: 'Destinataire (@username, numéro, ou id).' },
       text: { type: 'string', required: true, description: 'Texte à envoyer.' },
     },
     resultSchema: { status: 'string', confirmationId: 'string' },
     errorSchema: { code: 'string', message: 'string' },
+    async prepare(args, ctx) {
+      return prepareSend('TELEGRAM', args, ctx);
+    },
     async execute(args, ctx) {
       if (!ctx.runtime || typeof ctx.runtime.sendMessageVerified !== 'function') return { ok: false, error: { code: 'RUNTIME_MISSING' } };
+      if (ctx.autonomous && await contactCrm.isOptedOut(ctx.tenant, 'TELEGRAM', args.to)) return { ok: false, error: { code: 'RECIPIENT_OPTED_OUT', message: 'Ce contact a refusé toute sollicitation.' } };
       const out = await ctx.runtime.sendMessageVerified({ channel: 'TELEGRAM', to: args.to, text: args.text, tenantId: ctx.tenant });
       if (out.status === 'FAILED') return { ok: false, error: { code: 'SEND_FAILED', message: out.error || 'non confirmé' } };
       return { ok: true, result: { status: out.status, confirmationId: out.confirmationId || null } };
@@ -379,7 +426,7 @@ const TOOLS = {
 // --------------------------------------------------------------------------
 function describe() {
   return Object.entries(TOOLS).map(([name, t]) => ({
-    name, description: t.description, permission: t.permission || null,
+    name, description: t.description, permission: t.permission || null, risk: t.risk || 'READ',
     inputSchema: t.inputSchema || {}, resultSchema: t.resultSchema || {}, errorSchema: t.errorSchema || {},
   }));
 }
@@ -405,6 +452,11 @@ async function _execute(tenant, name, args, ctx) {
     .filter(([k, s]) => s.required && (args == null || args[k] == null || args[k] === ''))
     .map(([k]) => k);
   if (missing.length) return Object.assign(call, { state: STATE.FAILED, error: { code: 'MISSING_INPUT', fields: missing }, finishedAt: new Date().toISOString() });
+
+  if (needsConfirmation(tool.risk, fullCtx) && !fullCtx.confirmed) {
+    const prepared = typeof tool.prepare === 'function' ? await tool.prepare(args || {}, fullCtx).catch(() => null) : null;
+    return Object.assign(call, { state: STATE.NEEDS_CONFIRMATION, risk: tool.risk, result: prepared, finishedAt: new Date().toISOString() });
+  }
 
   call.state = STATE.RUNNING;
   let out;
@@ -454,4 +506,13 @@ async function runChain(tenant, steps, ctx, opts) {
   return { ok: results.every((r) => r.state === STATE.SUCCESS), steps: results };
 }
 
-module.exports = { STATE, TOOLS, describe, list, execute, runChain };
+// Étape PREPARE explicite (sans effet de bord) pour un outil sensible.
+async function prepare(tenant, name, args, ctx) {
+  const tool = TOOLS[name];
+  if (!tool) return { state: STATE.FAILED, error: { code: 'UNKNOWN_TOOL' } };
+  const fullCtx = Object.assign({ tenant }, ctx || {});
+  const prepared = typeof tool.prepare === 'function' ? await tool.prepare(args || {}, fullCtx) : { ok: true, preview: args || {}, warnings: [] };
+  return { state: 'PREPARED', risk: tool.risk, needsConfirmation: needsConfirmation(tool.risk, fullCtx), prepared };
+}
+
+module.exports = { STATE, RISK, TOOLS, describe, list, execute, prepare, runChain, needsConfirmation };

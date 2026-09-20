@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const githubStore = require('./githubStore');
 const firebaseSync = require('./lib/firebaseSync');
+const cloudflareSync = require('./lib/cloudflareSync');
 
 // Sans disque persistant Render monté sur ce chemin, ce fichier local est
 // effacé à chaque redéploiement. Si githubStore est activé (GITHUB_TOKEN +
@@ -34,6 +35,19 @@ if (firebaseSync.enabled) {
       console.error('Échec de mise à jour du cache local de licences depuis Firestore :', err.message);
     }
   });
+}
+
+// Réplication Cloudflare (Worker + D1, gratuit) : les modifications faites côté
+// Cloudflare (liaison d'appareil, page admin) reviennent dans le cache local.
+if (cloudflareSync.enabled) {
+  cloudflareSync.startPull(
+    () => { try { return JSON.parse(fs.readFileSync(LICENSES_PATH, 'utf8')); } catch (e) { return []; } },
+    (list) => {
+      try { fs.writeFileSync(LICENSES_PATH, JSON.stringify(list, null, 2), 'utf8'); } catch (err) {
+        console.error('Échec de mise à jour du cache local de licences depuis Cloudflare :', err.message);
+      }
+    },
+  );
 }
 
 // Les clés sont toujours générées en majuscules (generateKeyString), mais un
@@ -82,6 +96,10 @@ async function saveLicenses(licenses) {
   // échouer à cause de la latence/disponibilité de Firebase.
   if (firebaseSync.enabled) {
     firebaseSync.syncLicensesToFirestore(licenses);
+  }
+  // Idem pour Cloudflare (non attendu, ne pousse que les clés modifiées).
+  if (cloudflareSync.enabled) {
+    cloudflareSync.pushLicenses(licenses);
   }
 }
 

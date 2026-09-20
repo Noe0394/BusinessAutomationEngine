@@ -66,7 +66,9 @@ function normalizeMessage(tenantId, channel, m) {
   // des millisecondes (GramJS Date object). Seuil 1e12 ≈ 2001 en secondes
   // (première valeur au-dessus de laquelle la valeur est certainement en ms).
   const rawTs = Number(m.ts);
-  const tsSec = rawTs > 1e12 ? Math.floor(rawTs / 1000) : (rawTs > 0 ? rawTs : Math.floor(Date.now() / 1000));
+  const nowSec = Math.floor(Date.now() / 1000);
+  const tsRaw = rawTs > 1e12 ? Math.floor(rawTs / 1000) : (rawTs > 0 ? rawTs : nowSec);
+  const tsSec = Math.min(tsRaw, nowSec); // un horodatage futur (horloge décalée) est ramené à maintenant
   const party = String(m.party || '');
   const isGroup = deriveConversationType(m.chatId || party, m) === 'GROUP';
   const phoneOf = (id) => String(id || '').split('@')[0];
@@ -113,11 +115,13 @@ async function loadIndex(tenantId, channel) {
 // Fenêtre glissante : retire tout ce qui est hors des 7 jours, puis borne la
 // taille (jamais sous la fenêtre : si la rétention par date a tout coupé, on
 // garde au moins les MAX_MESSAGES derniers, protection des horloges douteuses).
-function prune(messages) {
-  const cutoff = windowCutoffMs(RETENTION_DAYS);
-  let kept = (Array.isArray(messages) ? messages : []).filter((m) => (m && (m.tsMs || 0)) >= cutoff);
+function prune(messages, now) {
+  const t = now == null ? Date.now() : now;
+  const cutoff = t - RETENTION_DAYS * 24 * 3600 * 1000;
+  // Fenêtre stricte [now - 7×24h, now] : tout ce qui est hors fenêtre est détruit,
+  // sans filet de sécurité (une donnée expirée ne survit jamais).
+  let kept = (Array.isArray(messages) ? messages : []).filter((m) => { const ts = (m && (m.tsMs || 0)) || 0; return ts >= cutoff && ts <= t; });
   if (kept.length > MAX_MESSAGES) kept = kept.slice(-MAX_MESSAGES);
-  if (!kept.length && Array.isArray(messages) && messages.length) kept = messages.slice(-MAX_MESSAGES);
   return kept;
 }
 function save(tenantId, channel, doc) {
@@ -312,8 +316,7 @@ async function cleanupExpired(tenantId) {
       try { doc = await storageAdapter.get(NAMESPACE, id, null); } catch (e) { doc = null; }
       if (doc && Array.isArray(doc.messages)) {
         const before = doc.messages.length;
-        let kept = doc.messages.filter((m) => (m && (m.tsMs || 0)) >= cut);
-        if (!kept.length && before) kept = doc.messages.slice(-MAX_MESSAGES);
+        const kept = prune(doc.messages);
         report.removedMessages += before - kept.length;
         if (kept.length !== before) {
           doc.messages = kept;
@@ -347,6 +350,18 @@ async function cleanupExpired(tenantId) {
 
 // Balayage GLOBAL (multi-tenant) : parcourt les documents d'historique connus
 // localement et nettoie chaque tenant. Idempotent, borné (CLEANUP_BATCH).
+// Supprime les documents d'un namespace dont `updatedAt` (ISO ou ms) sort de la fenêtre.
+async function purgeStaleDocs(namespace, now) {
+  const t = now == null ? Date.now() : now;
+  let removed = 0;
+  for (const id of storageAdapter.listIds(namespace)) {
+    const doc = await storageAdapter.get(namespace, id, null);
+    const ts = doc && doc.updatedAt ? (typeof doc.updatedAt === 'number' ? doc.updatedAt : Date.parse(doc.updatedAt)) : 0;
+    if (!ts || t - ts > RETENTION_DAYS * 24 * 3600 * 1000 || ts > t) { storageAdapter.remove(namespace, id); removed += 1; }
+  }
+  return removed;
+}
+
 async function sweepAllExpired(batch = CLEANUP_BATCH) {
   let total = { removedMessages: 0, removedConversations: 0, tenants: 0, error: null };
   try {
@@ -367,6 +382,9 @@ async function sweepAllExpired(batch = CLEANUP_BATCH) {
       })));
       i = done;
     }
+    // Autres couches contenant des données de conversation : mêmes 7×24 h.
+    total.removedStates = await require('./jarvis/conversationState').purgeExpired();
+    total.removedSessions = await purgeStaleDocs('closer_sessions');
   } catch (e) {
     total.error = String((e && e.message) || e);
     console.error('messageHistory.sweepAllExpired :', total.error);
@@ -398,5 +416,5 @@ module.exports = {
   getMessageIds,
   cleanupExpired, sweepAllExpired, startMaintenance, stopMaintenance,
   updateConversationIndex, normalizeSearch, deriveConversationType, prune,
-  NAMESPACE, INDEX_NAMESPACE, RETENTION_DAYS, MAX_MESSAGES,
+  NAMESPACE, INDEX_NAMESPACE, RETENTION_DAYS, MAX_MESSAGES, purgeStaleDocs,
 };

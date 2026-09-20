@@ -6,6 +6,10 @@ const { personalizeMessage, buildPersonalizationVars } = require('../lib/persona
 const circuitBreaker = require('../lib/circuitBreaker');
 const messageHistory = require('../lib/messageHistory');
 
+async function isOptedOutRecipient(tenantId, channel, to) {
+  try { return await require('../ai-engine/contactCrm').isOptedOut(tenantId, channel, to); } catch (e) { return false; }
+}
+
 // Normalise un destinataire Telegram pour l'envoi : un identifiant ("username
 // Telegram, numéro, ou identifiant de groupe/canal déjà résolu — voir
 // recipientType ci-dessous) et le jeu complet de variables dynamiques
@@ -312,7 +316,7 @@ class TelegramCampaignEngine {
     const pending = [];
     for (const r of campaign.results || []) {
       const key = messageHistory.normalizeContactKey(r.to) || r.to;
-      if (r.status === 'sent' || r.status === 'sent_manual' || r.status === 'skipped_duplicate') {
+      if (r.status === 'sent' || r.status === 'sent_manual' || r.status === 'skipped_duplicate' || r.status === 'skipped_optout') {
         sent.push(key);
       } else {
         pending.push(key);
@@ -572,6 +576,19 @@ class TelegramCampaignEngine {
         this._persist(campaign);
         if (this.onActivity) this.onActivity();
         console.log(`Campagne Telegram (tenant "${this.tenantId}", "${campaign.name}"): destinataire ${campaign.results[i].to} ignoré (déjà relancé manuellement, ${i + 1}/${recipients.length}).`);
+        i += 1;
+        continue;
+      }
+
+      if (campaign.recipientType !== 'groups' && await isOptedOutRecipient(this.tenantId, 'TELEGRAM', normalizeTelegramRecipient(recipients[i]).identifier)) {
+        campaign.results[i].status = 'skipped_optout';
+        campaign.results[i].timestamp = new Date().toISOString();
+        campaign.sent += 1;
+        campaign.skippedOptOut = (campaign.skippedOptOut || 0) + 1;
+        campaign.nextIndex = i + 1;
+        this._persist(campaign);
+        if (this.onActivity) this.onActivity();
+        console.log(`Campagne Telegram (tenant "${this.tenantId}", "${campaign.name}"): destinataire ignoré (refus enregistré, ${i + 1}/${recipients.length}).`);
         i += 1;
         continue;
       }

@@ -1,0 +1,156 @@
+// TEST — Worker de licences Cloudflare (D1 simulée par node:sqlite, SQL identique)
+// et réplication VPS <-> Cloudflare.   node --test test/cloudflare-license.test.js
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const path = require('path');
+const fs = require('fs');
+const { DatabaseSync } = require('node:sqlite');
+
+process.env.CLOUDFLARE_LICENSE_URL = 'https://worker.test';
+process.env.CLOUDFLARE_ADMIN_SECRET = 'secret-test';
+
+function makeD1() {
+  const db = new DatabaseSync(':memory:');
+  db.exec(fs.readFileSync(path.join(__dirname, '..', 'cloudflare', 'license-worker', 'schema.sql'), 'utf8'));
+  const clean = (a) => a.map((v) => (v === undefined ? null : v));
+  const stmt = (sql, args) => ({
+    first: async () => db.prepare(sql).get(...clean(args)) || null,
+    all: async () => ({ results: db.prepare(sql).all(...clean(args)) }),
+    run: async () => { db.prepare(sql).run(...clean(args)); return { success: true }; },
+  });
+  return {
+    prepare: (sql) => Object.assign({ bind: (...args) => stmt(sql, args) }, stmt(sql, [])),
+    batch: async (list) => { for (const s of list) await s.run(); return []; },
+  };
+}
+
+let worker; let env; let writes;
+const call = async (method, p, body, admin) => {
+  const headers = { 'content-type': 'application/json' };
+  if (admin !== false) headers['x-admin-secret'] = admin || 'secret-test';
+  const res = await worker.fetch(new Request(`https://worker.test${p}`, { method, headers, body: body ? JSON.stringify(body) : undefined }), env);
+  return { status: res.status, body: await res.json() };
+};
+
+test('setup', async () => {
+  worker = (await import('../cloudflare/license-worker/src/index.js')).default;
+  env = { DB: makeD1(), ADMIN_SECRET: 'secret-test' };
+});
+
+test('génération : clé au format KEY-XXXXXXXX-AAAA, modules par défaut', async () => {
+  const r = await call('POST', '/admin/create', { note: 'client A' });
+  assert.equal(r.status, 201);
+  assert.match(r.body.key, /^KEY-[0-9A-F]{8}-\d{4}$/);
+  assert.deepEqual(r.body.allowedModules, ['whatsapp', 'telegram', 'studio_video']);
+  assert.equal(r.body.active, true);
+  env.key = r.body.key;
+});
+
+test('admin protégé : sans secret ou mauvais secret -> 401', async () => {
+  assert.equal((await call('GET', '/admin/list', null, false)).status, 401);
+  assert.equal((await call('GET', '/admin/list', null, 'faux')).status, 401);
+  assert.equal((await call('POST', '/createLicenseOffline', {}, 'faux')).status, 401);
+});
+
+test('vérification : liaison au 1er appareil, refus du second', async () => {
+  const ok = await call('POST', '/verify', { key: env.key.toLowerCase(), deviceId: 'dev-1' }, false);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.valid, true);
+  const same = await call('POST', '/verifyLicenseOffline', { key: env.key, deviceId: 'dev-1' }, false);
+  assert.equal(same.body.valid, true);
+  const other = await call('POST', '/verify', { key: env.key, deviceId: 'dev-2' }, false);
+  assert.equal(other.status, 403);
+  assert.equal(other.body.reason, 'DEVICE_MISMATCH');
+});
+
+test('vérification : clé inconnue, paramètres manquants', async () => {
+  assert.equal((await call('POST', '/verify', { key: 'KEY-00000000-2026', deviceId: 'd' }, false)).body.reason, 'NOT_FOUND');
+  assert.equal((await call('POST', '/verify', { deviceId: 'd' }, false)).body.reason, 'MISSING_KEY');
+  assert.equal((await call('POST', '/verify', { key: env.key }, false)).body.reason, 'MISSING_DEVICE_ID');
+});
+
+test('désactivation, expiration, réactivation, suppression', async () => {
+  await call('POST', '/admin/set-active', { key: env.key, active: false });
+  assert.equal((await call('POST', '/verify', { key: env.key, deviceId: 'dev-1' }, false)).body.reason, 'INACTIVE');
+  await call('POST', '/admin/set-active', { key: env.key, active: true });
+  await call('POST', '/admin/update', { key: env.key, expiresAt: '2020-01-01T00:00:00.000Z' });
+  assert.equal((await call('POST', '/verify', { key: env.key, deviceId: 'dev-1' }, false)).body.reason, 'EXPIRED');
+  await call('POST', '/admin/update', { key: env.key, expiresAt: null, allowedModules: ['whatsapp'] });
+  const v = await call('POST', '/verify', { key: env.key, deviceId: 'dev-1' }, false);
+  assert.deepEqual(v.body.allowedModules, ['whatsapp']);
+  assert.equal((await call('POST', '/admin/update', { key: env.key })).status, 400);
+  assert.equal((await call('POST', '/admin/delete', { key: env.key })).body.ok, true);
+  assert.equal((await call('POST', '/verify', { key: env.key, deviceId: 'dev-1' }, false)).body.reason, 'NOT_FOUND');
+});
+
+test('réplication : ne pousse que les clés modifiées, conserve la liaison distante', async () => {
+  const axios = require('axios');
+  writes = [];
+  axios.create = () => ({
+    post: async (p, body) => { writes.push([p, body]); const r = await call('POST', p, body); return { data: r.body }; },
+    get: async (p) => { const r = await call('GET', p); return { data: r.body }; },
+  });
+  const sync = require('../lib/cloudflareSync');
+  assert.equal(sync.enabled, true);
+
+  const licA = { key: 'KEY-AAAA0001-2026', createdAt: '2026-01-01T00:00:00.000Z', expiresAt: null, active: true, note: 'a', allowedModules: ['whatsapp'], boundDeviceId: null, boundAt: null };
+  const licB = { key: 'KEY-BBBB0002-2026', createdAt: '2026-01-02T00:00:00.000Z', expiresAt: null, active: true, note: 'b', allowedModules: ['telegram'], boundDeviceId: null, boundAt: null, custom: 42 };
+  let r = await sync.pushLicenses([licA, licB]);
+  assert.equal(r.upserted, 2);
+  r = await sync.pushLicenses([licA, licB]);
+  assert.equal(r.upserted, 0, 'rien de modifié -> aucune écriture');
+  assert.equal(writes.length, 1);
+
+  await new Promise((r2) => setTimeout(r2, 5));
+  await call('POST', '/verify', { key: licA.key, deviceId: 'phone-9' }, false); // liaison côté Cloudflare
+  const merged = await sync.pullLicenses([licA, licB]);
+  assert.ok(merged, 'la liaison distante revient au VPS');
+  assert.equal(merged.find((l) => l.key === licA.key).boundDeviceId, 'phone-9');
+
+  // désactivation faite sur la page admin Cloudflare -> adoptée localement
+  await new Promise((r2) => setTimeout(r2, 5));
+  await call('POST', '/admin/set-active', { key: licB.key, active: false });
+  const merged2 = await sync.pullLicenses(merged);
+  assert.equal(merged2.find((l) => l.key === licB.key).active, false);
+
+  // un push complet ne doit pas effacer la liaison distante
+  const stale = Object.assign({}, licA, { note: 'a2', boundDeviceId: null });
+  await sync.pushLicenses([stale, licB]);
+  const list = await call('GET', '/admin/list');
+  assert.equal(list.body.find((l) => l.key === licA.key).boundDeviceId, 'phone-9');
+  assert.equal(list.body.find((l) => l.key === licB.key).custom, 42, 'champs supplémentaires conservés');
+
+  // suppression locale -> suppression distante
+  await sync.pushLicenses([stale]);
+  assert.equal((await call('GET', '/admin/list')).body.some((l) => l.key === licB.key), false);
+});
+
+test('passerelle IA /ai/text : licence requise, cascade avec repli, aucune clé côté client', async () => {
+  const created = (await call('POST', '/admin/create', {})).body.key;
+  const calls = [];
+  const fakeFetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes('groq')) return { ok: false, status: 500, json: async () => ({}), text: async () => '' };
+    if (String(url).includes('openrouter')) return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'réponse openrouter' } }] }), text: async () => '' };
+    return { ok: true, status: 200, json: async () => ({}), text: async () => 'réponse pollinations' };
+  };
+  const ai = (headers, body, extraEnv) => worker.fetch(new Request('https://worker.test/ai/text', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }), Object.assign({}, env, { FETCH: fakeFetch }, extraEnv));
+
+  assert.equal((await ai({}, { prompt: 'x' })).status, 401, 'sans licence');
+  assert.equal((await ai({ 'x-license-key': 'KEY-00000000-2026', 'x-device-id': 'd' }, { prompt: 'x' })).status, 401, 'licence inconnue');
+  const good = { 'x-license-key': created, 'x-device-id': 'dev-ai' };
+  assert.equal((await ai(good, {})).status, 400, 'prompt manquant');
+
+  let r = await ai(good, { prompt: 'Bonjour' }, { GROQ_API_KEY: 'g', OPENROUTER_API_KEY: 'o' });
+  const body = await r.json();
+  assert.equal(r.status, 200);
+  assert.equal(body.text, 'réponse openrouter', 'groq en échec -> niveau suivant');
+  assert.match(body.provider, /openrouter/);
+
+  calls.length = 0;
+  r = await ai(good, { prompt: 'Bonjour' }, {});
+  assert.match((await r.json()).provider, /pollinations/, 'sans aucune clé : repli public');
+  assert.ok(!calls.some((u) => u.includes('groq')), 'niveau sans clé sauté');
+});

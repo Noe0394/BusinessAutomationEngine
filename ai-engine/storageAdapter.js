@@ -25,6 +25,18 @@ const githubStore = require('../githubStore');
 // directement entre cibles (convention déjà en place dans tout ce dépôt,
 // voir CLAUDE.md § "copies à resynchroniser manuellement").
 
+// LOCAL-FIRST : ces namespaces contiennent des données de conversation/contact
+// des clients finaux. Ils restent sur le volume privé de l'instance (VPS/PC) et
+// ne sont PAS poussés vers le miroir GitHub, sauf GITHUB_MIRROR_USER_DATA=true.
+const LOCAL_ONLY_NAMESPACES = new Set([
+  'message_history', 'conversation_index', 'conversation_state', 'closer_sessions',
+  'crm_contacts', 'activity', 'chat_uploads', 'chat_intelligent_sessions',
+]);
+function isMirrored(namespace) {
+  if (process.env.GITHUB_MIRROR_USER_DATA === 'true') return true;
+  return !LOCAL_ONLY_NAMESPACES.has(String(namespace));
+}
+
 function sanitizeId(rawId) {
   const cleaned = String(rawId || '').trim().replace(/[^A-Za-z0-9_-]/g, '_');
   return cleaned || 'unknown';
@@ -60,6 +72,7 @@ async function get(namespace, docId, defaultValue) {
     // Pas de fichier local : tenter GitHub avant d'abandonner.
   }
 
+  if (!isMirrored(namespace)) return defaultValue !== undefined ? defaultValue : null;
   const store = githubStore.createStore(remoteDocPath(namespace, docId));
   if (!store.enabled) return defaultValue !== undefined ? defaultValue : null;
 
@@ -80,6 +93,7 @@ function set(namespace, docId, data) {
   fs.mkdirSync(baseDir(namespace), { recursive: true });
   const content = JSON.stringify(data, null, 2);
   fs.writeFileSync(docPath(namespace, docId), content, 'utf8');
+  if (!isMirrored(namespace)) return data;
 
   const store = githubStore.createStore(remoteDocPath(namespace, docId));
   store.pushRemote(content).catch((err) => {
@@ -103,4 +117,16 @@ function listIds(namespace) {
   }
 }
 
-module.exports = { get, set, listIds };
+// Suppression d'un document (purge des données expirées) — local + miroir GitHub
+// seulement si le namespace est mirroré.
+function remove(namespace, docId) {
+  try { fs.unlinkSync(docPath(namespace, docId)); } catch (err) { /* déjà absent */ }
+  if (!isMirrored(namespace)) return true;
+  const store = githubStore.createStore(remoteDocPath(namespace, docId));
+  if (store.enabled && typeof store.deleteRemote === 'function') {
+    store.deleteRemote().catch((err) => console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : échec de suppression GitHub :`, err.message));
+  }
+  return true;
+}
+
+module.exports = { get, set, listIds, remove, isMirrored, LOCAL_ONLY_NAMESPACES };

@@ -8,12 +8,11 @@ const storageAdapter = require('./storageAdapter');
 // message réel + son expéditeur, reconstituer une conversation, exploiter le
 // contexte des 7 derniers jours, et comprendre le style de l'utilisateur.
 //
-// Un document par (tenant, canal). Rétention : on garde au moins RETENTION_DAYS
-// jours ET au plus MAX_MESSAGES entrées (le plus permissif des deux, pour ne
-// jamais perdre le contexte récent tout en bornant la taille).
+// Un document par (tenant, canal). Rétention : fenêtre stricte RETENTION_DAYS
+// (aucune donnée expirée ne survit) bornée à MAX_MESSAGES entrées.
 
 const NAMESPACE = 'message_history';
-const RETENTION_DAYS = 30; // >= 7 exigés ; on garde plus si la taille le permet
+const RETENTION_DAYS = 7; // fenêtre glissante stricte 7×24 h (alignée sur le VPS)
 const MAX_MESSAGES = 4000;
 
 function sanitize(id) { return String(id || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'default'; }
@@ -22,13 +21,11 @@ function docId(tenantId, channel) { return `${sanitize(tenantId)}__${sanitize(St
 async function load(tenantId, channel) {
   return storageAdapter.get(NAMESPACE, docId(tenantId, channel), { tenantId: sanitize(tenantId), channel: String(channel || 'WHATSAPP').toUpperCase(), messages: [] });
 }
-function prune(messages) {
-  const cutoff = Date.now() - RETENTION_DAYS * 24 * 3600 * 1000;
-  let kept = messages.filter((m) => (m.tsMs || 0) >= cutoff);
+function prune(messages, now) {
+  const t = now == null ? Date.now() : now;
+  const cutoff = t - RETENTION_DAYS * 24 * 3600 * 1000;
+  let kept = (messages || []).filter((m) => { const ts = (m && m.tsMs) || 0; return ts >= cutoff && ts <= t; });
   if (kept.length > MAX_MESSAGES) kept = kept.slice(-MAX_MESSAGES);
-  // Si la rétention par date a tout coupé (horloges/ts douteux), garder au moins
-  // les MAX_MESSAGES derniers bruts.
-  if (!kept.length && messages.length) kept = messages.slice(-MAX_MESSAGES);
   return kept;
 }
 function save(tenantId, channel, doc) {
@@ -44,7 +41,8 @@ function record(tenantId, { channel, direction, party, name, text, ts, chatId, h
   const ch = String(channel || 'WHATSAPP').toUpperCase();
   // Chargement synchrone-ish : storageAdapter.get est async ; on encapsule.
   return load(tenantId, ch).then((doc) => {
-    const tsSec = Number(ts) > 0 ? Number(ts) : Math.floor(Date.now() / 1000);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const tsSec = Math.min(Number(ts) > 0 ? Number(ts) : nowSec, nowSec); // horodatage futur -> maintenant
     const entry = {
       channel: ch,
       direction: direction === 'out' ? 'out' : 'in',
@@ -95,4 +93,4 @@ async function getSince(tenantId, channel, days) {
   return (doc.messages || []).filter((m) => (m.tsMs || 0) >= cutoff);
 }
 
-module.exports = { record, getRecent, getLastIncoming, getConversation, getSince, NAMESPACE, RETENTION_DAYS };
+module.exports = { record, getRecent, getLastIncoming, getConversation, getSince, prune, NAMESPACE, RETENTION_DAYS };

@@ -45,4 +45,9 @@ function listIds(namespace) {
   }
 }
 
-module.exports = { get, set, listIds };
+function remove(namespace, docId) {
+  try { fs.unlinkSync(docPath(namespace, docId)); } catch (err) { /* déjà absent */ }
+  return true;
+}
+
+module.exports = { get, set, listIds, remove };

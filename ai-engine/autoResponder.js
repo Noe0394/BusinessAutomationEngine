@@ -20,6 +20,11 @@ const businessServices = require('./businessServices');
 const messageHistory = require('./messageHistory');
 const storageAdapter = require('./storageAdapter');
 const modelRouter = require('./modelRouter');
+const contactCrm = require('./contactCrm');
+const conversationEngine = require('./jarvis/conversationEngine');
+const { shared: conversationQueue } = require('./jarvis/conversationQueue');
+
+const DEFAULT_DEBOUNCE_MS = Math.max(0, parseInt(process.env.AUTO_REPLY_DEBOUNCE_MS, 10) || 1500);
 
 const SETTINGS_NS = 'auto_settings';
 
@@ -53,7 +58,7 @@ function isEnabled(settings, channel) {
 
 // Rédige la réponse au client, EN S'APPUYANT sur le contexte métier réel
 // (produits/prix/règles des Services Métiers) et l'historique de la conversation.
-async function composeReply({ tenant, channel, from, name, text, llm }) {
+async function composeReply({ tenant, channel, from, name, text, llm, directives }) {
   // Model router (§6) : complexité du message -> taille de contexte + plafond
   // de tokens de sortie (économie réelle sur les messages simples).
   const route = modelRouter.classify(text);
@@ -74,6 +79,7 @@ async function composeReply({ tenant, channel, from, name, text, llm }) {
       ? `Informations RÉELLES de l'activité (produits, prix, règles — SEULE source autorisée, n'invente jamais au-delà de ceci) :\n${bizCtx}`
       : 'AUCUNE offre n\'est configurée pour ce vendeur. Tu ne connais donc PAS ses produits, services, prix ni domaine d\'activité.',
     history ? `Historique récent avec ce client :\n${history}` : '',
+    directives && directives.length ? `CONSIGNES DE CONVERSATION (OBLIGATOIRES, prioritaires sur tout style commercial) :\n- ${directives.join('\n- ')}` : '',
     `Nouveau message du client ${name ? '(' + name + ')' : ''} : "${text}"`,
     // Garde-fou anti-invention RENFORCÉ (un vrai client est en face) :
     'RÈGLE ABSOLUE : n\'invente JAMAIS un produit, un service, une formation, un domaine d\'activité, un prix ou une promesse. Ne cite QUE ce qui figure explicitement dans les informations ci-dessus.',
@@ -97,13 +103,21 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId }
   if (markProcessed(tenantId, messageId)) return { skipped: 'DUPLICATE' };
   if (!d.runtime || typeof d.runtime.sendMessageVerified !== 'function') return { skipped: 'NO_RUNTIME' };
 
-  try { require('./activityStore').record({ type: 'message_in', action: 'Message client reçu', status: 'ok', channel, tenant: tenantId, target: from, detail: text.slice(0, 120) }); } catch (e) { /* non bloquant */ }
+  try { require('./activityStore').record({ type: 'message_in', action: 'Message client reçu', status: 'ok', channel, tenant: tenantId, target: from, detail: `${text.length} caractères` }); } catch (e) { /* non bloquant */ }
 
-  const reply = await composeReply({ tenant: tenantId, channel, from, name, text, llm: d.llm });
-  if (!reply) return { skipped: 'EMPTY_REPLY' };
+  if (settings.jarvis === false) return legacyReply({ tenantId, channel, from, name, text }, d);
 
+  const debounceMs = d.debounceMs != null ? d.debounceMs : (settings.debounceMs != null ? settings.debounceMs : DEFAULT_DEBOUNCE_MS);
+  return conversationQueue.submit(
+    `${sanitizeTenant(tenantId)}:${channel}:${from}`,
+    { text, messageId },
+    (items) => processBatch({ tenantId, channel, from, name, items, settings }, d),
+    { debounceMs },
+  );
+}
+
+async function sendAndLog({ tenantId, channel, from, reply }, d) {
   const out = await d.runtime.sendMessageVerified({ channel, to: from, text: reply, tenantId });
-  // sendMessageVerified enregistre déjà le message sortant dans l'historique.
   const sent = out.status === 'SUCCESS';
   try {
     require('./activityStore').record({
@@ -112,13 +126,40 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId }
       detail: sent ? `envoyée (réf. ${out.confirmationId || '?'})` : (out.error || out.status),
     });
   } catch (e) { /* non bloquant */ }
-  return {
-    sent,
-    status: out.status,
-    confirmationId: out.confirmationId || null,
-    error: out.error || null,
-    reply,
-  };
+  return out;
+}
+
+async function processBatch({ tenantId, channel, from, name, items, settings }, d) {
+  const knownText = await businessServices.getEngineContextText(tenantId).catch(() => '');
+  let history = [];
+  try { history = await messageHistory.getConversation(tenantId, channel, from, 8); } catch (e) { history = []; }
+  let lastOut = null;
+  const result = await conversationEngine.handleBatch({ tenantId, channel, from, name, items }, {
+    llm: d.llm,
+    crm: d.crm || contactCrm,
+    knownText,
+    history,
+    settings,
+    compose: (directives, ctx) => composeReply({ tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives }),
+    send: async (reply) => { lastOut = await sendAndLog({ tenantId, channel, from, reply }, d); return lastOut; },
+    notify: d.notify || ((msg) => require('./platformOrchestrator').notifyTenantChat(tenantId, `⚠️ ${msg}`, [{ icon: '⚠️', label: 'Conversation à traiter', status: 'warning' }])),
+  });
+  if (result.action === 'NO_ACTION') {
+    try { require('./activityStore').record({ type: 'no_action', action: 'Aucune réponse nécessaire', channel, tenant: tenantId, target: from, status: 'ok', detail: `${result.intent || '-'} / ${result.reason}` }); } catch (e) { /* non bloquant */ }
+    return { skipped: 'NO_ACTION', reason: result.reason, intent: result.intent };
+  }
+  const out = lastOut || {};
+  const sent = out.status === 'SUCCESS';
+  return { sent, status: out.status, confirmationId: out.confirmationId || null, error: out.error || null, reply: result.text, intent: result.intent, state: result.state, kind: result.kind };
+}
+
+// Ancien comportement (settings.jarvis === false) : une réponse par message.
+async function legacyReply({ tenantId, channel, from, name, text }, d) {
+  const reply = await composeReply({ tenant: tenantId, channel, from, name, text, llm: d.llm });
+  if (!reply) return { skipped: 'EMPTY_REPLY' };
+  const out = await sendAndLog({ tenantId, channel, from, reply }, d);
+  const sent = out.status === 'SUCCESS';
+  return { sent, status: out.status, confirmationId: out.confirmationId || null, error: out.error || null, reply };
 }
 
 module.exports = { handleIncoming, composeReply, getSettings, setSettings, isEnabled, markProcessed, SETTINGS_NS };

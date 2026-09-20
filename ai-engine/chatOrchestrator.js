@@ -8,6 +8,7 @@ const connectorManager = require('./connectors/connectorManager');
 const businessServices = require('./businessServices');
 const toolRegistry = require('./toolRegistry');
 const toolAgent = require('./toolAgent');
+const agentLoop = require('./jarvis/agentLoop');
 const manualPaymentValidator = require('./manualPaymentValidator');
 const contactCrm = require('./contactCrm');
 const recurringTasks = require('../queues/recurringTasks');
@@ -1044,6 +1045,10 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
   });
   if (decision) return { text: decision.text, actionLog: decision.actionLog || null };
 
+  // Confirmation d'une action sensible préparée (PREPARE -> oui -> EXECUTE -> VERIFY).
+  const confirmed = await agentLoop.resolvePending({ tenantId, sessionId, text }, { ctx: { runtime: d.runtime || null } }).catch(() => null);
+  if (confirmed) return confirmed;
+
   const intent = detectIntent(text, lastAssistantMessage);
   if (!intent) {
     // Aucune intention à motif connu : l'AGENT À OUTILS prend le relais — le LLM
@@ -1052,9 +1057,9 @@ async function handle({ text, history, tenantId, sessionId, lastAssistantMessage
     // boucle « Chat → sélection d'outil → tool call → vérification → réponse ».
     // S'il n'y a aucun outil pertinent, il renvoie null et le chat générique
     // (image/vidéo/livre/conversation) reprend la main.
-    const agent = await toolAgent.runToolAgent(
-      { text, history, tenantId },
-      { runtime: d.runtime || null, permissions: d.toolPermissions || undefined, generateImage: d.generateImage || null },
+    const agent = await agentLoop.runAgentLoop(
+      { text, history, tenantId, sessionId },
+      { runtime: d.runtime || null, permissions: d.toolPermissions || undefined, generateImage: d.generateImage || null, llm: d.llm || undefined },
     ).catch((err) => {
       console.warn('chatOrchestrator — toolAgent indisponible, repli :', err.message);
       return null;

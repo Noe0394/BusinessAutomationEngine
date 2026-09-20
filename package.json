@@ -7,7 +7,8 @@
     "start": "node index.js",
     "start:local": "node index.js",
     "build": "node scripts/build-dashboard.js",
-    "test": "node --test"
+    "test": "node --test",
+    "cf:preflight": "node scripts/cloudflare-preflight.js"
   },
   "dependencies": {
     "@gradio/client": "^1.19.1",

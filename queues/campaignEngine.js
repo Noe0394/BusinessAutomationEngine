@@ -7,6 +7,10 @@ const { personalizeMessage } = require('../lib/personalization');
 const circuitBreaker = require('../lib/circuitBreaker');
 const messageHistory = require('../lib/messageHistory');
 
+async function isOptedOutRecipient(tenantId, channel, to) {
+  try { return await require('../ai-engine/contactCrm').isOptedOut(tenantId, channel, to); } catch (e) { return false; }
+}
+
 // GESTIONNAIRE MULTI-CAMPAGNES (Play / Pause / Reprise intelligente) — un
 // tenant peut désormais posséder PLUSIEURS campagnes stockées simultanément
 // (this.campaigns : Map<id, campaign>), mais une seule à la fois est
@@ -722,6 +726,20 @@ class CampaignEngine {
         this._persist(campaign);
         if (this.onActivity) this.onActivity();
         console.log(`Campagne (tenant "${this.tenantId}", "${campaign.name}"): destinataire ${campaign.results[i].to} ignoré (déjà relancé manuellement, ${i + 1}/${recipients.length}).`);
+        i += 1;
+        continue;
+      }
+
+      // Registre de refus (Jarvis) : un contact qui a dit non / stop n'est plus sollicité.
+      if (await isOptedOutRecipient(this.tenantId, 'WHATSAPP', normalizeRecipientEntry(recipients[i], this.session.getContactName).to)) {
+        campaign.results[i].status = 'skipped_optout';
+        campaign.results[i].timestamp = new Date().toISOString();
+        campaign.sent += 1;
+        campaign.skippedOptOut = (campaign.skippedOptOut || 0) + 1;
+        campaign.nextIndex = i + 1;
+        this._persist(campaign);
+        if (this.onActivity) this.onActivity();
+        console.log(`Campagne (tenant "${this.tenantId}", "${campaign.name}"): destinataire ignoré (refus enregistré, ${i + 1}/${recipients.length}).`);
         i += 1;
         continue;
       }

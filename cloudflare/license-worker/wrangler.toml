@@ -1,0 +1,10 @@
+# Générateur/vérificateur de licences CYRUS sur Cloudflare (palier gratuit).
+# Aucun secret ici : ADMIN_SECRET se définit avec `wrangler secret put ADMIN_SECRET`.
+name = "cyrus-license"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cyrus-licenses"
+database_id = "REMPLACER_PAR_L_ID_RETOURNE_PAR_wrangler_d1_create"

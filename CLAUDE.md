@@ -23,6 +23,20 @@ des exécutions en double des mêmes scripts) :
 - Pour forcer l'extraction et la sauvegarde immédiate d'une leçon depuis la
   session en cours (sans attendre la fin de session), invoquer `/learn`.
 
+**Chantier JARVIS (2026-09-20, branche `feat/jarvis-engine`, non déployé)** : moteur
+conversationnel (refus respecté, anti-répétition, NO_ACTION, file/debounce par
+conversation, agent multi-outils avec PREPARE→confirmation→VERIFY, mémoire 7×24 h
+stricte, local-first, licences sur Cloudflare). Détail et reste-à-faire :
+**`docs/JARVIS.md`**. Décision utilisateur : Cloudflare (Worker+D1, gratuit)
+remplace Firebase (devenu payant) — `cloudflare/license-worker/`, à déployer
+par l'utilisateur ; le générateur de licences Cloudflare est volontairement le
+DERNIER chantier. RIEA/Firebase partagé : toujours intouché.
+**COMPTE DES TESTS RÉELS : tout test réel (WhatsApp/Telegram/IA/licence) se fait avec le
+compte rattaché à la clé de licence de test** (consigne utilisateur du 2026-09-20).
+La clé est dans `.env` (variable `CYRUS_TEST_LICENSE_KEY`, fichier ignoré par Git : le dépôt
+GitHub est PUBLIC, ne jamais l'écrire dans un fichier commité). Scénarios : `docs/TESTS-REELS.md`.
+Identifiants Cloudflare (compte, jeton API, R2) : aussi dans `.env` (`CLOUDFLARE_*`), jamais commités.
+
 **Chantier en cours (2026-09-15, reprendre ICI)** : rendre l'agent CYRUS
 **100% autonome** (objectif explicite de l'utilisateur : "aiguiser le système
 intelligent à agir de façon 100% autonome"). Dernière avancée =
