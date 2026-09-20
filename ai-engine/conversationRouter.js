@@ -22,7 +22,7 @@ const contactIdentity = require('./contactIdentity');
 const CATEGORIES = [
   'PRIVATE_CASUAL', 'PRIVATE_PERSONAL', 'PRIVATE_SENSITIVE', 'GENERAL_INFORMATION', 'URGENT', 'CALLBACK_REQUEST',
   'BUSINESS_LEAD', 'CUSTOMER_SUPPORT', 'PAYMENT_PROOF', 'PAYMENT_VALIDATION', 'CAMPAIGN', 'SERVICE_REQUEST',
-  'OWNER_COMMAND', 'HUMAN_INTERVENTION_REQUIRED', 'OTHER',
+  'OWNER_COMMAND', 'HUMAN_INTERVENTION_REQUIRED', 'AUTOMATED_MESSAGE', 'OTHER',
 ];
 const HANDOFF = ['AI_ACTIVE', 'AI_WITH_OWNER_NOTIFICATION', 'HUMAN_REQUIRED', 'HUMAN_ACTIVE', 'AI_RESUMED'];
 
@@ -47,6 +47,10 @@ const S = {
   commitment: R('tu m avais (?:dit|promis|demande)|tu avais dit|tu avais promis|tu peux me confirmer|tu te rappelles|tu te souviens|comme convenu|comme prevu|hier tu|ce que tu avais dit|ce que tu m as dit'),
   favor: R('rendre (?:un |ce |le |ton )?service|un service|ce service|coup de main|tu peux m aider|peux tu m aider|peux tu me|tu peux me (?:preter|donner|ramener|deposer|envoyer|passer)|j ai besoin de toi|j ai besoin que tu'),
   question: /\?/,
+  // Manifestation d'intérêt COMMERCIAL explicite (volontairement plus stricte que « super/top/parfait » du classifieur d'intentions).
+  commercialInterest: R('interess\\w*|ca m interesse|en savoir plus|plus d info\\w*|plus de details|des info\\w*|renseignements?|informations?|infos?|prix|tarifs?|combien|je prends|je veux (?:bien )?(?:m inscrire|acheter|commander|participer|en profiter)|comment (?:faire|payer|participer|commander|m inscrire|s inscrire)|inscri\\w+|preneur'),
+  // Message généré par un autre assistant/répondeur : jamais de réponse (anti-boucle bot <-> bot), jamais d'alerte.
+  automated: R('merci de nous avoir ecrit|dites moi ce qui vous interesse|je vous reponds tout de suite|(?:ceci est )?(?:un )?message automatique|reponse automatique|reponse automatisee|nous vous repondrons (?:dans les meilleurs delais|des que possible|rapidement)|nous sommes actuellement (?:absents?|indisponibles?|fermes?)|votre message a bien ete recu|ne pas repondre a ce message|do not reply|auto reply|thank you for contacting'),
   businessWords: R('prix|tarifs?|combien|cout\\w*|formation\\w*|inscri\\w+|inscription|commande\\w*|acheter|achat|payer|paiement|paye|service\\w*|devis|catalogue|produits?|promo\\w*|offres?|livraison|cours|certificat\\w*|programme|session|abonnement|facture|recu de paiement|mobile money|orange money|wave|moov'),
 };
 
@@ -81,10 +85,13 @@ function classify(text, ctx) {
   if (businessContext) signals.push('contexte_commercial_connu');
 
   // Signaux forts, par ordre de gravité.
-  const urgent = has(S.urgent, n);
-  const secret = has(S.secret, n);
-  const money = has(S.money, n);
-  const family = has(S.family, n);
+  // Message très long (prompt/document collé) : un mot isolé ne suffit pas à le classer urgent/sensible/familial.
+  const isLong = raw.length > 300;
+  if (has(S.automated, n)) return out('AUTOMATED_MESSAGE', 0.9, 'message automatique d\'un autre assistant (aucune réponse : anti-boucle)', 'none');
+  const urgent = !isLong && has(S.urgent, n);
+  const secret = !isLong && has(S.secret, n);
+  const money = !isLong && has(S.money, n);
+  const family = !isLong && has(S.family, n);
   const callback = has(S.callback, n);
   const where = has(S.whereabouts, n) || (has(S.availability, n) && S.question.test(raw));
   const commit = has(S.commitment, n);
@@ -108,6 +115,8 @@ function classify(text, ctx) {
 
   // Contexte métier : mots-clés OU relation commerciale connue avec une vraie demande.
   const cls = intentClassifier.classify(raw, { state: c.state });
+  // Manifestation d'intérêt commercial (« je suis intéressée », « puis-je en savoir plus ? ») : moteur commercial, jamais « intervention humaine ».
+  if (!isLong && !(cls.flags && cls.flags.negative) && has(S.commercialInterest, n)) return out('BUSINESS_LEAD', 0.75, 'manifestation d\'intérêt commercial', 'none');
   const commercialIntents = new Set(['INTEREST', 'REQUEST_INFORMATION', 'REQUEST_MORE_INFORMATION', 'PURCHASE_INTENT', 'PAYMENT_INTENT', 'PRICE_OBJECTION', 'OBJECTION', 'HESITATION', 'REFUSAL', 'DISINTEREST', 'STOP', 'CANCELLATION', 'SUPPORT', 'COMPLAINT', 'REQUEST_TIME', 'LATER']);
   if (businessContext && commercialIntents.has(cls.intent)) return out(cls.intent === 'SUPPORT' || cls.intent === 'COMPLAINT' ? 'CUSTOMER_SUPPORT' : 'BUSINESS_LEAD', 0.8, 'contexte commercial + intention métier', 'none');
   if (biz && (commercialIntents.has(cls.intent) || S.question.test(raw))) {
@@ -168,6 +177,7 @@ function decide(cls, ctx) {
   };
 
   if (c.isGroup) return Object.assign(base, { mode: 'SILENT', reason: 'groupe : aucune réponse ni alerte automatique' , ownerNotificationRequired: policy.groupAlerts === true });
+  if (cls.category === 'AUTOMATED_MESSAGE') return Object.assign(base, { mode: 'SILENT', reason: cls.reason });
   if (cls.category === 'OWNER_COMMAND') return Object.assign(base, { mode: 'SILENT', reason: 'commande propriétaire non acceptée depuis une conversation externe' });
 
   // Métier : le moteur existant prend le relais (aucune logique privée appliquée).
@@ -413,4 +423,5 @@ module.exports = {
   CATEGORIES, HANDOFF, classify, arbitrate, decide, casualReply, waitingReply, processBatch,
   setHandoff, getHandoff, noteOwnerTookOver, resumeAutomation, listAwaitingOwner,
   THREAD_TTL_MS, HUMAN_REQUIRED_TTL_MS,
+  isCommercialInterest: (text) => { const raw = String(text || ''); return raw.length <= 400 && has(S.commercialInterest, norm(raw)); },
 };

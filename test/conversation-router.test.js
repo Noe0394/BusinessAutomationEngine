@@ -171,3 +171,24 @@ test('politique notifyCasual : réponse automatique + alerte', async () => {
   assert.equal(h.notes.length, 1);
   assert.match(h.notes[0], /Réponse automatique envoyée/);
 });
+
+test('RÉGRESSION (messages réellement reçus sur le compte de test) : intérêt commercial, message automatique, long texte collé', async () => {
+  const cat = (t) => router.classify(t, {}).category;
+  // ces messages étaient partis en « intervention humaine » avec une réponse d'attente
+  assert.equal(cat('Je suis intéressée'), 'BUSINESS_LEAD');
+  assert.equal(cat('Bonjour je suis intéressée'), 'BUSINESS_LEAD');
+  assert.equal(cat('Bonjour ! Puis-je en savoir plus à ce sujet ?'), 'BUSINESS_LEAD');
+  // accueil automatique d'un autre assistant : aucune réponse, aucune alerte (anti-boucle bot <-> bot)
+  assert.equal(cat('Bonjour 👋 Merci de nous avoir écrit ! Dites-moi ce qui vous intéresse, je vous réponds tout de suite.'), 'AUTOMATED_MESSAGE');
+  const h = harness();
+  const auto = await incoming('rg1', '22670444555@s.whatsapp.net', 'Bonjour 👋 Merci de nous avoir écrit ! Dites-moi ce qui vous intéresse, je vous réponds tout de suite.', h);
+  assert.equal(auto.mode, 'SILENT');
+  assert.equal(h.sent.length + h.notes.length, 0);
+  // un long texte collé ne devient pas « urgent/critique » à cause d'un mot isolé
+  const longText = 'Nouvelle implémentation : ' + 'blabla technique '.repeat(40) + ' il faut agir vite, tout de suite, sans accident.';
+  assert.notEqual(cat(longText), 'URGENT');
+  // une simple appréciation n'est pas une demande d'offre
+  assert.equal(cat('parfait merci'), 'PRIVATE_CASUAL');
+  assert.equal(require('../ai-engine/groupCampaigns').isInterest('Super promo !'), false);
+  assert.equal(require('../ai-engine/groupCampaigns').isInterest("Je suis intéressée, c'est combien ?"), true);
+});

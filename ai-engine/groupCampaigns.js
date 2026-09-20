@@ -231,7 +231,9 @@ function isInterest(text) {
   if (!raw) return false;
   const cls = intentClassifier.classify(raw, {});
   if (cls.flags && cls.flags.negative) return false;
-  if (cls.intents.some((i) => INTEREST_INTENTS.has(i))) return true;
+  // Intérêt commercial EXPLICITE seulement : « super / top / parfait » (classés INTEREST) ne sont pas une demande d'offre.
+  if (cls.intents.some((i) => i === 'PURCHASE_INTENT' || i === 'PAYMENT_INTENT')) return true;
+  if (require('./conversationRouter').isCommercialInterest(raw)) return true;
   const n = norm(raw);
   return /(?:^|\s)(?:interess\w*|ca m interesse|je prends|je veux|ca m interesse|comment (?:faire|participer|commander|payer|s inscrire)|moi aussi|prix|tarif|combien|dispo(?:nible)?)(?=\s|$|[?!])/.test(n) && n.length <= 200;
 }
