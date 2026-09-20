@@ -1,32 +1,41 @@
 {
   "date": "2026-09-20",
   "totals": {
-    "calls": 1,
-    "tokens": 978,
-    "cost": 0.0002934
+    "calls": 2,
+    "tokens": 1971,
+    "cost": 0.0005912999999999999
   },
   "byPurpose": {
     "client_conversation": {
-      "calls": 1,
-      "tokens": 978,
-      "cost": 0.0002934
+      "calls": 2,
+      "tokens": 1971,
+      "cost": 0.0005912999999999999
     }
   },
   "byProvider": {
     "groq": {
-      "calls": 1,
-      "tokens": 978,
-      "cost": 0.0002934
+      "calls": 2,
+      "tokens": 1971,
+      "cost": 0.0005912999999999999
     }
   },
   "byTenant": {
     "live": {
-      "calls": 1,
-      "tokens": 978,
-      "cost": 0.0002934
+      "calls": 2,
+      "tokens": 1971,
+      "cost": 0.0005912999999999999
     }
   },
   "recent": [
+    {
+      "ts": "2026-09-20T04:59:01.160Z",
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
+      "tokens": 993,
+      "cost": 0.000298,
+      "purpose": "client_conversation",
+      "tenant": "live"
+    },
     {
       "ts": "2026-09-20T04:59:00.949Z",
       "provider": "groq",
