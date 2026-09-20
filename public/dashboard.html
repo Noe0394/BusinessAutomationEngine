@@ -385,7 +385,6 @@
     <nav id="tabs">
       <button type="button" class="tab-btn active" data-tab="connections">🔌 Connexions &amp; Intégrations</button>
       <button type="button" class="tab-btn" data-tab="goalchat">💬 Chat Intelligent</button>
-      <button type="button" class="tab-btn" data-tab="campagnes">📣 Campagnes</button>
       <button type="button" class="tab-btn" data-tab="whatsapp">WhatsApp</button>
       <button type="button" class="tab-btn" data-tab="telegram">Telegram</button>
       <button type="button" class="tab-btn" data-tab="facebook">Facebook</button>
@@ -615,6 +614,48 @@
         <button type="button" id="import-crm-btn" title="Ajoute les contacts au CRM pour que le Chat Intelligent puisse les interroger et agir dessus">📇 Importer dans le CRM (interrogeable par le chat)</button>
         <div id="import-result" hidden></div>
         <div id="wa-adv-import" class="adv-import"></div>
+        <div id="wa-campaign-host">    <div id="cmp-shell">
+      <style>
+        #cmp-shell .cmp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+        #cmp-shell .cmp-box{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:12px}
+        #cmp-shell label{display:block;font-size:.85rem;opacity:.8;margin:8px 0 4px}
+        #cmp-shell input[type=text],#cmp-shell input[type=datetime-local],#cmp-shell select,#cmp-shell textarea{width:100%;box-sizing:border-box}
+        #cmp-shell textarea{min-height:90px}
+        #cmp-shell .cmp-counts{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+        #cmp-shell .cmp-chip{padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.07);font-size:.85rem}
+        #cmp-shell table{width:100%;border-collapse:collapse;font-size:.85rem}
+        #cmp-shell th,#cmp-shell td{text-align:left;padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.08)}
+        #cmp-shell .cmp-bar{height:8px;background:rgba(255,255,255,.1);border-radius:6px;overflow:hidden}
+        #cmp-shell .cmp-bar>div{height:100%;background:#22c55e}
+        #cmp-shell .cmp-badge{padding:2px 8px;border-radius:6px;font-size:.78rem;background:rgba(255,255,255,.1)}
+        #cmp-shell .cmp-scroll{max-height:320px;overflow:auto}
+        #cmp-shell .cmp-actions button{margin:2px 4px 2px 0}
+      </style>
+      <h3>Campagne suivie : programmation, statuts et reprise</h3>
+      <p style="opacity:.8">Utilise les numéros analysés dans « Autres méthodes de chargement de numéros ». Exécutée en arrière-plan par le serveur : vous pouvez fermer cette page.</p>
+
+      <div class="cmp-grid">
+        <div class="cmp-box">
+          <h3>Campagne</h3>
+          <label>Nom de la campagne</label><input type="text" id="cmp-name" placeholder="Promo septembre">
+          <label style="display:none">Canal</label>
+          <select id="cmp-channel" style="display:none"><option value="WHATSAPP">WhatsApp</option><option value="TELEGRAM">Telegram</option></select>
+          <label>Message (variables : {nom}, {prenom})</label><textarea id="cmp-text"></textarea>
+          <label>Image / média (WhatsApp)</label><input type="file" id="cmp-media" accept="image/*,video/*,application/pdf">
+          <label>Programmer (facultatif)</label><input type="datetime-local" id="cmp-when">
+          <div class="cmp-actions">
+            <button type="button" id="cmp-create">Créer la campagne</button>
+            <button type="button" id="cmp-schedule">Programmer</button>
+            <button type="button" id="cmp-launch">Lancer maintenant</button>
+          </div>
+          <div id="cmp-feedback" style="margin-top:8px"></div>
+        </div>
+      </div>
+
+      <h3 style="margin-top:18px">Mes campagnes (ce canal)</h3>
+      <div id="cmp-list"></div>
+      <div id="cmp-detail" class="cmp-box" hidden></div>
+    </div></div>
 
         <div class="table-wrap">
           <table style="margin-top: 1rem;">
@@ -830,6 +871,7 @@
           <p id="tg-dm-import-file-name" class="empty">Aucun fichier sélectionné.</p>
           <button type="button" id="tg-dm-import-btn">Importer</button>
           <p id="tg-dm-import-count" class="empty">Aucun contact importé.</p>          <div id="tg-adv-import" class="adv-import"></div>
+          <div id="tg-campaign-host"></div>
 
 
           <div class="table-wrap">
@@ -1120,61 +1162,6 @@
     </section>
 
     <!-- Onglet Programmation / Planning (multi-canal) -->
-    <section class="panel" id="panel-campagnes">
-      <style>
-        #panel-campagnes .cmp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
-        #panel-campagnes .cmp-box{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:12px}
-        #panel-campagnes label{display:block;font-size:.85rem;opacity:.8;margin:8px 0 4px}
-        #panel-campagnes input[type=text],#panel-campagnes input[type=datetime-local],#panel-campagnes select,#panel-campagnes textarea{width:100%;box-sizing:border-box}
-        #panel-campagnes textarea{min-height:90px}
-        #panel-campagnes .cmp-counts{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
-        #panel-campagnes .cmp-chip{padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.07);font-size:.85rem}
-        #panel-campagnes table{width:100%;border-collapse:collapse;font-size:.85rem}
-        #panel-campagnes th,#panel-campagnes td{text-align:left;padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.08)}
-        #panel-campagnes .cmp-bar{height:8px;background:rgba(255,255,255,.1);border-radius:6px;overflow:hidden}
-        #panel-campagnes .cmp-bar>div{height:100%;background:#22c55e}
-        #panel-campagnes .cmp-badge{padding:2px 8px;border-radius:6px;font-size:.78rem;background:rgba(255,255,255,.1)}
-        #panel-campagnes .cmp-scroll{max-height:320px;overflow:auto}
-        #panel-campagnes .cmp-actions button{margin:2px 4px 2px 0}
-      </style>
-      <h2>📣 Campagnes WhatsApp &amp; Telegram</h2>
-      <p style="opacity:.8">Les campagnes sont exécutées en arrière-plan par le serveur : vous pouvez fermer cette page. Les statuts affichés viennent des moteurs d'envoi réels.</p>
-
-      <div class="cmp-grid">
-        <div class="cmp-box">
-          <h3>1. Destinataires</h3>
-          <label>Coller une liste (numéros, « Nom : +226… », une ligne par contact)</label>
-          <textarea id="cmp-paste" placeholder="Jean : +226 70 12 34 56&#10;+22676123456"></textarea>
-          <label>Fichier Excel / CSV</label>
-          <input type="file" id="cmp-file" accept=".xlsx,.xls,.csv,.txt">
-          <label>Photographier une liste (OCR)</label>
-          <input type="file" id="cmp-photo" accept="image/*" capture="environment">
-          <label>Indicatif pays par défaut (facultatif, ex. 226)</label>
-          <input type="text" id="cmp-cc" placeholder="226">
-          <div class="cmp-actions"><button type="button" id="cmp-analyze">Analyser les destinataires</button></div>
-          <div id="cmp-analysis"></div>
-        </div>
-        <div class="cmp-box">
-          <h3>2. Campagne</h3>
-          <label>Nom de la campagne</label><input type="text" id="cmp-name" placeholder="Promo septembre">
-          <label>Canal</label>
-          <select id="cmp-channel"><option value="WHATSAPP">WhatsApp</option><option value="TELEGRAM">Telegram</option></select>
-          <label>Message (variables : {nom}, {prenom})</label><textarea id="cmp-text"></textarea>
-          <label>Image / média (WhatsApp)</label><input type="file" id="cmp-media" accept="image/*,video/*,application/pdf">
-          <label>Programmer (facultatif)</label><input type="datetime-local" id="cmp-when">
-          <div class="cmp-actions">
-            <button type="button" id="cmp-create">Créer la campagne</button>
-            <button type="button" id="cmp-schedule">Programmer</button>
-            <button type="button" id="cmp-launch">Lancer maintenant</button>
-          </div>
-          <div id="cmp-feedback" style="margin-top:8px"></div>
-        </div>
-      </div>
-
-      <h3 style="margin-top:18px">Mes campagnes</h3>
-      <div id="cmp-list"></div>
-      <div id="cmp-detail" class="cmp-box" hidden></div>
-    </section>
 
     <section class="panel" id="panel-scheduler">
       <h2>Programmation / Planning</h2>
@@ -2457,7 +2444,7 @@
       // que soit le module de la licence. Sans cette exclusion, ils étaient
       // masqués pour toute licence à modules restreints (bug signalé).
       const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'))
-        .filter((btn) => !['connections', 'goalchat', 'campagnes', 'scheduler', 'prospects', 'share', 'studio', 'services-metiers', 'aide', 'reports'].includes(btn.dataset.tab));
+        .filter((btn) => !['connections', 'goalchat', 'scheduler', 'prospects', 'share', 'studio', 'services-metiers', 'aide', 'reports'].includes(btn.dataset.tab));
 
       applyStudioLockState();
 
@@ -2832,7 +2819,7 @@
         if (btn.dataset.tab === 'relance') { relanceLoadQueue(); }
         if (btn.dataset.tab === 'studio') { studioLoadSessionsList(); }
         if (btn.dataset.tab === 'goalchat') { goalChatInit(); }
-        if (btn.dataset.tab === 'campagnes') { cmpInit(); }
+        if (btn.dataset.tab === 'whatsapp' || btn.dataset.tab === 'telegram') { cmpMount(btn.dataset.tab === 'telegram' ? 'TELEGRAM' : 'WHATSAPP'); }
         if (btn.dataset.tab === 'services-metiers') { svcMetiersInit(); }
         if (btn.dataset.tab === 'aide') { aideInit(); }
         if (btn.dataset.tab === 'reports') { reportsInit(); }
@@ -2897,32 +2884,6 @@
       });
       scroll.appendChild(table);
       return scroll;
-    }
-
-    async function cmpAnalyze() {
-      const box = document.getElementById('cmp-analysis');
-      box.textContent = 'Analyse en cours...';
-      try {
-        const form = new FormData();
-        const photo = document.getElementById('cmp-photo').files[0];
-        const file = document.getElementById('cmp-file').files[0];
-        const text = document.getElementById('cmp-paste').value.trim();
-        if (photo) form.append('file', photo); else if (file) form.append('file', file); else if (text) form.append('text', text);
-        else { box.textContent = 'Collez une liste, choisissez un fichier ou une photo.'; return; }
-        const cc = document.getElementById('cmp-cc').value.trim();
-        if (cc) form.append('defaultCountryCode', cc);
-        const data = await cmpJson('/api/campaigns/recipients', { method: 'POST', body: form });
-        cmpState.recipientsId = data.recipientsId;
-        box.textContent = '';
-        box.appendChild(cmpRenderCounts(data.counts));
-        if (data.counts.uncertain) box.appendChild(cmpEl('p', 'Les numéros « incertains » ne sont pas envoyés tant que leur format n\'est pas confirmé (aucun chiffre n\'est deviné).'));
-        box.appendChild(cmpRenderRows(data.rows, [
-          { key: 'name', label: 'Nom' }, { key: 'number', label: 'Numéro' },
-          { key: 'state', label: 'Statut', map: (s) => CMP_STATUS_LABELS[s] || s }, { key: 'reason', label: 'Détail' },
-        ]));
-      } catch (err) {
-        if (err.message !== 'unauthorized') box.textContent = err.message;
-      }
     }
 
     async function cmpUploadMedia() {
@@ -2996,6 +2957,7 @@
       try {
         const data = await cmpJson('/api/campaigns');
         box.textContent = '';
+        data.campaigns = data.campaigns.filter((c) => String(c.channel).toUpperCase() === document.getElementById('cmp-channel').value);
         if (!data.campaigns.length) { box.appendChild(cmpEl('p', 'Aucune campagne pour le moment.')); return; }
         data.campaigns.forEach((c) => {
           const card = cmpEl('div', null, { class: 'cmp-box' });
@@ -3050,10 +3012,20 @@
       } catch (err) { if (err.message !== 'unauthorized') { box.hidden = false; box.textContent = err.message; } }
     }
 
+    function cmpMount(channel) {
+      const host = document.getElementById(channel === 'TELEGRAM' ? 'tg-campaign-host' : 'wa-campaign-host');
+      const shell = document.getElementById('cmp-shell');
+      if (host && shell.parentNode !== host) host.appendChild(shell);
+      document.getElementById('cmp-channel').value = channel;
+      const media = document.getElementById('cmp-media');
+      media.previousElementSibling.style.display = media.style.display = channel === 'TELEGRAM' ? 'none' : '';
+      cmpState.openId = null; document.getElementById('cmp-detail').hidden = true;
+      cmpInit();
+    }
     function cmpInit() {
       if (!cmpState.wired) {
         cmpState.wired = true;
-        document.getElementById('cmp-analyze').addEventListener('click', cmpAnalyze);
+
         document.getElementById('cmp-create').addEventListener('click', () => cmpCreate('draft'));
         document.getElementById('cmp-schedule').addEventListener('click', () => cmpCreate('schedule'));
         document.getElementById('cmp-launch').addEventListener('click', () => cmpCreate('launch'));
@@ -3062,7 +3034,7 @@
       if (cmpState.timer) clearInterval(cmpState.timer);
       // Suivi quasi temps réel tant que l'onglet est affiché.
       cmpState.timer = setInterval(() => {
-        const panel = document.getElementById('panel-campagnes');
+        const panel = document.getElementById('cmp-shell').closest('.panel');
         if (!panel.classList.contains('active')) { clearInterval(cmpState.timer); cmpState.timer = null; return; }
         cmpRefreshList();
         if (cmpState.openId) cmpOpen(cmpState.openId);
@@ -10339,6 +10311,7 @@
           if (cc.value.trim()) form.append('defaultCountryCode', cc.value.trim());
           const data = await cmpJson('/api/campaigns/recipients', { method: 'POST', body: form });
           last = { rows: data.rows || [], text };
+          cmpState.recipientsId = data.recipientsId;
           out.textContent = '';
           out.appendChild(cmpRenderCounts(data.counts));
           if (data.counts.uncertain) out.appendChild(cmpEl('p', 'Les numéros « incertains » ne sont pas utilisés tant que leur format n’est pas confirmé (aucun chiffre n’est deviné).', { class: 'empty' }));
