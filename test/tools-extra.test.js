@@ -218,3 +218,58 @@ test('Excel joint -> pipeline (fichier réel .xlsx)', async () => {
   assert.equal(out.result.report.valid, 2);
   assert.equal(out.result.report.duplicates, 1);
 });
+
+test('protection : une seule fiche de continuité par campagne parente, notification, fermeture à la reprise', async () => {
+  const continuity = require('../ai-engine/campaignContinuity');
+  const { EventEmitter } = require('events');
+  const bus = new EventEmitter();
+  continuity.attach(bus);
+  const evt = { tenantId: 'tFb', channel: 'WHATSAPP', status: 'circuit_open', assistedMode: true, campaignId: 'camp1', campaignName: 'Promo' };
+  bus.emit('campaign:network_status', evt);
+  bus.emit('campaign:network_status', evt);
+  bus.emit('campaign:network_status', evt);
+  await new Promise((r) => setTimeout(r, 100));
+  const list = await continuity.list('tFb');
+  assert.equal(list.length, 1, 'idempotent : pas de doublon');
+  assert.equal(list[0].fallbackCampaignId, 'fb_camp1');
+  assert.equal(list[0].events, 3);
+  const ntf = await require('../ai-engine/notifications').list('tFb');
+  assert.equal(ntf.length, 1, 'une seule notification');
+
+  const rt = { getCampaignStatus: async () => ({ ok: true, result: { manualQueue: 42 } }) };
+  const tool = await toolRegistry.execute('tFb', 'getCampaignFallback', {}, { runtime: rt });
+  assert.equal(tool.result.fallbacks[0].manualQueue, 42);
+
+  bus.emit('campaign:network_status', { tenantId: 'tFb', channel: 'WHATSAPP', status: 'normal', campaignId: 'camp1' });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal((await continuity.list('tFb'))[0].status, 'closed');
+  bus.emit('campaign:network_status', evt);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal((await continuity.list('tFb'))[0].status, 'manual_fallback', 'une nouvelle protection rouvre la fiche');
+});
+
+test('médias : métadonnées, validation par canal, attachement à un brouillon, statistiques', async () => {
+  const img = await chatUploads.save(T, { originalname: 'promo.png', mimetype: 'image/png', buffer: Buffer.alloc(2048) });
+  assert.equal((await run('getMediaMetadata', { fileId: img.id })).result.type, 'image/png');
+  assert.equal((await run('validateMedia', { fileId: img.id })).result.valid, true);
+  const weird = await chatUploads.save(T, { originalname: 'x.bin', mimetype: 'model/foo', buffer: Buffer.alloc(10) });
+  assert.deepEqual((await run('validateMedia', { fileId: weird.id })).result.problems, ['TYPE_NON_SUPPORTE']);
+  const p = await run('prepareContactsFromSource', { text: '70000051' });
+  const d = await run('createCampaignDraft', { recipientsDraftId: p.result.recipientsDraftId, text: 'Promo' });
+  assert.equal((await run('attachCampaignMedia', { draftId: d.result.draftId, fileId: img.id })).state, 'SUCCESS');
+  const rec = [];
+  const rt = runtime(rec);
+  const l = await run('launchCampaign', { draftId: d.result.draftId }, { runtime: rt, confirmed: true, confirmFrom: 'WRITE', permissions: ['messages:send'] });
+  assert.equal(l.state, 'SUCCESS', JSON.stringify(l));
+  assert.equal(rec[0].sequence[0].type, 'media', 'le média part réellement dans la séquence de la campagne');
+  assert.equal(rec[0].sequence[0].buffer.length, 2048);
+  const st = await run('generateStatistics', {});
+  assert.equal(st.state, 'SUCCESS');
+  assert.ok(st.result.contacts);
+});
+
+test('AIProvider : OpenAI/Mistral/Claude inscrits dans la cascade, sautés sans clé, avant le repli public', () => {
+  const src = require('fs').readFileSync(path.join(__dirname, '..', 'lib', 'ai', 'llmFallbackEngine.js'), 'utf8');
+  const order = [...src.matchAll(/\{ name: '([a-z]+)', call:/g)].map((m) => m[1]);
+  assert.deepEqual(order, ['groq', 'gemini', 'deepseek', 'openrouter', 'huggingface', 'openai', 'mistral', 'claude', 'pollinations']);
+});

@@ -84,4 +84,6 @@ function onCampaignNetworkStatusChange(evt) {
   bus.emit('campaign:network_status', evt);
 }
 
+try { require('./campaignContinuity').attach(bus); } catch (err) { console.error('campaignContinuity non attaché :', err.message); }
+
 module.exports = { bus, onCampaignNetworkStatusChange, notifyTenantChat, formatNetworkStatusMessage };

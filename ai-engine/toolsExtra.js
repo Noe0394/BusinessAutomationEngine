@@ -9,6 +9,8 @@ const messageHistory = require('./messageHistory');
 const taskQueue = require('./taskQueue');
 const storageAdapter = require('./storageAdapter');
 const activityStore = require('./activityStore');
+const notifications = require('./notifications');
+const continuity = require('./campaignContinuity');
 
 const fail = (code, message, retryable) => ({ ok: false, error: { code, message: message || code, retryable: !!retryable } });
 const sanitize = (id) => String(id || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'default';
@@ -354,35 +356,83 @@ const TOOLS = {
     },
   },
 
+  // ================= MÉDIAS =================
+  getMediaMetadata: {
+    description: 'Métadonnées d’un média ou fichier joint (nom, type, taille).', permission: null, risk: 'READ',
+    inputSchema: { fileId: { type: 'string', required: true } },
+    async execute(args, ctx) { const m = await chatUploads.get(ctx.tenant, args.fileId); return m ? { ok: true, result: { id: m.id, name: m.name, type: m.type, size: m.size, textual: m.textual } } : fail('FILE_NOT_FOUND'); },
+  },
+  validateMedia: {
+    description: 'Vérifie qu’un média est utilisable sur un canal (type et taille : image/vidéo/audio/document).', permission: null, risk: 'READ',
+    inputSchema: { fileId: { type: 'string', required: true }, channel: { type: 'string' } },
+    async execute(args, ctx) {
+      const m = await chatUploads.get(ctx.tenant, args.fileId);
+      if (!m) return fail('FILE_NOT_FOUND');
+      const limits = { image: 16 * 1024 * 1024, video: 64 * 1024 * 1024, audio: 16 * 1024 * 1024, application: 100 * 1024 * 1024, text: 100 * 1024 * 1024 };
+      const kind = String(m.type || '').split('/')[0];
+      const max = limits[kind];
+      const problems = [];
+      if (!max) problems.push('TYPE_NON_SUPPORTE');
+      else if (m.size > max) problems.push('TROP_VOLUMINEUX');
+      if (chan(args.channel) === 'TELEGRAM' && m.size > 50 * 1024 * 1024) problems.push('TELEGRAM_LIMITE_50MO');
+      return { ok: true, result: { valid: !problems.length, problems, kind, size: m.size } };
+    },
+  },
+  attachCampaignMedia: {
+    description: 'Attache un média joint à un brouillon de campagne WhatsApp.', permission: null, risk: 'LOW_WRITE',
+    inputSchema: { draftId: { type: 'string', required: true }, fileId: { type: 'string', required: true } },
+    async execute(args, ctx) {
+      const m = await chatUploads.get(ctx.tenant, args.fileId);
+      if (!m) return fail('FILE_NOT_FOUND');
+      const doc = await loadDrafts(ctx.tenant);
+      const d = doc.drafts[args.draftId];
+      if (!d || d.kind !== 'campaign') return fail('DRAFT_NOT_FOUND');
+      if (d.status === 'launched') return fail('ALREADY_LAUNCHED');
+      d.mediaFileId = args.fileId;
+      await saveDrafts(ctx.tenant, doc);
+      return { ok: true, result: { draftId: d.id, media: m.name } };
+    },
+  },
+  generateStatistics: {
+    description: 'Statistiques réelles du jour (messages, réponses automatiques, outils, erreurs) et du CRM (contacts par étiquette).', permission: null, risk: 'READ', inputSchema: {},
+    async execute(args, ctx) {
+      const act = await activityStore.summary(null, 1);
+      const crm = await contactCrm.counts(ctx.tenant);
+      return { ok: true, result: { date: act.date, activity: act.counts, contacts: crm } };
+    },
+  },
+
   // ================= NOTIFICATIONS =================
   createNotification: {
     description: 'Crée une notification pour le vendeur (visible dans l\'interface).', permission: null, risk: 'LOW_WRITE',
     inputSchema: { title: { type: 'string', required: true }, body: { type: 'string' }, level: { type: 'string' } },
-    async execute(args, ctx) {
-      const doc = await storageAdapter.get('notifications', sanitize(ctx.tenant), { tenant: sanitize(ctx.tenant), items: [] });
-      const n = { id: uid('ntf'), title: String(args.title).slice(0, 120), body: String(args.body || '').slice(0, 500), level: args.level || 'info', read: false, at: Date.now() };
-      doc.items = doc.items.concat(n).slice(-200);
-      storageAdapter.set('notifications', sanitize(ctx.tenant), doc);
-      return { ok: true, result: { id: n.id } };
-    },
+    async execute(args, ctx) { const n = await notifications.create(ctx.tenant, args); return { ok: true, result: { id: n.id } }; },
   },
   getNotifications: {
     description: 'Liste les notifications (non lues par défaut).', permission: null, risk: 'READ', inputSchema: { all: { type: 'boolean' } },
-    async execute(args, ctx) {
-      const doc = await storageAdapter.get('notifications', sanitize(ctx.tenant), { items: [] });
-      const items = args.all ? doc.items : doc.items.filter((n) => !n.read);
-      return { ok: true, result: { count: items.length, items: items.slice(-30) } };
-    },
+    async execute(args, ctx) { const items = await notifications.list(ctx.tenant, args.all); return { ok: true, result: { count: items.length, items: items.slice(-30) } }; },
   },
   markNotificationRead: {
     description: 'Marque une notification comme lue.', permission: null, risk: 'LOW_WRITE', inputSchema: { id: { type: 'string', required: true } },
+    async execute(args, ctx) { return (await notifications.markRead(ctx.tenant, args.id)) ? { ok: true, result: { read: true } } : fail('NOTIFICATION_NOT_FOUND'); },
+  },
+
+  // ================= CONTINUITÉ (protection -> mode assisté) =================
+  getCampaignFallback: {
+    description: 'Liste les campagnes basculées en mode assisté (protection réseau) avec leur fiche de continuité et la file manuelle restante.',
+    permission: null, risk: 'READ', inputSchema: { channel: { type: 'string' } },
     async execute(args, ctx) {
-      const doc = await storageAdapter.get('notifications', sanitize(ctx.tenant), { items: [] });
-      const n = doc.items.find((x) => x.id === args.id);
-      if (!n) return fail('NOTIFICATION_NOT_FOUND');
-      n.read = true;
-      storageAdapter.set('notifications', sanitize(ctx.tenant), doc);
-      return { ok: true, result: { read: true } };
+      const list = await continuity.list(ctx.tenant);
+      const rows = [];
+      for (const fb of list) {
+        let manual = null;
+        if (ctx.runtime && ctx.runtime.getCampaignStatus && fb.status === 'manual_fallback') {
+          const st = await ctx.runtime.getCampaignStatus({ channel: fb.channel, campaignId: fb.parentCampaignId, tenantId: ctx.tenant });
+          manual = st.ok ? st.result.manualQueue : null;
+        }
+        rows.push(Object.assign({}, fb, { manualQueue: manual }));
+      }
+      return { ok: true, result: { count: rows.length, fallbacks: rows } };
     },
   },
 };
