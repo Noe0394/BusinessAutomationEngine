@@ -1,6 +1,6 @@
 {
   "tenantId": "KEY-E5164DF3-2026",
-  "activeCampaignId": null,
+  "activeCampaignId": "391c2b2f-9221-42cd-a57f-64c81ba8e3d4",
   "networkHealth": {
     "consecutiveSlowSends": 0,
     "consecutiveOverloadFailures": 0,
@@ -12,8 +12,8 @@
       "id": "391c2b2f-9221-42cd-a57f-64c81ba8e3d4",
       "name": "Bjr",
       "total": 92,
-      "sent": 0,
-      "success": 0,
+      "sent": 1,
+      "success": 1,
       "failed": 0,
       "skippedDuplicates": 0,
       "messageHash": "fd8ab008ccff112b5eb2215d",
@@ -26,9 +26,9 @@
       "createdAt": "2026-09-20T16:11:55.065Z",
       "startedAt": "2026-09-20T16:11:55.065Z",
       "finishedAt": null,
-      "lastProgressAt": "2026-09-20T16:11:55.065Z",
-      "nextIndex": 0,
-      "lastProcessedIndex": -1,
+      "lastProgressAt": "2026-09-20T16:11:55.307Z",
+      "nextIndex": 1,
+      "lastProcessedIndex": 0,
       "recipients": [
         {
           "telephone": "221775367648",
@@ -402,8 +402,9 @@
       "results": [
         {
           "to": "221775367648@s.whatsapp.net",
-          "status": "pending",
-          "timestamp": null
+          "status": "sent",
+          "error": null,
+          "timestamp": "2026-09-20T16:11:55.307Z"
         },
         {
           "to": "2250748013555@s.whatsapp.net",
@@ -861,9 +862,10 @@
           "timestamp": null
         }
       ],
-      "sentContactIds": [],
+      "sentContactIds": [
+        "221775367648"
+      ],
       "pendingContactIds": [
-        "221775367648",
         "2250748013555",
         "2250788885979",
         "2250708607103",
