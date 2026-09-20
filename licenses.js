@@ -348,8 +348,20 @@ async function verifyKey(key, deviceId) {
     return { valid: false, reason: 'MISSING_KEY' };
   }
 
-  const licenses = loadLicenses();
-  const license = licenses.find((l) => l.key === normalizeKey(key));
+  let licenses = loadLicenses();
+  let license = licenses.find((l) => l.key === normalizeKey(key));
+
+  if (!license && cloudflareSync.enabled) {
+    // Clé créée côté Cloudflare (générateur) : synchronisation immédiate au lieu d'attendre le cycle de 15 min.
+    try {
+      const merged = await cloudflareSync.pullLicenses(licenses);
+      if (merged) {
+        fs.writeFileSync(LICENSES_PATH, JSON.stringify(merged, null, 2), 'utf8');
+        licenses = loadLicenses();
+        license = licenses.find((l) => l.key === normalizeKey(key));
+      }
+    } catch (e) { /* on retombe sur NOT_FOUND */ }
+  }
 
   if (!license) {
     return { valid: false, reason: 'NOT_FOUND' };
