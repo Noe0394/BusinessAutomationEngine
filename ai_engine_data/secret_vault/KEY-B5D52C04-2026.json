@@ -1,0 +1,12 @@
+{
+  "tenant": "KEY-B5D52C04-2026",
+  "secrets": {
+    "service_svc_mubkwwb58lzur": {
+      "updatedAt": "2026-09-21T18:38:07.220Z",
+      "v": 1,
+      "iv": "J03J9MpSj09VbQAn",
+      "tag": "vJNj715r82LjdCdS2LVi0g==",
+      "ct": "aRLLovXLJi4xTan7pj3D+CdRge2obsUogspMzJ7ETAm295OmjSjPlWm/QPsG1AzN9dIB1z/LVwbNvvWY/vbmAI4/Pb+k7KfbGTQ0tva4Bc+6rd/LzPAS3/z1yz8ORHMnPqNYsB65zn/nioLQ9Yi2e5a5ybmWoDOcSKgTuG5bo/LbvyKrqcGu"
+    }
+  }
+}
