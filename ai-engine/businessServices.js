@@ -80,7 +80,12 @@ function normalizeService(data) {
     commercial: Object.assign({
       price: null, promoPrice: null, currency: 'FCFA', description: '', advantages: '',
       objections: '', responses: '', paymentTerms: '', accessTerms: '', target: '',
+      // Champs de pilotage de la conversation commerciale (tous facultatifs, jamais inventés) :
+      audience: '', period: '', source: '', initialMessage: '', closing: '', escalation: '', knowledge: '',
     }, d.commercial || {}),
+    // Spécialistes recommandés pour ce service (identifiants du registre d'agents) et cycle de vie : active | paused | disabled.
+    specialists: Array.isArray(d.specialists) ? d.specialists.map(String).slice(0, 8) : [],
+    lifecycle: ['active', 'paused', 'disabled'].includes(d.lifecycle) ? d.lifecycle : 'active',
     products: Array.isArray(d.products) ? d.products : [],
     rules: Array.isArray(d.rules) ? d.rules : [],
     objectives: Array.isArray(d.objectives) ? d.objectives : [],
@@ -250,7 +255,8 @@ async function getEngineContext(tenant) {
     products: s.products || [], commercial: Object.assign({}, s.commercial, {}),
     rules: s.rules || [], objectives: s.objectives || [], scopes: s.scopes || [],
     connected: s.status === STATUS.CONNECTED,
-    active: s.active !== false, createdAt: s.createdAt || '',
+    active: s.active !== false && (s.lifecycle || 'active') === 'active', createdAt: s.createdAt || '',
+    specialists: s.specialists || [], lifecycle: s.lifecycle || 'active',
   }));
 }
 
@@ -286,6 +292,11 @@ function renderService(s) {
     // Instructions de paiement / d'accès configurées par le vendeur : à donner EXACTEMENT, jamais complétées ni inventées.
     if (c.paymentTerms) lines.push(`  INSTRUCTIONS DE PAIEMENT (seuls moyens/numéros valides, à donner tels quels) : ${c.paymentTerms}`);
     else lines.push('  Instructions de paiement : NON CONFIGURÉES (ne cite aucun numéro, lien ni moyen de paiement).');
+    if (c.audience) lines.push(`  Audience visée : ${c.audience}`);
+    if (c.period) lines.push(`  Période / dates : ${c.period}`);
+    if (c.closing) lines.push(`  Consignes de closing : ${c.closing}`);
+    if (c.escalation) lines.push(`  Quand passer la main au propriétaire : ${c.escalation}`);
+    if (c.knowledge) lines.push(`  Connaissances complémentaires : ${c.knowledge}`);
     if (c.accessTerms) lines.push(`  Conditions d'accès / livraison : ${c.accessTerms}`);
     if ((s.rules || []).length) lines.push(`  Règles commerciales : ${s.rules.join(' | ')}`);
     if ((s.objectives || []).length) lines.push(`  Objectifs : ${s.objectives.join(' | ')}`);
@@ -311,13 +322,13 @@ function pickPriority(services, hint) {
 }
 async function getPrioritizedContext(tenant, opts) {
   const services = await getEngineContext(tenant);
-  if (!services.length) return { text: '', priority: null, others: [], count: 0 };
+  if (!services.length) return { text: '', priority: null, others: [], count: 0, recommendedSpecialists: [] };
   const prio = pickPriority(services, opts && opts.hint);
   const others = services.filter((s) => s !== prio && s.active !== false);
   const brief = (s) => { const c = s.commercial || {}; return `• ${s.name}${c.price != null ? ` — ${c.price} ${c.currency || ''}`.trimEnd() : ''}${c.description ? ` : ${String(c.description).slice(0, 140)}` : ''}`; };
   const parts = [`SERVICE PRIORITAIRE À PRÉSENTER (le plus pertinent pour ce contact — présente-le en premier et réponds à toutes ses questions dessus) :\n${renderService(prio)}`];
   if (others.length) parts.push(`AUTRES OFFRES DU VENDEUR (à proposer UNIQUEMENT comme suggestions complémentaires, quand c'est pertinent — jamais avant d'avoir répondu au sujet du service prioritaire) :\n${others.map(brief).join('\n')}`);
-  return { text: parts.join('\n\n'), priority: prio.name, others: others.map((s) => s.name), count: services.length };
+  return { text: parts.join('\n\n'), priority: prio.name, others: others.map((s) => s.name), count: services.length, recommendedSpecialists: prio.specialists || [] };
 }
 
 // Miroir des infos commerciales vers le profil business persistant que le

@@ -36,3 +36,6 @@ Le PC et le téléphone gardent leur mode « zéro serveur » : le portage adapt
 - `ai-engine/mediaPipeline.js`, `chatUploads.js` (extraction), `ownerChannel.js` (adaptateurs WhatsApp/Telegram, médias), `adapters/telegram.js` + `telegramManager.js` (self-chat « Messages sauvegardés »).
 - `ai-engine/clientAiQuota.js`, `clientLimitGuard.js`, `autoResponder.js`, `assistantLayer.js` (10 échanges IA/heure/client, groupes par membre, propriétaire illimité), `businessServices.getPrioritizedContext`, mémoire commerciale (`jarvis/conversationEngine.js`, `intentClassifier.js`).
 - Variables : `GEMINI_API_KEY`, `GEMINI_PRIMARY_MODEL`, `GEMINI_SECONDARY_MODEL`, `GEMINI_FLASH_MODEL`, `CLIENT_AI_LIMIT`, `CLIENT_AI_WINDOW_MS`.
+
+## Livraison 2026-09-21 (soir) — Agency Agents : spécialistes sous la tutelle du Service Orchestrateur
+Voir docs/AGENCY-AGENTS.md. À porter vers local-client/ et mobile/webapp/ : ai-engine/agents/ (+ catalog), scripts/sync-agency-agents.js, branchements autoResponder.composeReply et chatOrchestrator.handleInner, outils listSpecialists/setSpecialistStatus, champs Service métier (specialists, lifecycle…).

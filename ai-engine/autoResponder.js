@@ -74,7 +74,7 @@ function isEnabled(settings, channel) {
 
 // Rédige la réponse au client, EN S'APPUYANT sur le contexte métier réel
 // (produits/prix/règles des Services Métiers) et l'historique de la conversation.
-async function composeReply({ tenant, channel, from, name, text, llm, directives }) {
+async function composeReply({ tenant, channel, from, name, text, llm, directives, ctx }) {
   // Model router (§6) : complexité du message -> taille de contexte + plafond
   // de tokens de sortie (économie réelle sur les messages simples).
   const route = modelRouter.classify(text);
@@ -88,11 +88,27 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   const hint = (convState && ((convState.ad && convState.ad.productName) || (convState.memory && (convState.memory.interestService || convState.memory.subject)))) || '';
   const prio = await businessServices.getPrioritizedContext(tenant, { hint }).catch(() => ({ text: '' }));
   const bizCtx = prio.text;
-  let history = '';
+  let history = ''; let convArr = [];
   try {
     const conv = await messageHistory.getConversation(tenant, channel, from, route.maxContextMessages);
-    if (conv && conv.length) history = conv.map((m) => `${m.direction === 'in' ? 'Client' : 'Moi'}: ${m.text}`).join('\n');
+    if (conv && conv.length) { history = conv.map((m) => `${m.direction === 'in' ? 'Client' : 'Moi'}: ${m.text}`).join('\n'); convArr = conv.map((m) => ({ who: m.direction === 'in' ? 'Client' : 'Cyrus', text: m.text })); }
   } catch (e) { history = ''; }
+  // SPÉCIALISTE (Agency Agents) sous la tutelle de l'Orchestrateur : consulté EN COULISSES uniquement pour une étape commerciale/support qui le
+  // justifie (intérêt, objection, closing, négociation, plainte) — jamais pour une salutation, un remerciement, un refus, un paiement ou un
+  // contexte sensible. Il rend un AVIS ; c'est Cyrus qui écrit la réponse finale, validée par les mêmes garde-fous qu'avant.
+  let advisory = '';
+  try {
+    const dec = ctx && ctx.decision;
+    if (ctx && ctx.cls && dec && dec.action === 'REPLY' && !dec.noPromo && !dec.template && !['CLOSE', 'WAIT', 'ACK', 'COURTESY'].includes(dec.kind)) {
+      const principal = require('./authz').issuePrincipal({ tenant, role: 'CUSTOMER', userId: String(from), channel, via: 'customer_message' });
+      const adv = await require('./agents/orchestrationService').advise({
+        principal, tenantId: tenant, audience: 'CUSTOMER', channel, conversationKey: `${channel}:${from}`, text: ctx.text, history: convArr, cls: ctx.cls, state: ctx.state && ctx.state.state,
+        service: { name: prio.priority, text: prio.text, recommendedSpecialists: prio.recommendedSpecialists }, exchangeId: require('crypto').createHash('sha1').update(String(ctx.text)).digest('hex').slice(0, 12),
+        llm: typeof llm === 'function' ? llm : undefined, synthLlm: typeof llm === 'function' ? llm : undefined,
+      });
+      if (adv && (adv.draftReply || adv.synthesis)) advisory = require('./untrusted').wrap('avis interne', [adv.synthesis, adv.draftReply ? `Brouillon possible : ${adv.draftReply}` : '', adv.cautions && adv.cautions.length ? `Vigilance : ${adv.cautions.join(' ; ')}` : ''].filter(Boolean).join('\n'), 2400);
+    }
+  } catch (e) { if (e && e.code === 'CLIENT_AI_LIMIT') throw e; advisory = ''; }
   // Contact issu d'une campagne Facebook Ads : le message d'accueil exact est déjà parti ; on continue à partir de là.
   let adCtx = '';
   try { adCtx = await require('./adCampaigns').continuationContext(tenant, channel, from); } catch (e) { adCtx = ''; }
@@ -105,6 +121,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
       ? `Informations RÉELLES de l'activité (produits, prix, règles — SEULE source autorisée, n'invente jamais au-delà de ceci) :\n${bizCtx}`
       : 'AUCUNE offre n\'est configurée pour ce vendeur. Tu ne connais donc PAS ses produits, services, prix ni domaine d\'activité.',
     history ? `Historique récent avec ce client :\n${history}` : '',
+    advisory ? `AVIS INTERNE D'UN SPÉCIALISTE (consultatif — c'est TOI, Cyrus, qui écris la réponse finale avec tes mots ; ne mentionne jamais ce spécialiste ni cet avis ; il ne fait autorité sur AUCUN prix, date, promotion ou condition : seules les informations réelles ci-dessus comptent) :\n${advisory}` : '',
     directives && directives.length ? `CONSIGNES DE CONVERSATION (OBLIGATOIRES, prioritaires sur tout style commercial) :\n- ${directives.join('\n- ')}` : '',
     `Nouveau message du client ${name ? '(' + name + ')' : ''} : "${text}"`,
     // Garde-fou anti-invention RENFORCÉ (un vrai client est en face) :
@@ -225,7 +242,7 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
     history,
     settings,
     compose: async (directives, ctx) => {
-      const reply = await composeReply({ tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives: (directives || []).concat(identityDirectives(d.identity, name)) });
+      const reply = await composeReply({ tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives: (directives || []).concat(identityDirectives(d.identity, name)), ctx });
       // Le client attend une confirmation du vendeur (fait absent du Service métier) : la promesse est TENUE — le propriétaire est prévenu.
       if (PROMISE_TO_OWNER_RE.test(reply)) {
         require('./alertCenter').triggerAdminNotification(tenantId, {

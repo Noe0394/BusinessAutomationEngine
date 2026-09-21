@@ -60,6 +60,28 @@ function queueHandlers(tenant, runtime) {
 }
 
 const TOOLS = {
+  // ================= SPÉCIALISTES (bibliothèque Agency Agents, sous la tutelle de l'Orchestrateur) =================
+  listSpecialists: {
+    description: 'Liste les spécialistes internes disponibles (catalogue Agency Agents) avec leur statut pour ce compte ; filtrable par division, capacité ou statut. Consultation seulement.',
+    permission: null, risk: 'READ',
+    inputSchema: { division: { type: 'string' }, capability: { type: 'string' }, status: { type: 'string', description: 'active | disabled | blocked' }, query: { type: 'string' } },
+    async execute(args, ctx) {
+      const reg = require('./agents/agentRegistry');
+      let items = await reg.list({ tenant: ctx.tenant, division: args.division, capability: args.capability, status: args.status });
+      if (args.query) { const q = String(args.query).toLowerCase(); items = items.filter((a) => `${a.agentId} ${a.name} ${a.description}`.toLowerCase().includes(q)); }
+      return { ok: true, result: { total: items.length, summary: reg.summary(), specialists: items.slice(0, 40).map((a) => ({ agentId: a.agentId, name: a.name, specialty: a.specialty, capabilities: a.capabilities.slice(0, 6), status: a.status, riskLevel: a.riskLevel, audiences: a.audiences })) } };
+    },
+  },
+  setSpecialistStatus: {
+    description: 'Active ou désactive un spécialiste interne POUR CE COMPTE (les agents bloqués ne peuvent pas être activés). À utiliser quand le propriétaire demande de désactiver/réactiver un spécialiste.',
+    permission: null, risk: 'LOW_WRITE',
+    inputSchema: { agentId: { type: 'string', required: true }, status: { type: 'string', required: true, description: 'active | disabled' } },
+    async execute(args, ctx) {
+      const out = await require('./agents/agentRegistry').setStatus(String(args.agentId), String(args.status), { tenant: ctx.tenant, by: ctx.principal && ctx.principal.userId });
+      return out.ok ? { ok: true, result: out } : { ok: false, error: { code: out.error, message: out.reason || out.error } };
+    },
+  },
+
   // ================= CONTACTS =================
   parseContacts: {
     description: 'Extrait les contacts (numéro + nom) d\'un texte collé (virgules, points-virgules, retours à la ligne, tirets...) ou d\'un CSV.',
