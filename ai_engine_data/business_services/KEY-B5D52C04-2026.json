@@ -1,0 +1,106 @@
+{
+  "tenant": "KEY-B5D52C04-2026",
+  "services": [
+    {
+      "id": "svc_mubkwwb58lzur",
+      "name": "RIEA Afrique",
+      "type": "service",
+      "project": null,
+      "connection": {
+        "kind": "none",
+        "connectorType": null,
+        "baseUrl": null,
+        "authHeader": "X-API-Key",
+        "endpoints": null,
+        "apiKeyRef": null
+      },
+      "scopes": [
+        "students:create",
+        "students:suspend"
+      ],
+      "commercial": {
+        "price": 8000,
+        "promoPrice": null,
+        "currency": "FCFA",
+        "description": "",
+        "advantages": "",
+        "objections": "",
+        "responses": "",
+        "paymentTerms": "",
+        "accessTerms": "",
+        "target": "",
+        "audience": "",
+        "period": "",
+        "source": "",
+        "initialMessage": "",
+        "closing": "",
+        "escalation": "",
+        "knowledge": "",
+        "supportRules": ""
+      },
+      "specialists": [],
+      "lifecycle": "active",
+      "products": [
+        {
+          "name": "Gastronomie & Pâtisserie moderne",
+          "price": 8000
+        },
+        {
+          "name": "Grillades",
+          "price": 8000
+        },
+        {
+          "name": "Épicerie",
+          "price": 8000
+        },
+        {
+          "name": "Bouillon bio",
+          "price": 8000
+        },
+        {
+          "name": "Charcuterie artisanale",
+          "price": 8000
+        },
+        {
+          "name": "Élevage de volaille",
+          "price": 8000
+        },
+        {
+          "name": "Alimentation saine / Diététique",
+          "price": 8000
+        },
+        {
+          "name": "Alimentation infantile",
+          "price": 8000
+        },
+        {
+          "name": "Jus thérapeutiques",
+          "price": 8000
+        }
+      ],
+      "rules": [
+        "Après paiement confirmé, les ressources sont automatiquement accessibles",
+        "Certaines fonctionnalités avancées nécessitent une licence ou clé d'activation"
+      ],
+      "objectives": [
+        "Présenter RIEA et ses formations",
+        "Communiquer les tarifs et guider l'achat",
+        "Fournir accès aux contenus pédagogiques et attestations"
+      ],
+      "capabilities": [],
+      "adCampaigns": [],
+      "groups": [],
+      "status": "DRAFT",
+      "lastTest": null,
+      "history": [
+        {
+          "at": "2026-09-21T18:28:55.313Z",
+          "event": "Service créé"
+        }
+      ],
+      "createdAt": "2026-09-21T18:28:55.313Z",
+      "updatedAt": "2026-09-21T18:28:55.313Z"
+    }
+  ],
+  "updatedAt": "2026-09-21T18:28:55.313Z"
+}
