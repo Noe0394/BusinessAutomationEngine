@@ -1,0 +1,18 @@
+{
+  "connectors": {
+    "generic": {
+      "enabled": true,
+      "label": "RIEA Afrique",
+      "baseUrl": "https://riea-afrique-web.web.app",
+      "authHeader": "X-API-Key",
+      "scopes": [
+        "students:create",
+        "students:suspend",
+        "courses:enroll",
+        "contacts:write",
+        "tags:write",
+        "accounting:write"
+      ]
+    }
+  }
+}
