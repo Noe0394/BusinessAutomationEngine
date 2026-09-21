@@ -25,7 +25,11 @@ const conversationEngine = require('./jarvis/conversationEngine');
 const { shared: conversationQueue } = require('./jarvis/conversationQueue');
 const alwaysOn = require('./alwaysOn');
 
-const DEFAULT_DEBOUNCE_MS = Math.max(0, parseInt(process.env.AUTO_REPLY_DEBOUNCE_MS, 10) || 1500);
+// Réponse SPONTANÉE : attente minimale pour regrouper deux messages quasi simultanés (0 = aucune attente). Auparavant 1,5 s fixes avant tout traitement.
+const DEFAULT_DEBOUNCE_MS = process.env.AUTO_REPLY_DEBOUNCE_MS !== undefined && process.env.AUTO_REPLY_DEBOUNCE_MS !== '' ? Math.max(0, parseInt(process.env.AUTO_REPLY_DEBOUNCE_MS, 10) || 0) : 500;
+// L'avis d'un spécialiste ne doit JAMAIS retarder la réponse : passé ce délai, Cyrus répond sans lui (les tâches longues restent sur les voies dédiées).
+const SPECIALIST_BUDGET_MS = Math.max(0, parseInt(process.env.SPECIALIST_CUSTOMER_BUDGET_MS, 10) || 2500);
+const withinBudget = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), SPECIALIST_BUDGET_MS))]);
 
 const SETTINGS_NS = 'auto_settings';
 
@@ -104,11 +108,11 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
     const dec = ctx && ctx.decision;
     if (ctx && ctx.cls && dec && dec.action === 'REPLY' && !dec.noPromo && !dec.template && !['CLOSE', 'WAIT', 'ACK', 'COURTESY'].includes(dec.kind)) {
       const principal = require('./authz').issuePrincipal({ tenant, role: 'CUSTOMER', userId: String(from), channel, via: 'customer_message' });
-      const adv = await require('./agents/orchestrationService').advise({
+      const adv = await withinBudget(require('./agents/orchestrationService').advise({
         principal, tenantId: tenant, audience: 'CUSTOMER', channel, conversationKey: `${channel}:${from}`, text: ctx.text, history: convArr, cls: ctx.cls, state: ctx.state && ctx.state.state,
         service: { name: prio.priority, text: prio.text, recommendedSpecialists: prio.recommendedSpecialists }, exchangeId: require('crypto').createHash('sha1').update(String(ctx.text)).digest('hex').slice(0, 12),
         llm: typeof llm === 'function' ? llm : undefined, synthLlm: typeof llm === 'function' ? llm : undefined,
-      });
+      }).catch((e) => { if (e && e.code === 'CLIENT_AI_LIMIT') throw e; return null; }));
       if (adv && (adv.draftReply || adv.synthesis)) advisory = require('./untrusted').wrap('avis interne', [adv.synthesis, adv.draftReply ? `Brouillon possible : ${adv.draftReply}` : '', adv.cautions && adv.cautions.length ? `Vigilance : ${adv.cautions.join(' ; ')}` : ''].filter(Boolean).join('\n'), 2400);
     }
   } catch (e) { if (e && e.code === 'CLIENT_AI_LIMIT') throw e; advisory = ''; }

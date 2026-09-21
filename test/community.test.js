@@ -260,15 +260,92 @@ test('INTERFACE + ROUTES : sections dans les onglets WhatsApp ET Telegram, route
   const root = path.join(__dirname, '..');
   const html = fs.readFileSync(path.join(root, 'public', 'dashboard.html'), 'utf8');
   assert.match(html, /id="cm-wa-section"/); assert.match(html, /id="cm-tg-section"/);
-  const wa = html.slice(html.indexOf('id="panel-whatsapp"'), html.indexOf('id="panel-telegram"'));
-  const tg = html.slice(html.indexOf('id="panel-telegram"'), html.indexOf('</body>'));
-  assert.ok(wa.includes('cm-wa-create-btn') && !wa.includes('cm-tg-'));
-  assert.ok(tg.includes('cm-tg-create-btn') && tg.indexOf('cm-tg-section') < tg.indexOf('</section>'));
+  // Les deux sections vivent dans un onglet dédié « Communautés », rattaché aux modules WhatsApp/Telegram de la licence (sinon masqué).
+  const cm = html.slice(html.indexOf('id="panel-communities"'), html.indexOf('id="panel-reports"'));
+  assert.ok(cm.includes('cm-wa-create-btn') && cm.includes('cm-tg-create-btn') && cm.includes('cm-wa-stop-btn') && cm.includes('cm-tg-stop-btn'));
+  assert.match(html, /data-tab="communities"/); assert.match(html, /whatsapp: ['whatsapp', 'relance', 'communities']/); assert.match(html, /telegram: ['telegram', 'relance', 'communities']/);
   assert.ok(!/onclick=|onchange=|oninput=|onsubmit=/.test(html));
   const re = /<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/gi; let m; while ((m = re.exec(html))) assert.doesNotThrow(() => new Function(m[2]));
   const idx = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
-  for (const route of ["post('/api/communities/groups'", "get('/api/communities/groups'", "get('/api/communities/groups/:id'", "post('/api/communities/groups/:id/resume'", "post('/api/communities/discover'", "get('/api/communities/directory'", "post('/api/communities/sync'"]) {
+  for (const route of ["post('/api/communities/groups'", "get('/api/communities/groups'", "get('/api/communities/groups/:id'", "post('/api/communities/groups/:id/resume'", "post('/api/communities/groups/:id/cancel'", "post('/api/communities/discover'", "get('/api/communities/directory'", "post('/api/communities/sync'"]) {
     const line = idx.split('\n').find((l) => l.includes(route)); assert.ok(line && /requireAccess/.test(line), route);
   }
   assert.match(idx, /MODULE_NOT_ALLOWED/);
+});
+
+// ============================================================================ arrêt + progression
+test('ARRÊT : le traitement s\'arrête avant le prochain lot (CANCELLING → CANCELLED), le déjà-fait est conservé ; progression réelle', async () => {
+  const T = 'tCancel1';
+  const wa = fakeWa({});
+  useWa(wa);
+  let release; let gate = new Promise((r) => { release = r; });
+  svc._setSleep(() => gate); // bloque après le premier lot
+  const nums = Array.from({ length: 12 }, (_, i) => `2267000100${String(i).padStart(2, '0')}`);
+  const job = await svc.startGroup(T, { channel: 'WHATSAPP', title: 'Groupe à arrêter', recipients: members(nums) });
+  await new Promise((r) => setTimeout(r, 150));
+  let mid = await svc.getJob(T, job.id);
+  assert.ok(mid.progress.processed > 0 && mid.progress.processed < mid.progress.total, 'progression partielle réelle');
+  assert.ok(mid.progress.percent > 0 && mid.progress.percent < 100);
+  const req = await svc.cancelJob(T, job.id);
+  assert.equal(req.status, 'CANCELLING');
+  assert.equal((await svc.getJob(T, job.id)).status, 'CANCELLING');
+  release(); await svc.waitFor(job.id);
+  const end = await svc.getJob(T, job.id);
+  assert.equal(end.status, 'CANCELLED'); assert.match(end.error, /conservés/);
+  assert.ok(end.counts.added > 0 && end.counts.pending > 0, 'ajoutés conservés, reste non traité');
+  const addCalls = wa.calls.filter((c) => c[0] === 'add').length;
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(wa.calls.filter((c) => c[0] === 'add').length, addCalls, 'plus aucun ajout après l\'arrêt');
+  svc._setSleep(async () => {});
+  await assert.rejects(() => svc.cancelJob(T, job.id), (e) => e.code === 'INVALID_STATE');
+  await assert.rejects(() => svc.cancelJob('autre-compte', job.id), (e) => e.code === 'NOT_FOUND', 'isolation');
+});
+
+test('ARRÊT d\'un traitement en pause (limite de débit) : passe directement à CANCELLED ; terminé = 100 %', async () => {
+  const T = 'tCancel2';
+  const wa = fakeWa({ floodOn: '22670002003' });
+  useWa(wa);
+  const job = await svc.startGroup(T, { channel: 'WHATSAPP', title: 'Groupe pause', recipients: members(['22670002001', '22670002002', '22670002003', '22670002004']) });
+  await svc.waitFor(job.id);
+  const paused = await svc.getJob(T, job.id);
+  assert.equal(paused.status, 'PAUSED_RATE_LIMIT');
+  const c = await svc.cancelJob(T, job.id);
+  assert.equal(c.status, 'CANCELLED');
+  const T3 = 'tCancel3'; useWa(fakeWa({}));
+  const j3 = await svc.startGroup(T3, { channel: 'WHATSAPP', title: 'Groupe complet', recipients: members(['22670003001', '22670003002']) });
+  await svc.waitFor(j3.id);
+  assert.equal((await svc.getJob(T3, j3.id)).progress.percent, 100);
+});
+
+test('PAUSE / REPRISE à la demande + traitement INTERROMPU (redémarrage) : reprise là où il s\'est arrêté, rien n\'est refait', async () => {
+  const T = 'tPause1';
+  const wa = fakeWa({});
+  useWa(wa);
+  let release; const gate = new Promise((r) => { release = r; });
+  svc._setSleep(() => gate);
+  const nums = Array.from({ length: 12 }, (_, i) => `2267000200${String(i).padStart(2, '0')}`);
+  const job = await svc.startGroup(T, { channel: 'WHATSAPP', title: 'Groupe pause user', recipients: members(nums) });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal((await svc.pauseJob(T, job.id)).status, 'PAUSING');
+  release(); await svc.waitFor(job.id);
+  const paused = await svc.getJob(T, job.id);
+  assert.equal(paused.status, 'PAUSED_USER');
+  const before = paused.counts.added; assert.ok(before > 0 && paused.counts.pending > 0);
+  svc._setSleep(async () => {});
+  await svc.resumeJob(T, job.id); await svc.waitFor(job.id);
+  const done = await svc.getJob(T, job.id);
+  assert.equal(done.status, 'DONE'); assert.equal(done.counts.added, 12); assert.equal(done.progress.percent, 100);
+  const created = wa.calls.filter((c) => c[0] === 'create').length; assert.equal(created, 1, 'le groupe n\'est créé qu\'une fois');
+  const allAdded = wa.calls.filter((c) => c[0] === 'add').flatMap((c) => c[1]); assert.equal(new Set(allAdded).size, allAdded.length, 'aucun membre ajouté deux fois');
+  // traitement interrompu par un redémarrage : statut RUNNING en base sans exécution → INTERRUPTED, reprise possible
+  const storage = require('../ai-engine/storageAdapter');
+  const T2 = 'tPause2'; useWa(fakeWa({}));
+  const j2 = await svc.startGroup(T2, { channel: 'WHATSAPP', title: 'Groupe orphelin', recipients: members(['22670004001', '22670004002']) });
+  await svc.waitFor(j2.id);
+  const doc = await storage.get('community_jobs', T2, null); doc.jobs[j2.id].status = 'RUNNING'; doc.jobs[j2.id].members[0].status = 'pending'; await storage.set('community_jobs', T2, doc);
+  assert.equal((await svc.getJob(T2, j2.id)).status, 'INTERRUPTED');
+  await svc.resumeJob(T2, j2.id); await svc.waitFor(j2.id);
+  assert.equal((await svc.getJob(T2, j2.id)).status, 'DONE');
+  // pause d'un traitement qui n'est pas en cours : refusé
+  await assert.rejects(() => svc.pauseJob(T2, j2.id), (e) => e.code === 'INVALID_STATE');
 });

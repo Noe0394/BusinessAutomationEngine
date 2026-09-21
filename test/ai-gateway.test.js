@@ -232,3 +232,18 @@ test('le Chat intelligent ne dépend d\'aucun nom de modèle : aucun module mét
 });
 
 test.after(() => { try { fs.rmSync(process.env.AI_ENGINE_STORAGE_DIR, { recursive: true, force: true }); } catch (e) { /* nettoyage */ } });
+
+test('RÉPONSE SPONTANÉE : un fournisseur lent est doublé en parallèle après AI_HEDGE_MS ; le plus rapide gagne', async () => {
+  process.env.AI_HEDGE_MS = '50';
+  const gw = require('../lib/ai/llmFallbackEngine'); gw._resetHealth();
+  const t0 = Date.now();
+  const m = mockAxios((url) => {
+    if (/gemini|generativelanguage/i.test(url) && !/flash/i.test(url)) return new Promise((res) => setTimeout(() => res({ data: { candidates: [{ content: { parts: [{ text: 'lent' }] } }] } }), 1500));
+    return { data: { candidates: [{ content: { parts: [{ text: 'rapide' }] } }], choices: [{ message: { content: 'rapide' } }] } };
+  });
+  try {
+    const r = await gw.generateAIResponse('bonjour', [], null, undefined, null, { tier: 'standard' });
+    assert.ok(Date.now() - t0 < 1200, `réponse en ${Date.now() - t0} ms : le doublon parallèle doit gagner`);
+    assert.ok(r.text);
+  } finally { delete process.env.AI_HEDGE_MS; if (m && m.restore) m.restore(); }
+});

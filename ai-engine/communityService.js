@@ -24,6 +24,9 @@ let sleepFn = (ms) => new Promise((r) => setTimeout(r, ms));
 const pause = (min, max) => sleepFn(min + Math.floor(Math.random() * Math.max(1, max - min)));
 const running = new Map();   // tenant:channel -> jobId (un seul traitement à la fois)
 const promises = new Map();  // jobId -> promesse du traitement (tests / attente)
+const cancelRequests = new Set(); // jobId dont l'arrêt définitif a été demandé : pris en compte avant chaque lot / invitation
+const pauseRequests = new Set();  // jobId dont la pause a été demandée (reprise possible)
+const stopped = (job) => cancelRequests.has(job.id) || pauseRequests.has(job.id);
 
 const DEFAULT_INVITE = 'Bonjour {nom}, vous êtes invité(e) à rejoindre le groupe « {groupe} » : {lien}';
 function renderInvite(template, { name, group, link }) {
@@ -117,11 +120,26 @@ async function saveJob(tenant, job) {
   await storageAdapter.set(NS, sanitize(tenant), doc);
 }
 const count = (job, st) => job.members.filter((m) => m.status === st).length;
+// Progression RÉELLE : contacts déjà traités (ajoutés, invités, déjà membres, absents, désinscrits, échecs) sur le total. « needs_invite » = invitation encore à envoyer.
+function progressOf(job) {
+  const total = job.members.length || 0;
+  const processed = job.members.filter((m) => !['pending', 'needs_invite'].includes(m.status)).length;
+  const ended = ['DONE', 'DONE_WITH_ISSUES'].includes(job.status);
+  return { processed, total, percent: ended ? 100 : (total ? Math.min(99, Math.floor((processed / total) * 100)) : 0) };
+}
+// Statut affiché : demandes d'arrêt/pause en cours, et traitement INTERROMPU (redémarrage du serveur pendant l'exécution) → reprise possible.
+function liveStatus(job) {
+  if (cancelRequests.has(job.id)) return 'CANCELLING';
+  if (pauseRequests.has(job.id)) return 'PAUSING';
+  if (['RUNNING', 'QUEUED'].includes(job.status) && running.get(`${job.tenant}:${job.channel}`) !== job.id) return 'INTERRUPTED';
+  return job.status;
+}
 function publicJob(job, withMembers) {
   const c = {};
   for (const m of job.members) c[m.status] = (c[m.status] || 0) + 1;
   return {
-    id: job.id, channel: job.channel, title: job.title, status: job.status, error: job.error || null,
+    id: job.id, channel: job.channel, title: job.title, status: liveStatus(job), error: job.error || null, phase: job.phase || null,
+    progress: progressOf(job),
     group: job.group ? { id: job.group.id, subject: job.group.subject, link: job.group.link || null } : null,
     counts: Object.assign({ total: job.members.length, added: 0, invited_dm: 0, already_member: 0, not_on_platform: 0, opted_out: 0, failed: 0, pending: 0, needs_invite: 0 }, c),
     createdAt: job.createdAt, finishedAt: job.finishedAt || null,
@@ -160,20 +178,26 @@ async function runJob(tenant, job) {
   const key = `${sanitize(tenant)}:${job.channel}`;
   try {
     const driver = DRIVERS[job.channel](tenant);
-    job.status = 'RUNNING'; await saveJob(tenant, job);
+    job.status = 'RUNNING'; job.phase = 'verification'; await saveJob(tenant, job);
     if (!driver.connected()) { job.status = 'FAILED'; job.error = `${job.channel}_NOT_CONNECTED`; return; }
     const optedOut = await contactCrm.optedOutSet(tenant, job.channel).catch(() => new Set());
     for (const m of job.members) if (m.status === 'pending' && optedOut.has(contactCrm.identityOf(m.identifier))) { m.status = 'opted_out'; m.reason = 'A demandé à ne plus être sollicité'; }
     if (job.members.some((m) => m.status === 'pending' && !m.verified)) { await driver.verify(job.members.filter((m) => m.status === 'pending')); job.members.forEach((m) => { m.verified = true; }); await saveJob(tenant, job); }
 
     const todo = () => job.members.filter((m) => m.status === 'pending');
+    const cancelNow = () => {
+      if (cancelRequests.has(job.id)) { job.status = 'CANCELLED'; job.error = 'Arrêté à votre demande : le groupe déjà créé et les personnes déjà ajoutées sont conservés.'; }
+      else { job.status = 'PAUSED_USER'; job.error = 'En pause à votre demande : cliquez sur « Reprendre » pour continuer là où il s\'est arrêté.'; }
+    };
+    if (stopped(job)) { cancelNow(); return; }
     if (!job.group) {
       if (!todo().length) { job.status = 'DONE'; job.error = 'NO_ELIGIBLE_MEMBER'; return; }
       job.group = await driver.create(job.title, job.description); await saveJob(tenant, job);
     }
     // 1) ajout DIRECT, par petits lots espacés, dans le respect de la confidentialité
-    let paused = false;
+    let paused = false; job.phase = 'ajout'; await saveJob(tenant, job);
     while (todo().length && !paused) {
+      if (stopped(job)) { cancelNow(); return; }
       const batch = todo().slice(0, driver.batchSize());
       let results;
       try { results = await driver.add(job.group, batch); }
@@ -193,21 +217,25 @@ async function runJob(tenant, job) {
       await saveJob(tenant, job);
       if (todo().length && !paused) await pause(c.delayMin, c.delayMax);
     }
+    if (stopped(job)) { cancelNow(); return; }
     if (paused) { job.status = 'PAUSED_RATE_LIMIT'; job.error = 'La plateforme a limité le débit : traitement mis en pause pour protéger le compte (reprise possible plus tard).'; return; }
 
     // 2) restrictions d'ajout : lien d'invitation OFFICIEL en message privé (jamais de contournement)
     const invitees = job.members.filter((m) => m.status === 'needs_invite');
     if (invitees.length) {
+      job.phase = 'invitations';
       job.group.link = job.group.link || await driver.link(job.group); await saveJob(tenant, job);
       if (!job.group.link) { invitees.forEach((m) => { m.status = 'failed'; m.reason = 'Lien d\'invitation indisponible'; }); }
       else {
         for (const m of invitees) {
+          if (stopped(job)) { cancelNow(); return; }
           try { await driver.dm(m, renderInvite(job.inviteMessage, { name: m.name, group: job.group.subject, link: job.group.link })); m.status = 'invited_dm'; m.reason = 'Lien d\'invitation envoyé en message privé'; }
           catch (err) { if (driver.isFlood(err)) { job.status = 'PAUSED_RATE_LIMIT'; job.error = 'Limitation de débit pendant l\'envoi des invitations : reprise possible plus tard.'; return; } m.status = 'failed'; m.reason = 'Envoi de l\'invitation impossible'; }
           await saveJob(tenant, job); await pause(c.delayMin, c.delayMax);
         }
       }
     }
+    job.phase = null;
     job.status = job.members.some((m) => m.status === 'failed') ? 'DONE_WITH_ISSUES' : 'DONE';
   } catch (err) {
     console.warn(`communityService — job ${job.id} en échec : ${require('../lib/ai/aiErrors').redact(err && err.message)}`);
@@ -216,6 +244,7 @@ async function runJob(tenant, job) {
     job.finishedAt = ['RUNNING'].includes(job.status) ? null : new Date().toISOString();
     try { await saveJob(tenant, job); } catch (e) { /* non bloquant */ }
     if (running.get(key) === job.id) running.delete(key);
+    cancelRequests.delete(job.id); pauseRequests.delete(job.id);
   }
 }
 
@@ -245,8 +274,9 @@ async function startGroup(tenant, input) {
 async function resumeJob(tenant, jobId) {
   const doc = await loadDoc(tenant); const job = doc.jobs[jobId];
   if (!job) { const e = new Error('Groupe introuvable.'); e.code = 'NOT_FOUND'; throw e; }
-  if (!['PAUSED_RATE_LIMIT', 'DONE_WITH_ISSUES'].includes(job.status)) { const e = new Error('Ce traitement ne peut pas être repris.'); e.code = 'INVALID_STATE'; throw e; }
   const key = `${sanitize(tenant)}:${job.channel}`;
+  const orphan = ['RUNNING', 'QUEUED'].includes(job.status) && running.get(key) !== job.id;
+  if (!['PAUSED_RATE_LIMIT', 'DONE_WITH_ISSUES', 'PAUSED_USER'].includes(job.status) && !orphan) { const e = new Error('Ce traitement ne peut pas être repris.'); e.code = 'INVALID_STATE'; throw e; }
   if (running.has(key)) { const e = new Error('Un traitement est déjà en cours sur ce canal.'); e.code = 'JOB_ALREADY_RUNNING'; throw e; }
   job.members.forEach((m) => { if (m.status === 'failed' && /Sans réponse|Erreur technique/.test(m.reason || '')) { m.status = 'pending'; m.reason = null; } });
   job.error = null; running.set(key, job.id);
@@ -254,8 +284,29 @@ async function resumeJob(tenant, jobId) {
   return publicJob(job, false);
 }
 
+// Arrêt d'un traitement : en cours → pris en compte avant le prochain lot (CANCELLING puis CANCELLED) ; en pause / terminé avec échecs → CANCELLED tout de suite.
+// Ce qui a déjà été fait (groupe créé, membres ajoutés, invitations envoyées) n'est jamais annulé.
+async function cancelJob(tenant, jobId) {
+  const doc = await loadDoc(tenant); const job = doc.jobs[jobId];
+  if (!job) { const e = new Error('Groupe introuvable.'); e.code = 'NOT_FOUND'; throw e; }
+  const key = `${sanitize(tenant)}:${job.channel}`;
+  if (running.get(key) === job.id) { cancelRequests.add(job.id); return publicJob(job, false); }
+  if (!['PAUSED_RATE_LIMIT', 'DONE_WITH_ISSUES', 'QUEUED', 'PAUSED_USER', 'RUNNING'].includes(job.status)) { const e = new Error('Ce traitement n\'est pas en cours.'); e.code = 'INVALID_STATE'; throw e; }
+  job.status = 'CANCELLED'; job.error = 'Arrêté à votre demande.'; job.finishedAt = new Date().toISOString();
+  await saveJob(tenant, job); return publicJob(job, false);
+}
+
+// Pause à la demande : le traitement s'arrête avant le prochain lot / la prochaine invitation (statut PAUSING puis PAUSED_USER) et se reprend avec resumeJob.
+async function pauseJob(tenant, jobId) {
+  const doc = await loadDoc(tenant); const job = doc.jobs[jobId];
+  if (!job) { const e = new Error('Groupe introuvable.'); e.code = 'NOT_FOUND'; throw e; }
+  const key = `${sanitize(tenant)}:${job.channel}`;
+  if (running.get(key) !== job.id || cancelRequests.has(job.id)) { const e = new Error('Ce traitement n\'est pas en cours.'); e.code = 'INVALID_STATE'; throw e; }
+  pauseRequests.add(job.id); return publicJob(job, false);
+}
+
 async function getJob(tenant, jobId) { const j = (await loadDoc(tenant)).jobs[jobId]; return j ? publicJob(j, true) : null; }
 async function listJobs(tenant) { return Object.values((await loadDoc(tenant)).jobs).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).map((j) => publicJob(j, false)); }
 const waitFor = (jobId) => promises.get(jobId) || Promise.resolve();
 
-module.exports = { startGroup, resumeJob, getJob, listJobs, waitFor, renderInvite, DEFAULT_INVITE, DRIVERS, _setSleep: (fn) => { sleepFn = fn; }, _running: running };
+module.exports = { startGroup, resumeJob, cancelJob, pauseJob, getJob, listJobs, waitFor, renderInvite, DEFAULT_INVITE, DRIVERS, _setSleep: (fn) => { sleepFn = fn; }, _running: running };

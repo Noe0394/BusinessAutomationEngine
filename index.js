@@ -5785,6 +5785,8 @@ try {
   }));
   app.get('/api/communities/groups', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, groups: await communityService.listJobs(tenant) })));
   app.get('/api/communities/groups/:id', requireAccess, cmRoute(async (req, tenant) => { const g = await communityService.getJob(tenant, req.params.id); if (!g) throw Object.assign(new Error('Groupe introuvable.'), { code: 'NOT_FOUND' }); return { ok: true, group: g }; }));
+  app.post('/api/communities/groups/:id/pause', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.pauseJob(tenant, req.params.id) })));
+  app.post('/api/communities/groups/:id/cancel', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.cancelJob(tenant, req.params.id) })));
   app.post('/api/communities/groups/:id/resume', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.resumeJob(tenant, req.params.id) })));
   app.post('/api/communities/discover', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discover(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true })) })));
   app.get('/api/communities/directory', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, communities: await contactCrm.listCommunities(tenant, { channel: req.query.channel, keyword: req.query.keyword }) })));

@@ -2194,7 +2194,9 @@
           <input type="text" id="cm-wa-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
         </div>
         <button type="button" id="cm-wa-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
-        <button type="button" id="cm-wa-resume-btn" hidden>▶️ Reprendre</button>
+        <button type="button" id="cm-wa-pause-btn" hidden>⏸ Pause</button>
+        <button type="button" id="cm-wa-resume-btn" hidden>▶️ Reprendre</button>
+        <button type="button" id="cm-wa-stop-btn" hidden style="background:#c0392b;color:#fff">⏹ Arrêter la création</button>
         <p id="cm-wa-create-feedback" hidden></p>
         <div id="cm-wa-progress" hidden></div>
 
@@ -2234,7 +2236,9 @@
           <input type="text" id="cm-tg-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
         </div>
         <button type="button" id="cm-tg-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
-        <button type="button" id="cm-tg-resume-btn" hidden>▶️ Reprendre</button>
+        <button type="button" id="cm-tg-pause-btn" hidden>⏸ Pause</button>
+        <button type="button" id="cm-tg-resume-btn" hidden>▶️ Reprendre</button>
+        <button type="button" id="cm-tg-stop-btn" hidden style="background:#c0392b;color:#fff">⏹ Arrêter la création</button>
         <p id="cm-tg-create-feedback" hidden></p>
         <div id="cm-tg-progress" hidden></div>
 
@@ -2913,6 +2917,7 @@
         if (btn.dataset.tab === 'services-metiers') { svcMetiersInit(); }
         if (btn.dataset.tab === 'aide') { aideInit(); }
         if (btn.dataset.tab === 'reports') { reportsInit(); }
+        if (btn.dataset.tab === 'communities' && window.__cmReattach) { Object.keys(window.__cmReattach).forEach(function (k) { window.__cmReattach[k](); }); }
       });
     });
 
@@ -10581,14 +10586,22 @@
         function renderProgress(job) {
           var box = $('progress'); box.hidden = false; box.textContent = '';
           var c = job.counts || {};
+          var pr = job.progress || { processed: 0, total: (c.total || 0), percent: 0 };
+          var phases = { verification: 'Vérification des contacts…', ajout: 'Ajout des membres…', invitations: 'Envoi des invitations…' };
+          var statusFr = { QUEUED: 'En file', RUNNING: 'En cours', CANCELLING: 'Arrêt en cours…', PAUSING: 'Mise en pause…', PAUSED_USER: 'En pause', INTERRUPTED: 'Interrompu (reprise possible)', CANCELLED: 'Arrêté', DONE: 'Terminé', DONE_WITH_ISSUES: 'Terminé avec des échecs', FAILED: 'Échec', PAUSED_RATE_LIMIT: 'En pause (limite de débit)' };
+          var barWrap = document.createElement('div'); barWrap.style.cssText = 'background:#e6e1f5;border-radius:8px;height:18px;overflow:hidden;margin:6px 0';
+          var bar = document.createElement('div'); bar.style.cssText = 'height:100%;background:#6c4fd6;transition:width .4s;width:' + pr.percent + '%'; barWrap.appendChild(bar); box.appendChild(barWrap);
+          var cap = document.createElement('div'); cap.style.fontWeight = '600'; cap.textContent = pr.percent + ' % — ' + pr.processed + ' / ' + pr.total + ' contact(s) traité(s)' + (job.phase && phases[job.phase] ? ' · ' + phases[job.phase] : ''); box.appendChild(cap);
           var lines = [
-            'Statut : ' + job.status + (job.error ? ' — ' + job.error : ''),
+            'Statut : ' + (statusFr[job.status] || job.status) + (job.error ? ' — ' + job.error : ''),
             'Ajoutés directement : ' + (c.added || 0) + ' · Invitations envoyées en message privé : ' + (c.invited_dm || 0) + ' · Déjà membres : ' + (c.already_member || 0),
             'Absents de la plateforme : ' + (c.not_on_platform || 0) + ' · Désinscrits (ignorés) : ' + (c.opted_out || 0) + ' · Échecs : ' + (c.failed || 0) + ' · En attente : ' + ((c.pending || 0) + (c.needs_invite || 0)) + ' / ' + (c.total || 0),
           ];
           if (job.group && job.group.link) lines.push('Lien du groupe : ' + job.group.link);
           lines.forEach(function (l) { var d = document.createElement('div'); d.textContent = l; box.appendChild(d); });
-          $('resume-btn').hidden = !(job.status === 'PAUSED_RATE_LIMIT' || job.status === 'DONE_WITH_ISSUES');
+          $('resume-btn').hidden = ['PAUSED_RATE_LIMIT', 'DONE_WITH_ISSUES', 'PAUSED_USER', 'INTERRUPTED'].indexOf(job.status) < 0;
+          if ($('pause-btn')) { $('pause-btn').hidden = ['QUEUED', 'RUNNING'].indexOf(job.status) < 0; $('pause-btn').disabled = false; }
+          if ($('stop-btn')) { $('stop-btn').hidden = ['QUEUED', 'RUNNING', 'PAUSING', 'CANCELLING', 'PAUSED_RATE_LIMIT', 'PAUSED_USER', 'INTERRUPTED'].indexOf(job.status) < 0; $('stop-btn').disabled = job.status === 'CANCELLING'; }
         }
         function poll(id) {
           if (pollTimer) clearInterval(pollTimer);
@@ -10596,7 +10609,7 @@
             try {
               var res = await apiFetch('/api/communities/groups/' + encodeURIComponent(id) + '?channel=' + channel);
               var data = await res.json();
-              if (data && data.group) { currentJob = data.group; renderProgress(data.group); if (['DONE', 'DONE_WITH_ISSUES', 'FAILED', 'PAUSED_RATE_LIMIT'].indexOf(data.group.status) >= 0) { clearInterval(pollTimer); pollTimer = null; } }
+              if (data && data.group) { currentJob = data.group; renderProgress(data.group); if (['DONE', 'DONE_WITH_ISSUES', 'FAILED', 'PAUSED_RATE_LIMIT', 'PAUSED_USER', 'INTERRUPTED', 'CANCELLED'].indexOf(data.group.status) >= 0) { clearInterval(pollTimer); pollTimer = null; } }
             } catch (e) { /* session expirée : géré par apiFetch */ }
           };
           tick(); pollTimer = setInterval(tick, 4000);
@@ -10618,6 +10631,38 @@
             else { say($('create-feedback'), 'Groupe en cours de création : ' + data.group.counts.total + ' contact(s) valide(s). Les ajouts se font lentement pour protéger votre compte.', true); currentJob = data.group; renderProgress(data.group); poll(data.group.id); }
           } catch (e) { if (e.message !== 'unauthorized') say($('create-feedback'), 'Erreur de communication avec le serveur.', false); }
           $('create-btn').disabled = false;
+        });
+        // Le traitement tourne CÔTÉ SERVEUR : rafraîchir la page ne l'arrête pas. Au chargement, on retrouve le traitement en cours (ou le dernier) de ce canal et on reprend l'affichage.
+        var reattach = async function () {
+          try {
+            var res = await apiFetch('/api/communities/groups?channel=' + channel);
+            var data = await res.json();
+            var mine = ((data && data.groups) || []).filter(function (g) { return g.channel === channel; });
+            var active = mine.filter(function (g) { return ['QUEUED', 'RUNNING', 'PAUSING', 'CANCELLING', 'PAUSED_USER', 'PAUSED_RATE_LIMIT', 'INTERRUPTED'].indexOf(g.status) >= 0; })[0] || mine[0];
+            if (!active) return;
+            var one = await (await apiFetch('/api/communities/groups/' + encodeURIComponent(active.id) + '?channel=' + channel)).json();
+            if (one && one.group) { currentJob = one.group; renderProgress(one.group); if (['QUEUED', 'RUNNING', 'PAUSING', 'CANCELLING'].indexOf(one.group.status) >= 0) poll(one.group.id); }
+          } catch (e) { /* session expirée ou aucun traitement : rien à reprendre */ }
+        };
+        // Appelé à l'ouverture de l'onglet « Communautés » (aucun appel réseau au chargement de la page).
+        window.__cmReattach = window.__cmReattach || {}; window.__cmReattach[p] = reattach;
+        if ($('pause-btn')) $('pause-btn').addEventListener('click', async function () {
+          if (!currentJob) return;
+          $('pause-btn').disabled = true;
+          try {
+            var res = await apiFetch('/api/communities/groups/' + encodeURIComponent(currentJob.id) + '/pause', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel }) });
+            var data = await res.json();
+            if (data && data.ok) { say($('create-feedback'), 'Pause demandée : le traitement s\'arrête avant le prochain lot.', true); currentJob = data.group; renderProgress(data.group); poll(currentJob.id); } else { $('pause-btn').disabled = false; say($('create-feedback'), (data && data.error) || 'Pause impossible.', false); }
+          } catch (e) { $('pause-btn').disabled = false; }
+        });
+        if ($('stop-btn')) $('stop-btn').addEventListener('click', async function () {
+          if (!currentJob) return;
+          $('stop-btn').disabled = true;
+          try {
+            var res = await apiFetch('/api/communities/groups/' + encodeURIComponent(currentJob.id) + '/cancel', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel }) });
+            var data = await res.json();
+            if (data && data.ok) { say($('create-feedback'), 'Arrêt demandé : le traitement s\'arrête avant le prochain lot. Ce qui est déjà fait est conservé.', true); currentJob = data.group; renderProgress(data.group); poll(currentJob.id); } else { $('stop-btn').disabled = false; say($('create-feedback'), (data && data.error) || 'Arrêt impossible.', false); }
+          } catch (e) { $('stop-btn').disabled = false; }
         });
         $('resume-btn').addEventListener('click', async function () {
           if (!currentJob) return;
