@@ -6,7 +6,10 @@
   <title>CYRUS SUPER ASSISTANT</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-  <meta name="theme-color" content="#6c4fd6" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <meta name="theme-color" content="#090a10" />
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     body { font-family: sans-serif; margin: 0; background: #f2f2f3; color: #1a1a1a; }
@@ -10731,5 +10734,10 @@
       setup('wa', 'WHATSAPP'); setup('tg', 'TELEGRAM');
     })();
   </script>
+  <!-- Interface v2 : thème sombre + aide en infobulles + animations Motion (chargés en dernier pour l'ordre de la cascade). -->
+  <link rel="stylesheet" href="/ui-v2.generated.css" />
+  <link rel="stylesheet" href="/ui-v2.css" />
+  <script src="/vendor/motion.js"></script>
+  <script src="/ui-v2.js"></script>
 </body>
 </html>

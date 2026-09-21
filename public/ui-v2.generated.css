@@ -1,0 +1,118 @@
+/* GÉNÉRÉ par scripts/gen-ui-v2-overrides.js — ne pas éditer à la main (relancer le script). */
+body { background: var(--surface-2) !important; color: var(--text-2) !important; }
+header button { border-color: var(--border) !important; }
+#login-screen input { border-color: var(--border) !important; }
+.error { color: #fca5a5 !important; }
+.ok { color: #5eeac0 !important; }
+nav#tabs { background: var(--surface-2) !important; }
+nav#tabs button { background: var(--surface-2) !important; }
+nav#tabs button.active { background: var(--surface-2) !important; color: #93c5fd !important; }
+.panel { background: var(--surface-2) !important; }
+.conn-block { border-color: var(--border) !important; }
+.subsection { border-color: var(--border) !important; }
+th, td { border-color: var(--border) !important; }
+th { background: var(--surface-2) !important; }
+.badge.connected { background: rgba(52,227,155,.11) !important; color: #5eeac0 !important; }
+.badge.disconnected { background: rgba(248,113,113,.12) !important; color: #fca5a5 !important; }
+.mode-toggle button { background: var(--surface-2) !important; color: #93c5fd !important; }
+#pairing-code-display { background: var(--surface-2) !important; }
+#search-groups, #search-tg-groups { border-color: var(--border) !important; }
+.group-actions button { background: var(--surface-2) !important; color: #93c5fd !important; }
+.field input[type="text"], .field input[type="tel"], .field input[type="number"], .field select, .field textarea { border-color: var(--border) !important; }
+#drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone, #share-import-drop-zone, #share-custom-media-drop-zone, #fb-sched-media-drop-zone { color: var(--text-2) !important; }
+#drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover, #share-import-drop-zone.dragover, #share-custom-media-drop-zone.dragover, #fb-sched-media-drop-zone.dragover { background: var(--surface-2) !important; }
+.warning-box { background: rgba(251,191,36,.12) !important; border-color: var(--border) !important; color: #fcd34d !important; }
+.sequence-step { border-color: var(--border) !important; background: var(--surface-2) !important; }
+.sequence-step-badge { color: #93c5fd !important; }
+.sequence-step-actions button { border-color: var(--border) !important; }
+.send-button:disabled { background: rgba(52,227,155,.11) !important; }
+.pause-button:disabled { background: rgba(251,191,36,.12) !important; }
+#campaign-feedback.ok, #tg-feedback.ok, #tg-dm-feedback.ok { background: rgba(52,227,155,.11) !important; color: #5eeac0 !important; }
+#campaign-feedback.error, #tg-feedback.error, #tg-dm-feedback.error { background: rgba(248,113,113,.12) !important; color: #fca5a5 !important; }
+#progress-bar-outer, #tg-dm-progress-bar-outer, #tg-groups-progress-bar-outer { background: var(--surface-2) !important; }
+.count-success { color: #5eeac0 !important; }
+.count-failed { color: #fca5a5 !important; }
+.campaign-queue-section { border-color: var(--border) !important; }
+.campaign-queue-empty { color: var(--text-2) !important; }
+.campaign-queue-row { border-color: var(--border) !important; background: var(--surface-2) !important; }
+.campaign-queue-row.is-active { background: var(--surface-2) !important; }
+.campaign-queue-meta { color: var(--text-2) !important; }
+.campaign-queue-badge.status-running { background: rgba(248,113,113,.12) !important; color: #fca5a5 !important; }
+.campaign-queue-badge.status-paused { background: rgba(251,191,36,.12) !important; color: #fcd34d !important; }
+.campaign-queue-badge.status-completed { background: rgba(52,227,155,.11) !important; color: #5eeac0 !important; }
+.campaign-queue-badge.status-queued { background: var(--surface-2) !important; color: var(--text-2) !important; }
+.campaign-queue-badge.status-stopped, .campaign-queue-badge.status-cancelled { background: var(--surface-2) !important; }
+.relance-card { background: var(--surface-2) !important; }
+.relance-card-counter { color: #93c5fd !important; }
+.relance-copy-button { background: var(--surface-2) !important; border-color: var(--border) !important; }
+.relance-regenerate-button { background: rgba(251,191,36,.12) !important; border-color: var(--border) !important; color: #fcd34d !important; }
+.relance-skip-button { background: var(--surface-2) !important; color: #fca5a5 !important; }
+.relance-call-button { background: var(--surface-2) !important; color: #93c5fd !important; }
+.relance-prefill-notice.ok { background: var(--surface-2) !important; color: #5eeac0 !important; }
+.relance-prefill-notice.warn { background: rgba(251,191,36,.12) !important; color: #fcd34d !important; }
+.relance-toolbar label { color: var(--text-2) !important; }
+.relance-toolbar select { border-color: var(--border) !important; }
+.relance-rhythm-counter { color: #93c5fd !important; }
+.relance-abtest-panel { border-color: var(--border) !important; background: var(--surface-2) !important; }
+.relance-abtest-panel summary { color: #93c5fd !important; }
+.relance-dropzone { color: #93c5fd !important; }
+.relance-dropzone.dragover { background: rgba(96,165,250,.12) !important; }
+.relance-image-slot { border-color: var(--border) !important; }
+.relance-image-slot span { color: var(--text-2) !important; }
+.relance-series-panel { background: var(--surface-2) !important; }
+.relance-series-panel label { color: var(--text-2) !important; }
+.relance-series-countdown { color: #93c5fd !important; }
+.relance-series-panel button { background: var(--surface-2) !important; color: #93c5fd !important; }
+.smart-textgen { background: var(--surface-2) !important; border-color: var(--border) !important; }
+.smart-textgen-intention { border-color: var(--border) !important; }
+.smart-textgen-hint { color: #fca5a5 !important; }
+.image-link-uploader { background: var(--surface-2) !important; }
+.image-link-uploader.dragover { background: rgba(52,227,155,.11) !important; }
+.image-link-uploader-status { color: var(--text-2) !important; }
+.image-link-uploader button:not(.image-link-uploader-label) { background: var(--surface-2) !important; color: #93c5fd !important; }
+.studio-session-item { border-color: var(--border) !important; background: var(--surface-2) !important; }
+.studio-session-item.active { background: rgba(96,165,250,.12) !important; }
+.studio-messages { background: var(--surface-2) !important; border-color: var(--border) !important; }
+.studio-msg.assistant { background: var(--surface-2) !important; border-color: var(--border) !important; }
+.studio-msg.thinking { background: var(--surface-2) !important; border-color: var(--border) !important; }
+.studio-handoff-btn { background: rgba(96,165,250,.12) !important; border-color: var(--border) !important; color: #93c5fd !important; }
+.studio-input-row { background: var(--surface-2) !important; border-color: var(--border) !important; }
+.studio-input-row .image-link-uploader-label { color: #93c5fd !important; }
+#media-canvas-frame { border-color: var(--border) !important; }
+#media-video-preview { border-color: var(--border) !important; }
+.media-variant-card { border-color: var(--border) !important; background: var(--surface-2) !important; }
+.media-variant-card-label { color: #93c5fd !important; }
+.media-fallback-badge { background: rgba(251,191,36,.12) !important; border-color: var(--border) !important; color: #fcd34d !important; }
+#media-edit-panel { border-color: var(--border) !important; }
+#import-result.ok { background: rgba(52,227,155,.11) !important; color: #5eeac0 !important; }
+#import-result.error { background: rgba(248,113,113,.12) !important; color: #fca5a5 !important; }
+.modal-box { background: var(--surface-2) !important; }
+.modal-actions button { background: var(--surface-2) !important; color: #93c5fd !important; }
+.status-sent, .status-delivered { color: #5eeac0 !important; }
+.status-failed { color: #fca5a5 !important; }
+#panel-goalchat .gc-head { background: var(--surface-2) !important; }
+#panel-goalchat .gc-iconbtn { background: var(--surface-2) !important; }
+#panel-goalchat .gc-iconbtn.on { background: rgba(96,165,250,.12) !important; }
+#panel-goalchat .gc-autopanel { background: var(--surface-2) !important; }
+#panel-goalchat #goalchat-messages { background: var(--surface-2) !important; }
+#panel-goalchat .studio-msg.assistant { background: var(--surface-2) !important; color: var(--text-2) !important; }
+#panel-goalchat .studio-msg-actions button { background: var(--surface-2) !important; color: #93c5fd !important; }
+#panel-goalchat .studio-msg-actions button:active { background: rgba(96,165,250,.12) !important; }
+#panel-goalchat .gc-inputbar { background: var(--surface-2) !important; }
+#panel-goalchat .gc-input { background: var(--surface-2) !important; }
+#panel-goalchat .gc-attachments { background: var(--surface-2) !important; }
+#panel-goalchat .gc-chip { background: var(--surface-2) !important; }
+#cmp-shell .cmp-box { border-color: var(--border) !important; }
+#cmp-shell th,#cmp-shell td { border-color: var(--border) !important; }
+#panel-services-metiers .svc-card { border-color: var(--border) !important; }
+#panel-services-metiers .svc-badge { border-color: var(--border) !important; }
+#panel-services-metiers .svc-warn { border-color: var(--border) !important; }
+#panel-services-metiers .svc-form { border-color: var(--border) !important; }
+#panel-services-metiers .svc-form input,#panel-services-metiers .svc-form select,#panel-services-metiers .svc-form textarea { border-color: var(--border) !important; }
+#panel-services-metiers details { border-color: var(--border) !important; }
+#panel-aide .aide-search { border-color: var(--border) !important; }
+#panel-aide details { border-color: var(--border) !important; }
+#panel-aide .aide-faq-item { border-color: var(--border) !important; }
+#panel-reports .rep-kpi { border-color: var(--border) !important; }
+#panel-reports .rep-feed { border-color: var(--border) !important; }
+#panel-reports .rep-evt { border-color: var(--border) !important; }

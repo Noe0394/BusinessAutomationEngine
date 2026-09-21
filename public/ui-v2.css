@@ -1,0 +1,118 @@
+/* CYRUS — interface v2 : sombre, aérée, premium. Chargé APRÈS le CSS du dashboard (ordre du document) ; les couleurs claires d'origine sont neutralisées par
+   ui-v2.generated.css (généré), ce fichier pose les jetons de design et le style des composants. */
+:root {
+  color-scheme: dark;
+  --bg: #090a10; --bg-2: #0d0f18;
+  --surface: rgba(255,255,255,.035); --surface-2: rgba(255,255,255,.055); --surface-3: rgba(255,255,255,.085);
+  --border: rgba(255,255,255,.085); --border-strong: rgba(255,255,255,.16);
+  --text: #eceef6; --text-2: #c3c7d8; --muted: #8b90a3;
+  --accent: #7c5cff; --accent-2: #a78bfa; --accent-soft: rgba(124,92,255,.16);
+  --ok: #34e39b; --ok-soft: rgba(52,227,155,.12); --warn: #fbbf24; --warn-soft: rgba(251,191,36,.12); --err: #f87171; --err-soft: rgba(248,113,113,.12);
+  --radius: 16px; --radius-sm: 10px;
+  --font: 'Inter', 'Plus Jakarta Sans', 'SF Pro Text', -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+  --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 12px 40px -18px rgba(0,0,0,.65);
+}
+
+html body { font-family: var(--font); background: radial-gradient(1100px 520px at 12% -8%, rgba(124,92,255,.13), transparent 60%), radial-gradient(900px 480px at 100% 0%, rgba(52,227,155,.05), transparent 55%), var(--bg) !important; color: var(--text) !important; -webkit-font-smoothing: antialiased; letter-spacing: -.005em; line-height: 1.5; }
+html body :where(button, input, select, textarea) { font-family: var(--font); }
+
+/* ---------- en-tête + navigation ---------- */
+html body header { background: rgba(13,15,24,.72) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); animation: none; padding: .7rem 1.4rem; }
+html body header h1 { font-size: .95rem; font-weight: 600; letter-spacing: .06em; }
+html body header button { background: var(--surface-2); border: 1px solid var(--border) !important; border-radius: var(--radius-sm); font-weight: 500; transition: background .2s, border-color .2s, transform .15s; }
+html body header button:hover { background: var(--surface-3); border-color: var(--border-strong) !important; }
+html body nav#tabs { background: rgba(9,10,16,.8) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); padding: .6rem 1rem; gap: .4rem; scrollbar-width: none; }
+html body nav#tabs::-webkit-scrollbar { display: none; }
+html body nav#tabs button { background: transparent !important; color: var(--muted) !important; border: 1px solid transparent; border-radius: 999px; font-weight: 500; font-size: .84rem; padding: .5rem .95rem; min-height: 36px; box-shadow: none; transition: color .2s, background .2s, border-color .2s; white-space: nowrap; }
+html body nav#tabs button:hover { color: var(--text) !important; background: var(--surface) !important; }
+html body nav#tabs button.active { color: #fff !important; background: var(--accent-soft) !important; border-color: rgba(124,92,255,.45); box-shadow: 0 0 0 1px rgba(124,92,255,.15), 0 6px 20px -10px rgba(124,92,255,.7); }
+
+/* ---------- cartes ---------- */
+html body .panel { background: transparent !important; box-shadow: none; padding: 1.75rem 1.25rem; margin: 0 auto; max-width: 1180px; border-radius: 0; }
+html body .panel.active { min-height: calc(100vh - 120px); }
+html body #panel-studio.active { max-width: none; }
+html body .panel > h2 { font-size: 1.5rem; font-weight: 650; letter-spacing: -.02em; margin: 0 0 1.5rem; color: var(--text); }
+html body .panel h3 { font-size: 1rem; font-weight: 600; letter-spacing: -.01em; color: var(--text); margin: 0 0 1rem; }
+html body .conn-block, html body .subsection, html body .campaign-queue-section, html body .sequence-step, html body .warning-box {
+  background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: var(--radius); padding: 1.5rem; margin: 0 0 1.5rem; box-shadow: var(--shadow);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+html body .subsection:first-of-type { border-top: 1px solid var(--border) !important; margin-top: 0; padding-top: 1.5rem; }
+html body .subsection { margin-top: 0; }
+html body .warning-box { background: var(--warn-soft) !important; border-color: rgba(251,191,36,.3) !important; color: var(--warn) !important; font-weight: 500; }
+
+/* ---------- champs ---------- */
+html body :where(input[type=text], input[type=tel], input[type=number], input[type=email], input[type=password], input[type=search], input[type=url], input[type=datetime-local], input[type=time], input[type=date], select, textarea) {
+  background: rgba(255,255,255,.04) !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: var(--radius-sm); padding: .7rem .9rem; min-height: 44px;
+  transition: border-color .2s, box-shadow .2s, background .2s;
+}
+html body :where(input, select, textarea):focus { outline: none; border-color: rgba(124,92,255,.7) !important; box-shadow: 0 0 0 3px rgba(124,92,255,.2); background: rgba(255,255,255,.06) !important; }
+html body ::placeholder { color: #6f7488; }
+html body select option { background: #12141d; color: var(--text); }
+html body .field label { font-weight: 500; font-size: .84rem; color: var(--text-2); margin-bottom: .4rem; }
+html body input[type=checkbox], html body input[type=radio] { accent-color: var(--accent); }
+
+/* ---------- boutons ---------- */
+html body :where(button) { border-radius: var(--radius-sm); font-weight: 500; transition: background .2s, border-color .2s, transform .12s, box-shadow .2s, opacity .2s; }
+html body :where(button):not(:disabled):active { transform: scale(.975); }
+html body button:disabled { opacity: .45; cursor: not-allowed; }
+html body :where(.panel button):not([class]), html body .group-actions button, html body .mode-toggle button, html body .gc-iconbtn {
+  background: var(--surface-2) !important; color: var(--text) !important; border: 1px solid var(--border) !important;
+}
+html body :where(.panel button):not([class]):hover, html body .group-actions button:hover, html body .mode-toggle button:hover { background: var(--surface-3) !important; border-color: var(--border-strong) !important; }
+html body .mode-toggle button.active { background: var(--accent-soft) !important; border-color: rgba(124,92,255,.5) !important; color: #fff !important; }
+html body .panel button[type=submit], html body #login-screen button, html body .gc-send, html body .btn-primary {
+  background: linear-gradient(135deg, #7c5cff, #9b7bff) !important; border: none !important; color: #fff !important; box-shadow: 0 8px 24px -10px rgba(124,92,255,.8);
+}
+html body .panel button[type=submit]:hover, html body .gc-send:hover { filter: brightness(1.08); }
+html body .open-whatsapp-btn { background: linear-gradient(135deg, #1fbf75, #25d366) !important; border-radius: var(--radius-sm); font-weight: 600; }
+
+/* ---------- badges d'état ---------- */
+html body .badge { display: inline-flex; align-items: center; gap: .45rem; padding: .32rem .8rem; border-radius: 999px; font-size: .78rem; font-weight: 600; letter-spacing: .01em; border: 1px solid transparent; }
+html body .badge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+html body .badge.connected { background: var(--ok-soft) !important; color: var(--ok) !important; border-color: rgba(52,227,155,.28); }
+html body .badge.disconnected { background: var(--err-soft) !important; color: var(--err) !important; border-color: rgba(248,113,113,.28); }
+html body .gc-auto-status, html body .status-sent { color: var(--ok); }
+
+/* ---------- tableaux ---------- */
+html body .table-wrap { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: auto; background: var(--surface); }
+html body table { border-collapse: separate; border-spacing: 0; }
+html body th { background: var(--surface-2) !important; color: var(--muted) !important; font-weight: 600; font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; border: none !important; border-bottom: 1px solid var(--border) !important; padding: .75rem 1rem; }
+html body td { border: none !important; border-bottom: 1px solid var(--border) !important; padding: .75rem 1rem; color: var(--text-2); }
+html body tr:last-child td { border-bottom: none !important; }
+html body tbody tr { transition: background .15s; }
+html body tbody tr:hover { background: var(--surface); }
+
+/* ---------- zones diverses ---------- */
+html body :where(#drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone) { border: 1.5px dashed var(--border-strong) !important; background: var(--surface) !important; border-radius: var(--radius); color: var(--muted) !important; transition: border-color .2s, background .2s; }
+html body :where(#drop-zone, #import-drop-zone, #tg-drop-zone).dragover { border-color: var(--accent) !important; background: var(--accent-soft) !important; }
+html body #pairing-code-display { background: var(--surface-2) !important; border: 1px solid var(--border); color: var(--text); font-variant-numeric: tabular-nums; }
+html body .empty { color: var(--muted) !important; }
+html body hr { border: none; border-top: 1px solid var(--border); }
+html body a { color: var(--accent-2); }
+html body ::selection { background: rgba(124,92,255,.4); }
+html body * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
+
+/* ---------- Chat Intelligent ---------- */
+html body .gc-autopanel { background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: var(--radius); padding: 1.25rem; }
+html body .gc-auto-title { font-weight: 600; color: var(--text); }
+html body .gc-switch { color: var(--text-2); }
+
+/* ---------- aide : icône « ? » + infobulle (remplace les longs paragraphes) ---------- */
+.cy-help { position: relative; display: inline-flex; vertical-align: middle; margin-left: .5rem; }
+.cy-help > button { all: unset; box-sizing: border-box; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 600 .72rem var(--font); color: var(--muted); border: 1px solid var(--border-strong); cursor: help; transition: color .2s, border-color .2s, background .2s; }
+.cy-help > button:hover, .cy-help > button:focus-visible, .cy-help.open > button { color: #fff; background: var(--accent-soft); border-color: rgba(124,92,255,.6); }
+.cy-help .cy-tip { position: absolute; left: 50%; top: calc(100% + 10px); transform: translateX(-50%) translateY(4px); width: max-content; max-width: min(340px, 78vw); padding: .8rem 1rem; border-radius: 12px; background: rgba(20,22,33,.96); border: 1px solid var(--border-strong); color: var(--text-2); font: 400 .8rem/1.55 var(--font); letter-spacing: 0; text-transform: none; box-shadow: 0 18px 50px -12px rgba(0,0,0,.8); backdrop-filter: blur(12px); opacity: 0; pointer-events: none; z-index: 60; text-align: left; white-space: normal; transition: opacity .18s, transform .18s; }
+.cy-help:hover .cy-tip, .cy-help:focus-within .cy-tip, .cy-help.open .cy-tip { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+.cy-help.cy-help-block { display: flex; margin: -.75rem 0 1rem; }
+@media (max-width: 640px) { .cy-help .cy-tip { left: 0; transform: translateY(4px); } .cy-help:hover .cy-tip, .cy-help:focus-within .cy-tip, .cy-help.open .cy-tip { transform: translateY(0); } }
+
+/* ---------- mouvement : état initial des éléments animés par Motion (rien ne reste masqué sans JS) ---------- */
+@media (prefers-reduced-motion: reduce) { html body * { animation: none !important; transition-duration: .01ms !important; } }
+@media (max-width: 720px) { html body .panel { padding: 1.25rem .85rem; } html body .conn-block, html body .subsection { padding: 1.1rem; } html body .panel > h2 { font-size: 1.25rem; } }
+
+/* ---------- réglages du répondeur (Chat Intelligent) : libellé au-dessus, liste pleine largeur ---------- */
+html body .gc-autopanel .gc-switch { display: block; margin: .6rem 0; font-size: .84rem; color: var(--muted); }
+html body .gc-autopanel .gc-switch select { display: block; width: 100%; margin-top: .35rem; }
+html body .gc-autopanel .gc-switch input[type=checkbox] { margin-right: .5rem; }
+html body .gc-autopanel .gc-auto-title { display: flex; align-items: center; gap: .25rem; margin-top: .4rem; }

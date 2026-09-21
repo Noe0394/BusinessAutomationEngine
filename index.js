@@ -962,6 +962,10 @@ app.get('/icon.svg', (req, res) => {
 app.get('/sw.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'sw.js'));
 });
+// Interface v2 du dashboard (thème sombre, aide en infobulles, animations Motion) : fichiers statiques publics, liste blanche stricte.
+for (const asset of ['ui-v2.css', 'ui-v2.generated.css', 'ui-v2.js', 'vendor/motion.js']) {
+  app.get('/' + asset, (req, res) => { res.set('Cache-Control', 'public, max-age=300'); res.sendFile(path.join(__dirname, 'public', asset)); });
+}
 
 // Pages légales publiques (Politique de confidentialité, CGU, suppression des
 // données) requises pour la configuration de l'app Meta for Developers
