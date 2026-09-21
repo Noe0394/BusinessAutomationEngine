@@ -146,7 +146,7 @@ async function diagnose(tenant) {
   const oldCases = snap.cases.filter((c) => c.status !== 'RESOLVED' && Date.now() - c.openedAt > 2 * DAY);
   if (oldCases.length) add({ key: 'OLD_SAV_CASES', observation: `${oldCases.length} dossier(s) SAV ouvert(s) depuis plus de 48 h.`, diagnostic: 'Des réclamations restent sans résolution.', recommendation: 'Traiter ces dossiers SAV en priorité (je peux préparer une réponse pour chacun).', kind: 'NEEDS_VALIDATION', targets: oldCases.map((c) => c.id) });
   const services = await safe(() => require('./businessServices').list(tenant), []);
-  for (const s of services.filter((x) => x.lifecycle === 'active')) {
+  for (const s of services.filter((x) => (x.lifecycle || 'active') === 'active')) {
     const c = s.commercial || {}; const miss = [];
     if (!(c.price != null || (s.products || []).some((p) => p && p.price != null))) miss.push('prix'); if (!c.paymentTerms) miss.push('conditions de paiement'); if (!c.supportRules) miss.push('règles SAV');
     if (miss.length) add({ key: `SERVICE_INCOMPLETE:${s.id}`, serviceId: s.id, observation: `Le service « ${s.name} » n'a pas : ${miss.join(', ')}.`, diagnostic: 'Sans ces informations, je ne peux pas répondre précisément et je transmets plus souvent.', recommendation: `Compléter le service « ${s.name} » (${miss.join(', ')}).`, kind: 'NEEDS_VALIDATION' });
