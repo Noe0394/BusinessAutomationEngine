@@ -236,6 +236,7 @@ async function guard(text, decision, ctx) {
     const rep = repetitionGuard.check(t, ctx.state.recentReplies);
     if (rep.repeated) return `REPEAT_${rep.kind}`;
     if (unverifiedAmount(t, d.knownText)) return 'AMOUNT_UNVERIFIED';
+    if (!(d.learning && d.learning.forcedReply) && require('../claimGuard').hasCustomerClaim(t)) return 'ACTION_CLAIM_UNVERIFIED'; // jamais « c'est fait / j'ai enregistré… » sans action réelle
     if (d.learning && d.learning.verify) { const lp = d.learning.verify(t); if (lp) return lp; }
     return null;
   };
@@ -248,6 +249,7 @@ async function guard(text, decision, ctx) {
       REPEAT_QUESTION: 'Ne repose PAS une question déjà posée au client.',
       UNSOLICITED_PROMO: 'Ta réponse précédente contenait une promotion/un prix/une offre NON sollicités : reformule en répondant uniquement à ce que dit le client, sans aucun contenu commercial.',
       PRIVATE_DATA: 'Ta réponse précédente contenait des coordonnées (numéro/e-mail) absentes des données réelles : retire-les.',
+      ACTION_CLAIM_UNVERIFIED: "Ta réponse affirmait qu'une action était faite (enregistré, validé, envoyé, réservé…) alors que RIEN n'a été exécuté : reformule sans rien affirmer d'accompli ; dis ce que le client peut faire ou que tu transmets sa demande au vendeur.",
       AMOUNT_UNVERIFIED: 'Ta réponse citait un montant absent des données réelles: retire tout montant non présent dans les informations configurées.',
       COURSE_CLAIM_UNSUPPORTED: 'Ta réponse prétendait venir du cours alors qu\'aucun extrait n\'a été retrouvé : reformule en disant clairement que cette précision n\'est pas dans le contenu de la formation, puis, si pertinent, donne un complément clairement marqué « connaissance générale ».',
     }[issue];
@@ -262,6 +264,7 @@ async function guard(text, decision, ctx) {
     const safe = decision.template && TEMPLATES[decision.template] && !PROMO_RE.test(TEMPLATES[decision.template]) ? TEMPLATES[decision.template] : null;
     return { text: safe || (ctx.cls.flags.greeting ? TEMPLATES.COURTESY : (decision.kind === 'ANSWER' ? TEMPLATES.HOLD : null)), issue };
   }
+  if (issue === 'ACTION_CLAIM_UNVERIFIED') return { text: TEMPLATES.HOLD, issue, escalate: true }; // le vendeur est prévenu : rien n'est promis
   if (issue === 'AMOUNT_UNVERIFIED') return { text: TEMPLATES.AMOUNT_UNVERIFIED, issue };
   if (issue === 'COURSE_CLAIM_UNSUPPORTED') return { text: require('../learnerSupport').UNKNOWN_IN_COURSE, issue, escalate: true };
   if (issue === 'SALES_PUSH') return { text: decision.template ? TEMPLATES[decision.template] : TEMPLATES.WAIT, issue };

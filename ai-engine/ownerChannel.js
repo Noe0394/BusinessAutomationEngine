@@ -68,11 +68,12 @@ function quotedId(msg) {
 function sentId(result) { return result && result.key && result.key.id ? String(result.key.id) : null; }
 
 // Réglage : le canal propriétaire est actif quand l'assistant WhatsApp l'est (ou explicitement via ownerChannel:true/false).
+// Le self-chat du propriétaire est une interface de PILOTAGE (comme le Chat intelligent du site) : il fonctionne toujours, même si le répondeur
+// automatique des CLIENTS est coupé. Seul un réglage explicite `ownerChannel: false` le désactive. (Sécurité inchangée : seul le self-chat du compte
+// connecté ou un numéro propriétaire configuré est reconnu — voir adapter.isOwnerContext.)
 function isEnabled(settings, channel) {
-  if (!settings) return false;
-  if (settings.ownerChannel === false) return false;
-  if (settings.ownerChannel === true) return true;
-  return String(channel || 'WHATSAPP').toUpperCase() === 'TELEGRAM' ? !!settings.telegram : !!settings.whatsapp;
+  void channel;
+  return !(settings && settings.ownerChannel === false);
 }
 function isConfiguredOwner(settings, identity) {
   const list = (settings && Array.isArray(settings.ownerNumbers)) ? settings.ownerNumbers : [];
@@ -303,14 +304,16 @@ async function handleOwnerMessage(input, deps) {
 
     // 3) Chat Intelligent (même cerveau que le tableau de bord)
     const history = d.history ? await d.history.load(tenantId) : [];
-    let answer = null;
-    try { const out = d.chat ? await d.chat({ text, tenantId, history, session, principal, tainted, channel: adapter.channel }) : null; answer = out && out.text ? out.text : null; }
+    let answer = null; let turnOut = null;
+    try { const out = d.chat ? await d.chat({ text, tenantId, history, session, principal, tainted, channel: adapter.channel }) : null; turnOut = out; answer = out && out.text ? out.text : null; }
     catch (err) { console.warn(`ownerChannel — Chat Intelligent en échec (tenant "${tenant}") : ${aiErrors.redact(err && (err.internalDetail || err.message))}`); answer = aiErrors.safeUserMessage(err); }
     if (!answer && d.chatFallback) {
       try { answer = await d.chatFallback(text, history); }
       catch (err) { console.warn(`ownerChannel — repli conversationnel en échec (tenant "${tenant}") : ${aiErrors.redact(err && (err.internalDetail || err.message))}`); answer = aiErrors.safeUserMessage(err); }
     }
     if (!answer) answer = "Je n'ai pas de réponse pour cette demande pour le moment.";
+    // JAMAIS « fait » sans preuve : une affirmation d'accomplissement sans action réellement exécutée et vérifiée dans ce tour est remplacée par un message honnête.
+    answer = require('./claimGuard').guard(answer, turnOut).text;
     answer = contactIdentity.scrubTechnicalIds(answer);
     await reply(answer);
     if (d.history) { try { await d.history.append(tenantId, userTextForHistory || text, answer); } catch (e) { /* non bloquant */ } }
