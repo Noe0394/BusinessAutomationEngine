@@ -1,0 +1,17 @@
+{
+  "tenantId": "KEY-B4403774-2026",
+  "offers": [
+    {
+      "source": "service_metier",
+      "serviceId": "svc_mublskgsmeq4r",
+      "name": "RIEA Afrique",
+      "category": "formation",
+      "price": "8000 FCFA",
+      "description": "Plateforme africaine de formation professionnelle en cuisine, pâtisserie, transformation alimentaire, alimentation et entrepreneuriat.",
+      "options": "Gastronomie & Pâtisserie moderne, Grillades, Épicerie, Bouillon bio, Charcuterie artisanale, Élevage de volaille, Alimentation saine / Diététique, Alimentation infantile, Jus thérapeutiques",
+      "advantages": "",
+      "objections": ""
+    }
+  ],
+  "faq": []
+}
