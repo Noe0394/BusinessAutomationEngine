@@ -1,9 +1,22 @@
 [
   {
     "id": "mubi6wtg86a1e54c5c46",
-    "title": "Nouvelle discussion",
+    "title": "WhatsApp propriétaire",
     "createdAt": "2026-09-21T17:12:43.684Z",
-    "updatedAt": "2026-09-21T17:12:43.684Z",
-    "messages": []
+    "updatedAt": "2026-09-21T17:12:43.685Z",
+    "messages": [
+      {
+        "role": "user",
+        "text": "Cc salut",
+        "createdAt": "2026-09-21T17:12:43.685Z",
+        "via": "whatsapp_owner"
+      },
+      {
+        "role": "assistant",
+        "text": "Salut ! Ça va ? Dis-moi ce que je peux faire pour toi aujourd'hui, je suis prêt !",
+        "createdAt": "2026-09-21T17:12:43.685Z",
+        "via": "whatsapp_owner"
+      }
+    ]
   }
 ]
