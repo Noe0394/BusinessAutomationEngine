@@ -110,7 +110,11 @@ function decide(state, cls, ctx) {
     if (c.humanActive) return stop('HUMAN_ACTIVE');
     if (c.loopSuspected) return stop('LOOP_PROTECTION');
     // Groupe de FORMATION lié à un cours (automatisation autorisée par le propriétaire) : une question d'apprentissage y est légitime.
-    if (c.isGroup && !(c.learning && c.learning.active) && (!c.groupReplies || !commercial || flags.sensitive)) return stop('GROUP_NOT_ADDRESSED');
+    if (c.isGroup && !(c.learning && c.learning.active)) {
+      // Groupes : la décision vient du moteur d'engagement (politique + mémoire 7 jours + à qui s'adresse le message) ; sans lui, ancien comportement prudent.
+      if (c.engagement) { if (!c.engagement.respond) return stop(c.engagement.code); }
+      else if (!c.groupReplies || !commercial || flags.sensitive) return stop('GROUP_NOT_ADDRESSED');
+    }
     if (flags.sensitive && !state.refusal.active) {
       return {
         action: 'REPLY', kind: 'COURTESY', template: 'SENSITIVE', reason: `SENSITIVE_${flags.sensitive}`, reopen: false, escalate: flags.sensitive === 'URGENT', noPromo: true,
@@ -125,13 +129,20 @@ function decide(state, cls, ctx) {
     return { action: 'REPLY', kind: 'ANSWER', reason: 'LEARNING', reopen: false, escalate: !!c.learning.escalate, noPromo: false, directives: base.concat(c.learning.directives || []) };
   }
   const d = decideCore(state, cls, c);
-  if (d.action === 'REPLY' && intent === 'GREETING' && cls.intents.length === 1 && !flags.smalltalk && !d.template) { d.variants = 'GREET'; d.kind = 'COURTESY'; }
+  if (d.action === 'REPLY' && intent === 'GREETING' && cls.intents.length === 1 && !flags.smalltalk && !d.template && !(c.engagement && c.engagement.register === 'NATURAL_CONTINUITY')) { d.variants = 'GREET'; d.kind = 'COURTESY'; }
   if (d.action === 'REPLY' && !commercial && !['CLOSE', 'SUPPORT'].includes(d.kind)) {
     d.noPromo = true;
     d.directives = d.directives.concat(['Conversation NON commerciale : réponds naturellement à ce que dit le client. AUCUNE promotion non sollicitée : ne cite ni prix, ni formation, ni offre, ni produit.']);
     if (flags.smalltalk && !d.template) d.template = 'SMALLTALK';
   }
   if (state.memory && state.memory.subject && d.action === 'REPLY') d.directives = d.directives.concat([`Sujet courant de la conversation : ${state.memory.subject}.`]);
+  // Registre décidé par le moteur d'engagement (naturel / business / présentation / réponse de groupe) + contexte des 7 derniers jours.
+  if (c.engagement && d.action === 'REPLY') {
+    const e = c.engagement;
+    d.directives = d.directives.concat(e.directives || []);
+    if (['NATURAL', 'NATURAL_CONTINUITY'].includes(e.register) && !['CLOSE', 'SUPPORT'].includes(d.kind)) d.noPromo = true;
+    d.engagement = { code: e.code, why: e.why, register: e.register };
+  }
   return d;
 }
 
@@ -348,12 +359,15 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
   let cls = intentClassifier.classify(text, { state });
   if (cls.needsArbitration && d.llm && !(d.learning && d.learning.forcedReply)) cls = await intentClassifier.arbitrate({ text, history: d.history, llm: d.llm, base: cls });
 
+  // Engagement (politique + contexte 7 jours) : calculé UNE fois, sans réseau ni IA, avant toute décision.
+  let engagement = null;
+  if (typeof d.engagementFn === 'function') { try { engagement = await d.engagementFn({ cls, state, text, items: fresh }); } catch (e) { engagement = null; } }
   const recentTs = (state.recentTs || []).filter((t) => now - t < 120000);
   const subject = detectSubject(text, d.productNames);
   if (subject) state.memory.subject = subject;
   const decision = decide(state, cls, {
     now, humanActive: state.humanUntil > now, loopSuspected: recentTs.length >= 8,
-    isGroup: !!d.isGroup, groupReplies: !!d.groupReplies, learning: d.learning,
+    isGroup: !!d.isGroup, groupReplies: !!d.groupReplies, learning: d.learning, engagement,
   });
   const ctx = { tenantId, channel, from, name, text, cls, state, deps: d, decision };
   let replyText = null; let guardInfo = null; let out = null; let sent = false;
@@ -406,7 +420,7 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
     } catch (e) { /* non bloquant */ }
   }
 
-  return { action, reason, intent: cls.intent, intents: cls.intents, state: state.state, kind: decision.kind, text: replyText, out, sent, guard: guardInfo && guardInfo.issue };
+  return { action, reason, intent: cls.intent, intents: cls.intents, state: state.state, kind: decision.kind, text: replyText, out, sent, guard: guardInfo && guardInfo.issue, engagement: decision.engagement || (engagement ? { code: engagement.code, why: engagement.why, register: engagement.register } : null) };
 }
 
 module.exports = { handleBatch, decide, noteHumanActivity, commercialAllowed, privateLeak, unverifiedAmount, amountsIn, TEMPLATES };

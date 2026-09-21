@@ -4349,6 +4349,8 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
     }) : null;
 
     if (orchestrated) {
+      // JAMAIS « fait » sans preuve d'exécution dans ce tour (voir ai-engine/claimGuard.js).
+      if (orchestrated.text) orchestrated.text = require('./ai-engine/claimGuard').guard(orchestrated.text, orchestrated).text;
       assistantMessage = { role: 'assistant', createdAt: new Date().toISOString(), ...orchestrated };
       const updated = await aiStudioStore.appendMessages(tenantId, req.params.id, [userMessage, assistantMessage], title);
       return res.json({ session: updated });
@@ -4425,7 +4427,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
         }
       } else {
         await sleep(1500 + Math.floor(Math.random() * 1500));
-        assistantMessage = { role: 'assistant', text: replyText, createdAt: new Date().toISOString() };
+        assistantMessage = { role: 'assistant', text: require('./ai-engine/claimGuard').guard(replyText, null).text, createdAt: new Date().toISOString() };
       }
     }
   } catch (err) {
@@ -5122,6 +5124,24 @@ app.get('/api/auto-responder', requireAccess, async (req, res) => {
   try { res.json({ ok: true, settings: await autoResponder.getSettings(resolveTenantId(req)) }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
+// Comportement du répondeur (privé / groupes / présentation des services / exceptions) — voir ai-engine/conversationPolicy.js.
+app.get('/api/conversation-policy', requireAccess, async (req, res) => {
+  try { const p = await require('./ai-engine/conversationPolicy').get(resolveTenantId(req)); res.json({ ok: true, policy: p, resume: require('./ai-engine/conversationPolicy').describe(p) }); }
+  catch (err) { res.status(500).json({ error: 'Indisponible.' }); }
+});
+app.post('/api/conversation-policy', requireAccess, async (req, res) => {
+  try {
+    const cp = require('./ai-engine/conversationPolicy'); const b = req.body || {}; const patch = {};
+    if (cp.PRIVATE_MODES.includes(b.private)) patch.private = b.private;
+    if (cp.GROUP_MODES.includes(b.group)) patch.group = b.group;
+    if (cp.PRESENT_MODES.includes(b.presentServices)) patch.presentServices = b.presentServices;
+    if (b.windowDays !== undefined) patch.windowDays = b.windowDays;
+    if (b.groupMaxRepliesPer10Min !== undefined) patch.groupMaxRepliesPer10Min = b.groupMaxRepliesPer10Min;
+    if (typeof b.aiJudgment === 'boolean') patch.aiJudgment = b.aiJudgment;
+    const p = await cp.set(resolveTenantId(req), patch);
+    res.json({ ok: true, policy: p, resume: cp.describe(p) });
+  } catch (err) { res.status(500).json({ error: 'Enregistrement impossible.' }); }
+});
 app.post('/api/auto-responder', requireAccess, async (req, res) => {
   try {
     const b = req.body || {};
@@ -5319,6 +5339,19 @@ function hasIncomingAttachment(channel, msg) {
 // ai-engine/emotionalCloser.js — WhatsApp : JID complet ; Telegram (GramJS) :
 // chatId (senderId absent sur certains messages de canal/groupe, chatId
 // toujours présent).
+// Un message WhatsApp de groupe s'adresse-t-il à MOI ? mention de mon compte (numéro ou LID) ou réponse à l'un de mes messages (contextInfo Baileys).
+function waAddressing(msg, session) {
+  try {
+    const m = (msg && msg.message) || {};
+    const inner = (m.ephemeralMessage && m.ephemeralMessage.message) || (m.viewOnceMessage && m.viewOnceMessage.message) || m;
+    const holder = inner.extendedTextMessage || inner.imageMessage || inner.videoMessage || inner.documentMessage || inner.audioMessage || {};
+    const ci = holder.contextInfo || {};
+    const ids = session && typeof session.getSelfIds === 'function' ? session.getSelfIds() : {};
+    const base = (j) => String(j || '').split(':')[0].split('@')[0];
+    const mine = new Set([ids.pn, ids.lid].filter(Boolean).map(base));
+    return { mentioned: (ci.mentionedJid || []).some((j) => mine.has(base(j))), quotedFromBot: !!ci.participant && mine.has(base(ci.participant)) };
+  } catch (e) { return {}; }
+}
 function extractFromId(channel, msg) {
   if (channel === 'WHATSAPP') return msg && msg.key && msg.key.remoteJid;
   return msg && (msg.chatId ? String(msg.chatId) : (msg.senderId ? String(msg.senderId) : null));
@@ -5375,6 +5408,8 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
   const anyWaMedia = channel === 'WHATSAPP' && !!(msg && msg.message && (msg.message.imageMessage || msg.message.videoMessage || msg.message.audioMessage || msg.message.documentMessage || msg.message.documentWithCaptionMessage || msg.message.ptvMessage));
   const attachOnly = !text && channel === 'WHATSAPP' && (hasIncomingAttachment(channel, msg) || anyWaMedia);
   if (!text && !attachOnly) return;
+  // À qui s'adresse le message ? (mention de mon compte, réponse à l'un de mes messages) — utilisé par le moteur d'engagement (ai-engine/engagement.js).
+  const addressing = channel === 'WHATSAPP' ? waAddressing(msg, session) : (msg && msg.mentioned === true ? { mentioned: true } : {});
   const isGroupMsg = channel === 'WHATSAPP' && /@g\.us$/i.test(String(extractFromId(channel, msg) || ''));
 
   // IDENTITÉ RÉELLE du contact (nom -> vrai numéro -> « non identifié ») : un JID/LID n'est jamais un numéro de téléphone
@@ -5505,7 +5540,7 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       console.error(`assistantLayer.route (tenant "${tenantId}", ${channel}) :`, err.message);
     }
     const autoOut = await autoResponder.handleIncoming(
-      { tenantId, channel, from, name: senderName, text, messageId, senderId: isGroupMsg && msg && msg.key && msg.key.participant ? String(msg.key.participant) : (channel === 'TELEGRAM' && msg && msg.senderId ? String(msg.senderId) : undefined) },
+      { tenantId, channel, from, name: senderName, text, messageId, addressing, senderId: isGroupMsg && msg && msg.key && msg.key.participant ? String(msg.key.participant) : (channel === 'TELEGRAM' && msg && msg.senderId ? String(msg.senderId) : undefined) },
       { runtime: intelligenceBridge && intelligenceBridge.runtime, identity },
     ).catch((err) => {
       console.error(`autoResponder (tenant "${tenantId}", ${channel}) :`, err.message);

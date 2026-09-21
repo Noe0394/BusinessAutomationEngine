@@ -32,6 +32,9 @@ const SPECIALIST_BUDGET_MS = Math.max(0, parseInt(process.env.SPECIALIST_CUSTOME
 const withinBudget = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), SPECIALIST_BUDGET_MS))]);
 
 const SETTINGS_NS = 'auto_settings';
+const conversationPolicy = require('./conversationPolicy');
+const conversationContext = require('./conversationContext');
+const engagement = require('./engagement');
 
 // Déduplication en mémoire par tenant (Baileys/Telegram peuvent redélivrer le
 // même message ; on ne répond qu'UNE fois). Borné pour ne pas fuir en mémoire.
@@ -84,7 +87,8 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   const route = modelRouter.classify(text);
   // Appel IA tagué (AI Cost Guard) : purpose 'client_conversation' + tenant +
   // maxTokens (routeur) + taskId (protection anti-boucle par conversation).
-  const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}`, tier: route.tier === 'complex' ? 'reasoning' : 'standard' };
+  // Toujours le niveau « standard » de la cascade pour un client qui attend : réponse spontanée (le doublon parallèle du fournisseur lent s'applique). Le niveau « raisonnement » (lent) reste réservé aux tâches longues.
+  const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}`, tier: 'standard' };
   const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, meta).then((r) => r.text);
   // Offres classées : SERVICE PRIORITAIRE (celui de la campagne / du sujet déjà évoqué, sinon le service actif le plus récent),
   // puis les autres offres en simples suggestions complémentaires. Source de vérité = Services métiers configurés.
@@ -93,7 +97,11 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   // Un groupe lié (après vérification admin) à un Service métier répond d'abord sur CE service, quel que soit le métier.
   if (isGroupChat(channel, from)) { try { const linked = (await businessServices.list(tenant)).find((s) => (s.groups || []).some((g) => String(g.id) === String(from) && String(g.channel).toUpperCase() === String(channel).toUpperCase())); if (linked) hint = linked.name; } catch (e) { /* sans lien : comportement habituel */ } }
   const prio = await businessServices.getPrioritizedContext(tenant, { hint }).catch(() => ({ text: '' }));
-  const bizCtx = prio.text;
+  // Registre NATUREL (discussion courante, salutation, rappel du fil) : l'offre n'est PAS le sujet ; on la garde en tête sans la mettre en avant.
+  const registerNow = ctx && ctx.decision && ctx.decision.engagement && ctx.decision.engagement.register;
+  const bizCtx = ['NATURAL', 'NATURAL_CONTINUITY'].includes(registerNow)
+    ? (prio.text ? "Tu connais l'activité du vendeur, mais elle n'est PAS le sujet de cette discussion : n'en parle pas, sauf si la personne t'interroge elle-même dessus." : '')
+    : prio.text;
   let history = ''; let convArr = [];
   try {
     const conv = await messageHistory.getConversation(tenant, channel, from, route.maxContextMessages);
@@ -175,7 +183,7 @@ async function composeLearning({ tenant, channel, from, name, text, llm, directi
 // Point d'entrée : traite un message entrant de bout en bout. Retourne un objet
 // d'état honnête (jamais un faux succès) : { sent, status, confirmationId } ou
 // { skipped: 'DISABLED' | 'DUPLICATE' | 'NO_RUNTIME' | 'EMPTY_REPLY' }.
-async function handleIncoming({ tenantId, channel, from, name, text, messageId, senderId }, deps) {
+async function handleIncoming({ tenantId, channel, from, name, text, messageId, senderId, addressing }, deps) {
   const d = deps || {};
   const settings = d.settings || await getSettings(tenantId);
   if (!isEnabled(settings, channel)) return { skipped: 'DISABLED' };
@@ -202,7 +210,7 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId, 
   const debounceMs = d.debounceMs != null ? d.debounceMs : (settings.debounceMs != null ? settings.debounceMs : DEFAULT_DEBOUNCE_MS);
   return conversationQueue.submit(
     `${sanitizeTenant(tenantId)}:${channel}:${from}`,
-    { text, messageId, senderId },
+    { text, messageId, senderId, addressing },
     (items) => processBatch({ tenantId, channel, from, name, items, settings }, d),
     { debounceMs },
   );
@@ -268,6 +276,9 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
   } catch (e) { productNames = []; }
   // Arbitrage des intentions AMBIGUËES (refus vs intérêt, hésitation vs paiement…) : décision critique -> niveau raisonnement.
   const arbitrationLlm = d.llm || ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'intent_arbitration', tenant: tenantId, tier: 'reasoning', maxTokens: 300 }).then((r) => r.text));
+  // Juge des cas ambigus d'engagement : la cascade d'IA en production (niveau « standard », court, avec doublon parallèle) ; un modèle injecté (tests) n'est utilisé que s'il est
+  // fourni explicitement (engagementLlm) — jamais le modèle de rédaction simulé.
+  const judgeLlm = d.engagementLlm || (d.llm ? null : ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'engagement_judgment', tenant: tenantId, tier: 'standard', maxTokens: 120 }).then((r) => r.text)));
   // ACCOMPAGNEMENT D'APPRENANT (privé ou groupe de formation lié) : recherche ciblée dans la base de connaissances de CE compte.
   let learn = null;
   try {
@@ -281,6 +292,17 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
     groupReplies: settings.groupReplies === true,
     productNames,
     priorityService: (await businessServices.getPrioritizedContext(tenantId, { hint: '' }).catch(() => ({}))).priority || null,
+    // Politique du propriétaire + mémoire 7 jours de CETTE discussion → décision d'engagement (répondre ? registre ? présenter un service ?). Sans réseau ni IA.
+    engagementFn: async ({ cls, state, text: batchText, items: batchItems }) => {
+      const group = isGroupChat(channel, from);
+      const pol = conversationPolicy.resolveFor(conversationPolicy.fromSettings(settings), channel, from, group);
+      const ctx = await conversationContext.analyze({ tenant: tenantId, channel, from, isGroup: group, text: batchText, windowDays: pol.windowDays });
+      const lastItem = (batchItems || [])[(batchItems || []).length - 1] || {};
+      const addressing = Object.assign({ named: /\bcyrus\b/i.test(batchText) }, lastItem.addressing || {});
+      const base = engagement.decide({ policy: pol, ctx, cls, isGroup: group, addressing, text: batchText, state, learning: learn });
+      // Cas ambigus : la cascade d'IA tranche (budget 1,8 s) ; sinon la décision par règles s'applique. Les règles dures ne sont jamais contournées.
+      return engagement.arbitrate({ policy: pol, ctx, cls, isGroup: group, text: batchText, briefDirectives: base.directives }, base, judgeLlm, parseInt(process.env.ENGAGEMENT_AI_BUDGET_MS, 10) || 1800);
+    },
     llm: arbitrationLlm,
     crm: d.crm || contactCrm,
     knownText: learn ? `${knownText}\n${learn.knownText}` : knownText,
@@ -302,13 +324,15 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
     // Demande hors périmètre / escalade : triggerAdminNotification (alerte persistante, WhatsApp du propriétaire + tableau de bord).
     notify: d.notify || ((msg) => require('./alertCenter').triggerAdminNotification(tenantId, { reason: msg, contact: d.identity || null, key: `esc:${tenantId}:${channel}:${from}:${Math.floor(Date.now() / 600000)}` })),
   });
+  // Journal des décisions d'engagement (répond / se tait, et POURQUOI) : alimente l'outil « explainReply ».
+  if (result.engagement) { try { require('./activityStore').record({ type: 'engagement', action: result.action === 'NO_ACTION' ? 'Pas de réponse' : `Réponse (${result.engagement.register})`, status: 'ok', channel, tenant: tenantId, target: from, detail: `${result.engagement.code} | ${result.engagement.why}` }); } catch (e) { /* non bloquant */ } }
   if (result.action === 'NO_ACTION') {
-    try { require('./activityStore').record({ type: 'no_action', action: 'Aucune réponse nécessaire', channel, tenant: tenantId, target: from, status: 'ok', detail: `${result.intent || '-'} / ${result.reason}` }); } catch (e) { /* non bloquant */ }
-    return { skipped: 'NO_ACTION', reason: result.reason, intent: result.intent };
+    try { require('./activityStore').record({ type: 'no_action', action: 'Aucune réponse nécessaire', channel, tenant: tenantId, target: from, status: 'ok', detail: `${result.intent || '-'} / ${result.reason}${result.engagement ? ' / ' + result.engagement.why : ''}` }); } catch (e) { /* non bloquant */ }
+    return { skipped: 'NO_ACTION', reason: result.reason, intent: result.intent, engagement: result.engagement || null };
   }
   const out = lastOut || {};
   const sent = out.status === 'SUCCESS';
-  return { sent, status: out.status, confirmationId: out.confirmationId || null, error: out.error || null, reply: result.text, intent: result.intent, state: result.state, kind: result.kind };
+  return { sent, status: out.status, confirmationId: out.confirmationId || null, error: out.error || null, reply: result.text, intent: result.intent, state: result.state, kind: result.kind, engagement: result.engagement || null };
 }
 
 // Ancien comportement (settings.jarvis === false) : une réponse par message.

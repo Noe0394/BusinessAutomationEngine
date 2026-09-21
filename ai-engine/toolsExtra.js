@@ -706,5 +706,7 @@ const TOOLS = {
 
 // Cycle de vie client, guidage et groupes de Service métier (module dédié).
 Object.assign(TOOLS, require('./toolsLifecycle').TOOLS);
+// Pilotage du répondeur : politique, « pourquoi ? », contexte d'une discussion (module dédié).
+Object.assign(TOOLS, require('./toolsConversation').TOOLS);
 
 module.exports = { TOOLS, queueHandlers, launchDraft };

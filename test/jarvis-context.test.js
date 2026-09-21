@@ -94,7 +94,7 @@ test('groupes : silence par défaut, réponse seulement si configuré ET demande
   const rec = [];
   const g = '2250101@g.us';
   const a = await say(g, 'Bonjour tout le monde', pushy(), rec);
-  assert.equal(a.skipped, 'NO_ACTION'); assert.equal(a.reason, 'GROUP_NOT_ADDRESSED');
+  assert.equal(a.skipped, 'NO_ACTION'); assert.match(a.reason, /^GROUP_(NOT_ADDRESSED|CASUAL)$/); // raisons plus précises depuis le moteur d'engagement (même silence)
   assert.equal((await say(g, 'Combien coûte la formation ?', async () => 'C\'est 8000 FCFA.', rec)).skipped, 'NO_ACTION', 'groupReplies désactivé par défaut');
   await autoResponder.setSettings(T, { groupReplies: true });
   assert.equal((await say(g, 'Combien coûte la formation ?', async () => 'C\'est 8000 FCFA.', rec)).sent, true);

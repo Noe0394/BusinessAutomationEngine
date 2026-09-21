@@ -167,6 +167,10 @@ const LIFE_ORDERS_RE = /(?:\b(?:liste|montre|affiche|quelles?\s+sont)\b[^.?!]{0,
 const ACTIVITY_REPORT_RE = /(?:rapport\s+(?:d['’]\s*)?(?:activit[ée]s?|d['’]intelligence)|qu['’]est[- ]ce qui\s+(?:a\s+[ée]t[ée]|est)\s+(?:fait|bloqu[ée]|am[ée]lior[ée])|ce qui\s+(?:est|a\s+[ée]t[ée])\s+bloqu[ée]|\bque\s+(?:dois[- ]tu|faut[- ]il)\s+am[ée]liorer|comment\s+(?:t['’]es[- ]tu|tu\s+t['’]es)\s+am[ée]lior|analyse\s+(?:mon|l['’])\s*activit[ée])/i;
 const SELF_QUESTION_RE = /(?:^|\b)(?:qui es[- ]tu|pr[ée]sente[- ]toi|que (?:peux|sais)[- ]tu faire|qu['’]est[- ]ce que tu (?:peux|sais) faire|quels?\s+(?:sont\s+)?(?:tes|les)\s+(?:outils|fonctions|fonctionnalit[ée]s|capacit[ée]s|agents|services|modules)|quels?\s+(?:agents|outils)\s+(?:as|utilises|sont)|que ne peux[- ]tu pas|quelles?\s+sont\s+tes\s+limites|comment\s+(?:tu\s+)?t['’]am[ée]liores)|^\s*peux[- ]tu\s+(?:relancer|g[ée]rer|utiliser|vendre)\b[^.!]*\?\s*$/i;
 
+// Pilotage du répondeur depuis le chat (site, self WhatsApp/Telegram) : « pourquoi as-tu répondu à X ? », « dans le groupe Y réponds seulement si on te mentionne », « arrête de parler business à Z ».
+const WHY_REPLY_RE = /pourquoi\s+(?:as[- ]tu|tu\s+as|n['’]as[- ]tu\s+pas|tu\s+n['’]as\s+pas|le\s+r[ée]pondeur\s+(?:a|n['’]a\s+pas)|il\s+(?:a|n['’]a\s+pas))\s+(?:r[ée]pondu|r[ée]pond)/i;
+const CONVPOLICY_RE = /(?:comportement|politique|r[èe]glages?)\s+(?:du\s+)?r[ée]pondeur|(?:dans|pour|avec)\s+(?:le\s+groupe|la\s+discussion|ce\s+groupe|ce\s+contact)\b[^.?!]{0,80}\b(?:r[ée]ponds?|parle|pr[ée]sente)\b[^.?!]{0,60}\b(?:seulement|uniquement|plus|jamais|toujours|naturel\w*|business)\b|(?:arr[êe]te|cesse|ne\s+parle\s+plus)\b[^.?!]{0,30}\b(?:business|vente|de\s+mes\s+services)\b|(?:quand|comment)\s+(?:dois[- ]tu|le\s+r[ée]pondeur\s+doit[- ]il)\s+(?:parler|r[ée]pondre|pr[ée]senter)/i;
+
 function detectIntent(text, lastAssistantMessage) {
   const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply', 'adcampaign', 'groupcampaign'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
@@ -174,6 +178,7 @@ function detectIntent(text, lastAssistantMessage) {
   }
   if (lastAssistantMessage && lastAssistantMessage.intent === 'guide' && GUIDE_STEP_RE.test(text)) return 'guide';
   if (SELF_QUESTION_RE.test(text) && !/\d{6,}/.test(text)) return 'selfknow';
+  if (WHY_REPLY_RE.test(text) || CONVPOLICY_RE.test(text)) return 'convpolicy';
   if (LIFE_WHY_RE.test(text) || LIFE_CANDIDATES_RE.test(text) || LIFE_SAV_RE.test(text) || LIFE_ORDERS_RE.test(text)) return 'lifecycle';
   if (ACTIVITY_REPORT_RE.test(text)) return 'activityreport';
   if (GUIDE_START_RE.test(text) || (/\bexplique[- ]moi\b/i.test(text) && require('./guidedSetup').planForText(text))) return 'guide';
@@ -1379,6 +1384,26 @@ async function handleActivityReport(text, tenantId) {
   return { text: parts.join('\n'), intent: 'activityreport', actionLog: [{ icon: '📊', label: 'Rapport construit sur données réelles', status: 'done' }] };
 }
 
+// 'convpolicy' — « pourquoi as-tu répondu / pas répondu à X ? » (explication factuelle) ; lecture du comportement ; réglages → agent à outils (setConversationPolicy, avec vérification).
+async function handleConvPolicy(text, history, tenantId, sessionId, deps) {
+  if (WHY_REPLY_RE.test(text)) {
+    const clean = String(text).replace(/[?.!\s]+$/, ''); const m = clean.match(/(?:dans|au|le)\s+groupe\s+(.+)$/i) || clean.match(/\b(?:à|avec)\s+(.+)$/i) || clean.match(/\bpour\s+(.+)$/i);
+    const call = await toolRegistry.execute(tenantId, 'explainReply', m ? { conversation: m[1].trim() } : {}, {});
+    if (call.state !== 'SUCCESS') return { text: (call.error && call.error.message) || 'Je ne retrouve pas cette discussion dans les 7 derniers jours.', intent: 'convpolicy', actionLog: [{ icon: '⚠️', label: 'Explication indisponible', status: 'error' }] };
+    const r = call.result;
+    if (!r.count) return { text: r.note || 'Aucune décision enregistrée pour cette discussion sur les derniers jours.', intent: 'convpolicy', actionLog: [{ icon: '🔎', label: 'Aucune décision trouvée', status: 'done' }] };
+    const lines = r.decisions.slice(0, 5).map((d) => `• ${d.decision}${d.why ? ' — ' + d.why : ''}`);
+    return { text: `${r.conversation ? 'Pour « ' + r.conversation + ' » : ' : 'Mes dernières décisions : '}\n${lines.join('\n')}`, intent: 'convpolicy', toolCall: { name: 'explainReply', state: call.state, result: r }, actionLog: [{ icon: '🔎', label: 'Décisions relues dans mon journal', status: 'done' }] };
+  }
+  if (/(?:quel(?:le)?s?|montre|affiche|donne)[^.?!]{0,40}(?:comportement|politique|r[èe]glages?)/i.test(text) && !/(?:mets?|change|r[ée]gle|passe|d[ée]sactive|active)/i.test(text)) {
+    const call = await toolRegistry.execute(tenantId, 'getConversationPolicy', {}, {});
+    if (call.state === 'SUCCESS') return { text: `Voici comment je me comporte :\n- ${call.result.resume.join('\n- ')}\nDites-moi ce que vous voulez changer (par ex. « dans le groupe X, réponds seulement si on me mentionne »).`, intent: 'convpolicy', toolCall: { name: 'getConversationPolicy', state: call.state, result: call.result }, actionLog: [{ icon: '🎛️', label: 'Comportement relu', status: 'done' }] };
+  }
+  const agent = await agentLoop.runAgentLoop({ text, history, tenantId, sessionId }, { runtime: deps.runtime || null, permissions: deps.toolPermissions || undefined, llm: deps.llm || undefined }).catch(() => null);
+  if (agent) return Object.assign(agent, { intent: 'convpolicy' });
+  return { text: "Je n'ai pas pu régler cela. Dites-moi par exemple : « dans le groupe X, réponds seulement si on me mentionne » ou « ne parle jamais business à Awa ».", intent: 'convpolicy', isPlanningQuestion: true };
+}
+
 async function handleGenMedia(text, tenantId, deps) {
   const call = await toolRegistry.execute(tenantId, 'generateImage', { prompt: text }, { generateImage: deps.generateImage || null });
   if (call.state !== 'SUCCESS') {
@@ -1515,6 +1540,7 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
     case 'genmedia': return handleGenMedia(text, tenantId, d);
     case 'community': return handleCommunity(text, history, tenantId, sessionId, d);
     case 'selfknow': return handleSelfKnow(text, tenantId);
+    case 'convpolicy': return handleConvPolicy(text, history, tenantId, sessionId, d);
     case 'guide': return handleGuide(text, tenantId, lastAssistantMessage);
     case 'lifecycle': return handleLifecycle(text, tenantId);
     case 'activityreport': return handleActivityReport(text, tenantId);

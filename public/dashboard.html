@@ -565,6 +565,17 @@
         <label class="gc-switch"><input type="checkbox" id="autoreply-wa"> WhatsApp</label>
         <label class="gc-switch"><input type="checkbox" id="autoreply-tg"> Telegram</label>
         <span id="autoreply-status" class="gc-auto-status"></span>
+        <div class="gc-auto-title" style="margin-top:10px">🎛️ Comportement du répondeur</div>
+        <div class="gc-auto-desc">Réglez quand je parle business, quand je présente vos services et quand je réponds dans les groupes. Je m'appuie sur la mémoire des 7 derniers jours de chaque discussion.</div>
+        <label class="gc-switch" style="display:block;margin:4px 0">Discussions privées
+          <select id="cp-private"><option value="auto">Automatique (business quand le sujet s'y prête)</option><option value="natural">Toujours naturel (jamais de vente)</option><option value="business">Toujours orienté activité</option></select></label>
+        <label class="gc-switch" style="display:block;margin:4px 0">Groupes
+          <select id="cp-group"><option value="topic">Si on s'adresse à moi, ou question sur le thème d'un groupe métier</option><option value="addressed">Seulement si on me mentionne / me répond / m'appelle</option><option value="off">Silence dans les groupes</option></select></label>
+        <label class="gc-switch" style="display:block;margin:4px 0">Présenter mes services
+          <select id="cp-present"><option value="when-relevant">Quand le sujet s'y prête</option><option value="on-request">Seulement si on me le demande</option><option value="never">Jamais</option></select></label>
+        <label class="gc-switch" style="display:block;margin:4px 0"><input type="checkbox" id="cp-ai"> L'IA tranche les cas ambigus (recommandé)</label>
+        <div id="cp-resume" class="gc-auto-desc" style="margin-top:6px"></div>
+        <span id="cp-status" class="gc-auto-status"></span>
       </div>
       <div id="goalchat-messages"></div>
       <p id="goalchat-feedback" class="gc-feedback" hidden></p>
@@ -3429,6 +3440,18 @@
       }
       wa.addEventListener('change', save);
       tg.addEventListener('change', save);
+      // Comportement du répondeur (politique) : lecture + enregistrement à chaque changement.
+      var cpPrivate = document.getElementById('cp-private'); var cpGroup = document.getElementById('cp-group'); var cpPresent = document.getElementById('cp-present'); var cpAi = document.getElementById('cp-ai');
+      var cpResume = document.getElementById('cp-resume'); var cpStatus = document.getElementById('cp-status');
+      function cpShow(d) { if (!d || !d.policy) return; cpPrivate.value = d.policy.private; cpGroup.value = d.policy.group; cpPresent.value = d.policy.presentServices; cpAi.checked = d.policy.aiJudgment !== false; cpResume.textContent = (d.resume || []).join(' '); }
+      async function cpSave() {
+        try {
+          var res = await apiFetch('/api/conversation-policy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ private: cpPrivate.value, group: cpGroup.value, presentServices: cpPresent.value, aiJudgment: cpAi.checked }) });
+          var d = await res.json(); if (d && d.ok) { cpShow(d); cpStatus.textContent = 'Enregistré ✓'; setTimeout(function () { cpStatus.textContent = ''; }, 2000); }
+        } catch (e) { if (e.message !== 'unauthorized') cpStatus.textContent = 'Erreur'; }
+      }
+      [cpPrivate, cpGroup, cpPresent, cpAi].forEach(function (el) { if (el) el.addEventListener('change', cpSave); });
+      try { var rp = await apiFetch('/api/conversation-policy'); cpShow(await rp.json()); } catch (e) { /* silencieux */ }
       try {
         const res = await apiFetch('/api/auto-responder');
         const d = await res.json();
