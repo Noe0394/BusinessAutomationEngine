@@ -26,20 +26,13 @@ async function readUploadText(tenant, fileId) {
   return { meta };
 }
 
+// Fichier joint -> source de destinataires pour campaignService.prepareRecipients : le binaire ORIGINAL est relu et confié à
+// l'extracteur unique (toutes les feuilles, en-têtes détectés, CSV/TSV/VCF/JSON) — le même que celui du Web, de WhatsApp et de
+// Telegram. Jamais un parseur de plus.
 async function rowsFromUpload(tenant, fileId) {
-  const r = await readUploadText(tenant, fileId);
-  if (r.error) return r;
-  const XLSX = require('xlsx');
-  try {
-    let wb;
-    if (r.text) wb = XLSX.read(r.text, { type: 'string' });
-    else {
-      const f = await chatUploads.readFile(tenant, fileId);
-      if (!f) return { error: fail('FILE_NOT_FOUND') };
-      wb = XLSX.read(f.buffer, { type: 'buffer' });
-    }
-    return { rows: XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]) };
-  } catch (e) { return { error: fail('PARSE_ERROR', e.message) }; }
+  const f = await chatUploads.readFile(tenant, fileId).catch(() => null);
+  if (!f) return { error: fail('FILE_NOT_FOUND') };
+  return { file: { buffer: f.buffer, name: f.meta.name, type: f.meta.type } };
 }
 
 // ---------- brouillons de campagne (persistés) ----------
@@ -116,7 +109,7 @@ const TOOLS = {
       if (!args.text && args.fileId) {
         const r = await rowsFromUpload(ctx.tenant, args.fileId);
         if (r.error) return r.error;
-        src = { rows: r.rows };
+        src = { file: r.file };
       }
       try {
         const out = await campaignService.prepareRecipients(ctx.tenant, src, { defaultCountryCode: args.defaultCountryCode });

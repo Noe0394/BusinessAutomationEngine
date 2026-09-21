@@ -79,9 +79,14 @@ function create(d) {
     const debounceMs = settings.debounceMs != null ? settings.debounceMs : DEFAULT_DEBOUNCE_MS;
     conversationQueue.submit(`priv:${sanitize(tenantId)}:${channel}:${from}`, { text, messageId },
       async (items) => {
-        const out = await conversationRouter.processBatch({ tenantId, channel, from, identity, items, hasAttachment }, {
-          send: (reply) => sendVia(tenantId, channel, from, reply), settings, llm: d.llm, llmReasoning: d.llmReasoning,
-        });
+        // Conversation privée d'un contact : chaque lot est un ÉCHANGE IA client (limite 10/heure, voir clientAiQuota).
+        const out = await require('./clientLimitGuard').guardExchange(
+          { tenantId, channel, from, identity, exchangeId: items[items.length - 1].messageId, isGroup: false },
+          () => conversationRouter.processBatch({ tenantId, channel, from, identity, items, hasAttachment }, {
+            send: (reply) => sendVia(tenantId, channel, from, reply), settings, llm: d.llm, llmReasoning: d.llmReasoning,
+          }),
+        );
+        if (out && out.skipped === 'AI_LIMIT') return out;
         // Le lot pris ensemble ressemble à une demande métier : on laisse le moteur existant répondre.
         if (out.mode === 'BUSINESS') {
           await d.autoResponder.handleIncoming({ tenantId, channel, from, name: identity && identity.displayName, text: items.map((i) => i.text).join('\n'), messageId: items[items.length - 1].messageId }, { runtime: d.getRuntime && d.getRuntime() }).catch(() => {});
@@ -160,12 +165,15 @@ function create(d) {
   const ownerDeps = {
     getSettings: (t) => d.autoResponder.getSettings(t),
     history: ownerHistory,
-    transcribe: d.transcribeVoice || null,
-    // Même cerveau que l'onglet « Chat Intelligent » : chatOrchestrator (outils, mémoire, campagnes, rapports…).
-    chat: async ({ text, tenantId, history }) => {
+    // Les notes vocales et fichiers passent par le pipeline médias COMMUN (ai-engine/mediaPipeline.js), pas par un transcripteur
+    // propre au canal.
+    transcribe: null,
+    // Même cerveau que l'onglet « Chat Intelligent » : chatOrchestrator (outils, mémoire, campagnes, rapports…). Le principal
+    // (OWNER, émis par ownerChannel après vérification du self-chat) et la « teinte » du tour (contenu externe) sont transmis tels quels.
+    chat: async ({ text, tenantId, history, principal, tainted }) => {
       const last = [...history].reverse().find((m) => m.role === 'assistant') || null;
       const sid = await ownerSessionId(tenantId);
-      return d.chatOrchestrator.handle({ text, history, tenantId, sessionId: sid || 'owner-whatsapp', lastAssistantMessage: last }, d.chatDeps(tenantId));
+      return d.chatOrchestrator.handle({ text, history, tenantId, sessionId: sid || 'owner-whatsapp', lastAssistantMessage: last, principal, tainted: !!tainted }, d.chatDeps(tenantId));
     },
     // Aucune intention/outil applicable : conversation générale, comme le fait l'onglet du tableau de bord.
     chatFallback: async (text, history) => (await d.llmFallbackEngine.generateAIResponse(text, history)).text,
@@ -175,8 +183,8 @@ function create(d) {
     },
   };
 
-  async function handleOwnerMessage({ tenantId, session, msg, configuredOwner }) {
-    return ownerChannel.handleOwnerMessage({ tenantId, session, msg, configuredOwner }, ownerDeps);
+  async function handleOwnerMessage({ tenantId, session, msg, configuredOwner, channel }) {
+    return ownerChannel.handleOwnerMessage({ tenantId, session, msg, configuredOwner, channel: channel || 'WHATSAPP' }, ownerDeps);
   }
 
   // --- Démarrage : livreurs d'alertes + abonnement au canal propriétaire ----------------------------------------
@@ -186,7 +194,11 @@ function create(d) {
       ownerChannel.studioChatDeliverer((t, text, log) => d.platformOrchestrator.notifyTenantChat(t, text, log)),
     ]);
     if (typeof d.whatsappManager.setOwnerMessageHandler === 'function') {
-      d.whatsappManager.setOwnerMessageHandler(({ tenantId, session, msg }) => handleOwnerMessage({ tenantId, session, msg }));
+      d.whatsappManager.setOwnerMessageHandler(({ tenantId, session, msg }) => handleOwnerMessage({ tenantId, session, msg, channel: 'WHATSAPP' }));
+    }
+    // Parité Telegram : « Messages sauvegardés » du compte connecté = self-chat propriétaire, MÊME moteur.
+    if (d.telegramManager && typeof d.telegramManager.setOwnerMessageHandler === 'function') {
+      d.telegramManager.setOwnerMessageHandler(({ tenantId, session, msg }) => handleOwnerMessage({ tenantId, session, msg, channel: 'TELEGRAM' }));
     }
   }
 

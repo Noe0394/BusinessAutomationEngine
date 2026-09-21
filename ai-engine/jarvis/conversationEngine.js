@@ -87,6 +87,10 @@ function memoryLines(state) {
   if (m.explained && m.explained.length) lines.push(`Sujets déjà expliqués au client (ne les répète pas sauf demande explicite): ${m.explained.join(', ')}.`);
   if (m.accepted && m.accepted.length) lines.push(`Le client a déjà accepté/exprimé: ${m.accepted.join(', ')}.`);
   if (m.refused && m.refused.length) lines.push(`Le client a déjà refusé: ${m.refused.join(', ')} — ne le repropose pas.`);
+  if (m.interestService) lines.push(`Service qui a suscité l'intérêt du client : « ${m.interestService} » — c'est de lui qu'on parle par défaut (« l'attestation », « ça commence quand », « le prix » s'y rapportent).`);
+  if (m.askedQuestions && m.askedQuestions.length) lines.push(`Questions déjà posées par le client : ${m.askedQuestions.join(' | ')} — ne les lui fais pas répéter.`);
+  if (m.objections && m.objections.length) lines.push(`Objections déjà exprimées : ${m.objections.join(' | ')} — n'y reviens pas sans raison, traite-les avec les réponses préparées du service.`);
+  if (m.otherInterest) lines.push(`Le client s'est aussi intéressé à : ${m.otherInterest}.`);
   if (m.waiting) lines.push(`Le client attend/reporte (${m.waiting.kind}${m.waiting.when ? ', ' + m.waiting.when : ''}) — ne redemande pas ce qu'il a déjà dit.`);
   lines.push(`État actuel de la conversation: ${state.state}.`);
   return lines;
@@ -257,7 +261,7 @@ async function guard(text, decision, ctx) {
   return { text: null, issue };
 }
 
-function applyState(state, cls, decision, sent, replyText, items, now) {
+function applyState(state, cls, decision, sent, replyText, items, now, deps) {
   const { intent, flags } = cls;
   const prev = state.state;
   state.state = conversationState.nextState(prev, intent, flags);
@@ -277,6 +281,11 @@ function applyState(state, cls, decision, sent, replyText, items, now) {
   if (decision.kind === 'WAIT') state.memory.waiting = { kind: intent, when: flags.deferral || null, since: now };
   else if (['PURCHASE_INTENT', 'PAYMENT_INTENT', 'QUESTION', 'INTEREST'].includes(intent) && !flags.deferral) state.memory.waiting = null;
   for (const t of (flags.topics || [])) state.memory.questions[t] = (state.memory.questions[t] || 0) + 1;
+  // Mémoire commerciale : questions posées, objections, service d'intérêt (le code décide ; l'IA n'écrit jamais dans l'état).
+  const said = String(items.map((i) => i.text).join(' ')).replace(/\s+/g, ' ').trim().slice(0, 100);
+  if ((intent === 'QUESTION' || intent === 'REQUEST_INFORMATION' || intent === 'REQUEST_MORE_INFORMATION') && said) { state.memory.askedQuestions = (state.memory.askedQuestions || []).concat([said]).slice(-8); }
+  if ((intent === 'OBJECTION' || intent === 'PRICE_OBJECTION') && said) { state.memory.objections = (state.memory.objections || []).concat([said]).slice(-5); }
+  if (deps && deps.priorityService && !state.memory.interestService && (STRONG_COMMERCIAL.has(intent) || intent === 'QUESTION')) { state.memory.interestService = deps.priorityService; if (!state.memory.subject) state.memory.subject = deps.priorityService; }
   if (sent && replyText) {
     for (const t of topicsOfReply(replyText)) if (!state.memory.explained.includes(t)) state.memory.explained.push(t);
     state.recentReplies.push({ text: replyText.slice(0, 600), ts: now, kind: decision.kind });
@@ -351,7 +360,7 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
     state.recentTs = recentTs.concat(now);
     state.lastMessageTs = now;
   } else {
-    applyState(state, cls, decision, sent, replyText, fresh, now);
+    applyState(state, cls, decision, sent, replyText, fresh, now, d);
     state.recentTs = recentTs.concat(now).slice(-30);
   }
   await conversationState.save(state);

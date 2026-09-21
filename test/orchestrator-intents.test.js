@@ -4,6 +4,7 @@
 // l'AGENT À OUTILS (IA) qui choisit et exécute l'outil réel (pause/reprise/annulation/statut de campagne, conversation…).
 // Toute régression de routage (ex. « \b » après une lettre accentuée qui rendait « Réponds à Jean… » invisible) est détectée ici.
 'use strict';
+require('./helpers/auth').actAsAdmin(); // identité authentifiée de test (deny-by-default : voir ai-engine/authz.js)
 const test = require('node:test');
 const assert = require('node:assert');
 const o = require('../ai-engine/chatOrchestrator');

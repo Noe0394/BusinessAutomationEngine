@@ -250,6 +250,7 @@ async function getEngineContext(tenant) {
     products: s.products || [], commercial: Object.assign({}, s.commercial, {}),
     rules: s.rules || [], objectives: s.objectives || [], scopes: s.scopes || [],
     connected: s.status === STATUS.CONNECTED,
+    active: s.active !== false, createdAt: s.createdAt || '',
   }));
 }
 
@@ -262,7 +263,11 @@ async function getEngineContext(tenant) {
 async function getEngineContextText(tenant) {
   const ctx = await getEngineContext(tenant);
   if (!ctx.length) return '';
-  return ctx.map((s) => {
+  return ctx.map(renderService).join('\n\n');
+}
+
+function renderService(s) {
+  {
     const c = s.commercial || {};
     const cur = c.currency || '';
     const lines = [`• Service « ${s.name} » (${s.type}${s.project ? `, projet : ${s.project}` : ''})${s.connected ? ' — plateforme connectée' : ''}`];
@@ -286,7 +291,33 @@ async function getEngineContextText(tenant) {
     if ((s.objectives || []).length) lines.push(`  Objectifs : ${s.objectives.join(' | ')}`);
     if ((s.scopes || []).length) lines.push(`  Capacités autorisées (outils réels) : ${s.scopes.join(', ')}`);
     return lines.join('\n');
-  }).join('\n\n');
+  }
+}
+
+// CONVERSATION COMMERCIALE : ordre de présentation des offres à un prospect.
+//   1. SERVICE PRIORITAIRE = celui qui correspond au contexte (campagne / sujet déjà évoqué : `hint`), sinon le Service métier ACTIF
+//      le plus RÉCENT ;
+//   2. les autres services actifs ne sont donnés qu'en SUGGESTIONS COMPLÉMENTAIRES (résumé court) ;
+//   3. tout vient des données configurées : rien n'est inventé. Renvoie { text, priority, others, count }.
+function pickPriority(services, hint) {
+  const active = services.filter((s) => s.active !== false);
+  const pool = active.length ? active : services;
+  const h = String(hint || '').trim().toLowerCase();
+  if (h) {
+    const hit = pool.find((s) => String(s.name || '').toLowerCase() === h) || pool.find((s) => h.includes(String(s.name || '').toLowerCase()) && String(s.name || '').length >= 3);
+    if (hit) return hit;
+  }
+  return pool.slice().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0] || null;
+}
+async function getPrioritizedContext(tenant, opts) {
+  const services = await getEngineContext(tenant);
+  if (!services.length) return { text: '', priority: null, others: [], count: 0 };
+  const prio = pickPriority(services, opts && opts.hint);
+  const others = services.filter((s) => s !== prio && s.active !== false);
+  const brief = (s) => { const c = s.commercial || {}; return `• ${s.name}${c.price != null ? ` — ${c.price} ${c.currency || ''}`.trimEnd() : ''}${c.description ? ` : ${String(c.description).slice(0, 140)}` : ''}`; };
+  const parts = [`SERVICE PRIORITAIRE À PRÉSENTER (le plus pertinent pour ce contact — présente-le en premier et réponds à toutes ses questions dessus) :\n${renderService(prio)}`];
+  if (others.length) parts.push(`AUTRES OFFRES DU VENDEUR (à proposer UNIQUEMENT comme suggestions complémentaires, quand c'est pertinent — jamais avant d'avoir répondu au sujet du service prioritaire) :\n${others.map(brief).join('\n')}`);
+  return { text: parts.join('\n\n'), priority: prio.name, others: others.map((s) => s.name), count: services.length };
 }
 
 // Miroir des infos commerciales vers le profil business persistant que le
@@ -347,5 +378,5 @@ async function syncToConnectors(tenant) {
 
 module.exports = {
   STATUS, list, get, create, update, remove, connectApi, testConnection,
-  setPermissions, summary, getEngineContext, getEngineContextText, syncOffersToProfile, syncToConnectors, NAMESPACE,
+  setPermissions, summary, getEngineContext, getEngineContextText, getPrioritizedContext, syncOffersToProfile, syncToConnectors, NAMESPACE,
 };

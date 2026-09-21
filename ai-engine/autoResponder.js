@@ -82,7 +82,12 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   // maxTokens (routeur) + taskId (protection anti-boucle par conversation).
   const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}`, tier: route.tier === 'complex' ? 'reasoning' : 'standard' };
   const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, meta).then((r) => r.text);
-  const bizCtx = await businessServices.getEngineContextText(tenant).catch(() => '');
+  // Offres classées : SERVICE PRIORITAIRE (celui de la campagne / du sujet déjà évoqué, sinon le service actif le plus récent),
+  // puis les autres offres en simples suggestions complémentaires. Source de vérité = Services métiers configurés.
+  let convState = null; try { convState = await require('./jarvis/conversationState').get(tenant, channel, from); } catch (e) { convState = null; }
+  const hint = (convState && ((convState.ad && convState.ad.productName) || (convState.memory && (convState.memory.interestService || convState.memory.subject)))) || '';
+  const prio = await businessServices.getPrioritizedContext(tenant, { hint }).catch(() => ({ text: '' }));
+  const bizCtx = prio.text;
   let history = '';
   try {
     const conv = await messageHistory.getConversation(tenant, channel, from, route.maxContextMessages);
@@ -109,6 +114,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
       : 'Comme aucune offre n\'est renseignée, NE CITE AUCUN produit/service/domaine : réponds chaleureusement et demande simplement au client ce qu\'il recherche (ou dis que le vendeur va lui préciser) — sans jamais deviner ce qui est vendu.',
     // Conduite de la conversation commerciale (défauts constatés en test réel : moyens de paiement inventés, salutation répétée).
     'PAIEMENT : quand le client veut payer ou demande comment payer, donne EXACTEMENT les instructions de paiement configurées (numéro/moyen tels quels), puis demande la capture de la preuve de paiement avec son email. N\'invente JAMAIS un lien de paiement, un moyen (virement, carte…) ou un numéro absent des informations ci-dessus ; s\'ils ne sont pas configurés, dis que tu fais confirmer la procédure par le vendeur.',
+    'CONSEILLER : parle comme un conseiller humain qui connaît son offre, jamais comme un questionnaire ; réponds d\'abord précisément à la question posée, puis propose la suite naturelle. Une question de suivi (« et l\'attestation ? », « ça commence quand ? », « et l\'autre formation ? ») se rapporte au service et à l\'historique ci-dessus : ne demande jamais au client de répéter le contexte. Prix, dates, caractéristiques, reconnaissance d\'une attestation, promotions et conditions : UNIQUEMENT s\'ils figurent dans les informations ci-dessus ; sinon dis que tu transmets la question au vendeur. Ne propose les autres offres que comme suggestion complémentaire pertinente, après avoir répondu.',
     'INTÉRÊT : si le client manifeste son intérêt, réponds concrètement avec ce que tu sais RÉELLEMENT de l\'offre (ce que c\'est, le prix), puis propose la suite (comment payer) — pas une simple question.',
     history ? 'Ne dis « Bonjour »/« Salut » que dans le TOUT PREMIER message d\'une conversation : ici l\'échange est déjà commencé, va droit au but.' : '',
     'INFORMATION ABSENTE : si la question porte sur un fait absent des informations (livraison, zone, délai…), ne promets pas de « vérifier et revenir » ; dis simplement que tu transmets la question au vendeur qui confirmera.',
@@ -121,7 +127,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
 // Point d'entrée : traite un message entrant de bout en bout. Retourne un objet
 // d'état honnête (jamais un faux succès) : { sent, status, confirmationId } ou
 // { skipped: 'DISABLED' | 'DUPLICATE' | 'NO_RUNTIME' | 'EMPTY_REPLY' }.
-async function handleIncoming({ tenantId, channel, from, name, text, messageId }, deps) {
+async function handleIncoming({ tenantId, channel, from, name, text, messageId, senderId }, deps) {
   const d = deps || {};
   const settings = d.settings || await getSettings(tenantId);
   if (!isEnabled(settings, channel)) return { skipped: 'DISABLED' };
@@ -131,12 +137,18 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId }
 
   try { require('./activityStore').record({ type: 'message_in', action: 'Message client reçu', status: 'ok', channel, tenant: tenantId, target: from, detail: `${text.length} caractères` }); } catch (e) { /* non bloquant */ }
 
-  if (settings.jarvis === false) return legacyReply({ tenantId, channel, from, name, text }, d);
+  // Ancien mode : même limite par client (10 échanges IA/heure) que le moteur Jarvis.
+  if (settings.jarvis === false) {
+    return require('./clientLimitGuard').guardExchange(
+      { tenantId, channel, from, senderId, identity: d.identity, name, exchangeId: messageId, isGroup: isGroupChat(channel, from) },
+      () => legacyReply({ tenantId, channel, from, name, text }, d),
+    );
+  }
 
   const debounceMs = d.debounceMs != null ? d.debounceMs : (settings.debounceMs != null ? settings.debounceMs : DEFAULT_DEBOUNCE_MS);
   return conversationQueue.submit(
     `${sanitizeTenant(tenantId)}:${channel}:${from}`,
-    { text, messageId },
+    { text, messageId, senderId },
     (items) => processBatch({ tenantId, channel, from, name, items, settings }, d),
     { debounceMs },
   );
@@ -178,7 +190,16 @@ function identityDirectives(identity, name) {
   return ["Tu ne connais ni le nom ni l'objet de la demande de ce contact : demande-lui poliment, une seule fois, son nom et ce qu'il souhaite ; n'insiste pas s'il ne répond pas."];
 }
 
-async function processBatch({ tenantId, channel, from, name, items, settings }, d) {
+// Chaque lot est un ÉCHANGE IA client : limite de 10/heure par client (voir clientAiQuota) ; au-delà, aucun appel IA, passage au propriétaire.
+async function processBatch(args, d) {
+  const last = args.items[args.items.length - 1] || {};
+  return require('./clientLimitGuard').guardExchange(
+    { tenantId: args.tenantId, channel: args.channel, from: args.from, senderId: last.senderId, identity: d.identity, name: args.name, exchangeId: last.messageId, isGroup: isGroupChat(args.channel, args.from) },
+    () => processBatchInner(args, d),
+  );
+}
+
+async function processBatchInner({ tenantId, channel, from, name, items, settings }, d) {
   const knownText = await businessServices.getEngineContextText(tenantId).catch(() => '');
   let history = [];
   try { history = await messageHistory.getConversation(tenantId, channel, from, 8); } catch (e) { history = []; }
@@ -197,6 +218,7 @@ async function processBatch({ tenantId, channel, from, name, items, settings }, 
     isGroup: isGroupChat(channel, from),
     groupReplies: settings.groupReplies === true,
     productNames,
+    priorityService: (await businessServices.getPrioritizedContext(tenantId, { hint: '' }).catch(() => ({}))).priority || null,
     llm: arbitrationLlm,
     crm: d.crm || contactCrm,
     knownText,

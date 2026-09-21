@@ -20,16 +20,18 @@ const okGemini = (t) => ({ data: { candidates: [{ content: { parts: [{ text: t }
 const okClaude = (t) => ({ data: { content: [{ text: t }] } });
 function mockAxios(handler) {
   const calls = [];
-  const orig = axios.post;
+  const orig = axios.post; const origGet = axios.get;
   axios.post = async (url, body, cfg) => { calls.push({ url: String(url), body, timeout: cfg && cfg.timeout }); return handler(String(url), body, calls.length); };
-  return { calls, restore: () => { axios.post = orig; } };
+  axios.get = async () => { throw Object.assign(new Error('400'), { response: { status: 400, data: {} } }); }; // repli public : jamais de réseau réel
+  return { calls, restore: () => { axios.post = orig; axios.get = origGet; } };
 }
 
 test('état des connexions : ordre par niveau, modèles forts manquants signalés', () => {
   withKeys(['GROQ_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'HUGGINGFACE_API_KEY']);
   const s = llm.getProviderStatus();
-  assert.deepEqual(s.reasoning.slice(0, 3), ['groq', 'gemini', 'openrouter']);
-  assert.deepEqual(s.standard.slice(0, 2), ['groq', 'gemini']);
+  // Consigne produit : la famille Gemini (Gemma 4 31B → Gemma 4 → Flash) passe avant tous les fournisseurs externes.
+  assert.deepEqual(s.reasoning.slice(0, 5), ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq', 'openrouter']);
+  assert.deepEqual(s.standard.slice(0, 4), ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq']);
   assert.deepEqual(s.missingStrongModels, ['claude', 'openai']);
   withKeys(['GROQ_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']);
   const s2 = llm.getProviderStatus();
@@ -50,27 +52,29 @@ test('niveau RAISONNEMENT : Groq gpt-oss-120b en effort « high », marge de tok
   } finally { m.restore(); }
 });
 
-test('niveau STANDARD : cascade économique inchangée (effort « low », délai court, Gemini Flash en secours)', async () => {
+test('niveau STANDARD : Gemma 4 31B en premier ; si toute la famille Gemini échoue, Groq (effort « low », délai court) prend le relais', async () => {
   withKeys(['GROQ_API_KEY', 'GEMINI_API_KEY']);
-  let n = 0;
-  const m = mockAxios((url) => { n++; if (/groq/.test(url)) throw Object.assign(new Error('500'), { response: { status: 500 } }); return okGemini('réponse rapide'); });
+  process.env.AI_RETRY_BASE_MS = '0';
+  const m = mockAxios((url) => { if (/generativelanguage/.test(url)) throw Object.assign(new Error('400'), { response: { status: 400, data: {} } }); return okGroq('réponse rapide'); });
   try {
     const r = await llm.generateAIResponse('Salut', [], null);
-    assert.equal(r.provider, 'gemini');
-    assert.equal(m.calls[0].body.reasoning_effort, 'low');
-    assert.equal(m.calls[0].timeout, 15000);
-    assert.match(m.calls[1].url, /gemini-3\.6-flash/);
+    assert.equal(r.provider, 'groq');
+    assert.match(m.calls[0].url, /gemma-4-31b-it/);
+    const groqCall = m.calls.find((c) => /groq/.test(c.url));
+    assert.equal(groqCall.body.reasoning_effort, 'low');
+    assert.equal(groqCall.timeout, 15000);
   } finally { m.restore(); }
 });
 
-test('RAISONNEMENT : si Groq échoue, Gemini PRO (pas Flash) prend le relais avec un délai étendu', async () => {
+test('RAISONNEMENT : Gemma 4 31B en premier avec un délai étendu ; jamais de Gemini PRO automatique', async () => {
   withKeys(['GROQ_API_KEY', 'GEMINI_API_KEY']);
-  const m = mockAxios((url) => { if (/groq/.test(url)) throw Object.assign(new Error('429'), { response: { status: 429 } }); return okGemini('analyse approfondie'); });
+  const m = mockAxios((url) => okGemini('analyse approfondie'));
   try {
     const r = await llm.generateAIResponse('Décision critique', [], null, undefined, null, { tier: 'reasoning' });
-    assert.equal(r.provider, 'gemini');
-    assert.match(m.calls[1].url, /gemini-pro-latest/);
-    assert.equal(m.calls[1].timeout, 60000);
+    assert.equal(r.provider, 'gemini-primary');
+    assert.match(m.calls[0].url, /gemma-4-31b-it/);
+    assert.ok(!/pro/i.test(m.calls[0].url));
+    assert.equal(m.calls[0].timeout, 60000);
   } finally { m.restore(); }
 });
 

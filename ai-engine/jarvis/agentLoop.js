@@ -5,6 +5,7 @@ const llmFallbackEngine = require('../../lib/ai/llmFallbackEngine');
 const personaManager = require('../personaManager');
 const toolRegistry = require('../toolRegistry');
 const loopGuard = require('../loopGuard');
+const authz = require('../authz');
 const { describeTools } = require('../toolAgent');
 
 const LIMITS = { maxSteps: 5, totalTimeoutMs: 60000, toolTimeoutMs: 25000, maxAiCalls: 8 };
@@ -84,7 +85,8 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
     steps.push({ name: plan.tool, args: plan.args || {}, state: call.state, result: call.result || null, error: call.error || null, verification: call.verification || null });
 
     if (call.state === 'NEEDS_CONFIRMATION') {
-      pending.set(`${tenantId}:${sessionId || 'x'}`, { name: plan.tool, args: plan.args || {}, ctx, expires: Date.now() + PENDING_TTL_MS });
+      // L'action préparée reste liée à l'identité qui l'a demandée : seul le même principal peut la confirmer.
+      pending.set(`${tenantId}:${sessionId || 'x'}`, { name: plan.tool, args: plan.args || {}, ctx, principal: authz.currentPrincipal(), expires: Date.now() + PENDING_TTL_MS });
       stopReason = 'NEEDS_CONFIRMATION';
       break;
     }
@@ -125,6 +127,8 @@ async function resolvePending({ tenantId, sessionId, text }, deps) {
   const p = pending.get(key);
   if (!p) return null;
   if (Date.now() > p.expires) { pending.delete(key); return null; }
+  const who = authz.currentPrincipal();
+  if (p.principal && (!who || who.tenant !== p.principal.tenant || who.role !== p.principal.role)) return null; // pas le même appelant : jamais de confirmation par un autre
   if (personaManager.detectDecline(text)) {
     pending.delete(key);
     return { text: 'D\'accord, j\'annule : rien n\'a été exécuté.', actionLog: [{ icon: '🚫', label: `${p.name} annulé`, status: 'warning' }] };

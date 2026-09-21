@@ -14,6 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const storageAdapter = require('./storageAdapter');
+const untrusted = require('./untrusted');
 
 const NAMESPACE = 'chat_uploads';
 const MAX_TEXT_CHARS = 12000; // borne l'extraction pour ne pas gonfler le contexte
@@ -64,6 +65,17 @@ async function save(tenant, file) {
   return { id: meta.id, name: meta.name, type: meta.type, size: meta.size, textual: meta.textual, hasText: meta.hasText };
 }
 
+// Enregistre le résultat RÉEL de l'extraction de contenu (mediaPipeline) dans la fiche du fichier : statut OK/FAILED, méthode,
+// texte extrait. Permet à n'importe quel tour ou outil ultérieur de retrouver le contenu par l'identifiant du fichier.
+async function setExtraction(tenant, id, extraction) {
+  const doc = await loadMeta(tenant);
+  const meta = doc.files && doc.files[id];
+  if (!meta) return false;
+  meta.extraction = Object.assign({ at: new Date().toISOString() }, extraction, extraction && extraction.text ? { text: String(extraction.text).slice(0, MAX_TEXT_CHARS) } : {});
+  await storageAdapter.set(NAMESPACE, sanitize(tenant), doc);
+  return true;
+}
+
 async function get(tenant, id) {
   const doc = await loadMeta(tenant);
   return (doc.files && doc.files[id]) || null;
@@ -89,8 +101,14 @@ async function buildContext(tenant, attachments) {
   for (const a of list) {
     const meta = await get(tenant, a && a.id);
     if (!meta) { parts.push(`- Fichier joint : ${(a && a.name) || 'inconnu'} (référence introuvable).`); continue; }
-    if (meta.hasText && meta.text) {
-      parts.push(`- Fichier joint « ${meta.name} » (${meta.type}) [id: ${meta.id}]. Contenu :\n"""\n${meta.text}\n"""`);
+    if (meta.extraction && meta.extraction.status === 'OK' && meta.extraction.text) {
+      parts.push(`- Fichier joint « ${meta.name} » (${meta.type}, ${meta.size} octets) [id: ${meta.id}] — contenu réellement extrait :
+${untrusted.wrap('fichier « ' + meta.name + ' »', meta.extraction.text)}`);
+    } else if (meta.extraction && meta.extraction.status === 'FAILED') {
+      parts.push(`- Fichier joint « ${meta.name} » (${meta.type}) [id: ${meta.id}] : NON TRAITÉ (${meta.extraction.code || 'échec'}). Le contenu n'a pas pu être lu : n'en dis rien, n'invente rien, demande de le renvoyer ou de réessayer.`);
+    } else if (meta.hasText && meta.text) {
+      parts.push(`- Fichier joint « ${meta.name} » (${meta.type}) [id: ${meta.id}]. Contenu :
+${untrusted.wrap('fichier « ' + meta.name + ' »', meta.text)}`);
     } else {
       parts.push(`- Fichier joint « ${meta.name} » (${meta.type}, ${meta.size} octets) [id: ${meta.id}] — contenu binaire non lisible par le modèle texte actuel : n'invente pas ce qu'il contient. Pour un fichier de contacts (CSV/Excel), tu peux l'importer avec l'outil importContactsFromFile en passant ce fileId.`);
     }
@@ -98,4 +116,4 @@ async function buildContext(tenant, attachments) {
   return 'PIÈCES JOINTES importées par l\'utilisateur dans la discussion :\n' + parts.join('\n');
 }
 
-module.exports = { save, get, readFile, buildContext, isTextual, NAMESPACE };
+module.exports = { save, get, readFile, buildContext, setExtraction, isTextual, NAMESPACE, MAX_TEXT_CHARS };

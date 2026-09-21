@@ -3,6 +3,7 @@
 // Le transport WhatsApp est un faux (aucun envoi réel) ; toute la logique métier, le stockage, le scheduler, le workflow de
 // paiement et l'Identity Resolver sont les vrais modules.
 'use strict';
+require('./helpers/auth').actAsAdmin(); // identité authentifiée de test (deny-by-default : voir ai-engine/authz.js)
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('os');

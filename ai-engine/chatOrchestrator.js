@@ -7,6 +7,7 @@ const platformOrchestrator = require('./platformOrchestrator');
 const connectorManager = require('./connectors/connectorManager');
 const businessServices = require('./businessServices');
 const toolRegistry = require('./toolRegistry');
+const authz = require('./authz');
 const toolAgent = require('./toolAgent');
 const agentLoop = require('./jarvis/agentLoop');
 const memoryQuery = require('./memoryQuery');
@@ -1300,7 +1301,25 @@ async function handleGenMedia(text, tenantId, deps) {
 // engineFor, humanContext } injectés depuis la même instance que
 // lib/intelligence/vps-bridge.js (voir index.js, zéro moteur dupliqué).
 // ---------------------------------------------------------------------------
-async function handle({ text, history, tenantId, sessionId, lastAssistantMessage }, deps) {
+// POINT D'ENTRÉE UNIQUE du Chat intelligent (Web, WhatsApp, Telegram passent tous ici). Sécurité côté backend, jamais confiée au
+// texte ni au LLM : l'appelant doit avoir été AUTHENTIFIÉ par le canal (principal émis par du code serveur de confiance), son
+// compte doit être celui visé, et seuls les rôles OWNER/ADMIN accèdent à ce moteur (un client, un contact privé ou un groupe
+// n'ont jamais accès au back-office, quoi qu'ils écrivent). Le principal est ensuite porté par le contexte d'exécution : chaque
+// outil refait SES PROPRES vérifications (rôle, compte, paramètres, propriété de la ressource) — deny-by-default.
+// `tainted` : le tour contient du contenu externe (fichier, média, transcription) : les actions d'écriture externes exigeront
+// alors une confirmation explicite (voir toolRegistry).
+async function handle(input, deps) {
+  // Principal transmis par le canal, sinon celui déjà établi par une couche de confiance en amont (contexte d'exécution).
+  const p = (input && input.principal) || authz.currentPrincipal();
+  const allowed = authz.isPrincipal(p) && (p.role === authz.ROLES.OWNER || p.role === authz.ROLES.ADMIN)
+    && (p.role === authz.ROLES.ADMIN || p.tenant === String(input && input.tenantId));
+  if (!allowed) {
+    return { text: "Je ne peux pas traiter cette demande : votre identité n'a pas pu être vérifiée pour ce compte.", blocked: true, actionLog: [{ icon: '🔒', label: 'Accès refusé', status: 'error' }] };
+  }
+  return authz.runAs(p, () => handleInner(input, deps), { tainted: !!input.tainted });
+}
+
+async function handleInner({ text, history, tenantId, sessionId, lastAssistantMessage }, deps) {
   const d = deps || {};
 
   // Décision de validation de paiement manuel (Human-in-the-Loop) — un

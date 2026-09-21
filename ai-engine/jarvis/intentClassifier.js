@@ -53,6 +53,9 @@ const TOPICS = [
   ['delivery', /(?:^|\s)(?:livraison|livrer|livre|expedition|retrait)(?=\s|$|[?!])/],
   ['format', /(?:^|\s)(?:en ligne|presentiel|distance|zoom|whatsapp|visio|video)(?=\s|$|[?!])/],
   ['location', /(?:^|\s)(?:ou|lieu|adresse|localisation|ville)(?=\s|$|[?!])/],
+  ['certificate', /(?:^|\s)(?:attestation\w*|certificat\w*|certifi\w+|diplome\w*|reconnu\w*|reconnaissance|accredit\w*|agree\w*)(?=\s|$|[?!])/],
+  ['advantages', /(?:^|\s)(?:avantage\w*|benefice\w*|atouts?|interet)(?=\s|$|[?!])/],
+  ['howitworks', /(?:^|\s)(?:fonctionnement|deroul\w+|marche|fonctionne\w*|modalite\w*|conditions?|programme|contenu)(?=\s|$|[?!])/],
 ];
 
 // Contextes où une promotion commerciale serait déplacée (deuil, prière, santé, juridique, conflit, urgence).

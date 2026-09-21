@@ -12,6 +12,7 @@
 
 'use strict';
 
+require('./helpers/auth').actAsAdmin(); // identité authentifiée de test (deny-by-default : voir ai-engine/authz.js)
 const http = require('http');
 const path = require('path');
 const os = require('os');

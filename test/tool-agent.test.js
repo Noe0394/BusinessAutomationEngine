@@ -5,6 +5,7 @@
 
 'use strict';
 
+require('./helpers/auth').actAsAdmin(); // identité authentifiée de test (deny-by-default : voir ai-engine/authz.js)
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('os');

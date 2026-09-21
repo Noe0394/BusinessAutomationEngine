@@ -24,6 +24,9 @@ const NAMESPACE = 'ai_usage';
 const COST_PER_MTOK = {
   groq: 0.30,
   gemini: 0.20,
+  'gemini-primary': 0.20,
+  'gemini-secondary': 0.10,
+  'gemini-flash': 0.20,
   deepseek: 0.28,
   openrouter: 0.0, // modèles :free utilisés
   huggingface: 0.0,
@@ -33,6 +36,9 @@ const COST_PER_MTOK = {
 const MODEL_BY_PROVIDER = {
   groq: 'openai/gpt-oss-120b',
   gemini: process.env.GEMINI_MODEL || 'gemini-flash',
+  'gemini-primary': process.env.GEMINI_PRIMARY_MODEL || 'gemma-4-31b-it',
+  'gemini-secondary': process.env.GEMINI_SECONDARY_MODEL || 'gemma-4-26b-a4b-it',
+  'gemini-flash': process.env.GEMINI_FLASH_MODEL || 'gemini-flash-latest',
   deepseek: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
   openrouter: 'google/gemma:free',
   huggingface: 'Qwen2.5-72B-Instruct',

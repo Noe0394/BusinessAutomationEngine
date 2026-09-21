@@ -1,6 +1,7 @@
 // TEST RUNNER — canal propriétaire (self-chat -> Chat Intelligent), anti-boucle, isolation, file d'attente.
 //   node --test test/owner-channel.test.js
 'use strict';
+require('./helpers/auth').actAsAdmin(); // identité authentifiée de test (deny-by-default : voir ai-engine/authz.js)
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('os');

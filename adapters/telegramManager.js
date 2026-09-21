@@ -25,6 +25,12 @@ function setIncomingMessageHandler(fn) {
   incomingMessageHandler = typeof fn === 'function' ? fn : null;
 }
 
+// Canal propriétaire (self-chat « Messages sauvegardés ») -> Chat Intelligent : voir adapters/whatsappManager.js#setOwnerMessageHandler.
+let ownerMessageHandler = null;
+function setOwnerMessageHandler(fn) {
+  ownerMessageHandler = typeof fn === 'function' ? fn : null;
+}
+
 // Handler des messages HISTORIQUES PRÉEXISTANTS (backfill mémoire 7 jours,
 // voir adapters/telegram.js#backfillHistory). Distinct du handler live : ces
 // messages n'alimentent que la mémoire, jamais les auto-réponses.
@@ -64,6 +70,14 @@ function getOrCreate(rawTenantId) {
         if (!incomingMessageHandler) return;
         Promise.resolve(incomingMessageHandler({ channel: 'TELEGRAM', tenantId, session, msg })).catch((err) => {
           console.error(`Erreur dans le filtrage privé/pro Telegram (tenant "${tenantId}") :`, err.message);
+        });
+      });
+    }
+    if (typeof session.onOwnerMessage === 'function') {
+      session.onOwnerMessage((msg) => {
+        if (!ownerMessageHandler) return;
+        Promise.resolve(ownerMessageHandler({ channel: 'TELEGRAM', tenantId, session, msg })).catch((err) => {
+          console.error(`Erreur du canal propriétaire Telegram (tenant "${tenantId}") :`, err.message);
         });
       });
     }
@@ -320,5 +334,6 @@ module.exports = {
   listActiveEntries,
   getStorageStatus,
   setIncomingMessageHandler,
+  setOwnerMessageHandler,
   setHistoryMessageHandler,
 };

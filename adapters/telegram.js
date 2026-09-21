@@ -158,6 +158,37 @@ function createSession(tenantId) {
     incomingMessageListeners.push(callback);
   }
 
+  // Canal PROPRIÉTAIRE (parité avec WhatsApp) : messages que l'utilisateur s'écrit à lui-même dans « Messages sauvegardés »
+  // (self-chat Telegram). Ce ne sont ni des messages clients ni de l'activité de campagne : ils vont vers le Chat intelligent
+  // (voir ai-engine/ownerChannel.js). Seule cette conversation précise est propriétaire — jamais un autre dialogue.
+  const ownerMessageListeners = [];
+  function onOwnerMessage(callback) {
+    if (typeof callback === 'function') ownerMessageListeners.push(callback);
+  }
+  let selfId = null;
+  async function ensureSelfId() {
+    if (selfId) return selfId;
+    try {
+      const me = client ? await client.getMe() : null;
+      if (me && me.id != null) selfId = String(me.id);
+    } catch (err) { /* identité indisponible : aucun message ne sera considéré comme propriétaire */ }
+    return selfId;
+  }
+  function isSavedMessages(msg) {
+    return !!selfId && !!msg && msg.chatId != null && String(msg.chatId) === selfId;
+  }
+  async function dispatchOwnerCandidate(m) {
+    await ensureSelfId();
+    if (!isSavedMessages(m)) return;
+    ownerMessageListeners.forEach((callback) => {
+      try {
+        callback(m);
+      } catch (err) {
+        console.error(`Erreur dans un écouteur de message propriétaire Telegram (tenant "${tenantId}") :`, err.message);
+      }
+    });
+  }
+
   // Écouteurs "message HISTORIQUE PRÉEXISTANT" (backfill Telegram, voir
   // backfillHistory ci-dessous) — DISTINCT d'onIncomingMessage : ces messages
   // sont RÉCUPÉRÉS depuis le serveur Telegram (client.getDialogs +
@@ -250,6 +281,7 @@ function createSession(tenantId) {
     // Le compte connecté change (logout/startLogin) : purge les messages
     // bufferisés de l'ancien compte pour ne jamais les exposer sous le nouveau.
     recentMessages.length = 0;
+    selfId = null;
     accountResetListeners.forEach((callback) => {
       try {
         callback();
@@ -269,6 +301,9 @@ function createSession(tenantId) {
       // event.message.out === true : message envoyé par CE compte (notre
       // propre campagne, ou une réponse manuelle de l'utilisateur) — seul un
       // message reçu d'un contact doit mettre la file d'attente en pause.
+      if (event.message && event.message.out) {
+        dispatchOwnerCandidate(event.message).catch(() => {});
+      }
       if (event.message && !event.message.out) {
         recordIncomingMessage(event.message);
         incomingMessageListeners.forEach((callback) => {
@@ -768,6 +803,8 @@ function createSession(tenantId) {
     isConnected,
     isPaired,
     onIncomingMessage,
+    onOwnerMessage,
+    isSavedMessages,
     onAccountReset,
     restoreSessionFromRemote,
     getStorageStatus,

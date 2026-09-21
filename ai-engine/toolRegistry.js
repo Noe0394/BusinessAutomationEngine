@@ -18,6 +18,7 @@ const contactCrm = require('./contactCrm');
 const messageHistory = require('./messageHistory');
 const knowledgeBase = require('./knowledgeBase');
 const chatUploads = require('./chatUploads');
+const authz = require('./authz');
 
 // Niveaux de risque : l'utilisateur donne l'ordre, Cyrus l'exécute. Une confirmation n'est demandée QUE si elle est
 // explicitement configurée (ctx.confirmFrom ou JARVIS_CONFIRM_FROM = premier niveau exigeant une confirmation).
@@ -73,6 +74,7 @@ const TOOLS = {
   },
 
   getProductPrice: {
+    roles: ['OWNER', 'ADMIN', 'CUSTOMER'], // un prix est une information publique du vendeur
     description: 'Donne le prix RÉEL d\'un produit/formation/service configuré, recherché par nom. Ne renvoie jamais un prix inventé.',
     permission: null,
     risk: 'READ',
@@ -127,6 +129,8 @@ const TOOLS = {
 
   // ---- Configuration métier PAR LE CHAT (écriture) ------------------------
   configureBusinessService: {
+    // Brancher une URL/clé fournie par un contenu externe ferait partir des données vers un tiers : confirmation exigée.
+    confirmWhenTainted: (a) => !!(a && (a.baseUrl || a.apiKey)),
     description: 'Crée (et éventuellement connecte l\'API + teste) un Service Métier à partir d\'instructions en langage naturel : nom, type d\'activité, prix, produits, règles, objectifs, et connexion API (URL + clé + permissions). Retourne le service créé et, si une API est fournie, le résultat RÉEL du test de connexion.',
     permission: null,
     risk: 'LOW_WRITE',
@@ -178,24 +182,14 @@ const TOOLS = {
     async execute(args, ctx) {
       const meta = await chatUploads.get(ctx.tenant, args.fileId);
       if (!meta) return { ok: false, error: { code: 'FILE_NOT_FOUND' } };
-      let rows = [];
+      // Extracteur UNIQUE de contacts (toutes les feuilles, en-têtes détectés, CSV/TSV/VCF/JSON) : même logique que le Web.
+      let contacts = [];
       try {
-        const XLSX = require('xlsx');
-        let wb;
-        if (meta.hasText && meta.text) wb = XLSX.read(meta.text, { type: 'string' });
-        else {
-          const fs = require('fs'); const path = require('path');
-          const root = process.env.AI_ENGINE_STORAGE_DIR || path.join(__dirname, '..', 'ai_engine_data');
-          const buf = fs.readFileSync(path.join(root, 'chat_uploads', String(ctx.tenant).replace(/[^A-Za-z0-9_-]/g, '_') || 'unknown', args.fileId));
-          wb = XLSX.read(buf, { type: 'buffer' });
-        }
-        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+        const f = await chatUploads.readFile(ctx.tenant, args.fileId);
+        if (!f) return { ok: false, error: { code: 'FILE_NOT_FOUND' } };
+        const entries = require('./contactExtractor').extractFromFile({ buffer: f.buffer, name: f.meta.name, type: f.meta.type }).entries;
+        contacts = entries.filter((e) => e.phone).map((e) => ({ name: e.name || '', phone: e.phone }));
       } catch (e) { return { ok: false, error: { code: 'PARSE_ERROR', message: e.message } }; }
-      const contacts = rows.map((r) => {
-        const name = String(r.nom || r.Nom || r.prenom || r.Prenom || r.name || r.Name || '').trim();
-        const phone = String(r.telephone || r.Telephone || r.phone || r.Phone || r.numero || r.Numero || r.tel || r.Tel || '').trim();
-        return { name, phone };
-      });
       const report = await contactCrm.importContacts(ctx.tenant, contacts, { source: 'chat_import' });
       return { ok: true, result: report };
     },
@@ -440,7 +434,35 @@ function describe() {
 // Liste des outils réellement UTILISABLES pour ce contexte (permissions).
 function list(ctx) {
   const perms = (ctx && Array.isArray(ctx.permissions)) ? ctx.permissions : null;
-  return describe().filter((t) => !t.permission || !perms || perms.includes(t.permission));
+  // Deny-by-default : sans identité authentifiée, aucun outil n'est proposé ; sinon seuls ceux que le RÔLE peut utiliser.
+  const principal = (ctx && ctx.principal) || authz.currentPrincipal();
+  if (!authz.isPrincipal(principal)) return [];
+  return describe()
+    .filter((t) => authz.authorizeTool({ tool: TOOLS[t.name], toolName: t.name, tenant: principal.tenant, principal }).allowed)
+    .filter((t) => !t.permission || !perms || perms.includes(t.permission));
+}
+
+const MAX_STRING = 200000;
+function validateArgs(schema, args) {
+  const bad = [];
+  for (const [k, spec] of Object.entries(schema || {})) {
+    const v = args ? args[k] : undefined;
+    if (v == null || v === '') continue;
+    const t = spec && spec.type;
+    if (t === 'string' && (typeof v === 'object' || (typeof v === 'string' && v.length > MAX_STRING))) bad.push(k);
+    else if (t === 'number' && !Number.isFinite(Number(v))) bad.push(k);
+    else if (t === 'boolean' && typeof v !== 'boolean' && v !== 'true' && v !== 'false') bad.push(k);
+  }
+  return bad;
+}
+// Aperçu d'arguments pour une confirmation : jamais de secret (clé, jeton, mot de passe) en clair.
+function previewOf(args) {
+  const out = {};
+  for (const [k, v] of Object.entries(args || {})) {
+    if (/key|token|secret|password|pass/i.test(k)) out[k] = '••••';
+    else out[k] = typeof v === 'string' ? v.slice(0, 300) : v;
+  }
+  return out;
 }
 
 async function _execute(tenant, name, args, ctx) {
@@ -449,6 +471,15 @@ async function _execute(tenant, name, args, ctx) {
   if (!tool) return Object.assign(call, { state: STATE.FAILED, error: { code: 'UNKNOWN_TOOL', message: `Outil « ${name} » inconnu.` }, finishedAt: new Date().toISOString() });
 
   const fullCtx = Object.assign({ tenant }, ctx || {});
+  const done = (extra) => Object.assign(call, extra, { finishedAt: new Date().toISOString() });
+
+  // 1) AUTHENTIFIER + 2) AUTORISER (deny-by-default) : le principal vient du contexte serveur (jamais d'un argument, jamais
+  //    du LLM) ; le rôle doit figurer dans les rôles de l'outil ; un compte n'opère que sur lui-même.
+  const principal = authz.isPrincipal(fullCtx.principal) ? fullCtx.principal : authz.currentPrincipal();
+  fullCtx.principal = principal;
+  const verdict = authz.authorizeTool({ tool, toolName: name, tenant, principal });
+  if (!verdict.allowed) return done({ state: STATE.BLOCKED, error: { code: verdict.code, message: verdict.message } });
+
   // Permission
   if (tool.permission && Array.isArray(fullCtx.permissions) && !fullCtx.permissions.includes(tool.permission)) {
     return Object.assign(call, { state: STATE.BLOCKED, error: { code: 'PERMISSION_DENIED', permission: tool.permission }, finishedAt: new Date().toISOString() });
@@ -459,8 +490,25 @@ async function _execute(tenant, name, args, ctx) {
     .map(([k]) => k);
   if (missing.length) return Object.assign(call, { state: STATE.FAILED, error: { code: 'MISSING_INPUT', fields: missing }, finishedAt: new Date().toISOString() });
 
-  if (needsConfirmation(tool.risk, fullCtx) && !fullCtx.confirmed) {
-    const prepared = typeof tool.prepare === 'function' ? await tool.prepare(args || {}, fullCtx).catch(() => null) : null;
+  // 3) VALIDER les paramètres (types et bornes déclarés par le contrat) — un argument produit par un LLM n'est pas fiable.
+  const invalid = validateArgs(tool.inputSchema, args);
+  if (invalid.length) return done({ state: STATE.FAILED, error: { code: 'INVALID_INPUT', fields: invalid } });
+
+  // 4) PROPRIÉTÉ de la ressource : tout identifiant de fichier doit être bien formé ET appartenir à ce compte.
+  for (const k of ['fileId', 'mediaFileId']) {
+    if (args && args[k] != null && args[k] !== '') {
+      if (!authz.isSafeId(String(args[k])) || !(await chatUploads.get(tenant, String(args[k])).catch(() => null))) {
+        return done({ state: STATE.BLOCKED, error: { code: 'RESOURCE_NOT_OWNED', message: 'Fichier introuvable pour ce compte.' } });
+      }
+    }
+  }
+
+  // Tour TEINTÉ (fichier, média, transcription, donnée externe dans le message) : une action d'écriture externe ne part jamais
+  // sans un « oui » explicite de l'humain, même si un contenu externe « ordonne » de la lancer.
+  const taintedGuard = authz.isTainted() && !fullCtx.confirmed
+    && ((RISK[tool.risk] != null ? RISK[tool.risk] : RISK.WRITE) >= RISK.WRITE || (typeof tool.confirmWhenTainted === 'function' && tool.confirmWhenTainted(args || {})));
+  if ((needsConfirmation(tool.risk, fullCtx) || taintedGuard) && !fullCtx.confirmed) {
+    const prepared = typeof tool.prepare === 'function' ? await tool.prepare(args || {}, fullCtx).catch(() => null) : { ok: true, preview: previewOf(args), warnings: taintedGuard ? ['CONTENU_EXTERNE'] : [] };
     return Object.assign(call, { state: STATE.NEEDS_CONFIRMATION, risk: tool.risk, result: prepared, finishedAt: new Date().toISOString() });
   }
 

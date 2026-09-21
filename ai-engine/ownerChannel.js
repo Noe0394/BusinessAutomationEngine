@@ -17,6 +17,9 @@
 const pendingActions = require('./pendingActions');
 const conversationRouter = require('./conversationRouter');
 const contactIdentity = require('./contactIdentity');
+const authz = require('./authz');
+const aiErrors = require('../lib/ai/aiErrors');
+const scrubOutbound = aiErrors.scrubOutbound;
 
 const MARK = '⁣'; // séparateur invisible : signature technique des messages générés par Cyrus
 const MAX_PER_MINUTE = 20;
@@ -54,8 +57,8 @@ function wasJustSent(tenant, text) {
 }
 
 function extractText(msg) {
-  const m = (msg && msg.message) || {};
-  return String(m.conversation || (m.extendedTextMessage && m.extendedTextMessage.text) || (m.imageMessage && m.imageMessage.caption) || (m.videoMessage && m.videoMessage.caption) || '').trim();
+  const m = unwrapWa(msg);
+  return String(m.conversation || (m.extendedTextMessage && m.extendedTextMessage.text) || (m.imageMessage && m.imageMessage.caption) || (m.videoMessage && m.videoMessage.caption) || (m.documentMessage && m.documentMessage.caption) || '').trim();
 }
 function quotedId(msg) {
   const m = (msg && msg.message) || {};
@@ -65,10 +68,11 @@ function quotedId(msg) {
 function sentId(result) { return result && result.key && result.key.id ? String(result.key.id) : null; }
 
 // Réglage : le canal propriétaire est actif quand l'assistant WhatsApp l'est (ou explicitement via ownerChannel:true/false).
-function isEnabled(settings) {
+function isEnabled(settings, channel) {
   if (!settings) return false;
   if (settings.ownerChannel === false) return false;
-  return settings.ownerChannel === true || !!settings.whatsapp;
+  if (settings.ownerChannel === true) return true;
+  return String(channel || 'WHATSAPP').toUpperCase() === 'TELEGRAM' ? !!settings.telegram : !!settings.whatsapp;
 }
 function isConfiguredOwner(settings, identity) {
   const list = (settings && Array.isArray(settings.ownerNumbers)) ? settings.ownerNumbers : [];
@@ -141,67 +145,176 @@ async function handleControlCommand(tenantId, text) {
   return { text: `Compris : tu gères la conversation avec ${c.contactLabel}. Je ne réponds plus à sa place pendant 4 h ; dis « reprends la conversation avec ${c.contactLabel} » pour me la rendre.` };
 }
 
+// --- Adaptateurs de canal -------------------------------------------------------------------------------------------
+// Le Chat intelligent est UN SEUL moteur ; WhatsApp et Telegram ne sont que des adaptateurs d'entrée/sortie : chacun sait
+// (1) reconnaître un message du propriétaire, (2) en extraire le texte, (3) décrire un éventuel média joint, (4) le télécharger
+// RÉELLEMENT, (5) répondre dans la même conversation. Tout le reste (média → normalisation → Chat intelligent → outils →
+// vérification → réponse) est commun et vit dans handleOwnerMessage ci-dessous.
+function unwrapWa(msg) {
+  let m = (msg && msg.message) || {};
+  for (let i = 0; i < 4; i += 1) {
+    const inner = (m.ephemeralMessage && m.ephemeralMessage.message) || (m.viewOnceMessage && m.viewOnceMessage.message)
+      || (m.viewOnceMessageV2 && m.viewOnceMessageV2.message) || (m.documentWithCaptionMessage && m.documentWithCaptionMessage.message);
+    if (!inner) break;
+    m = inner;
+  }
+  return m;
+}
+
+const WHATSAPP = {
+  channel: 'WHATSAPP',
+  isOwnerContext: (session, msg, input) => (typeof session.isSelfChatJid === 'function' && session.isSelfChatJid(msg.key.remoteJid)) || !!input.configuredOwner,
+  messageId: (msg) => (msg.key && msg.key.id ? String(msg.key.id) : null),
+  destination: (msg) => msg.key.remoteJid,
+  text: (msg) => extractText(msg),
+  // Média joint : { kind, mimetype, filename, caption, voice } ou null. « voice » = vraie note vocale (Push-To-Talk) : c'est la
+  // PAROLE du propriétaire (une consigne), pas un document à analyser.
+  media(msg) {
+    const m = unwrapWa(msg);
+    if (m.imageMessage) return { kind: 'image', mimetype: m.imageMessage.mimetype || 'image/jpeg', filename: 'image', caption: m.imageMessage.caption || '' };
+    if (m.videoMessage) return { kind: 'video', mimetype: m.videoMessage.mimetype || 'video/mp4', filename: 'video', caption: m.videoMessage.caption || '' };
+    if (m.ptvMessage) return { kind: 'video', mimetype: m.ptvMessage.mimetype || 'video/mp4', filename: 'video', caption: '' };
+    if (m.audioMessage) return { kind: 'audio', mimetype: m.audioMessage.mimetype || 'audio/ogg', filename: m.audioMessage.ptt ? 'vocal' : 'audio', caption: '', voice: !!m.audioMessage.ptt };
+    if (m.documentMessage) return { kind: 'document', mimetype: m.documentMessage.mimetype || 'application/octet-stream', filename: m.documentMessage.fileName || 'document', caption: m.documentMessage.caption || '' };
+    return null;
+  },
+  download: (session, msg) => session.downloadIncomingMedia(msg),
+  reply: (tenantId, session, msg, text) => sendToSelf(tenantId, session, text, msg.key.remoteJid),
+  quotedId,
+};
+
+// Telegram (GramJS) : le « self-chat » est la conversation « Messages sauvegardés » du compte connecté.
+const TELEGRAM = {
+  channel: 'TELEGRAM',
+  isOwnerContext: (session, msg) => typeof session.isSavedMessages === 'function' && session.isSavedMessages(msg),
+  messageId: (msg) => (msg && msg.id != null ? String(msg.id) : null),
+  destination: (msg) => msg.chatId,
+  text: (msg) => String((msg && msg.message) || '').trim(),
+  media(msg) {
+    if (msg.voice) return { kind: 'audio', mimetype: 'audio/ogg', filename: 'vocal', caption: '', voice: true };
+    if (msg.photo) return { kind: 'image', mimetype: 'image/jpeg', filename: 'image', caption: '' };
+    const doc = msg.document || msg.video || msg.audio;
+    if (doc) {
+      const attrs = doc.attributes || [];
+      const fn = attrs.find((a) => a && a.fileName);
+      return { kind: 'document', mimetype: doc.mimeType || 'application/octet-stream', filename: (fn && fn.fileName) || 'fichier', caption: '' };
+    }
+    return null;
+  },
+  download: (session, msg) => msg.downloadMedia(),
+  reply: async (tenantId, session, msg, text) => {
+    const out = String(text).slice(0, 3800) + MARK;
+    rememberSent(sanitize(tenantId), out);
+    const res = await session.sendMessage(msg.chatId, out);
+    return { ok: true, messageId: res && res.id != null ? String(res.id) : null };
+  },
+  quotedId: (msg) => (msg && msg.replyTo && msg.replyTo.replyToMsgId != null ? String(msg.replyTo.replyToMsgId) : null),
+};
+const ADAPTERS = { WHATSAPP, TELEGRAM };
+
+// Description courte du fichier pour l'historique (le contenu extrait reste rattaché au fichier par son identifiant).
+const shortRef = (it) => `[Pièce jointe : ${it.name} (${it.kind}) [id: ${it.fileId || '-'}]${it.ok ? '' : ' — non traitée'}]`;
+
 // --- Point d'entrée -----------------------------------------------------------------------------------------------
-//   input : { tenantId, session, msg }
-//   deps  : { getSettings, chat({text, tenantId, history}) -> {text}|null, chatFallback(text, history) -> string,
+//   input : { tenantId, session, msg, channel?: 'WHATSAPP'|'TELEGRAM', configuredOwner? }
+//   deps  : { getSettings, chat({text, tenantId, history, session, principal, tainted}) -> {text}|null, chatFallback(text, history) -> string,
 //             paymentDeps(tenantId) -> {deliverToClient, executeOptions}, history: { load(tenantId), append(tenantId, user, assistant) },
-//             resolveDecision? (tests) }
+//             transcribe?(session,msg) (rétrocompatibilité), media?: { ingest(input), buildTurn(input) } }
 async function handleOwnerMessage(input, deps) {
   const { tenantId, session, msg } = input;
+  const adapter = ADAPTERS[String(input.channel || 'WHATSAPP').toUpperCase()] || WHATSAPP;
   const tenant = sanitize(tenantId);
   const run = async () => {
     const d = deps || {};
-    if (!msg || !msg.key || !session) return { ignored: 'NO_MESSAGE' };
+    if (!msg || !session) return { ignored: 'NO_MESSAGE' };
+    if (adapter === WHATSAPP && !msg.key) return { ignored: 'NO_MESSAGE' };
     // Isolation : uniquement la conversation « à soi-même » du compte connecté, ou un numéro propriétaire configuré.
-    const selfChat = typeof session.isSelfChatJid === 'function' && session.isSelfChatJid(msg.key.remoteJid);
-    if (!selfChat && !input.configuredOwner) return { ignored: 'NOT_OWNER' };
+    // (Le principal OWNER n'est émis qu'ICI, après cette vérification faite côté serveur — jamais à partir d'un texte.)
+    if (!adapter.isOwnerContext(session, msg, input)) return { ignored: 'NOT_OWNER' };
     const settings = d.getSettings ? await d.getSettings(tenantId) : null;
-    if (!isEnabled(settings)) return { ignored: 'OWNER_CHANNEL_DISABLED' };
+    if (!isEnabled(settings, adapter.channel)) return { ignored: 'OWNER_CHANNEL_DISABLED' };
+    const principal = authz.issuePrincipal({ tenant: tenantId, role: authz.ROLES.OWNER, userId: tenantId, channel: adapter.channel, via: input.configuredOwner ? 'configured_owner' : 'self_chat' });
 
-    let text = extractText(msg);
-    if (!text && d.transcribe) { try { text = String((await d.transcribe(session, msg)) || '').trim(); } catch (e) { text = ''; } }
-    if (!text) return { ignored: 'EMPTY' };
-    if (text.includes(MARK)) return { ignored: 'CYRUS_GENERATED' };          // anti-boucle : message produit par Cyrus
-    if (wasJustSent(tenant, text)) return { ignored: 'ECHO_OF_CYRUS' };
-    if (markSeen(tenant, msg.key.id)) return { ignored: 'DUPLICATE' };
-    const dest = msg.key.remoteJid;
-    const reply = async (t) => { const r = await sendToSelf(tenantId, session, t, dest); return r; };
+    let text = adapter.text(msg);
+    const mediaInfo = adapter.media(msg);
+    if (text && text.includes(MARK)) return { ignored: 'CYRUS_GENERATED' };          // anti-boucle : message produit par Cyrus
+    if (!text && !mediaInfo) return { ignored: 'EMPTY' };
+    if (text && wasJustSent(tenant, text)) return { ignored: 'ECHO_OF_CYRUS' };
+    if (markSeen(tenant, adapter.messageId(msg))) return { ignored: 'DUPLICATE' };
+    const reply = async (t) => adapter.reply(tenantId, session, msg, scrubOutbound(t));
     if (overRate(tenant, Date.now())) {
       return { ignored: 'RATE_LIMITED' }; // silence : ne jamais alimenter une boucle
     }
+
+    // 0) MÉDIA / FICHIER joint : récupération RÉELLE du binaire, extraction réelle, puis normalisation avec l'instruction du
+    //    MÊME message. Aucune étape simulée : si le fichier n'a pas pu être récupéré ou lu, on le dit simplement.
+    let tainted = false; let userTextForHistory = null;
+    if (mediaInfo && mediaInfo.voice && !text && typeof d.transcribe === 'function') {
+      // Chemin historique (transcripteur injecté) : la note vocale devient directement le texte du propriétaire.
+      try { text = String((await d.transcribe(session, msg)) || '').trim(); } catch (e) { text = ''; }
+      if (!text) return { ignored: 'EMPTY' };
+    } else if (mediaInfo) {
+      const media = d.media || require('./mediaPipeline');
+      let buffer = null;
+      try { buffer = await adapter.download(session, msg); } catch (err) { console.warn(`ownerChannel — téléchargement du média impossible (tenant "${tenant}", ${adapter.channel}) : ${aiErrors.redact(err && err.message)}`); }
+      if (!Buffer.isBuffer(buffer) || !buffer.length) {
+        await reply(aiErrors.FILE_FAILED_USER_MESSAGE);
+        return { handled: 'MEDIA_DOWNLOAD_FAILED' };
+      }
+      const item = await media.ingest({ tenantId, buffer, mimetype: mediaInfo.mimetype, filename: mediaInfo.filename, source: adapter.channel });
+      if (mediaInfo.voice) {
+        // Note vocale du propriétaire = sa consigne parlée : la transcription devient son message (non teinté).
+        if (!item.ok) { await reply(aiErrors.FILE_FAILED_USER_MESSAGE); return { handled: 'VOICE_FAILED' }; }
+        text = item.text.split('\n(Original :')[0].trim();
+        userTextForHistory = text;
+      } else {
+        const turn = media.buildTurn({ instruction: text || mediaInfo.caption, items: [item] });
+        userTextForHistory = `${text || mediaInfo.caption || ''}\n${shortRef(item)}`.trim();
+        if (!item.ok) { await reply(item.userMessage || aiErrors.FILE_FAILED_USER_MESSAGE); return { handled: 'MEDIA_UNREADABLE', fileId: item.fileId || null }; }
+        text = turn.text; tainted = turn.tainted;
+      }
+    } else if (!text && d.transcribe) {
+      try { text = String((await d.transcribe(session, msg)) || '').trim(); } catch (e) { text = ''; }
+      if (!text) return { ignored: 'EMPTY' };
+    }
+    if (!text) return { ignored: 'EMPTY' };
 
     // 1) OUI / NON sur une action précise
     const dec = (require('./manualPaymentValidator')).parseOwnerDecision(text);
     const open = await pendingActions.listOpen(tenantId);
     const targeted = !!dec.pendingActionId;
-    if (dec.decision && (open.length || targeted)) {
+    if (!mediaInfo && dec.decision && (open.length || targeted)) {
       const pd = d.paymentDeps ? d.paymentDeps(tenantId, session) : {};
       const out = await require('./manualPaymentValidator').resolveOwnerDecision(tenantId, {
-        decision: dec.decision, pendingActionId: dec.pendingActionId, quotedMessageId: quotedId(msg), courseHint: dec.courseHint,
+        decision: dec.decision, pendingActionId: dec.pendingActionId, quotedMessageId: adapter.quotedId(msg), courseHint: dec.courseHint,
       }, pd);
       await reply(out.text);
       return { handled: 'DECISION', kind: out.kind, pendingActionId: out.pendingActionId || null };
     }
-    if (dec.ambiguous && open.length) {
+    if (!mediaInfo && dec.ambiguous && open.length) {
       // « ok », « attends », « peut-être »… : jamais une opération sensible. On le dit clairement.
       await reply(`Je n'ai rien exécuté. ${open.length > 1 ? `${open.length} actions attendent` : 'Une action attend'} ta décision : réponds « OUI » ou « NON »${open.length > 1 ? ' suivi de la référence (ex : « OUI ' + open[0].pendingActionId + ' »)' : ''}.`);
       return { handled: 'AMBIGUOUS_DECISION' };
     }
 
     // 2) reprise / prise en main d'une conversation
-    const ctl = await handleControlCommand(tenantId, text);
+    const ctl = mediaInfo ? null : await handleControlCommand(tenantId, text);
     if (ctl) { await reply(ctl.text); return { handled: 'CONTROL' }; }
 
     // 3) Chat Intelligent (même cerveau que le tableau de bord)
     const history = d.history ? await d.history.load(tenantId) : [];
     let answer = null;
-    try { const out = d.chat ? await d.chat({ text, tenantId, history, session }) : null; answer = out && out.text ? out.text : null; } catch (err) { answer = `Je n'ai pas pu traiter ta demande (${err.message}).`; }
-    if (!answer && d.chatFallback) { try { answer = await d.chatFallback(text, history); } catch (err) { answer = `Je n'arrive pas à répondre pour le moment (${err.message}).`; } }
+    try { const out = d.chat ? await d.chat({ text, tenantId, history, session, principal, tainted, channel: adapter.channel }) : null; answer = out && out.text ? out.text : null; }
+    catch (err) { console.warn(`ownerChannel — Chat Intelligent en échec (tenant "${tenant}") : ${aiErrors.redact(err && (err.internalDetail || err.message))}`); answer = aiErrors.safeUserMessage(err); }
+    if (!answer && d.chatFallback) {
+      try { answer = await d.chatFallback(text, history); }
+      catch (err) { console.warn(`ownerChannel — repli conversationnel en échec (tenant "${tenant}") : ${aiErrors.redact(err && (err.internalDetail || err.message))}`); answer = aiErrors.safeUserMessage(err); }
+    }
     if (!answer) answer = "Je n'ai pas de réponse pour cette demande pour le moment.";
     answer = contactIdentity.scrubTechnicalIds(answer);
     await reply(answer);
-    if (d.history) { try { await d.history.append(tenantId, text, answer); } catch (e) { /* non bloquant */ } }
-    return { handled: 'CHAT' };
+    if (d.history) { try { await d.history.append(tenantId, userTextForHistory || text, answer); } catch (e) { /* non bloquant */ } }
+    return { handled: 'CHAT', media: !!mediaInfo };
   };
   const prev = chains.get(tenant) || Promise.resolve();
   const next = prev.catch(() => {}).then(run);
@@ -210,4 +323,4 @@ async function handleOwnerMessage(input, deps) {
   return next;
 }
 
-module.exports = { MARK, SESSION_TITLE, handleOwnerMessage, whatsappDeliverer, studioChatDeliverer, isEnabled, isConfiguredOwner, sendToSelf, extractText, quotedId, _test: { seen, rate, lastSent } };
+module.exports = { MARK, SESSION_TITLE, handleOwnerMessage, whatsappDeliverer, studioChatDeliverer, isEnabled, isConfiguredOwner, sendToSelf, extractText, quotedId, ADAPTERS, _test: { seen, rate, lastSent } };

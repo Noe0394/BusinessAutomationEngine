@@ -3,6 +3,7 @@
 //   node --test test/tools-extra.test.js
 'use strict';
 
+require('./helpers/auth').actAsAdmin(); // identité authentifiée de test (deny-by-default : voir ai-engine/authz.js)
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('os');
@@ -274,7 +275,6 @@ test('médias : métadonnées, validation par canal, attachement à un brouillon
 });
 
 test('AIProvider : OpenAI/Mistral/Claude inscrits dans la cascade, sautés sans clé, avant le repli public', () => {
-  const src = require('fs').readFileSync(path.join(__dirname, '..', 'lib', 'ai', 'llmFallbackEngine.js'), 'utf8');
-  const order = [...src.matchAll(/\{ name: '([a-z]+)', call:/g)].map((m) => m[1]);
-  assert.deepEqual(order, ['groq', 'gemini', 'deepseek', 'openrouter', 'huggingface', 'openai', 'mistral', 'claude', 'pollinations']);
+  const order = require('../lib/ai/llmFallbackEngine').providersForTier('standard').map((p) => p.name);
+  assert.deepEqual(order, ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq', 'openrouter', 'huggingface', 'deepseek', 'openai', 'mistral', 'claude', 'pollinations']);
 });

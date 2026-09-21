@@ -4232,15 +4232,23 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
   // l'exigence "L'Agent retranscrit la note vocale en direct dans le tchat".
   let attachment = null;
   let voiceTranscript = null;
+  let orchText = null; let studioTainted = false; // texte enrichi du contenu des fichiers (uniquement pour l'orchestrateur)
   if (req.file && req.file.mimetype && req.file.mimetype.startsWith('audio/')) {
     try {
       const { text: raw, language } = await voiceProcessor.transcribeAudio(req.file.buffer, req.file.mimetype, req.file.originalname);
       voiceTranscript = await voiceProcessor.translateToFrench(raw, language);
       text = voiceTranscript;
     } catch (err) {
-      console.error('Chat-First — échec de la transcription vocale du vendeur :', err.message);
-      return res.status(502).json({ error: `Impossible de traiter la note vocale (${err.message}).` });
+      console.error('Chat-First — échec de la transcription vocale du vendeur :', require('./lib/ai/aiErrors').redact(err.internalDetail || err.message));
+      return res.status(502).json({ error: 'Je n\'ai pas pu traiter cette note vocale. Pouvez-vous la renvoyer ou réessayer un peu plus tard ?' });
     }
+  } else if (req.file && ['pdf', 'docx', 'spreadsheet', 'text'].includes(mediaPipeline.detectKind({ buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname }).kind)) {
+    // Document / tableur / texte joint : MÊME pipeline que WhatsApp et Telegram (extraction réelle, contenu encadré comme non fiable).
+    const item = await mediaPipeline.ingest({ tenantId, buffer: req.file.buffer, mimetype: req.file.mimetype, filename: req.file.originalname, source: 'WEB' });
+    const turn = mediaPipeline.buildTurn({ instruction: text, items: [item] });
+    if (!item.ok) return res.status(422).json({ error: item.userMessage });
+    orchText = turn.text; studioTainted = true;
+    if (!text) text = '[Fichier joint : ' + req.file.originalname + ']';
   } else if (req.file) {
     // Pièce jointe image/vidéo (logo/photo produit) : hébergée immédiatement
     // via imageLinkStore (même store que Image-to-Link) pour être
@@ -4300,11 +4308,14 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
     // de conversation normal) — l'exécution retombe alors sur le pipeline
     // existant inchangé.
     const orchestrated = intelligenceBridge ? await chatOrchestrator.handle({
-      text,
+      text: orchText || text,
       history: existing.messages,
       tenantId,
       sessionId: req.params.id,
       lastAssistantMessage,
+      // Identité AUTHENTIFIÉE par requireAccess (jamais déduite du texte) ; tour teinté si un fichier a été joint.
+      principal: require('./ai-engine/authz').issuePrincipal({ tenant: tenantId, role: req.isAdmin ? 'ADMIN' : 'OWNER', userId: tenantId, channel: 'WEB', via: req.isAdmin ? 'web_admin' : 'web_license' }),
+      tainted: studioTainted,
     }, {
       runtime: intelligenceBridge.runtime,
       engineFor: intelligenceBridge.engineFor,
@@ -5068,15 +5079,22 @@ app.post('/api/contacts/import-crm', requireAccess, upload.single('file'), async
 // ai-engine/chatUploads.js. Renvoie des références utilisées ensuite par
 // POST /api/intelligence/goal-chat (champ `attachments`).
 const chatUploads = require('./ai-engine/chatUploads');
+// Chaque fichier passe par le MÊME pipeline médias que WhatsApp et Telegram (ai-engine/mediaPipeline.js) : type réel détecté,
+// contenu RÉELLEMENT extrait (image, audio, vidéo, PDF, Word, Excel/CSV, texte), résultat rattaché au fichier. Un fichier qui n'a pas pu
+// être lu est signalé (processed:false) — jamais présenté comme analysé.
+const mediaPipeline = require('./ai-engine/mediaPipeline');
 app.post('/api/intelligence/upload', requireAccess, upload.array('files', 10), async (req, res) => {
   try {
     const files = Array.isArray(req.files) ? req.files : [];
     if (!files.length) return res.status(400).json({ error: 'Aucun fichier fourni (champ "files").' });
     const tenant = resolveTenantId(req);
     const saved = [];
-    for (const f of files) saved.push(await chatUploads.save(tenant, f));
+    for (const f of files) {
+      const r = await mediaPipeline.ingest({ tenantId: tenant, buffer: f.buffer, mimetype: f.mimetype, filename: f.originalname, source: 'WEB' });
+      saved.push({ id: r.fileId || '', name: r.name, type: r.mimetype, size: r.size, textual: r.kind === 'text', hasText: r.ok, processed: r.ok, kind: r.kind, partial: r.partial, error: r.ok ? null : r.userMessage });
+    }
     res.json({ ok: true, files: saved });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error('Import de fichiers (Chat Intelligent) :', require('./lib/ai/aiErrors').redact(err.message)); res.status(500).json({ error: require('./lib/ai/aiErrors').FILE_FAILED_USER_MESSAGE }); }
 });
 // Sert / télécharge un fichier importé ou un média généré (per-tenant).
 // ?download=1 force le téléchargement (Content-Disposition attachment).
@@ -5317,7 +5335,8 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     }
   }
   // Une capture d'écran envoyée SANS légende n'a pas de texte : elle doit quand même atteindre le suivi des preuves de paiement.
-  const attachOnly = !text && channel === 'WHATSAPP' && hasIncomingAttachment(channel, msg);
+  const anyWaMedia = channel === 'WHATSAPP' && !!(msg && msg.message && (msg.message.imageMessage || msg.message.videoMessage || msg.message.audioMessage || msg.message.documentMessage || msg.message.documentWithCaptionMessage || msg.message.ptvMessage));
+  const attachOnly = !text && channel === 'WHATSAPP' && (hasIncomingAttachment(channel, msg) || anyWaMedia);
   if (!text && !attachOnly) return;
   const isGroupMsg = channel === 'WHATSAPP' && /@g\.us$/i.test(String(extractFromId(channel, msg) || ''));
 
@@ -5449,7 +5468,7 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       console.error(`assistantLayer.route (tenant "${tenantId}", ${channel}) :`, err.message);
     }
     const autoOut = await autoResponder.handleIncoming(
-      { tenantId, channel, from, name: senderName, text, messageId },
+      { tenantId, channel, from, name: senderName, text, messageId, senderId: isGroupMsg && msg && msg.key && msg.key.participant ? String(msg.key.participant) : (channel === 'TELEGRAM' && msg && msg.senderId ? String(msg.senderId) : undefined) },
       { runtime: intelligenceBridge && intelligenceBridge.runtime, identity },
     ).catch((err) => {
       console.error(`autoResponder (tenant "${tenantId}", ${channel}) :`, err.message);
