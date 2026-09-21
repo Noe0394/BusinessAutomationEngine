@@ -1,0 +1,107 @@
+{
+  "tenant": "KEY-B4403774-2026",
+  "services": [
+    {
+      "id": "svc_mublskgsmeq4r",
+      "name": "RIEA Afrique",
+      "type": "formation",
+      "project": null,
+      "connection": {
+        "kind": "api",
+        "connectorType": "generic",
+        "baseUrl": "https://riea-afrique-web.web.app/",
+        "authHeader": "X-API-Key",
+        "endpoints": null,
+        "apiKeyRef": null
+      },
+      "scopes": [
+        "students:create",
+        "students:suspend"
+      ],
+      "commercial": {
+        "price": 8000,
+        "promoPrice": null,
+        "currency": "FCFA",
+        "description": "Plateforme africaine de formation professionnelle en cuisine, pâtisserie, transformation alimentaire, alimentation et entrepreneuriat.",
+        "advantages": "",
+        "objections": "",
+        "responses": "",
+        "paymentTerms": "",
+        "accessTerms": "",
+        "target": "",
+        "audience": "",
+        "period": "",
+        "source": "",
+        "initialMessage": "",
+        "closing": "",
+        "escalation": "",
+        "knowledge": "",
+        "supportRules": ""
+      },
+      "specialists": [],
+      "lifecycle": "active",
+      "products": [
+        {
+          "name": "Gastronomie & Pâtisserie moderne",
+          "price": 8000
+        },
+        {
+          "name": "Grillades",
+          "price": 8000
+        },
+        {
+          "name": "Épicerie",
+          "price": 8000
+        },
+        {
+          "name": "Bouillon bio",
+          "price": 8000
+        },
+        {
+          "name": "Charcuterie artisanale",
+          "price": 8000
+        },
+        {
+          "name": "Élevage de volaille",
+          "price": 8000
+        },
+        {
+          "name": "Alimentation saine / Diététique",
+          "price": 8000
+        },
+        {
+          "name": "Alimentation infantile",
+          "price": 8000
+        },
+        {
+          "name": "Jus thérapeutiques",
+          "price": 8000
+        }
+      ],
+      "rules": [
+        "Les promotions et packs peuvent avoir des tarifs différents",
+        "Certaines fonctionnalités avancées nécessitent une licence ou une clé d’activation"
+      ],
+      "objectives": [
+        "Présenter RIEA",
+        "expliquer ses formations et services",
+        "communiquer les tarifs",
+        "guider les clients vers l’achat et les informer sur l’accès aux contenus et attestations"
+      ],
+      "capabilities": [],
+      "adCampaigns": [],
+      "groups": [],
+      "status": "DRAFT",
+      "lastTest": null,
+      "history": [
+        {
+          "at": "2026-09-21T18:53:32.957Z",
+          "event": "Service créé"
+        }
+      ],
+      "createdAt": "2026-09-21T18:53:32.956Z",
+      "updatedAt": "2026-09-21T18:53:32.956Z"
+    }
+  ],
+  "updatedAt": "2026-09-21T18:53:32.957Z"
+}
