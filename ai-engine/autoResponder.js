@@ -182,6 +182,12 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId, 
   if (!from || !text) return { skipped: 'EMPTY_REPLY' };
   if (markProcessed(tenantId, messageId)) return { skipped: 'DUPLICATE' };
   if (!d.runtime || typeof d.runtime.sendMessageVerified !== 'function') return { skipped: 'NO_RUNTIME' };
+  // Anti-boucle entre assistants : jamais de réponse automatique à un message signé par un assistant, ni à répétition avec un autre compte Cyrus.
+  const peer = require('./botSignature').detectPeer({ tenantId, channel, from, text });
+  if (peer) {
+    try { require('./activityStore').record({ type: 'peer_bot_ignored', action: 'Message venant d’un autre assistant : aucune réponse automatique', status: 'warning', channel, tenant: tenantId, target: from, detail: peer.reason }); } catch (e) { /* non bloquant */ }
+    return { skipped: 'PEER_BOT', reason: peer.reason };
+  }
 
   try { require('./activityStore').record({ type: 'message_in', action: 'Message client reçu', status: 'ok', channel, tenant: tenantId, target: from, detail: `${text.length} caractères` }); } catch (e) { /* non bloquant */ }
 
@@ -203,7 +209,7 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId, 
 }
 
 async function sendAndLog({ tenantId, channel, from, reply }, d) {
-  const out = await d.runtime.sendMessageVerified({ channel, to: from, text: reply, tenantId });
+  const out = await d.runtime.sendMessageVerified({ channel, to: from, text: require('./botSignature').sign(reply), tenantId });
   const sent = out.status === 'SUCCESS';
   try {
     require('./activityStore').record({

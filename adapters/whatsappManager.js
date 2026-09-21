@@ -372,7 +372,18 @@ function getStorageStatus() {
   };
 }
 
+// Ce numéro est-il celui d'un AUTRE compte Cyrus connecté sur ce serveur ? (anti-boucle entre deux comptes : voir ai-engine/botSignature.js)
+function isNumberOfOtherTenant(digits, exceptTenant) {
+  const except = sanitizeTenantId(exceptTenant);
+  for (const [id, entry] of tenants) {
+    if (id === except || !entry || !entry.session || typeof entry.session.getConnectedNumber !== 'function') continue;
+    try { if (String(entry.session.getConnectedNumber() || '') === String(digits)) return true; } catch (e) { /* session en reconnexion */ }
+  }
+  return false;
+}
+
 module.exports = {
+  isNumberOfOtherTenant,
   ensureConnected,
   ADMIN_TENANT_ID,
   sanitizeTenantId,

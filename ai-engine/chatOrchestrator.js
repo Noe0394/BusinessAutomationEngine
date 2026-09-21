@@ -185,7 +185,9 @@ function detectIntent(text, lastAssistantMessage) {
   if (offerClarifier.detectNewOfferIntent(text)) return 'offer';
   // 'reply' (répondre réellement au dernier message) AVANT 'inbox' : "réponds-lui"
   // est une action d'envoi, pas une lecture. AVANT 'report' aussi (répond ≠ rapport).
-  if (REPLY_RE.test(text)) return 'reply';
+  // « Réponds-lui… » = ordre COURT adressé au dernier message reçu. Un long texte d'instructions (création de service, configuration…) qui contient
+  // « réponds aux prospects » n'est PAS un ordre d'envoi : sinon il partait tel quel vers le dernier contact.
+  if (REPLY_RE.test(text) && String(text).length <= 400 && !CONFIGSVC_RE.test(text)) return 'reply';
   if (OWNERQUEUE_RE.test(text)) return 'ownerqueue';
   if (ACTIONS_RE.test(text)) return 'actionsreport';
   // Questions sur la mémoire 7×24 h (retrouver une discussion, ce qu'un client a dit, qui a parlé de...) : réponse factuelle.
@@ -731,6 +733,7 @@ async function composeReplyText(instruction, last, tenantId, domain) {
 }
 
 async function handleReply(text, tenantId, deps) {
+  if (String(text || '').length > 600) return { text: "Ce message est trop long pour être une réponse à envoyer : je ne l'envoie à personne. Dictez-moi la réponse exacte à envoyer, ou reformulez votre demande.", intent: 'reply' };
   if (!deps.runtime || typeof deps.runtime.sendMessageVerified !== 'function') {
     return { text: 'Envoi indisponible pour le moment (moteur non injecté).' };
   }

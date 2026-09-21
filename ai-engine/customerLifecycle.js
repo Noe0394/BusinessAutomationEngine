@@ -221,7 +221,7 @@ async function runFollowUp(tenant, followUpId, deps) {
   text = String(text || (TEMPLATES[fu.kind] || TEMPLATES.LOYALTY)(fu.contact.name, subject ? `votre ${subject}` : '')).trim();
   if (!d.runtime || typeof d.runtime.sendMessageVerified !== 'function') { await record({ status: 'NEEDS_OWNER', ownerReason: 'NO_RUNTIME' }, 'followup_needs_owner'); return { ok: false, error: 'NO_RUNTIME', decision }; }
   const to = fu.contact.channel === 'WHATSAPP' && !/@/.test(fu.contact.id) ? `${fu.contact.id}@s.whatsapp.net` : fu.contact.id;
-  const out = await d.runtime.sendMessageVerified({ channel: fu.contact.channel, to, text, tenantId: tenant });
+  const out = await d.runtime.sendMessageVerified({ channel: fu.contact.channel, to, text: require('./botSignature').sign(text), tenantId: tenant });
   const sent = out && out.status === 'SUCCESS';
   await record(sent ? { status: 'SENT', sentAt: Date.now(), confirmationId: out.confirmationId || null, attempts: fu.attempts + 1, text: text.slice(0, 300) } : { attempts: fu.attempts + 1, lastError: String((out && (out.error || out.status)) || 'ÉCHEC') }, sent ? 'followup_sent' : 'followup_failed');
   try { require('./activityStore').record({ type: 'follow_up', action: `Relance ${fu.kind}`, status: sent ? 'ok' : 'error', channel: fu.contact.channel, tenant, target: fu.contact.name || fu.contact.id, detail: sent ? `envoyée (réf. ${out.confirmationId || '?'})` : String(out && out.error) }); } catch (e) { /* non bloquant */ }

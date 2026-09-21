@@ -28,7 +28,7 @@ let mid = 0;
 // LLM de test : "vendeur pressant" qui essaie toujours de vendre (pire cas)
 function pushyLlm(reply) { return async () => reply || 'La formation est à 8000 FCFA. Souhaitez-vous vous inscrire ?'; }
 function runtime(record) {
-  return { sendMessageVerified: async (p) => { record.push(p); return { status: 'SUCCESS', confirmationId: 'WAMID-J-' + record.length }; } };
+  return { sendMessageVerified: async (p) => { record.push(Object.assign({}, p, { text: require('../ai-engine/botSignature').strip(p.text) })); return { status: 'SUCCESS', confirmationId: 'WAMID-J-' + record.length }; } };
 }
 async function say(from, text, llm, rec, extra) {
   return autoResponder.handleIncoming(

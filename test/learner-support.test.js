@@ -66,7 +66,7 @@ test.after(() => { axios.post = origPost; axios.get = origGet; try { fs.rmSync(T
 const alerts = [];
 alertCenter.setDeliverers([async (tenant, text) => { alerts.push({ tenant, text }); return { ok: true, channel: 't' }; }]);
 const sent = [];
-const runtime = { sendMessageVerified: async ({ to, text, tenantId }) => { sent.push({ to, text, tenantId }); return { status: 'SUCCESS', confirmationId: 'C' + sent.length }; } };
+const runtime = { sendMessageVerified: async ({ to, text, tenantId }) => { sent.push({ to, text: require('../ai-engine/botSignature').strip(text), tenantId }); return { status: 'SUCCESS', confirmationId: 'C' + sent.length }; } };
 const settings = { whatsapp: true, telegram: true, debounceMs: 0, groupReplies: false };
 const owner = (t) => authz.issuePrincipal({ tenant: t, role: 'OWNER', channel: 'WEB', via: 'test' });
 const customer = (t) => authz.issuePrincipal({ tenant: t, role: 'CUSTOMER', channel: 'WHATSAPP', via: 'test' });
