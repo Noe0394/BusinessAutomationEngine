@@ -152,11 +152,17 @@ const GENMEDIA_RE = /(g[ée]n[èe]re?r?|cr[ée]e?r?|fabrique?r?|dessine?r?|fais(
 // fil" que index.js#POST .../messages) fait gagner la continuation d'une
 // intention en cours sur toute reclassification par mots-clés du nouveau
 // message, exactement comme pour image/vidéo/livre.
+// COMMUNAUTÉS : créer/inviter dans un groupe, ou découvrir des groupes/canaux publics par thème. Traitées par l'AGENT À OUTILS (Tool Registry :
+// createCommunityGroup / discoverCommunities…), donc avec PREPARE → confirmation → exécution → vérification.
+const COMMUNITY_BUILD_RE = /(?:\bcr[ée]{1,2}\w*|\bmonte\w*|\bouvre\w*|\bconstitue\w*|\bmets?\s+en\s+place|\bfai(?:s|re)\s+un|\binvite\w*|\bajoute\w*)\b[^.?!]{0,60}\b(?:(?:un|une|le|la|mon|ma|ce|cette|nouveau|nouvelle)\s+)?(?:groupes?|communaut[ée]s?)\b/i;
+const COMMUNITY_SEARCH_RE = /(?:\btrouve\w*|\bcherche\w*|\brecherche\w*|\bd[ée]couvre\w*|\bidentifie\w*|\brep[èe]re\w*|\bd[ée]niche\w*)\b[^.?!]{0,60}\b(?:groupes?|canaux|cha[iî]nes?|communaut[ée]s?)\b[^.?!]{0,40}\b(?:publics?|th[ée]matiques?|sur|autour|li[ée]s?|d['’]int[ée]r[êe]t)\b|\b(?:groupes?|canaux)\s+(?:publics?\s+)?(?:whatsapp|telegram)\s+(?:sur|autour|du|d['’]|pour)\b/i;
+
 function detectIntent(text, lastAssistantMessage) {
   const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply', 'adcampaign', 'groupcampaign'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
     return lastAssistantMessage.intent;
   }
+  if (COMMUNITY_SEARCH_RE.test(text) || (COMMUNITY_BUILD_RE.test(text) && !/(?:groupes?\s+(?:admin|que\s+j)|mes\s+groupes|dans\s+(?:le|mes|tous)\s+groupes?\b)/i.test(text))) return 'community';
   // Campagnes de groupes administrés (création, rapport, arrêt) : AVANT « recurring » / « grouppost » / « goal ».
   if ((GROUPCAMPAIGN_TARGET_RE.test(text) && GROUPCAMPAIGN_TIME_RE.test(text)) || GROUPCAMPAIGN_REPORT_RE.test(text) || GROUPCAMPAIGN_STOP_RE.test(text)) return 'groupcampaign';
   // Campagne Facebook Ads (message d'accueil des nouveaux contacts) : AVANT « offer » / « goal » qui la happaient.
@@ -1282,6 +1288,14 @@ async function handleImportContacts(text, tenantId) {
 // ---------------------------------------------------------------------------
 // 'genmedia' — génère un visuel (affiche/image) et le renvoie téléchargeable.
 // ---------------------------------------------------------------------------
+// 'community' — délègue à l'AGENT À OUTILS (boucle plan → outil → confirmation → vérification) : createCommunityGroup, discoverCommunities,
+// getCommunityGroupStatus, listCommunities, prepareContactsFromSource. Aucune logique d'envoi ici : tout passe par le Tool Registry.
+async function handleCommunity(text, history, tenantId, sessionId, deps) {
+  const agent = await agentLoop.runAgentLoop({ text, history, tenantId, sessionId }, { runtime: deps.runtime || null, permissions: deps.toolPermissions || undefined, generateImage: deps.generateImage || null, llm: deps.llm || undefined }).catch(() => null);
+  if (agent) return Object.assign(agent, { intent: 'community' });
+  return { text: "Je n'ai pas pu préparer cette action de groupe/communauté. Dites-moi le canal (WhatsApp ou Telegram), le nom du groupe et la liste de contacts (fichier joint ou texte), ou les mots-clés à explorer.", isPlanningQuestion: true, intent: 'community' };
+}
+
 async function handleGenMedia(text, tenantId, deps) {
   const call = await toolRegistry.execute(tenantId, 'generateImage', { prompt: text }, { generateImage: deps.generateImage || null });
   if (call.state !== 'SUCCESS') {
@@ -1416,6 +1430,7 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
     case 'configsvc': return handleConfigSvc(text, history, tenantId);
     case 'importcontacts': return handleImportContacts(text, tenantId);
     case 'genmedia': return handleGenMedia(text, tenantId, d);
+    case 'community': return handleCommunity(text, history, tenantId, sessionId, d);
     default: return null;
   }
 }

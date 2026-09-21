@@ -39,3 +39,6 @@ Le PC et le téléphone gardent leur mode « zéro serveur » : le portage adapt
 
 ## Livraison 2026-09-21 (soir) — Agency Agents : spécialistes sous la tutelle du Service Orchestrateur
 Voir docs/AGENCY-AGENTS.md. À porter vers local-client/ et mobile/webapp/ : ai-engine/agents/ (+ catalog), scripts/sync-agency-agents.js, branchements autoResponder.composeReply et chatOrchestrator.handleInner, outils listSpecialists/setSpecialistStatus, champs Service métier (specialists, lifecycle…).
+
+## Livraison 2026-09-21 (nuit) — Communautés : création/invitation de groupes + découverte (WhatsApp/Telegram)
+À porter vers local-client/ et mobile/webapp/ : ai-engine/communityService.js, communityDiscovery.js, contactCrm (communities), outils createCommunityGroup/getCommunityGroupStatus/discoverCommunities/listCommunities (toolsExtra), intention community (chatOrchestrator), primitives moteurs (adapters/whatsappEngineBaileys.js : checkNumbersOnWhatsApp/createGroup/addGroupParticipants/getGroupInviteLink/getInviteInfo ; adapters/telegram.js : createCommunityGroup/inviteUserToGroup/exportGroupInviteLink/searchPublicCommunities), routes /api/communities/*, sections UI cm-wa/cm-tg. Variables : COMMUNITY_MAX_MEMBERS, COMMUNITY_WA_BATCH, COMMUNITY_DELAY_MIN_MS/MAX_MS, WHATSAPP_DIRECTORY_SEARCH_URL.

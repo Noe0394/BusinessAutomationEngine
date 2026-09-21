@@ -766,6 +766,47 @@
           <button type="button" id="show-last-report-btn" hidden>📋 Voir le dernier rapport de campagne</button>
         </p>
       </div>
+
+      <div class="subsection" id="cm-wa-section">
+        <h3>👥 Communautés — créer un groupe et découvrir des groupes/canaux (WhatsApp)</h3>
+        <p class="empty">Créez un groupe à partir d'une liste de contacts validés : les participants sont ajoutés dans le respect de leurs paramètres de confidentialité ; ceux qui ont restreint l'ajout direct reçoivent automatiquement le lien d'invitation officiel en message privé. Vous pouvez aussi le demander directement dans le Chat Intelligent.</p>
+
+        <div class="field">
+          <label for="cm-wa-title">Nom du groupe</label>
+          <input type="text" id="cm-wa-title" maxlength="100" placeholder="Ex. Formation Marketing — Promo 1" />
+        </div>
+        <div class="field">
+          <label for="cm-wa-text">Contacts (un par ligne : numéro, éventuellement avec le nom)</label>
+          <textarea id="cm-wa-text" rows="4" placeholder="+22670123456 Awa&#10;+22675000111 Issa"></textarea>
+        </div>
+        <div class="field">
+          <label for="cm-wa-file">…ou un fichier (Excel, CSV, texte, vCard, ou image d'une liste — OCR)</label>
+          <input type="file" id="cm-wa-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" />
+        </div>
+        <div class="field">
+          <label for="cm-wa-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
+          <input type="text" id="cm-wa-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
+        </div>
+        <button type="button" id="cm-wa-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
+        <button type="button" id="cm-wa-resume-btn" hidden>▶️ Reprendre</button>
+        <p id="cm-wa-create-feedback" hidden></p>
+        <div id="cm-wa-progress" hidden></div>
+
+        <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
+        <div class="field">
+          <label for="cm-wa-kw">Mots-clés sectoriels (séparés par des virgules)</label>
+          <input type="text" id="cm-wa-kw" placeholder="Ex. marketing digital, immobilier" />
+        </div>
+        <button type="button" id="cm-wa-search-btn">🔎 Rechercher</button>
+        <button type="button" id="cm-wa-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
+        <p id="cm-wa-search-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th></tr></thead>
+            <tbody id="cm-wa-results"><tr><td colspan="5" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- Onglet Telegram -->
@@ -948,6 +989,47 @@
             <p id="tg-dm-progress-network-status" class="warning-box" hidden></p>
           </div>
         </div>
+
+      <div class="subsection" id="cm-tg-section">
+        <h3>👥 Communautés — créer un groupe et découvrir des groupes/canaux (Telegram)</h3>
+        <p class="empty">Créez un groupe à partir d'une liste de contacts validés : les participants sont ajoutés dans le respect de leurs paramètres de confidentialité ; ceux qui ont restreint l'ajout direct reçoivent automatiquement le lien d'invitation officiel en message privé. Vous pouvez aussi le demander directement dans le Chat Intelligent.</p>
+
+        <div class="field">
+          <label for="cm-tg-title">Nom du groupe</label>
+          <input type="text" id="cm-tg-title" maxlength="100" placeholder="Ex. Formation Marketing — Promo 1" />
+        </div>
+        <div class="field">
+          <label for="cm-tg-text">Contacts (un par ligne : numéro ou @username, éventuellement avec le nom)</label>
+          <textarea id="cm-tg-text" rows="4" placeholder="+22670123456 Awa&#10;+22675000111 Issa"></textarea>
+        </div>
+        <div class="field">
+          <label for="cm-tg-file">…ou un fichier (Excel, CSV, texte, vCard, ou image d'une liste — OCR)</label>
+          <input type="file" id="cm-tg-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" />
+        </div>
+        <div class="field">
+          <label for="cm-tg-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
+          <input type="text" id="cm-tg-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
+        </div>
+        <button type="button" id="cm-tg-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
+        <button type="button" id="cm-tg-resume-btn" hidden>▶️ Reprendre</button>
+        <p id="cm-tg-create-feedback" hidden></p>
+        <div id="cm-tg-progress" hidden></div>
+
+        <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
+        <div class="field">
+          <label for="cm-tg-kw">Mots-clés sectoriels (séparés par des virgules)</label>
+          <input type="text" id="cm-tg-kw" placeholder="Ex. marketing digital, immobilier" />
+        </div>
+        <button type="button" id="cm-tg-search-btn">🔎 Rechercher</button>
+        <button type="button" id="cm-tg-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
+        <p id="cm-tg-search-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th></tr></thead>
+            <tbody id="cm-tg-results"><tr><td colspan="5" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
       </div>
     </section>
 
@@ -10424,6 +10506,98 @@
         return added;
       },
     });
+
+    // ---- Communautés : création/invitation de groupes + découverte (onglets WhatsApp et Telegram) -------------------------------------
+    (function initCommunities() {
+      function setup(p, channel) {
+        var $ = function (s) { return document.getElementById('cm-' + p + '-' + s); };
+        if (!$('create-btn')) return;
+        var lastResults = []; var pollTimer = null; var currentJob = null;
+        function say(el, msg, ok) { el.hidden = false; el.textContent = msg; el.className = ok === false ? 'error' : (ok ? 'ok' : 'empty'); }
+        function renderProgress(job) {
+          var box = $('progress'); box.hidden = false; box.textContent = '';
+          var c = job.counts || {};
+          var lines = [
+            'Statut : ' + job.status + (job.error ? ' — ' + job.error : ''),
+            'Ajoutés directement : ' + (c.added || 0) + ' · Invitations envoyées en message privé : ' + (c.invited_dm || 0) + ' · Déjà membres : ' + (c.already_member || 0),
+            'Absents de la plateforme : ' + (c.not_on_platform || 0) + ' · Désinscrits (ignorés) : ' + (c.opted_out || 0) + ' · Échecs : ' + (c.failed || 0) + ' · En attente : ' + ((c.pending || 0) + (c.needs_invite || 0)) + ' / ' + (c.total || 0),
+          ];
+          if (job.group && job.group.link) lines.push('Lien du groupe : ' + job.group.link);
+          lines.forEach(function (l) { var d = document.createElement('div'); d.textContent = l; box.appendChild(d); });
+          $('resume-btn').hidden = !(job.status === 'PAUSED_RATE_LIMIT' || job.status === 'DONE_WITH_ISSUES');
+        }
+        function poll(id) {
+          if (pollTimer) clearInterval(pollTimer);
+          var tick = async function () {
+            try {
+              var res = await apiFetch('/api/communities/groups/' + encodeURIComponent(id) + '?channel=' + channel);
+              var data = await res.json();
+              if (data && data.group) { currentJob = data.group; renderProgress(data.group); if (['DONE', 'DONE_WITH_ISSUES', 'FAILED', 'PAUSED_RATE_LIMIT'].indexOf(data.group.status) >= 0) { clearInterval(pollTimer); pollTimer = null; } }
+            } catch (e) { /* session expirée : géré par apiFetch */ }
+          };
+          tick(); pollTimer = setInterval(tick, 4000);
+        }
+        $('create-btn').addEventListener('click', async function () {
+          var title = $('title').value.trim();
+          if (title.length < 2) return say($('create-feedback'), 'Indiquez un nom de groupe.', false);
+          var fd = new FormData();
+          fd.append('channel', channel); fd.append('title', title);
+          if ($('text').value.trim()) fd.append('text', $('text').value);
+          if ($('invite').value.trim()) fd.append('inviteMessage', $('invite').value.trim());
+          var f = $('file').files[0]; if (f) fd.append('file', f, f.name);
+          if (!$('text').value.trim() && !f) return say($('create-feedback'), 'Ajoutez des contacts (texte ou fichier).', false);
+          $('create-btn').disabled = true; say($('create-feedback'), 'Préparation de la liste et création du groupe…');
+          try {
+            var res = await apiFetch('/api/communities/groups', { method: 'POST', body: fd });
+            var data = await res.json();
+            if (!res.ok || !data.ok) { say($('create-feedback'), (data && data.error) || 'Échec de la création.', false); }
+            else { say($('create-feedback'), 'Groupe en cours de création : ' + data.group.counts.total + ' contact(s) valide(s). Les ajouts se font lentement pour protéger votre compte.', true); currentJob = data.group; renderProgress(data.group); poll(data.group.id); }
+          } catch (e) { if (e.message !== 'unauthorized') say($('create-feedback'), 'Erreur de communication avec le serveur.', false); }
+          $('create-btn').disabled = false;
+        });
+        $('resume-btn').addEventListener('click', async function () {
+          if (!currentJob) return;
+          try {
+            var res = await apiFetch('/api/communities/groups/' + encodeURIComponent(currentJob.id) + '/resume', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel }) });
+            var data = await res.json();
+            if (data && data.ok) { say($('create-feedback'), 'Reprise du traitement.', true); poll(currentJob.id); } else say($('create-feedback'), (data && data.error) || 'Reprise impossible.', false);
+          } catch (e) { /* géré */ }
+        });
+        function renderResults(list) {
+          var body = $('results'); body.textContent = '';
+          if (!list.length) { var tr0 = document.createElement('tr'); var td0 = document.createElement('td'); td0.colSpan = 5; td0.className = 'empty'; td0.textContent = 'Aucune communauté trouvée pour ces mots-clés.'; tr0.appendChild(td0); body.appendChild(tr0); return; }
+          list.forEach(function (c) {
+            var tr = document.createElement('tr');
+            [c.name || '-', c.kind === 'channel' ? 'Canal' : 'Groupe', c.members != null ? String(c.members) : '-'].forEach(function (v) { var td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+            var tdl = document.createElement('td');
+            if (c.link && /^https:\/\/(t\.me|chat\.whatsapp\.com)\//.test(c.link)) { var a = document.createElement('a'); a.href = c.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = c.link.replace('https://', ''); tdl.appendChild(a); } else tdl.textContent = '-';
+            tr.appendChild(tdl);
+            var tds = document.createElement('td'); tds.textContent = c.verified ? '✅ vérifié' : '⚠️ non vérifié'; tr.appendChild(tds);
+            body.appendChild(tr);
+          });
+        }
+        $('search-btn').addEventListener('click', async function () {
+          var kw = $('kw').value.trim();
+          if (kw.length < 2) return say($('search-feedback'), 'Indiquez au moins un mot-clé.', false);
+          $('search-btn').disabled = true; say($('search-feedback'), 'Recherche en cours…');
+          try {
+            var res = await apiFetch('/api/communities/discover', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel, keywords: kw }) });
+            var data = await res.json();
+            if (!res.ok || !data.ok) { say($('search-feedback'), (data && data.error) || 'Recherche impossible.', false); }
+            else { lastResults = data.results || []; renderResults(lastResults); say($('search-feedback'), lastResults.length + ' communauté(s) trouvée(s).' + (channel === 'WHATSAPP' ? ' (WhatsApp n\'a pas d\'annuaire officiel : résultats issus d\'annuaires publics du web, vérifiés auprès de WhatsApp quand c\'est possible.)' : ''), true); $('sync-btn').hidden = !lastResults.length; }
+          } catch (e) { if (e.message !== 'unauthorized') say($('search-feedback'), 'Erreur de communication avec le serveur.', false); }
+          $('search-btn').disabled = false;
+        });
+        $('sync-btn').addEventListener('click', async function () {
+          try {
+            var res = await apiFetch('/api/communities/sync', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel, communities: lastResults }) });
+            var data = await res.json();
+            say($('search-feedback'), data && data.ok ? (data.count + ' communauté(s) synchronisée(s) dans le CRM.') : ((data && data.error) || 'Synchronisation impossible.'), !!(data && data.ok));
+          } catch (e) { /* géré */ }
+        });
+      }
+      setup('wa', 'WHATSAPP'); setup('tg', 'TELEGRAM');
+    })();
   </script>
 </body>
 </html>

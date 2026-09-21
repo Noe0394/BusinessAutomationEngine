@@ -904,6 +904,48 @@ function createSession(tenantId) {
     throw lastError || new Error("Impossible de générer le code d'appairage.");
   }
 
+  // ---- MODULE COMMUNAUTÉS (création/invitation de groupes, découverte) : primitives minimales du moteur ; toute la logique (respect de la
+  // vie privée, cadence, DM d'invitation, rapport) est dans ai-engine/communityService.js. Rien ici ne décide ni n'envoie de son propre chef.
+  const digitsOf = (x) => String(x || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+  const toUserJid = (n) => `${digitsOf(n)}@s.whatsapp.net`;
+
+  // Quels numéros existent réellement sur WhatsApp ? -> [{ number, exists, jid }]
+  async function checkNumbersOnWhatsApp(numbers) {
+    if (!sock) throw new Error('Adaptateur WhatsApp non initialisé.');
+    const list = (numbers || []).map(digitsOf).filter(Boolean);
+    if (!list.length) return [];
+    const res = (await sock.onWhatsApp(...list.map(toUserJid))) || [];
+    const byNum = new Map(res.map((r) => [digitsOf(r.jid), r]));
+    return list.map((n) => { const r = byNum.get(n); return { number: n, exists: !!(r && r.exists), jid: r && r.jid ? r.jid : toUserJid(n) }; });
+  }
+  async function createGroup(subject, participantNumbers) {
+    if (!sock) throw new Error('Adaptateur WhatsApp non initialisé.');
+    const g = await sock.groupCreate(String(subject).slice(0, 100), (participantNumbers || []).map(toUserJid));
+    return { id: g.id, subject: g.subject || subject };
+  }
+  // Ajout de participants : renvoie le statut RÉEL de WhatsApp par participant ('200' ajouté, '403' confidentialité : ajout direct refusé,
+  // '408' a quitté récemment, '409' déjà membre, '401' refusé/bloqué…).
+  async function addGroupParticipants(groupJid, numbers) {
+    if (!sock) throw new Error('Adaptateur WhatsApp non initialisé.');
+    const res = (await sock.groupParticipantsUpdate(groupJid, (numbers || []).map(toUserJid), 'add')) || [];
+    return res.map((p) => ({ number: digitsOf(p.jid), jid: p.jid, status: String(p.status) }));
+  }
+  async function getGroupInviteLink(groupJid) {
+    if (!sock) throw new Error('Adaptateur WhatsApp non initialisé.');
+    const code = await sock.groupInviteCode(groupJid);
+    return code ? `https://chat.whatsapp.com/${code}` : null;
+  }
+  async function setGroupDescription(groupJid, text) {
+    if (!sock) throw new Error('Adaptateur WhatsApp non initialisé.');
+    await sock.groupUpdateDescription(groupJid, String(text || '').slice(0, 2000));
+  }
+  // Informations RÉELLES d'un groupe à partir de son code d'invitation (nom, taille, description) — sans le rejoindre.
+  async function getInviteInfo(code) {
+    if (!sock) throw new Error('Adaptateur WhatsApp non initialisé.');
+    const i = await sock.groupGetInviteInfo(String(code));
+    return { id: i.id, subject: i.subject || '', description: i.desc || '', size: i.size != null ? i.size : (i.participants || []).length, createdAt: i.creation || null };
+  }
+
   async function getGroupMetadata(groupId) {
     if (!sock) {
       throw new Error('Adaptateur WhatsApp non initialisé.');
@@ -1074,6 +1116,12 @@ function createSession(tenantId) {
     getRecentMessages,
     getConnectedNumber,
     isPaired,
+    checkNumbersOnWhatsApp,
+    createGroup,
+    addGroupParticipants,
+    getGroupInviteLink,
+    setGroupDescription,
+    getInviteInfo,
     onIncomingMessage,
     onOutgoingMessage,
     onHistoryMessage,

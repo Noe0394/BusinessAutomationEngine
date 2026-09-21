@@ -5716,6 +5716,44 @@ try {
   app.get('/api/campaigns/:id/report', requireAccess, cmpRoute((req, tenant) => campaignService.report(tenant, req.params.id, cmpRuntime())));
 }
 
+// ---------- Communautés : création/invitation de groupes + découverte (onglets WhatsApp et Telegram) ----------
+// Mêmes services que le Chat intelligent (ai-engine/communityService.js, communityDiscovery.js) : une seule logique, deux entrées (interface / discussion).
+{
+  const communityService = require('./ai-engine/communityService');
+  const communityDiscovery = require('./ai-engine/communityDiscovery');
+  const cmChannel = (req) => String((req.body && req.body.channel) || req.query.channel || 'WHATSAPP').toUpperCase();
+  const cmGuard = (req) => {
+    const ch = cmChannel(req);
+    if (!['WHATSAPP', 'TELEGRAM'].includes(ch)) return { code: 'INVALID_CHANNEL', http: 400, message: 'Canal inconnu.' };
+    const need = ch === 'TELEGRAM' ? 'telegram' : 'whatsapp';
+    if (req.allowedModules !== null && req.allowedModules !== undefined && !(Array.isArray(req.allowedModules) && req.allowedModules.includes(need))) return { code: 'MODULE_NOT_ALLOWED', http: 403, message: `Votre clé de licence n'inclut pas le module "${need}".` };
+    return null;
+  };
+  const cmRoute = (fn) => async (req, res) => {
+    const denied = cmGuard(req);
+    if (denied) return res.status(denied.http).json({ error: denied.message, code: denied.code });
+    try { res.json(await fn(req, resolveTenantId(req))); }
+    catch (err) {
+      const http = { RECIPIENTS_NOT_FOUND: 404, NOT_FOUND: 404, JOB_ALREADY_RUNNING: 409, INVALID_STATE: 409 }[err.code] || (err.code ? 400 : 500);
+      if (http === 500) console.error('communautés :', require('./lib/ai/aiErrors').redact(err.message));
+      res.status(http).json({ error: http === 500 ? 'Erreur interne.' : err.message, code: err.code || 'INTERNAL' });
+    }
+  };
+  app.post('/api/communities/groups', requireAccess, upload.single('file'), cmRoute(async (req, tenant) => {
+    const b = req.body || {};
+    const input = { channel: cmChannel(req), title: b.title, description: b.description, inviteMessage: b.inviteMessage, text: b.text, defaultCountryCode: b.defaultCountryCode };
+    if (req.file) { if (/^image\//.test(req.file.mimetype || '')) input.image = req.file.buffer; else input.file = { buffer: req.file.buffer, name: req.file.originalname, type: req.file.mimetype }; }
+    if (b.recipientsId) input.recipientsId = b.recipientsId;
+    return { ok: true, group: await communityService.startGroup(tenant, input) };
+  }));
+  app.get('/api/communities/groups', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, groups: await communityService.listJobs(tenant) })));
+  app.get('/api/communities/groups/:id', requireAccess, cmRoute(async (req, tenant) => { const g = await communityService.getJob(tenant, req.params.id); if (!g) throw Object.assign(new Error('Groupe introuvable.'), { code: 'NOT_FOUND' }); return { ok: true, group: g }; }));
+  app.post('/api/communities/groups/:id/resume', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.resumeJob(tenant, req.params.id) })));
+  app.post('/api/communities/discover', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discover(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true })) })));
+  app.get('/api/communities/directory', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, communities: await contactCrm.listCommunities(tenant, { channel: req.query.channel, keyword: req.query.keyword }) })));
+  app.post('/api/communities/sync', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.syncToCrm(tenant, Array.isArray(req.body && req.body.communities) ? req.body.communities.slice(0, 100) : [])) })));
+}
+
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ error: `Erreur de téléversement : ${err.message}` });

@@ -60,6 +60,64 @@ function queueHandlers(tenant, runtime) {
 }
 
 const TOOLS = {
+  // ================= COMMUNAUTÉS (création/invitation de groupes, découverte) =================
+  createCommunityGroup: {
+    description: 'Crée un groupe WhatsApp ou Telegram avec un nom et une liste de contacts (fichier Excel/CSV joint via fileId, liste préparée via recipientsDraftId, ou texte collé) : ajoute les participants dans le respect de leur confidentialité et, pour ceux qui ont restreint l\'ajout direct, envoie AUTOMATIQUEMENT le lien d\'invitation officiel en message privé. Le traitement continue en arrière-plan ; suivi via getCommunityGroupStatus. Action sensible : confirmation.',
+    permission: 'messages:send', risk: 'WRITE',
+    inputSchema: {
+      channel: { type: 'string', description: 'WHATSAPP (défaut) ou TELEGRAM.' }, title: { type: 'string', required: true, description: 'Nom du groupe.' },
+      description: { type: 'string' }, fileId: { type: 'string', description: 'Fichier de contacts joint (Excel/CSV/image OCR), ex. f_xxx.' },
+      recipientsDraftId: { type: 'string', description: 'Liste déjà préparée par prepareContactsFromSource.' }, text: { type: 'string', description: 'Contacts collés en texte.' },
+      inviteMessage: { type: 'string', description: 'Message d\'invitation (variables {nom} {groupe} {lien}).' },
+    },
+    async prepare(args, ctx) {
+      let count = null;
+      try {
+        if (args.recipientsDraftId) { const d = (await storageAdapter.get('campaign_drafts', sanitize(ctx.tenant), { drafts: {} })).drafts[args.recipientsDraftId]; count = d && d.rows ? d.rows.filter((r) => r.state === 'valid').length : null; }
+        else if (args.fileId) { const f = await chatUploads.readFile(ctx.tenant, args.fileId); if (f) count = require('./contactExtractor').extractFromFile({ buffer: f.buffer, name: f.meta.name, type: f.meta.type }).entries.length; }
+        else if (args.text) count = require('./contactExtractor').extractFromText(args.text, 'texte').length;
+      } catch (e) { count = null; }
+      return { ok: !!args.title, preview: { channel: chan(args.channel), title: String(args.title || '').slice(0, 100), contactsDetectes: count, regle: 'Ajout direct seulement si la confidentialité le permet ; sinon lien d\'invitation en message privé. Cadence lente, pause automatique en cas de limitation.' }, warnings: count === 0 ? ['AUCUN_CONTACT_DETECTE'] : [] };
+    },
+    async execute(args, ctx) {
+      const input = { channel: chan(args.channel), title: args.title, description: args.description, inviteMessage: args.inviteMessage };
+      if (args.recipientsDraftId) input.recipientsId = args.recipientsDraftId;
+      else if (args.fileId) {
+        const f = await chatUploads.readFile(ctx.tenant, args.fileId); if (!f) return fail('FILE_NOT_FOUND');
+        if (/^image\//.test(f.meta.type || '')) input.image = f.buffer; else input.file = { buffer: f.buffer, name: f.meta.name, type: f.meta.type };
+      } else if (args.text) input.text = args.text;
+      else return fail('NO_RECIPIENTS', 'Fournissez un fichier, une liste préparée ou des contacts en texte.');
+      try { const job = await require('./communityService').startGroup(ctx.tenant, input); return { ok: true, result: { jobId: job.id, status: job.status, channel: job.channel, title: job.title, total: job.counts.total } }; }
+      catch (e) { return fail(e.code || 'GROUP_START_FAILED', e.message); }
+    },
+    async verify(result) { return { verified: !!(result && result.jobId) }; },
+  },
+  getCommunityGroupStatus: {
+    description: 'Progression et rapport RÉELS d\'une création de groupe (ajoutés, invitations envoyées en message privé, déjà membres, absents de la plateforme, refus, échecs). Sans jobId : liste des derniers groupes.',
+    permission: null, risk: 'READ',
+    inputSchema: { jobId: { type: 'string' } },
+    async execute(args, ctx) {
+      const svc = require('./communityService');
+      if (!args.jobId) return { ok: true, result: { groups: (await svc.listJobs(ctx.tenant)).slice(0, 10) } };
+      const j = await svc.getJob(ctx.tenant, String(args.jobId)); return j ? { ok: true, result: j } : fail('NOT_FOUND');
+    },
+  },
+  discoverCommunities: {
+    description: 'Découvre des groupes/canaux PUBLICS par mots-clés sectoriels. Telegram : recherche globale officielle (canaux/groupes publics + liens). WhatsApp : liens d\'invitation d\'annuaires publics, vérifiés auprès de WhatsApp. Ne rejoint rien. sync=true les enregistre dans le CRM.',
+    permission: null, risk: 'READ',
+    inputSchema: { channel: { type: 'string', description: 'TELEGRAM ou WHATSAPP.' }, keywords: { type: 'string', required: true, description: 'Mots-clés séparés par des virgules.' }, limit: { type: 'number' }, sync: { type: 'boolean', description: 'true pour enregistrer les résultats dans le CRM.' } },
+    async execute(args, ctx) {
+      try { const out = await require('./communityDiscovery').discover(ctx.tenant, { channel: args.channel, keywords: args.keywords, limit: args.limit, sync: args.sync === true || args.sync === 'true' }); return { ok: true, result: { channel: out.channel, keywords: out.keywords, total: out.results.length, synced: out.synced, communities: out.results.slice(0, 30) } }; }
+      catch (e) { return fail(e.code || 'DISCOVERY_FAILED', e.message); }
+    },
+  },
+  listCommunities: {
+    description: 'Liste les communautés (groupes/canaux publics) déjà enregistrées dans le CRM, filtrables par canal ou mot-clé.',
+    permission: null, risk: 'READ',
+    inputSchema: { channel: { type: 'string' }, keyword: { type: 'string' } },
+    async execute(args, ctx) { const items = await contactCrm.listCommunities(ctx.tenant, { channel: args.channel, keyword: args.keyword }); return { ok: true, result: { total: items.length, communities: items.slice(0, 40) } }; },
+  },
+
   // ================= SPÉCIALISTES (bibliothèque Agency Agents, sous la tutelle de l'Orchestrateur) =================
   listSpecialists: {
     description: 'Liste les spécialistes internes disponibles (catalogue Agency Agents) avec leur statut pour ce compte ; filtrable par division, capacité ou statut. Consultation seulement.',

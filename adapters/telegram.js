@@ -768,6 +768,44 @@ function createSession(tenantId) {
     }
   }
 
+  // ---- MODULE COMMUNAUTÉS (primitives minimales ; la logique vit dans ai-engine/communityService.js) -------------------------------
+  // Crée un supergroupe. Renvoie l'entité (gardée en mémoire par l'appelant le temps du traitement).
+  async function createCommunityGroup({ title, about }) {
+    if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+    const res = await client.invoke(new Api.channels.CreateChannel({ title: String(title).slice(0, 128), about: String(about || '').slice(0, 255), megagroup: true }));
+    const chat = (res.chats || [])[0];
+    if (!chat) throw new Error('GROUP_CREATION_FAILED');
+    return { id: chat.id.toString(), entity: chat };
+  }
+  async function getGroupEntity(id) {
+    if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+    return client.getEntity(Number(String(id).trim()));
+  }
+  // Invite UN utilisateur ; les restrictions de confidentialité remontent en erreur explicite (USER_PRIVACY_RESTRICTED…) OU via
+  // missingInvitees : dans les deux cas l'appelant bascule sur le lien d'invitation en message privé.
+  async function inviteUserToGroup(groupEntity, userEntity) {
+    if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+    const r = await client.invoke(new Api.channels.InviteToChannel({ channel: groupEntity, users: [userEntity] }));
+    const missing = (r && r.missingInvitees) || [];
+    return { added: missing.length === 0, privacyRestricted: missing.length > 0 };
+  }
+  async function exportGroupInviteLink(groupEntity) {
+    if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+    const r = await client.invoke(new Api.messages.ExportChatInvite({ peer: groupEntity }));
+    return r && r.link ? r.link : null;
+  }
+  // Recherche GLOBALE Telegram (API contacts.Search) : canaux/groupes PUBLICS correspondant à un mot-clé.
+  async function searchPublicCommunities(query, limit) {
+    if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+    const r = await client.invoke(new Api.contacts.Search({ q: String(query).slice(0, 100), limit: Math.min(50, Number(limit) || 20) }));
+    return (r.chats || []).map((c) => ({
+      id: c.id != null ? c.id.toString() : null,
+      title: c.title || '', username: c.username || null,
+      isChannel: !!c.broadcast, isGroup: !!c.megagroup || (!c.broadcast && !!c.title),
+      participants: c.participantsCount != null ? Number(c.participantsCount) : null,
+    })).filter((c) => c.id && c.username); // seuls les publics (avec @username) ont un lien officiel
+  }
+
   async function sendMessage(chatId, text) {
     if (!connected) {
       throw new Error('TELEGRAM_NOT_CONNECTED');
@@ -821,6 +859,11 @@ function createSession(tenantId) {
     getRecentMessages,
     onHistoryMessage,
     resolveRecipient,
+    createCommunityGroup,
+    getGroupEntity,
+    inviteUserToGroup,
+    exportGroupInviteLink,
+    searchPublicCommunities,
     sendMessage,
     sendMedia,
     sendVoiceNote,

@@ -245,7 +245,35 @@ async function removeContact(tenantId, channel, from) {
   return existed;
 }
 
+// ---- COMMUNAUTÉS DÉCOUVERTES (groupes/canaux publics) : dans la MÊME base CRM (doc.communities), volontairement SÉPARÉES des contacts-personnes
+// (doc.contacts) : une communauté n'est jamais une cible de campagne « personne ». Clé = canal + identifiant public (@username / code d'invitation).
+async function upsertCommunity(tenantId, c) {
+  const doc = await load(tenantId);
+  doc.communities = doc.communities || {};
+  const key = contactKey(c.channel, c.ref);
+  const before = doc.communities[key] || null;
+  const now = new Date().toISOString();
+  const keywords = Array.from(new Set([].concat((before && before.keywords) || [], c.keywords || []).map((k) => String(k).toLowerCase()).filter(Boolean)));
+  doc.communities[key] = {
+    key, channel: String(c.channel).toUpperCase(), ref: String(c.ref), name: String(c.name || '').slice(0, 160), link: c.link || null,
+    kind: c.kind || 'group', members: c.members != null ? Number(c.members) : (before && before.members) || null, description: String(c.description || (before && before.description) || '').slice(0, 400),
+    keywords, verified: !!c.verified, tags: Array.from(new Set(['communauté', 'découverte'].concat((before && before.tags) || []))),
+    firstSyncedAt: (before && before.firstSyncedAt) || now, syncedAt: now,
+  };
+  await save(tenantId, doc);
+  return { created: !before, community: doc.communities[key] };
+}
+async function listCommunities(tenantId, opts) {
+  const doc = await load(tenantId);
+  let items = Object.values(doc.communities || {});
+  const o = opts || {};
+  if (o.channel) items = items.filter((c) => c.channel === String(o.channel).toUpperCase());
+  if (o.keyword) { const k = String(o.keyword).toLowerCase(); items = items.filter((c) => (c.keywords || []).includes(k) || String(c.name).toLowerCase().includes(k)); }
+  return items.sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt)));
+}
+
 module.exports = {
+  upsertCommunity, listCommunities,
   getContact, updateContact, removeContact,
   markOptOut, clearOptOut, isOptedOut, optedOutSet, identityOf, TAG_OPTOUT,
   recordSeen, addTags, setStage, markPurchase, list, counts,
