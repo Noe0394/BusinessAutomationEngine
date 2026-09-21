@@ -34,7 +34,7 @@ const LOCAL_ONLY_NAMESPACES = new Set([
   'task_queue', 'campaign_drafts', 'notifications', 'campaign_fallbacks',
   'contact_identity', 'alerts', 'pending_actions', 'owner_channel', 'group_campaigns', 'group_leads', 'ad_entries',
   // Numéros de téléphone / clés de clients / contenus de formation : jamais poussés vers le miroir GitHub.
-  'community_jobs', 'client_ai_quota', 'course_kb', 'lifecycle', 'improvements', 'guided_setup',
+  'community_jobs', 'client_ai_quota', 'course_kb', 'lifecycle', 'improvements', 'guided_setup', 'service_trash',
 ]);
 function isMirrored(namespace) {
   if (process.env.GITHUB_MIRROR_USER_DATA === 'true') return true;

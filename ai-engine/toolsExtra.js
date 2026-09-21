@@ -708,5 +708,7 @@ const TOOLS = {
 Object.assign(TOOLS, require('./toolsLifecycle').TOOLS);
 // Pilotage du répondeur : politique, « pourquoi ? », contexte d'une discussion (module dédié).
 Object.assign(TOOLS, require('./toolsConversation').TOOLS);
+// Services métiers : modifier, pause/réactivation, suppression + restauration (faire ET défaire), toutes vérifiées.
+Object.assign(TOOLS, require('./toolsServices').TOOLS);
 
 module.exports = { TOOLS, queueHandlers, launchDraft };

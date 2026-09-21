@@ -157,19 +157,23 @@ const TOOLS = {
       const scopes = String(args.scopes || '').split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
       const connection = args.baseUrl ? { kind: 'api', connectorType: args.connectorType || (/agent-gateway|riea/i.test(args.baseUrl) ? 'platform_gateway' : 'generic'), baseUrl: args.baseUrl, authHeader: args.authHeader || 'X-API-Key' } : { kind: 'none' };
       if (connection.connectorType === 'platform_gateway') connection.endpoints = { enroll: '/api/v1/agent-gateway/enroll-student', suspend: '/api/v1/agent-gateway/suspend-student' };
-      const svc = await businessServices.create(ctx.tenant, {
-        name: args.name, type: args.type || 'autre', connection, scopes,
-        commercial: { price: args.price != null ? Number(args.price) : null, currency: args.currency || 'FCFA', description: args.description || '' },
-        products, rules: splitList(args.rules), objectives: splitList(args.objectives),
-      });
+      // Un service portant déjà ce nom est MIS À JOUR (jamais dupliqué) ; sinon il est créé.
+      const existing = (await businessServices.list(ctx.tenant)).find((s) => String(s.name).trim().toLowerCase() === String(args.name).trim().toLowerCase());
+      const payload = {
+        name: args.name, type: args.type || (existing && existing.type) || 'autre', connection: args.baseUrl ? connection : (existing ? existing.connection : connection), scopes: scopes.length ? scopes : (existing ? existing.scopes : scopes),
+        commercial: Object.assign({}, existing ? existing.commercial : {}, { price: args.price != null ? Number(args.price) : (existing && existing.commercial ? existing.commercial.price : null), currency: args.currency || (existing && existing.commercial && existing.commercial.currency) || 'FCFA', description: args.description || (existing && existing.commercial && existing.commercial.description) || '' }),
+        products: products.length ? products : (existing ? existing.products : products), rules: args.rules ? splitList(args.rules) : (existing ? existing.rules : []), objectives: args.objectives ? splitList(args.objectives) : (existing ? existing.objectives : []),
+      };
+      const svc = existing ? await businessServices.update(ctx.tenant, existing.id, payload) : await businessServices.create(ctx.tenant, payload);
       let test = null; let connected = false;
       if (args.apiKey && args.baseUrl) {
         await businessServices.connectApi(ctx.tenant, svc.id, { apiKey: args.apiKey, baseUrl: args.baseUrl, authHeader: connection.authHeader, connectorType: connection.connectorType, endpoints: connection.endpoints });
         const t = await businessServices.testConnection(ctx.tenant, svc.id);
         test = t.result; connected = t.status === 'CONNECTED';
       }
-      return { ok: true, result: { serviceId: svc.id, name: svc.name, connected, test } };
+      return { ok: true, result: { serviceId: svc.id, name: svc.name, connected, test, updated: !!existing } };
     },
+    async verify(res, a, ctx) { return { verified: (await businessServices.list(ctx.tenant)).some((s) => s.id === res.serviceId && s.name === res.name) }; },
   },
 
   importContactsFromFile: {
@@ -470,6 +474,7 @@ async function _execute(tenant, name, args, ctx) {
   const tool = TOOLS[name];
   if (!tool) return Object.assign(call, { state: STATE.FAILED, error: { code: 'UNKNOWN_TOOL', message: `Outil « ${name} » inconnu.` }, finishedAt: new Date().toISOString() });
 
+  call.risk = tool.risk || 'READ'; // nature de l'outil, exposée à ceux qui doivent savoir si une action d'ÉCRITURE a réellement eu lieu
   const fullCtx = Object.assign({ tenant }, ctx || {});
   const done = (extra) => Object.assign(call, extra, { finishedAt: new Date().toISOString() });
 
@@ -524,9 +529,9 @@ async function _execute(tenant, name, args, ctx) {
   if (typeof tool.verify === 'function') {
     let v;
     try { v = await tool.verify(out.result, args || {}, fullCtx); } catch (e) { v = { verified: false }; }
-    return Object.assign(call, { state: v && v.verified ? STATE.SUCCESS : STATE.UNCONFIRMED, result: out.result, verification: v, finishedAt: new Date().toISOString() });
+    return Object.assign(call, { state: v && v.verified ? STATE.SUCCESS : STATE.UNCONFIRMED, verified: !!(v && v.verified), result: out.result, verification: v, finishedAt: new Date().toISOString() });
   }
-  return Object.assign(call, { state: STATE.SUCCESS, result: out.result, finishedAt: new Date().toISOString() });
+  return Object.assign(call, { state: STATE.SUCCESS, verified: (tool.risk || 'READ') === 'READ', result: out.result, finishedAt: new Date().toISOString() });
 }
 
 // Exécution + journalisation d'activité (déterministe, non bloquante) : chaque

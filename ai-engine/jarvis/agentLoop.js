@@ -7,6 +7,8 @@ const toolRegistry = require('../toolRegistry');
 const loopGuard = require('../loopGuard');
 const authz = require('../authz');
 const { describeTools } = require('../toolAgent');
+const capabilityGap = require('../capabilityGap');
+const claimGuard = require('../claimGuard');
 
 const LIMITS = { maxSteps: 5, totalTimeoutMs: 60000, toolTimeoutMs: 25000, maxAiCalls: 8 };
 const PENDING_TTL_MS = 10 * 60 * 1000;
@@ -65,12 +67,13 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
       describeTools(tools),
       `Demande du vendeur : "${text}"`,
       prior ? `Déjà exécuté (résultats RÉELS) :\n${prior}` : 'Rien n\'a encore été exécuté.',
-      'Réponds UNIQUEMENT en JSON : {"tool":"nom_exact","args":{...}} pour l\'étape suivante, {"done":true} si la demande est accomplie, ou {"tool":null} si aucun outil n\'est pertinent (simple conversation).',
+      'Réponds UNIQUEMENT en JSON : {"tool":"nom_exact","args":{...}} pour l\'étape suivante, {"done":true} si la demande est accomplie, {"tool":null,"impossible":true} si la demande exige une ACTION (créer, modifier, supprimer, envoyer, activer…) qu\'AUCUN outil de la liste ne permet, ou {"tool":null} pour une simple conversation.',
+      'Une demande d\'ACTION n\'est accomplie que si l\'outil correspondant a été exécuté avec succès : pour supprimer, utilise un outil de suppression ; pour modifier, un outil de modification. Ne considère JAMAIS une lecture (liste, statut) comme la réalisation d\'une écriture.',
       'N\'invente jamais un outil. Ne répète jamais un appel identique. Exécute la demande telle que formulée, sans la contredire ni ajouter d\'étape qu\'elle ne demande pas.',
     ].join('\n');
     let plan;
     try { plan = extractJson(await ai(planPrompt)); } catch (e) { stopReason = e.message === 'AI_BUDGET' ? 'AI_BUDGET' : 'PLAN_ERROR'; break; }
-    if (!plan || plan.done || !plan.tool) { stopReason = 'DONE'; break; }
+    if (!plan || plan.done || !plan.tool) { stopReason = (plan && plan.impossible) ? 'IMPOSSIBLE' : 'DONE'; break; }
     if (!tools.some((t) => t.name === plan.tool)) { stopReason = 'UNKNOWN_TOOL'; break; }
     const key = sig(plan.tool, plan.args);
     if (seen.has(key)) { stopReason = 'LOOP_DETECTED'; break; }
@@ -82,7 +85,7 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
     } catch (e) {
       call = { name: plan.tool, args: plan.args || {}, state: 'FAILED', error: { code: 'TOOL_TIMEOUT', message: e.message } };
     }
-    steps.push({ name: plan.tool, args: plan.args || {}, state: call.state, result: call.result || null, error: call.error || null, verification: call.verification || null });
+    steps.push({ name: plan.tool, args: plan.args || {}, state: call.state, risk: call.risk || null, result: call.result || null, error: call.error || null, verification: call.verification || null });
 
     if (call.state === 'NEEDS_CONFIRMATION') {
       // L'action préparée reste liée à l'identité qui l'a demandée : seul le même principal peut la confirmer.
@@ -94,7 +97,14 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
     if (i === limits.maxSteps - 1) stopReason = 'MAX_STEPS';
   }
 
-  if (!steps.length) return null; // aucune action : la conversation générique reprend la main
+  const requestText = d.rawText || text;
+  if (!steps.length) {
+    // Une demande d'ACTION qu'aucun outil ne permet ne retombe JAMAIS sur la conversation libre (qui pourrait prétendre l'avoir faite) : réponse claire sur ce qui est / n'est pas possible.
+    if (stopReason === 'IMPOSSIBLE' || capabilityGap.isActionRequest(requestText)) {
+      return { text: capabilityGap.explain(requestText, tools), steps: [], stopReason: 'NO_TOOL', toolCalls: [], impossible: true, actionLog: [{ icon: '🚫', label: 'Aucune fonction ne correspond : rien exécuté', status: 'warning' }] };
+    }
+    return null; // simple conversation : la conversation générique reprend la main
+  }
 
   const results = steps.map((s, k) => `Étape ${k + 1} ${s.name} : ${s.state} — ${brief(s.result || s.error)}`).join('\n');
   const ansPrompt = [
@@ -112,9 +122,15 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
     answer = stopReason === 'NEEDS_CONFIRMATION' ? 'Action préparée, en attente de votre confirmation (oui/non).' : (steps.every((s) => s.state === 'SUCCESS') ? 'C\'est fait.' : `Je n'ai pas pu tout finaliser (${stopReason}).`);
   }
   const last = steps[steps.length - 1];
+  const toolCalls = steps.map((s) => ({ name: s.name, state: s.state, risk: s.risk }));
+  // Preuve affichée à l'utilisateur : ce qui a RÉELLEMENT été exécuté / vérifié dans ce tour (jamais une simple parole du modèle).
+  const proof = steps.filter((s) => s.risk && s.risk !== 'READ').map((s) => `${s.state === 'SUCCESS' ? '✔ Vérifié' : (s.state === 'UNCONFIRMED' ? '⚠ Exécuté mais non confirmé' : (s.state === 'NEEDS_CONFIRMATION' ? '⏸ En attente de votre confirmation' : '✖ Échec'))} : ${s.name}`);
+  answer = claimGuard.guard(answer, { toolCalls, actionLog: steps.map((s) => ({ status: status(s.state) })) }, { request: requestText }).text;
+  if (proof.length) answer += `\n\n${proof.join('\n')}`;
   return {
     text: answer,
     steps,
+    toolCalls,
     stopReason,
     toolCall: { name: last.name, state: last.state, result: last.result, error: last.error, confirmationId: (last.verification && last.verification.confirmationId) || null },
     actionLog: steps.map((s) => ({ icon: icon(s.state), label: `${s.name} → ${s.state}`, status: status(s.state) })),

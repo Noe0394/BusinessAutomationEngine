@@ -23,7 +23,7 @@ test("le chat ne lance NI spécialistes NI boucle d'outils pour une conversation
   const t0 = Date.now();
   const r = await orch.handle({ text: 'Bonjour, comment vas-tu ?', history: [], tenantId: 'speed1', sessionId: 's', principal: P }, deps);
   assert.equal(r, null, 'rendu à la conversation directe'); assert.equal(llmCalls, 0); assert.ok(Date.now() - t0 < 200);
-  await orch.handle({ text: 'Crée le service RIEA Afrique', history: [], tenantId: 'speed1', sessionId: 's', principal: P }, deps).catch(() => null);
+  await orch.handle({ text: 'Envoie un dossier à la mairie', history: [], tenantId: 'speed1', sessionId: 's', principal: P }, deps).catch(() => null);
   assert.ok(llmCalls >= 1, "un ordre passe par l'agent à outils");
 });
 

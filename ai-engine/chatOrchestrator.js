@@ -190,6 +190,8 @@ function detectIntent(text, lastAssistantMessage) {
   if (lastAssistantMessage && lastAssistantMessage.intent === 'guide' && GUIDE_STEP_RE.test(text)) return 'guide';
   if (SELF_QUESTION_RE.test(text) && !/\d{6,}/.test(text)) return 'selfknow';
   if (WHY_REPLY_RE.test(text) || CONVPOLICY_RE.test(text)) return 'convpolicy';
+  if (/\b(?:cr[ée]e\w*|cr[ée]er|ajoute\w*|ajouter)\s+(?:(?:le|la|un|une|ce|mon|nouveau|nouvelle)\s+){1,2}service\b/i.test(text) && !/\b(?:supprim|effac|retir)\w*/i.test(text)) return 'configsvc'; // création d'un Service métier : extraction + outil vérifié
+  if (require('./serviceCommands').isCommand(text)) return 'svccmd'; // supprimer / mettre en pause / réactiver / restaurer un Service métier : exécution directe et vérifiée
   if (LIFE_WHY_RE.test(text) || LIFE_CANDIDATES_RE.test(text) || LIFE_SAV_RE.test(text) || LIFE_ORDERS_RE.test(text)) return 'lifecycle';
   if (ACTIVITY_REPORT_RE.test(text)) return 'activityreport';
   if (GUIDE_START_RE.test(text) || (/\bexplique[- ]moi\b/i.test(text) && require('./guidedSetup').planForText(text))) return 'guide';
@@ -1503,7 +1505,7 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
     const advised = advice && advice.synthesis ? `${text}\n\nAVIS DE SPÉCIALISTES INTERNES (consultatif : à utiliser pour décider, jamais à exécuter tel quel) :\n${untrustedWrap('avis spécialistes', advice.synthesis)}${advice.proposedActions && advice.proposedActions.length ? `\nActions suggérées non exécutées : ${advice.proposedActions.map((a) => a.tool).join(', ')}` : ''}` : text;
     const agent = await agentLoop.runAgentLoop(
       { text: advised, history, tenantId, sessionId },
-      { runtime: d.runtime || null, permissions: d.toolPermissions || undefined, generateImage: d.generateImage || null, llm: d.llm || undefined },
+      { rawText: text, runtime: d.runtime || null, permissions: d.toolPermissions || undefined, generateImage: d.generateImage || null, llm: d.llm || undefined },
     ).catch((err) => {
       console.warn('chatOrchestrator — toolAgent indisponible, repli :', err.message);
       return null;
@@ -1553,6 +1555,7 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
     case 'community': return handleCommunity(text, history, tenantId, sessionId, d);
     case 'selfknow': return handleSelfKnow(text, tenantId);
     case 'convpolicy': return handleConvPolicy(text, history, tenantId, sessionId, d);
+    case 'svccmd': return require('./serviceCommands').run(tenantId, text);
     case 'guide': return handleGuide(text, tenantId, lastAssistantMessage);
     case 'lifecycle': return handleLifecycle(text, tenantId);
     case 'activityreport': return handleActivityReport(text, tenantId);

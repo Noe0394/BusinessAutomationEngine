@@ -317,7 +317,7 @@ async function handleOwnerMessage(input, deps) {
     clearTimeout(ackTimer); void ackSent;
     if (!answer) answer = "Je n'ai pas de réponse pour cette demande pour le moment.";
     // JAMAIS « fait » sans preuve : une affirmation d'accomplissement sans action réellement exécutée et vérifiée dans ce tour est remplacée par un message honnête.
-    answer = require('./claimGuard').guard(answer, turnOut).text;
+    answer = require('./claimGuard').guard(answer, turnOut, { request: text }).text;
     answer = contactIdentity.scrubTechnicalIds(answer);
     await reply(answer);
     if (d.history) { try { await d.history.append(tenantId, userTextForHistory || text, answer); } catch (e) { /* non bloquant */ } }

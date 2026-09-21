@@ -4350,7 +4350,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
 
     if (orchestrated) {
       // JAMAIS « fait » sans preuve d'exécution dans ce tour (voir ai-engine/claimGuard.js).
-      if (orchestrated.text) orchestrated.text = require('./ai-engine/claimGuard').guard(orchestrated.text, orchestrated).text;
+      if (orchestrated.text) orchestrated.text = require('./ai-engine/claimGuard').guard(orchestrated.text, orchestrated, { request: text }).text;
       assistantMessage = { role: 'assistant', createdAt: new Date().toISOString(), ...orchestrated };
       const updated = await aiStudioStore.appendMessages(tenantId, req.params.id, [userMessage, assistantMessage], title);
       return res.json({ session: updated });
@@ -4427,7 +4427,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
         }
       } else {
         await sleep(1500 + Math.floor(Math.random() * 1500));
-        assistantMessage = { role: 'assistant', text: require('./ai-engine/claimGuard').guard(replyText, null).text, createdAt: new Date().toISOString() };
+        assistantMessage = { role: 'assistant', text: require('./ai-engine/claimGuard').guard(replyText, null, { request: text }).text, createdAt: new Date().toISOString() };
       }
     }
   } catch (err) {
