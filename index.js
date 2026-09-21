@@ -5189,6 +5189,43 @@ app.get('/api/reports/activity', requireAccess, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// RAPPORT & ACTIVITÉ — centre d'intelligence (ai-engine/activityIntelligence.js) : fait / pas fait / bloqué / à améliorer / amélioré, filtres,
+// boucle d'amélioration contrôlée. Données RÉELLES du compte uniquement (tenant issu de la clé de licence, jamais d'un paramètre client).
+const activityIntelligence = require('./ai-engine/activityIntelligence');
+app.get('/api/reports/intelligence', requireAccess, async (req, res) => {
+  try {
+    const q = req.query || {};
+    const f = {}; for (const k of ['serviceId', 'product', 'campaign', 'channel', 'group', 'period', 'client', 'status', 'actionType']) if (q[k]) f[k] = String(q[k]).slice(0, 80);
+    res.json({ ok: true, report: await activityIntelligence.buildReport(resolveTenantId(req), f) });
+  } catch (err) { res.status(500).json({ error: 'Rapport indisponible.' }); }
+});
+app.post('/api/reports/improvements/refresh', requireAccess, async (req, res) => {
+  try { const r = await activityIntelligence.refresh(resolveTenantId(req)); res.json({ ok: true, created: r.created.length, open: r.open }); } catch (err) { res.status(500).json({ error: 'Diagnostic indisponible.' }); }
+});
+app.get('/api/reports/improvements', requireAccess, async (req, res) => {
+  try { const d = await activityIntelligence.loadImprovements(resolveTenantId(req)); res.json({ ok: true, items: d.items.slice(0, 50) }); } catch (err) { res.status(500).json({ error: 'Indisponible.' }); }
+});
+app.post('/api/reports/improvements/:id/apply', requireAccess, async (req, res) => {
+  try {
+    const t = resolveTenantId(req);
+    const approve = !!(req.body && req.body.approve === true);
+    let authorized = false; try { authorized = (await require('./ai-engine/autoResponder').getSettings(t)).selfImprove === true; } catch (e) { authorized = false; }
+    const r = await activityIntelligence.apply(t, req.params.id, { approvedByOwner: approve, authorized });
+    res.status(r.ok ? 200 : 409).json(r.ok ? { ok: true, status: r.item.status, changed: r.changed } : { ok: false, error: r.error, message: r.message || null });
+  } catch (err) { res.status(500).json({ error: 'Application impossible.' }); }
+});
+app.post('/api/reports/improvements/:id/measure', requireAccess, async (req, res) => {
+  try { const r = await activityIntelligence.measure(resolveTenantId(req), req.params.id); res.status(r.ok ? 200 : 404).json(r.ok ? { ok: true, result: r.item.result, status: r.item.status } : { ok: false, error: r.error }); } catch (err) { res.status(500).json({ error: 'Mesure impossible.' }); }
+});
+app.post('/api/reports/analysis', requireAccess, async (req, res) => {
+  try {
+    const b = req.body || {}; const f = {}; for (const k of ['serviceId', 'channel', 'period']) if (b[k]) f[k] = String(b[k]).slice(0, 40);
+    const t = resolveTenantId(req);
+    const principal = require('./ai-engine/authz').issuePrincipal({ tenant: t, role: 'OWNER', channel: 'WEB', via: 'dashboard' });
+    res.json(await activityIntelligence.analyzeWithAgents(t, f, principal));
+  } catch (err) { res.status(500).json({ error: 'Analyse indisponible.' }); }
+});
+
 // CENTRE D'AIDE / DOCUMENTATION — base de connaissances embarquée
 // (ai-engine/knowledgeBase.js), servie à l'onglet « Centre d'aide » du
 // dashboard. Le Chat Intelligent y accède aussi via l'outil getDocumentation.

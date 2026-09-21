@@ -74,7 +74,7 @@ function isEnabled(settings, channel) {
 
 // Rédige la réponse au client, EN S'APPUYANT sur le contexte métier réel
 // (produits/prix/règles des Services Métiers) et l'historique de la conversation.
-async function composeReply({ tenant, channel, from, name, text, llm, directives, ctx }) {
+async function composeReply({ tenant, channel, from, name, text, llm, directives, ctx, learning }) {
   // Model router (§6) : complexité du message -> taille de contexte + plafond
   // de tokens de sortie (économie réelle sur les messages simples).
   const route = modelRouter.classify(text);
@@ -85,7 +85,9 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   // Offres classées : SERVICE PRIORITAIRE (celui de la campagne / du sujet déjà évoqué, sinon le service actif le plus récent),
   // puis les autres offres en simples suggestions complémentaires. Source de vérité = Services métiers configurés.
   let convState = null; try { convState = await require('./jarvis/conversationState').get(tenant, channel, from); } catch (e) { convState = null; }
-  const hint = (convState && ((convState.ad && convState.ad.productName) || (convState.memory && (convState.memory.interestService || convState.memory.subject)))) || '';
+  let hint = (convState && ((convState.ad && convState.ad.productName) || (convState.memory && (convState.memory.interestService || convState.memory.subject)))) || '';
+  // Un groupe lié (après vérification admin) à un Service métier répond d'abord sur CE service, quel que soit le métier.
+  if (isGroupChat(channel, from)) { try { const linked = (await businessServices.list(tenant)).find((s) => (s.groups || []).some((g) => String(g.id) === String(from) && String(g.channel).toUpperCase() === String(channel).toUpperCase())); if (linked) hint = linked.name; } catch (e) { /* sans lien : comportement habituel */ } }
   const prio = await businessServices.getPrioritizedContext(tenant, { hint }).catch(() => ({ text: '' }));
   const bizCtx = prio.text;
   let history = ''; let convArr = [];
@@ -93,6 +95,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
     const conv = await messageHistory.getConversation(tenant, channel, from, route.maxContextMessages);
     if (conv && conv.length) { history = conv.map((m) => `${m.direction === 'in' ? 'Client' : 'Moi'}: ${m.text}`).join('\n'); convArr = conv.map((m) => ({ who: m.direction === 'in' ? 'Client' : 'Cyrus', text: m.text })); }
   } catch (e) { history = ''; }
+  if (learning && learning.active) return composeLearning({ tenant, channel, from, name, text, llm, directives, learning, history, prio });
   // SPÉCIALISTE (Agency Agents) sous la tutelle de l'Orchestrateur : consulté EN COULISSES uniquement pour une étape commerciale/support qui le
   // justifie (intérêt, objection, closing, négociation, plainte) — jamais pour une salutation, un remerciement, un refus, un paiement ou un
   // contexte sensible. Il rend un AVIS ; c'est Cyrus qui écrit la réponse finale, validée par les mêmes garde-fous qu'avant.
@@ -139,6 +142,30 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   ].filter(Boolean).join('\n');
   const raw = await gen(prompt);
   return String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1500);
+}
+
+// TOUR D'APPRENTISSAGE : prompt pédagogique (extraits ciblés du cours, provenance distinguée), recherche externe RÉELLE seulement si nécessaire et
+// disponible (les sources consultées sont ajoutées par le code), enregistrement de la question comme CANDIDATE de FAQ (jamais le contenu officiel).
+async function composeLearning({ tenant, channel, from, name, text, llm, directives, learning, history, prio }) {
+  const learnerSupport = require('./learnerSupport');
+  const svc = prio && prio.text ? String(prio.text).slice(0, 1500) : '';
+  const prompt = learnerSupport.buildPrompt(learning, { persona: personaManager.personaSystemPrompt('default'), name, text, history, directives, businessCtx: svc });
+  const meta = { purpose: 'learner_support', tenant, maxTokens: 700, taskId: `autoreply:${tenant}:${from}`, tier: 'standard' };
+  let raw = null; let sources = [];
+  if (typeof llm === 'function') raw = await llm(prompt);
+  else {
+    if (learning.needsWeb) {
+      try {
+        const r = await llmFallbackEngine.generateAIResponse(`${prompt}\n\nUne recherche web RÉELLE est activée : appuie-toi sur des sources fiables, présente ce qui en provient sous « Recherche externe : … », distinct du cours et de ta connaissance générale ; signale toute information incertaine ou contradictoire.`, [], null, undefined, null, Object.assign({}, meta, { grounding: true }));
+        raw = r.text; sources = r.sources || [];
+      } catch (e) { if (e && e.code === 'CLIENT_AI_LIMIT') throw e; raw = null; sources = []; } // recherche indisponible : jamais présentée comme effectuée
+    }
+    if (!raw) raw = (await llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, meta)).text;
+  }
+  let reply = String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1600);
+  if (sources.length) reply = learnerSupport.withSources(reply, sources);
+  try { await require('./courseKnowledge').recordQuestion(tenant, learning.course.id, text, learning.hasOfficial); } catch (e) { /* non bloquant */ }
+  return reply;
 }
 
 // Point d'entrée : traite un message entrant de bout en bout. Retourne un objet
@@ -231,18 +258,27 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
   } catch (e) { productNames = []; }
   // Arbitrage des intentions AMBIGUËES (refus vs intérêt, hésitation vs paiement…) : décision critique -> niveau raisonnement.
   const arbitrationLlm = d.llm || ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'intent_arbitration', tenant: tenantId, tier: 'reasoning', maxTokens: 300 }).then((r) => r.text));
+  // ACCOMPAGNEMENT D'APPRENANT (privé ou groupe de formation lié) : recherche ciblée dans la base de connaissances de CE compte.
+  let learn = null;
+  try {
+    const st = await require('./jarvis/conversationState').get(tenantId, channel, from);
+    learn = await require('./learnerSupport').prepare({ tenant: tenantId, channel, from, senderId: (items[items.length - 1] || {}).senderId, text: items.map((i) => i.text).join('\n'), isGroup: isGroupChat(channel, from), state: st, settings });
+    if (learn) learn.verify = require('./learnerSupport').verify(learn);
+  } catch (e) { learn = null; }
   const result = await conversationEngine.handleBatch({ tenantId, channel, from, name, items }, {
     isGroup: isGroupChat(channel, from),
+    learning: learn || undefined,
     groupReplies: settings.groupReplies === true,
     productNames,
     priorityService: (await businessServices.getPrioritizedContext(tenantId, { hint: '' }).catch(() => ({}))).priority || null,
     llm: arbitrationLlm,
     crm: d.crm || contactCrm,
-    knownText,
+    knownText: learn ? `${knownText}\n${learn.knownText}` : knownText,
     history,
     settings,
     compose: async (directives, ctx) => {
-      const reply = await composeReply({ tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives: (directives || []).concat(identityDirectives(d.identity, name)), ctx });
+      if (learn && learn.forcedReply) return learn.forcedReply; // refus/urgence : réponse DÉTERMINISTE, aucun appel IA
+      const reply = await composeReply({ learning: learn || undefined, tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives: (directives || []).concat(identityDirectives(d.identity, name)), ctx });
       // Le client attend une confirmation du vendeur (fait absent du Service métier) : la promesse est TENUE — le propriétaire est prévenu.
       if (PROMISE_TO_OWNER_RE.test(reply)) {
         require('./alertCenter').triggerAdminNotification(tenantId, {

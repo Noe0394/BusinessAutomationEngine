@@ -81,7 +81,7 @@ function normalizeService(data) {
       price: null, promoPrice: null, currency: 'FCFA', description: '', advantages: '',
       objections: '', responses: '', paymentTerms: '', accessTerms: '', target: '',
       // Champs de pilotage de la conversation commerciale (tous facultatifs, jamais inventés) :
-      audience: '', period: '', source: '', initialMessage: '', closing: '', escalation: '', knowledge: '',
+      audience: '', period: '', source: '', initialMessage: '', closing: '', escalation: '', knowledge: '', supportRules: '',
     }, d.commercial || {}),
     // Spécialistes recommandés pour ce service (identifiants du registre d'agents) et cycle de vie : active | paused | disabled.
     specialists: Array.isArray(d.specialists) ? d.specialists.map(String).slice(0, 8) : [],
@@ -92,6 +92,8 @@ function normalizeService(data) {
     capabilities: Array.isArray(d.capabilities) ? d.capabilities : [],
     // Campagnes d'entrée (Facebook Ads…) rattachées à ce service : voir ai-engine/adCampaigns.js.
     adCampaigns: Array.isArray(d.adCampaigns) ? d.adCampaigns : [],
+    // Groupes (WhatsApp/Telegram) liés à ce service APRÈS vérification réelle (groupe existant, compte connecté, statut admin) : voir toolsExtra#linkServiceGroup.
+    groups: Array.isArray(d.groups) ? d.groups.slice(0, 50) : [],
     status: d.status || STATUS.DRAFT,
     lastTest: d.lastTest || null,
     history: Array.isArray(d.history) ? d.history : [],
@@ -297,6 +299,7 @@ function renderService(s) {
     if (c.closing) lines.push(`  Consignes de closing : ${c.closing}`);
     if (c.escalation) lines.push(`  Quand passer la main au propriétaire : ${c.escalation}`);
     if (c.knowledge) lines.push(`  Connaissances complémentaires : ${c.knowledge}`);
+    if (c.supportRules) lines.push(`  Règles d'accompagnement des apprenants : ${c.supportRules}`);
     if (c.accessTerms) lines.push(`  Conditions d'accès / livraison : ${c.accessTerms}`);
     if ((s.rules || []).length) lines.push(`  Règles commerciales : ${s.rules.join(' | ')}`);
     if ((s.objectives || []).length) lines.push(`  Objectifs : ${s.objectives.join(' | ')}`);

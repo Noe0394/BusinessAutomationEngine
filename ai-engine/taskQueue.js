@@ -8,7 +8,11 @@ const MAX_ATTEMPTS = 3;
 const KEEP_FINISHED_MS = 7 * 24 * 3600 * 1000;
 const MAX_TASKS = 1000;
 
-const STATE = { QUEUED: 'QUEUED', PROCESSING: 'PROCESSING', COMPLETED: 'COMPLETED', FAILED: 'FAILED', CANCELLED: 'CANCELLED' };
+// États d'une tâche longue : QUEUED, RUNNING (= PROCESSING en interne), WAITING_EXTERNAL (attend une réponse/validation externe), VERIFYING,
+// COMPLETED, FAILED, CANCELLED, PAUSED. Aucune tâche ne disparaît : les états terminaux sont conservés 7 jours.
+const STATE = { QUEUED: 'QUEUED', PROCESSING: 'PROCESSING', COMPLETED: 'COMPLETED', FAILED: 'FAILED', CANCELLED: 'CANCELLED', PAUSED: 'PAUSED', WAITING_EXTERNAL: 'WAITING_EXTERNAL', VERIFYING: 'VERIFYING' };
+const normalizeState = (s) => (s === 'PROCESSING' ? 'RUNNING' : s); // vocabulaire public des rapports
+const PUBLIC_STATES = ['QUEUED', 'RUNNING', 'WAITING_EXTERNAL', 'VERIFYING', 'COMPLETED', 'FAILED', 'CANCELLED', 'PAUSED'];
 
 const sanitize = (id) => String(id || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'default';
 const uid = () => 'tsk_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -97,6 +101,17 @@ async function cancel(tenant, id) {
   return finish(tenant, id, { state: STATE.CANCELLED, finishedAt: Date.now() });
 }
 
+// Pause / reprise / états intermédiaires (attente externe, vérification) : la tâche reste visible et reprend là où elle en était.
+async function setState(tenant, id, state, extra) {
+  if (![STATE.PAUSED, STATE.WAITING_EXTERNAL, STATE.VERIFYING, STATE.QUEUED].includes(state)) return null;
+  const doc = await load(tenant);
+  const task = doc.tasks.find((t) => t.id === id);
+  if (!task || [STATE.COMPLETED, STATE.FAILED, STATE.CANCELLED].includes(task.state)) return null;
+  return finish(tenant, id, Object.assign({ state }, extra || {}));
+}
+const pause = (tenant, id) => setState(tenant, id, STATE.PAUSED);
+const resume = (tenant, id) => setState(tenant, id, STATE.QUEUED, { runAt: Date.now() });
+
 // recover_queue : une tâche PROCESSING dont le bail a expiré (crash/redémarrage) est remise en file.
 function recover(tenant, now) {
   const t0 = now == null ? Date.now() : now;
@@ -166,4 +181,4 @@ function startWorker(handlersFor, intervalMs) {
 }
 function stopWorker() { if (timer) { clearInterval(timer); timer = null; } }
 
-module.exports = { NAMESPACE, STATE, enqueue, claimNext, complete, fail, cancel, recover, list, status, processTenant, startWorker, stopWorker, listTenants };
+module.exports = { NAMESPACE, STATE, PUBLIC_STATES, normalizeState, setState, pause, resume, enqueue, claimNext, complete, fail, cancel, recover, list, status, processTenant, startWorker, stopWorker, listTenants };

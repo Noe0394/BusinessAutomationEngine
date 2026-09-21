@@ -157,11 +157,26 @@ const GENMEDIA_RE = /(g[ée]n[èe]re?r?|cr[ée]e?r?|fabrique?r?|dessine?r?|fais(
 const COMMUNITY_BUILD_RE = /(?:\bcr[ée]{1,2}\w*|\bmonte\w*|\bouvre\w*|\bconstitue\w*|\bmets?\s+en\s+place|\bfai(?:s|re)\s+un|\binvite\w*|\bajoute\w*)\b[^.?!]{0,60}\b(?:(?:un|une|le|la|mon|ma|ce|cette|nouveau|nouvelle)\s+)?(?:groupes?|communaut[ée]s?)\b/i;
 const COMMUNITY_SEARCH_RE = /(?:\btrouve\w*|\bcherche\w*|\brecherche\w*|\bd[ée]couvre\w*|\bidentifie\w*|\brep[èe]re\w*|\bd[ée]niche\w*)\b[^.?!]{0,60}\b(?:groupes?|canaux|cha[iî]nes?|communaut[ée]s?)\b[^.?!]{0,40}\b(?:publics?|th[ée]matiques?|sur|autour|li[ée]s?|d['’]int[ée]r[êe]t)\b|\b(?:groupes?|canaux)\s+(?:publics?\s+)?(?:whatsapp|telegram)\s+(?:sur|autour|du|d['’]|pour)\b/i;
 
+// --- Cyrus multi-métiers : auto-connaissance, guidage pas à pas, cycle de vie client (relances/SAV/commandes), rapport d'activité ---
+const GUIDE_START_RE = /\b(?:guide[zr]?[- ]moi|guidez[- ]moi|accompagne[zr]?[- ]moi|pas [àa] pas|[ée]tape par [ée]tape)\b/i;
+const GUIDE_STEP_RE = /^\s*(?:suivant|c['’]est fait|fait|termin[ée]|j['’]ai fini|ok(?:\s+suivant)?|v[ée]rifie(?:s)?|on continue|continue)\s*[.!]*\s*$/i;
+const LIFE_CANDIDATES_RE = /(?:\bquels?\s+(?:prospects?|clients?)\b[^.?!]{0,60}\b(?:relanc|suivi|recontact)|\b(?:prospects?|clients?)\b[^.?!]{0,40}\b(?:doivent|devrais[- ]je|faut[- ]il)\b[^.?!]{0,30}\brelanc|\bcommandes?\s+livr[ée]es?\s+sans\s+suivi|\bqui\s+(?:dois[- ]je|faut[- ]il)\s+relancer)/i;
+const LIFE_WHY_RE = /pourquoi\b[^.?!]{0,60}\brelance\b[^.?!]{0,60}\b(?:pas|non|jamais)\b[^.?!]{0,20}\benvoy/i;
+const LIFE_SAV_RE = /(?:\b(?:dossiers?|r[ée]clamations?|cas)\s+(?:sav|ouverts?|en cours)\b|\bsav\b[^.?!]{0,30}\b(?:ouverts?|en cours|quels|liste)\b|\bquels?\s+(?:sont\s+)?(?:les\s+)?(?:dossiers?\s+)?sav\b)/i;
+const LIFE_ORDERS_RE = /(?:\b(?:liste|montre|affiche|quelles?\s+sont)\b[^.?!]{0,30}\b(?:mes\s+|les\s+)?(?:commandes?|r[ée]servations?|dossiers?\s+clients?)\b|\bcommandes?\s+(?:en attente|non pay[ée]es?|en cours)\b)/i;
+const ACTIVITY_REPORT_RE = /(?:rapport\s+(?:d['’]\s*)?(?:activit[ée]s?|d['’]intelligence)|qu['’]est[- ]ce qui\s+(?:a\s+[ée]t[ée]|est)\s+(?:fait|bloqu[ée]|am[ée]lior[ée])|ce qui\s+(?:est|a\s+[ée]t[ée])\s+bloqu[ée]|\bque\s+(?:dois[- ]tu|faut[- ]il)\s+am[ée]liorer|comment\s+(?:t['’]es[- ]tu|tu\s+t['’]es)\s+am[ée]lior|analyse\s+(?:mon|l['’])\s*activit[ée])/i;
+const SELF_QUESTION_RE = /(?:^|\b)(?:qui es[- ]tu|pr[ée]sente[- ]toi|que (?:peux|sais)[- ]tu faire|qu['’]est[- ]ce que tu (?:peux|sais) faire|quels?\s+(?:sont\s+)?(?:tes|les)\s+(?:outils|fonctions|fonctionnalit[ée]s|capacit[ée]s|agents|services|modules)|quels?\s+(?:agents|outils)\s+(?:as|utilises|sont)|que ne peux[- ]tu pas|quelles?\s+sont\s+tes\s+limites|comment\s+(?:tu\s+)?t['’]am[ée]liores)|^\s*peux[- ]tu\s+(?:relancer|g[ée]rer|utiliser|vendre)\b[^.!]*\?\s*$/i;
+
 function detectIntent(text, lastAssistantMessage) {
   const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply', 'adcampaign', 'groupcampaign'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
     return lastAssistantMessage.intent;
   }
+  if (lastAssistantMessage && lastAssistantMessage.intent === 'guide' && GUIDE_STEP_RE.test(text)) return 'guide';
+  if (SELF_QUESTION_RE.test(text) && !/\d{6,}/.test(text)) return 'selfknow';
+  if (LIFE_WHY_RE.test(text) || LIFE_CANDIDATES_RE.test(text) || LIFE_SAV_RE.test(text) || LIFE_ORDERS_RE.test(text)) return 'lifecycle';
+  if (ACTIVITY_REPORT_RE.test(text)) return 'activityreport';
+  if (GUIDE_START_RE.test(text) || (/\bexplique[- ]moi\b/i.test(text) && require('./guidedSetup').planForText(text))) return 'guide';
   if (COMMUNITY_SEARCH_RE.test(text) || (COMMUNITY_BUILD_RE.test(text) && !/(?:groupes?\s+(?:admin|que\s+j)|mes\s+groupes|dans\s+(?:le|mes|tous)\s+groupes?\b)/i.test(text))) return 'community';
   // Campagnes de groupes administrés (création, rapport, arrêt) : AVANT « recurring » / « grouppost » / « goal ».
   if ((GROUPCAMPAIGN_TARGET_RE.test(text) && GROUPCAMPAIGN_TIME_RE.test(text)) || GROUPCAMPAIGN_REPORT_RE.test(text) || GROUPCAMPAIGN_STOP_RE.test(text)) return 'groupcampaign';
@@ -1296,6 +1311,71 @@ async function handleCommunity(text, history, tenantId, sessionId, deps) {
   return { text: "Je n'ai pas pu préparer cette action de groupe/communauté. Dites-moi le canal (WhatsApp ou Telegram), le nom du groupe et la liste de contacts (fichier joint ou texte), ou les mots-clés à explorer.", isPlanningQuestion: true, intent: 'community' };
 }
 
+// 'selfknow' — Cyrus parle de LUI à la première personne, à partir des registres réels (ai-engine/cyrusSelf.js).
+async function handleSelfKnow(text, tenantId) {
+  const out = await require('./cyrusSelf').answer(tenantId, text);
+  return { text: out.text, intent: 'selfknow', actionLog: [{ icon: '🧭', label: 'Réponse construite sur mes registres réels', status: 'done' }] };
+}
+
+// 'guide' — GUIDED_SETUP / TUTORIAL_MODE : EXPLIQUE-MOI (explication) / GUIDE-MOI (pas à pas vérifié) / FAIS-LE (les outils font l'action).
+async function handleGuide(text, tenantId, lastAssistantMessage) {
+  const g = require('./guidedSetup'); const self = require('./cyrusSelf');
+  const mode = self.detectMode(text); const cont = lastAssistantMessage && lastAssistantMessage.intent === 'guide' && GUIDE_STEP_RE.test(text);
+  const planId = g.planForText(text);
+  if (cont) {
+    const ev = await g.status(tenantId);
+    if (!ev) return { text: g.render(null), intent: 'guide', isPlanningQuestion: true };
+    const before = ev.finished ? null : ev.steps[ev.current];
+    const prefix = before && /^\s*(?:c['’]est fait|fait|termin[ée]|j['’]ai fini)/i.test(text) ? `Je viens de vérifier dans votre compte : l'étape « ${before.title} » n'est pas encore en place. ` : '';
+    return { text: prefix + g.render(ev), intent: 'guide', isPlanningQuestion: !ev.finished };
+  }
+  if (!planId) return { text: 'Volontiers. Que voulez-vous mettre en place : votre Service métier, votre catalogue, vos contacts, une campagne, le SAV, les relances, vos groupes, ou la connexion de WhatsApp/Telegram ?', intent: 'guide', isPlanningQuestion: true };
+  if (mode === 'EXPLAIN' || (!mode && /\bexplique/i.test(text))) { const e = g.explain(planId); return { text: `${e.text}\n\nÉtapes : ${e.steps.map((s, i) => `${i + 1}. ${s}`).join(' · ')}.\nVoulez-vous que je vous guide pas à pas, ou que je le fasse pour vous ?`, intent: 'guide', isPlanningQuestion: true }; }
+  const ev = await g.start(tenantId, planId);
+  const plan = g.explain(planId);
+  return { text: `Objectif : ${plan.title}.\nPlan : ${plan.steps.map((s, i) => `${i + 1}. ${s}`).join(' · ')}.\n\n${g.render(ev)}`, intent: 'guide', isPlanningQuestion: !ev.finished, actionLog: [{ icon: '🧭', label: `Guidage : ${plan.title}`, status: 'done' }] };
+}
+
+// 'lifecycle' — questions du propriétaire sur les relances, le SAV et les dossiers : réponses FACTUELLES sur les données réelles (customerLifecycle).
+async function handleLifecycle(text, tenantId) {
+  const lc = require('./customerLifecycle'); const { explainReason } = require('./toolsLifecycle');
+  const who = (c) => c.name || c.id;
+  if (LIFE_WHY_RE.test(text)) {
+    const m = String(text).match(/(?:pour|à|a|de)\s+([A-ZÀ-Ý][\p{L}'-]+(?:\s+[A-ZÀ-Ý][\p{L}'-]+)?|\+?\d[\d\s]{5,})/u);
+    const q = m ? String(m[1]).trim().toLowerCase() : '';
+    const all = await lc.listFollowUps(tenantId);
+    const hit = (q ? all.filter((f) => String(f.contact.name || '').toLowerCase().includes(q) || String(f.contact.id).includes(q.replace(/\D/g, '') || '§')) : all.filter((f) => f.status !== 'SENT')).slice(0, 5);
+    if (!hit.length) return { text: "Je n'ai aucune relance planifiée qui corresponde : elle n'a donc jamais été prévue (aucun dossier livré ni paiement en attente pour ce contact). Voulez-vous que j'en planifie une ?", intent: 'lifecycle' };
+    return { text: hit.map((f) => `• ${f.kind} pour ${who(f.contact)} — statut ${f.status}. ${f.status === 'SENT' ? 'Elle a bien été envoyée.' : 'Motif : ' + explainReason(f.cancelReason || f.ownerReason || (f.decisions.length ? f.decisions[f.decisions.length - 1].reasons.slice(-1)[0] : 'PLANNED')) + '.'}`).join('\n'), intent: 'lifecycle' };
+  }
+  if (LIFE_SAV_RE.test(text)) {
+    const open = await lc.listCases(tenantId, { status: 'OPEN' });
+    return { text: open.length ? `Dossiers SAV ouverts (${open.length}) :\n` + open.slice(0, 10).map((c) => `• ${who(c.contact)} — ${c.category} : ${c.summary || 'sans détail'} (${Math.max(0, Math.round((Date.now() - c.openedAt) / 3600000))} h)`).join('\n') : "Aucun dossier SAV ouvert pour le moment.", intent: 'lifecycle' };
+  }
+  if (LIFE_ORDERS_RE.test(text) && !LIFE_CANDIDATES_RE.test(text)) {
+    const st = /pay[ée]/i.test(text) && /non|en attente/i.test(text) ? 'PAYMENT_PENDING' : (/livr/i.test(text) ? 'DELIVERED' : undefined);
+    const list = await lc.listOrders(tenantId, { status: st });
+    return { text: list.length ? `Dossiers${st ? ' ' + st : ''} (${list.length}) :\n` + list.slice(0, 10).map((o) => `• ${who(o.contact)} — ${o.serviceName || o.kind} : ${o.status}${o.total != null ? `, ${o.total} ${o.currency}` : ''}`).join('\n') : "Je n'ai aucun dossier correspondant.", intent: 'lifecycle' };
+  }
+  const c = await lc.candidates(tenantId); const lines = [];
+  if (c.idleProspects.length) lines.push(`Prospects intéressés restés sans suite (${c.idleProspects.length}) : ` + c.idleProspects.slice(0, 8).map((p) => `${p.contactId} (${p.state}, ${p.idleHours} h)`).join(', '));
+  if (c.due.length) lines.push(`Relances dues maintenant (${c.due.length}) : ` + c.due.slice(0, 8).map((d) => `${who(d.contact)} [${d.kind}]`).join(', '));
+  if (c.pendingPayments.length) lines.push(`Paiements en attente (${c.pendingPayments.length}) : ` + c.pendingPayments.slice(0, 8).map((p) => who(p.contact)).join(', '));
+  if (c.deliveredWithoutFollowUp.length) lines.push(`Commandes livrées sans suivi (${c.deliveredWithoutFollowUp.length}) : ` + c.deliveredWithoutFollowUp.slice(0, 8).map((d) => who(d.contact)).join(', '));
+  if (c.needsOwner.length) lines.push(`Relances qui attendent votre décision (${c.needsOwner.length}) : ` + c.needsOwner.slice(0, 8).map((n) => `${who(n.contact)} (${explainReason(n.reason)})`).join(', '));
+  return { text: lines.length ? lines.join('\n') + '\nAvant chaque envoi, je revérifie que la relance a encore lieu d\'être.' : "Rien à relancer ou à suivre pour le moment d'après vos données réelles.", intent: 'lifecycle' };
+}
+
+// 'activityreport' — Rapport & Activité : fait / pas fait / bloqué / à améliorer / amélioré, sur les données réelles ; lance aussi le diagnostic.
+async function handleActivityReport(text, tenantId) {
+  const ai = require('./activityIntelligence');
+  const period = (String(text).match(/\b(\d{1,3})\s*(jours?|j|heures?|h)\b/i) || []); const f = period[1] ? { period: `${period[1]}${/^h/i.test(period[2]) ? 'h' : 'd'}` } : (/aujourd/i.test(text) ? { period: '24h' } : {});
+  const r = await ai.buildReport(tenantId, f); const rec = await ai.refresh(tenantId);
+  const t = (l) => l.slice(0, 5).map((i) => `  – ${i.title}${i.reason ? ' (' + i.reason + ')' : ''}${i.result && i.result.message ? ' → ' + i.result.message : ''}`).join('\n');
+  const parts = [`Voici l'état réel de votre activité (${r.total} élément(s)) :`, `✅ Fait : ${r.totals.DONE}`, r.sections.done.length ? t(r.sections.done) : null, `⏳ Pas encore fait : ${r.totals.NOT_DONE}`, r.sections.notDone.length ? t(r.sections.notDone) : null, `⛔ Bloqué : ${r.totals.BLOCKED}`, r.sections.blocked.length ? t(r.sections.blocked) : null, `🔧 À améliorer : ${rec.open.length}`, rec.open.length ? rec.open.slice(0, 5).map((i) => `  – ${i.recommendation} (${i.kind === 'AUTO_SAFE' ? 'action sûre : je peux l\'appliquer si vous me le dites' : i.kind === 'TECHNICAL' ? 'technique : proposée, jamais appliquée seule' : 'attend votre validation'})`).join('\n') : null, `📈 Amélioré : ${r.totals.IMPROVED}`, r.sections.improved.length ? t(r.sections.improved) : null, r.note].filter(Boolean);
+  return { text: parts.join('\n'), intent: 'activityreport', actionLog: [{ icon: '📊', label: 'Rapport construit sur données réelles', status: 'done' }] };
+}
+
 async function handleGenMedia(text, tenantId, deps) {
   const call = await toolRegistry.execute(tenantId, 'generateImage', { prompt: text }, { generateImage: deps.generateImage || null });
   if (call.state !== 'SUCCESS') {
@@ -1431,6 +1511,10 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
     case 'importcontacts': return handleImportContacts(text, tenantId);
     case 'genmedia': return handleGenMedia(text, tenantId, d);
     case 'community': return handleCommunity(text, history, tenantId, sessionId, d);
+    case 'selfknow': return handleSelfKnow(text, tenantId);
+    case 'guide': return handleGuide(text, tenantId, lastAssistantMessage);
+    case 'lifecycle': return handleLifecycle(text, tenantId);
+    case 'activityreport': return handleActivityReport(text, tenantId);
     default: return null;
   }
 }

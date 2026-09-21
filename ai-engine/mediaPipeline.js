@@ -352,4 +352,26 @@ function buildTurn({ instruction, items }) {
   return { text, anyOk: list.some((i) => i.ok), tainted: list.length > 0, failures };
 }
 
-module.exports = { ingest, buildTurn, detectKind, pdfLocalText, docxText, spreadsheetSummary, readable, LABELS, MAX_FILE_BYTES };
+// Texte INTÉGRAL d'un support de cours (PDF texte, DOCX, texte, tableur) — SANS la borne de contexte de ingest() : sert à l'indexation de la base
+// pédagogique. Un PDF scanné passe par la lecture multimodale (borne du modèle). Renvoie { ok, text, kind, method } ; jamais d'exception.
+const MAX_FULL_TEXT = 2_000_000;
+async function extractFullText({ buffer, mimetype, filename }) {
+  try {
+    if (!Buffer.isBuffer(buffer) || !buffer.length) return { ok: false, error: 'NO_CONTENT' };
+    if (buffer.length > MAX_FILE_BYTES) return { ok: false, error: 'TOO_LARGE' };
+    const det = detectKind({ buffer, mimetype, filename });
+    let text = '';
+    if (det.kind === 'pdf') { text = pdfLocalText(buffer); if (!readable(text)) { const r = await extractPdf({ buffer }); text = r.text; } }
+    else if (det.kind === 'docx') text = docxText(buffer);
+    else if (det.kind === 'text') text = (await extractText({ buffer, name: filename })).text;
+    else if (det.kind === 'spreadsheet') text = spreadsheetSummary(buffer, filename, det.mime).text;
+    else if (det.kind === 'audio') text = (await extractAudio({ buffer, mime: det.mime, filename })).text;
+    else if (det.kind === 'video') text = (await extractVideo({ buffer, mime: det.mime, filename })).text;
+    else if (det.kind === 'image') text = (await extractImage({ buffer, mime: det.mime, filename })).text;
+    else return { ok: false, error: 'UNSUPPORTED_TYPE', kind: det.kind };
+    text = String(text || '').trim().slice(0, MAX_FULL_TEXT);
+    return text ? { ok: true, text, kind: det.kind } : { ok: false, error: 'EMPTY', kind: det.kind };
+  } catch (err) { logFail(`extraction intégrale de « ${filename} »`, err); return { ok: false, error: err.code || 'PROCESSING_FAILED' }; }
+}
+
+module.exports = { extractFullText, ingest, buildTurn, detectKind, pdfLocalText, docxText, spreadsheetSummary, readable, LABELS, MAX_FILE_BYTES };

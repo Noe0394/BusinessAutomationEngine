@@ -400,6 +400,7 @@
       <button type="button" class="tab-btn" data-tab="studio" hidden>🧠 Studio IA</button>
       <button type="button" class="tab-btn" data-tab="services-metiers">🏢 Services Métiers</button>
       <button type="button" class="tab-btn" data-tab="aide">📚 Centre d'aide</button>
+      <button type="button" class="tab-btn" data-tab="communities">👥 Communautés</button>
       <button type="button" class="tab-btn" data-tab="reports">📊 Rapports & Activités</button>
     </nav>
 
@@ -767,46 +768,7 @@
         </p>
       </div>
 
-      <div class="subsection" id="cm-wa-section">
-        <h3>👥 Communautés — créer un groupe et découvrir des groupes/canaux (WhatsApp)</h3>
-        <p class="empty">Créez un groupe à partir d'une liste de contacts validés : les participants sont ajoutés dans le respect de leurs paramètres de confidentialité ; ceux qui ont restreint l'ajout direct reçoivent automatiquement le lien d'invitation officiel en message privé. Vous pouvez aussi le demander directement dans le Chat Intelligent.</p>
-
-        <div class="field">
-          <label for="cm-wa-title">Nom du groupe</label>
-          <input type="text" id="cm-wa-title" maxlength="100" placeholder="Ex. Formation Marketing — Promo 1" />
-        </div>
-        <div class="field">
-          <label for="cm-wa-text">Contacts (un par ligne : numéro, éventuellement avec le nom)</label>
-          <textarea id="cm-wa-text" rows="4" placeholder="+22670123456 Awa&#10;+22675000111 Issa"></textarea>
-        </div>
-        <div class="field">
-          <label for="cm-wa-file">…ou un fichier (Excel, CSV, texte, vCard, ou image d'une liste — OCR)</label>
-          <input type="file" id="cm-wa-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" />
-        </div>
-        <div class="field">
-          <label for="cm-wa-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
-          <input type="text" id="cm-wa-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
-        </div>
-        <button type="button" id="cm-wa-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
-        <button type="button" id="cm-wa-resume-btn" hidden>▶️ Reprendre</button>
-        <p id="cm-wa-create-feedback" hidden></p>
-        <div id="cm-wa-progress" hidden></div>
-
-        <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
-        <div class="field">
-          <label for="cm-wa-kw">Mots-clés sectoriels (séparés par des virgules)</label>
-          <input type="text" id="cm-wa-kw" placeholder="Ex. marketing digital, immobilier" />
-        </div>
-        <button type="button" id="cm-wa-search-btn">🔎 Rechercher</button>
-        <button type="button" id="cm-wa-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
-        <p id="cm-wa-search-feedback" hidden></p>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th></tr></thead>
-            <tbody id="cm-wa-results"><tr><td colspan="5" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
-          </table>
-        </div>
-      </div>
+      
     </section>
 
     <!-- Onglet Telegram -->
@@ -990,46 +952,7 @@
           </div>
         </div>
 
-      <div class="subsection" id="cm-tg-section">
-        <h3>👥 Communautés — créer un groupe et découvrir des groupes/canaux (Telegram)</h3>
-        <p class="empty">Créez un groupe à partir d'une liste de contacts validés : les participants sont ajoutés dans le respect de leurs paramètres de confidentialité ; ceux qui ont restreint l'ajout direct reçoivent automatiquement le lien d'invitation officiel en message privé. Vous pouvez aussi le demander directement dans le Chat Intelligent.</p>
-
-        <div class="field">
-          <label for="cm-tg-title">Nom du groupe</label>
-          <input type="text" id="cm-tg-title" maxlength="100" placeholder="Ex. Formation Marketing — Promo 1" />
-        </div>
-        <div class="field">
-          <label for="cm-tg-text">Contacts (un par ligne : numéro ou @username, éventuellement avec le nom)</label>
-          <textarea id="cm-tg-text" rows="4" placeholder="+22670123456 Awa&#10;+22675000111 Issa"></textarea>
-        </div>
-        <div class="field">
-          <label for="cm-tg-file">…ou un fichier (Excel, CSV, texte, vCard, ou image d'une liste — OCR)</label>
-          <input type="file" id="cm-tg-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" />
-        </div>
-        <div class="field">
-          <label for="cm-tg-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
-          <input type="text" id="cm-tg-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
-        </div>
-        <button type="button" id="cm-tg-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
-        <button type="button" id="cm-tg-resume-btn" hidden>▶️ Reprendre</button>
-        <p id="cm-tg-create-feedback" hidden></p>
-        <div id="cm-tg-progress" hidden></div>
-
-        <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
-        <div class="field">
-          <label for="cm-tg-kw">Mots-clés sectoriels (séparés par des virgules)</label>
-          <input type="text" id="cm-tg-kw" placeholder="Ex. marketing digital, immobilier" />
-        </div>
-        <button type="button" id="cm-tg-search-btn">🔎 Rechercher</button>
-        <button type="button" id="cm-tg-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
-        <p id="cm-tg-search-feedback" hidden></p>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th></tr></thead>
-            <tbody id="cm-tg-results"><tr><td colspan="5" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
-          </table>
-        </div>
-      </div>
+      
       </div>
     </section>
 
@@ -2247,6 +2170,91 @@
          supervision, §15). Données réelles et DÉTERMINISTES (aucun appel IA) :
          coûts IA (GET /api/reports/ai-usage) + flux d'activités
          (GET /api/reports/activity). Portée par tenant (clé de licence). -->
+    <!-- Onglet : Communautés — création de groupes et découverte de groupes/canaux (WhatsApp + Telegram), sections déplacées ici pour être visibles. -->
+    <section class="panel" id="panel-communities">
+      <h2>👥 Communautés</h2>
+      <div class="subsection" id="cm-wa-section">
+        <h3>👥 Communautés — créer un groupe et découvrir des groupes/canaux (WhatsApp)</h3>
+        <p class="empty">Créez un groupe à partir d'une liste de contacts validés : les participants sont ajoutés dans le respect de leurs paramètres de confidentialité ; ceux qui ont restreint l'ajout direct reçoivent automatiquement le lien d'invitation officiel en message privé. Vous pouvez aussi le demander directement dans le Chat Intelligent.</p>
+
+        <div class="field">
+          <label for="cm-wa-title">Nom du groupe</label>
+          <input type="text" id="cm-wa-title" maxlength="100" placeholder="Ex. Formation Marketing — Promo 1" />
+        </div>
+        <div class="field">
+          <label for="cm-wa-text">Contacts (un par ligne : numéro, éventuellement avec le nom)</label>
+          <textarea id="cm-wa-text" rows="4" placeholder="+22670123456 Awa&#10;+22675000111 Issa"></textarea>
+        </div>
+        <div class="field">
+          <label for="cm-wa-file">…ou un fichier (Excel, CSV, texte, vCard, ou image d'une liste — OCR)</label>
+          <input type="file" id="cm-wa-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" />
+        </div>
+        <div class="field">
+          <label for="cm-wa-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
+          <input type="text" id="cm-wa-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
+        </div>
+        <button type="button" id="cm-wa-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
+        <button type="button" id="cm-wa-resume-btn" hidden>▶️ Reprendre</button>
+        <p id="cm-wa-create-feedback" hidden></p>
+        <div id="cm-wa-progress" hidden></div>
+
+        <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
+        <div class="field">
+          <label for="cm-wa-kw">Mots-clés sectoriels (séparés par des virgules)</label>
+          <input type="text" id="cm-wa-kw" placeholder="Ex. marketing digital, immobilier" />
+        </div>
+        <button type="button" id="cm-wa-search-btn">🔎 Rechercher</button>
+        <button type="button" id="cm-wa-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
+        <p id="cm-wa-search-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th></tr></thead>
+            <tbody id="cm-wa-results"><tr><td colspan="5" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="subsection" id="cm-tg-section">
+        <h3>👥 Communautés — créer un groupe et découvrir des groupes/canaux (Telegram)</h3>
+        <p class="empty">Créez un groupe à partir d'une liste de contacts validés : les participants sont ajoutés dans le respect de leurs paramètres de confidentialité ; ceux qui ont restreint l'ajout direct reçoivent automatiquement le lien d'invitation officiel en message privé. Vous pouvez aussi le demander directement dans le Chat Intelligent.</p>
+
+        <div class="field">
+          <label for="cm-tg-title">Nom du groupe</label>
+          <input type="text" id="cm-tg-title" maxlength="100" placeholder="Ex. Formation Marketing — Promo 1" />
+        </div>
+        <div class="field">
+          <label for="cm-tg-text">Contacts (un par ligne : numéro ou @username, éventuellement avec le nom)</label>
+          <textarea id="cm-tg-text" rows="4" placeholder="+22670123456 Awa&#10;+22675000111 Issa"></textarea>
+        </div>
+        <div class="field">
+          <label for="cm-tg-file">…ou un fichier (Excel, CSV, texte, vCard, ou image d'une liste — OCR)</label>
+          <input type="file" id="cm-tg-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" />
+        </div>
+        <div class="field">
+          <label for="cm-tg-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
+          <input type="text" id="cm-tg-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
+        </div>
+        <button type="button" id="cm-tg-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
+        <button type="button" id="cm-tg-resume-btn" hidden>▶️ Reprendre</button>
+        <p id="cm-tg-create-feedback" hidden></p>
+        <div id="cm-tg-progress" hidden></div>
+
+        <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
+        <div class="field">
+          <label for="cm-tg-kw">Mots-clés sectoriels (séparés par des virgules)</label>
+          <input type="text" id="cm-tg-kw" placeholder="Ex. marketing digital, immobilier" />
+        </div>
+        <button type="button" id="cm-tg-search-btn">🔎 Rechercher</button>
+        <button type="button" id="cm-tg-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
+        <p id="cm-tg-search-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th></tr></thead>
+            <tbody id="cm-tg-results"><tr><td colspan="5" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section class="panel" id="panel-reports">
       <style>
         #panel-reports .rep-kpis{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
@@ -10377,7 +10385,63 @@
         }).join('') + '</div>';
       }
       html += '</div>';
+      html += '<div class="rep-section" id="rep-intel"></div>';
       box.innerHTML = html;
+      repIntelLoad();
+    }
+
+    // Centre d'intelligence : fait / pas fait / bloqué / à améliorer / amélioré (données réelles) + filtres + boucle d'amélioration.
+    var repIntelFilters = {};
+    async function repIntelLoad() {
+      var host = document.getElementById('rep-intel'); if (!host) return;
+      var qs = Object.keys(repIntelFilters).filter(function (k) { return repIntelFilters[k]; }).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(repIntelFilters[k]); }).join('&');
+      host.innerHTML = '<p style="opacity:.6">Analyse des données réelles…</p>';
+      var data = null; var imps = null;
+      try {
+        data = await apiFetch('/api/reports/intelligence' + (qs ? '?' + qs : '')).then(function (r) { return r.json(); });
+        imps = await apiFetch('/api/reports/improvements').then(function (r) { return r.json(); }).catch(function () { return null; });
+      } catch (e) { if (e.message === 'unauthorized') return; }
+      var rep = data && data.report; if (!rep) { host.innerHTML = '<p class="rep-err">Rapport indisponible.</p>'; return; }
+      var cols = [['DONE', '✅ Fait', 'done'], ['NOT_DONE', '⏳ Pas encore fait', 'notDone'], ['BLOCKED', '⛔ Bloqué', 'blocked'], ['TO_IMPROVE', '🔧 À améliorer', 'toImprove'], ['IMPROVED', '📈 Amélioré', 'improved']];
+      var h = '<strong>🧠 Centre d\'intelligence — ce qui a été fait, bloqué et amélioré</strong>';
+      h += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0">'
+        + '<select id="rep-f-status"><option value="">Tous les statuts</option>' + cols.map(function (c) { return '<option value="' + c[0] + '"' + (repIntelFilters.status === c[0] ? ' selected' : '') + '>' + c[1] + '</option>'; }).join('') + '</select>'
+        + '<select id="rep-f-channel"><option value="">Tous les canaux</option><option value="WHATSAPP"' + (repIntelFilters.channel === 'WHATSAPP' ? ' selected' : '') + '>WhatsApp</option><option value="TELEGRAM"' + (repIntelFilters.channel === 'TELEGRAM' ? ' selected' : '') + '>Telegram</option></select>'
+        + '<select id="rep-f-period"><option value="7d">7 jours</option><option value="30d"' + (!repIntelFilters.period || repIntelFilters.period === '30d' ? ' selected' : '') + '>30 jours</option><option value="24h"' + (repIntelFilters.period === '24h' ? ' selected' : '') + '>24 h</option></select>'
+        + '<input id="rep-f-client" placeholder="Client" value="' + repEsc(repIntelFilters.client || '') + '" style="max-width:120px">'
+        + '<input id="rep-f-service" placeholder="Service (id)" value="' + repEsc(repIntelFilters.serviceId || '') + '" style="max-width:120px">'
+        + '<input id="rep-f-campaign" placeholder="Campagne" value="' + repEsc(repIntelFilters.campaign || '') + '" style="max-width:120px">'
+        + '<input id="rep-f-group" placeholder="Groupe" value="' + repEsc(repIntelFilters.group || '') + '" style="max-width:120px">'
+        + '<input id="rep-f-action" placeholder="Type d\'action" value="' + repEsc(repIntelFilters.actionType || '') + '" style="max-width:120px">'
+        + '<button type="button" id="rep-f-apply">Filtrer</button></div>';
+      if (rep.note) h += '<p style="opacity:.7">' + repEsc(rep.note) + '</p>';
+      h += '<div class="rep-kpis">' + cols.map(function (c) { return '<div class="rep-kpi"><div class="v">' + (rep.totals[c[0]] || 0) + '</div><div class="l">' + c[1] + '</div></div>'; }).join('') + '</div>';
+      cols.forEach(function (c) {
+        var list = rep.sections[c[2]] || []; if (!list.length) return;
+        h += '<div class="rep-section"><strong>' + c[1] + '</strong><div class="rep-feed">' + list.slice(0, 15).map(function (i) {
+          var extra = (i.reason ? ' — ' + i.reason : '') + (i.how ? ' · comment : ' + i.how : '') + (i.result && i.result.message ? ' · résultat : ' + i.result.message : '');
+          return '<div class="rep-evt"><div class="rep-what">' + repEsc(i.title + extra) + '</div><div class="rep-when">' + (i.ts ? new Date(i.ts).toLocaleString('fr-FR') : '') + '</div></div>';
+        }).join('') + '</div></div>';
+      });
+      var open = ((imps && imps.items) || []).filter(function (i) { return i.status === 'PROPOSED' || i.status === 'APPLIED'; });
+      h += '<div class="rep-section"><strong>🔁 Recommandations d\'amélioration</strong> <button type="button" id="rep-imp-scan" style="font-size:.8rem;margin-left:8px">Analyser maintenant</button> <button type="button" id="rep-imp-ai" style="font-size:.8rem">Analyse par mes spécialistes</button><div id="rep-imp-ai-out" style="margin-top:6px"></div>';
+      h += open.length ? '<div class="rep-feed">' + open.map(function (i) {
+        var kind = i.kind === 'AUTO_SAFE' ? 'action sûre' : (i.kind === 'TECHNICAL' ? 'technique — proposée seulement' : 'validation requise');
+        var btn = i.status === 'PROPOSED' && i.kind !== 'TECHNICAL' ? '<button type="button" data-imp-apply="' + repEsc(i.id) + '">Valider et appliquer</button>' : (i.status === 'APPLIED' ? '<button type="button" data-imp-measure="' + repEsc(i.id) + '">Mesurer le résultat</button>' : '');
+        return '<div class="rep-evt"><div class="rep-what"><b>' + repEsc(i.recommendation) + '</b><br><small>Observation : ' + repEsc(i.observation) + ' · Diagnostic : ' + repEsc(i.diagnostic || '') + ' · ' + repEsc(kind) + (i.result && i.result.message ? ' · Résultat : ' + repEsc(i.result.message) : '') + '</small></div><div>' + btn + '</div></div>';
+      }).join('') + '</div>' : '<p style="opacity:.6;margin-top:6px">Aucune recommandation ouverte. Cliquez sur « Analyser maintenant » pour observer vos données réelles.</p>';
+      h += '</div>';
+      host.innerHTML = h;
+      var g = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; };
+      document.getElementById('rep-f-apply').addEventListener('click', function () { repIntelFilters = { status: g('rep-f-status'), channel: g('rep-f-channel'), period: g('rep-f-period'), client: g('rep-f-client'), serviceId: g('rep-f-service'), campaign: g('rep-f-campaign'), group: g('rep-f-group'), actionType: g('rep-f-action') }; repIntelLoad(); });
+      document.getElementById('rep-imp-scan').addEventListener('click', async function () { await apiFetch('/api/reports/improvements/refresh', { method: 'POST' }).catch(function () {}); repIntelLoad(); });
+      document.getElementById('rep-imp-ai').addEventListener('click', async function () {
+        var out = document.getElementById('rep-imp-ai-out'); out.textContent = 'Analyse en cours…';
+        var r = await apiFetch('/api/reports/analysis', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ period: repIntelFilters.period || '30d', channel: repIntelFilters.channel || undefined }) }).then(function (x) { return x.json(); }).catch(function () { return null; });
+        out.textContent = r && r.text ? r.text : 'Analyse indisponible.';
+      });
+      host.querySelectorAll('[data-imp-apply]').forEach(function (b) { b.addEventListener('click', async function () { await apiFetch('/api/reports/improvements/' + encodeURIComponent(b.getAttribute('data-imp-apply')) + '/apply', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approve: true }) }).catch(function () {}); repIntelLoad(); }); });
+      host.querySelectorAll('[data-imp-measure]').forEach(function (b) { b.addEventListener('click', async function () { await apiFetch('/api/reports/improvements/' + encodeURIComponent(b.getAttribute('data-imp-measure')) + '/measure', { method: 'POST' }).catch(function () {}); repIntelLoad(); }); });
     }
 
     // PWA : installation optionnelle sous le nom "CYRUS SUPER ASSISTANT"

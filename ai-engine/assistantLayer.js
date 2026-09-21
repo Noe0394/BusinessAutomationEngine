@@ -63,6 +63,8 @@ function create(d) {
 
     // Classification rapide par message : le métier suit le flux existant, inchangé.
     const state = await conversationState.get(tenantId, channel, from);
+    // Un apprenant qui pose une question de cours n'est PAS une conversation privée « quotidienne » : moteur d'accompagnement (autoResponder).
+    try { const lp = await require('./learnerSupport').prepare({ tenantId, tenant: tenantId, channel, from, text, state, isGroup: false, settings }); if (lp && lp.active) return { handled: false, reason: 'LEARNING' }; } catch (e) { /* facultatif */ }
     if (state.groupOrigin) return { handled: false, reason: 'GROUP_LEAD' }; // prospect issu d'un groupe : conversation commerciale
     if (state.ad) return { handled: false, reason: 'AD_CONTACT' }; // contact issu d'une campagne : conversation commerciale
     let crm = null; try { crm = await contactCrm.getContact(tenantId, channel, contactCrm.identityOf(from)); } catch (e) { crm = null; }

@@ -50,6 +50,12 @@ function queueHandlers(tenant, runtime) {
       if (out.ok) { draft.status = 'launched'; draft.launchedAt = Date.now(); draft.startedAt = draft.launchedAt; draft.engineCampaignId = out.result.campaignId || null; await saveDrafts(tenant, doc); }
       return out.ok ? { ok: true, result: out.result } : { ok: false, error: out.error.message, retryable: out.error.retryable };
     },
+    // Relance / suivi client : la décision (10 vérifications) est reprise AU MOMENT d'envoyer, jamais à la planification.
+    FOLLOW_UP: async (task) => {
+      const out = await require('./customerLifecycle').runFollowUp(tenant, task.payload.followUpId, { runtime });
+      if (out.ok || out.skipped) return { ok: true, result: { decision: out.decision ? out.decision.action : undefined, skipped: out.skipped } };
+      return { ok: false, error: out.error || 'FOLLOW_UP_FAILED', retryable: out.error !== 'NOT_FOUND' };
+    },
     SEND_MESSAGE: async (task) => {
       if (!runtime || typeof runtime.sendMessageVerified !== 'function') return { ok: false, error: 'RUNTIME_MISSING', retryable: true };
       const out = await runtime.sendMessageVerified({ channel: task.payload.channel, to: task.payload.to, text: task.payload.text, tenantId: tenant });
@@ -60,6 +66,84 @@ function queueHandlers(tenant, runtime) {
 }
 
 const TOOLS = {
+  // ================= FORMATIONS : base de connaissances pédagogique (accompagnement des apprenants) =================
+  ingestCourse: {
+    description: 'Ajoute du contenu à la base de connaissances d\'une FORMATION (créée si nécessaire) à partir d\'un fichier joint (PDF, DOCX, texte, Excel, audio/vidéo transcrits) via fileId, ou d\'un texte : structure module → chapitre → leçon détectée, indexation pour la recherche ciblée. category : official (contenu officiel, défaut), complementary (connaissances complémentaires), faq (questions fréquentes validées), internal (notes internes, jamais montrées aux apprenants). Peut lier la formation à un Service métier (serviceId).',
+    permission: null, risk: 'LOW_WRITE',
+    confirmWhenTainted: (a) => !a || !a.category || a.category === 'official', // le contenu officiel ne change pas sur la foi d'un fichier sans confirmation du propriétaire
+    inputSchema: { course: { type: 'string', required: true, description: 'Nom de la formation.' }, fileId: { type: 'string', description: 'Support joint (f_xxx).' }, text: { type: 'string', description: 'Contenu en texte.' }, category: { type: 'string', description: 'official | complementary | faq | internal' }, serviceId: { type: 'string', description: 'Service métier à lier.' }, description: { type: 'string' } },
+    async execute(args, ctx) {
+      const ck = require('./courseKnowledge');
+      try {
+        if (args.serviceId || args.description) await ck.createCourse(ctx.tenant, { name: args.course, serviceId: args.serviceId, description: args.description });
+        let text = args.text; let name = 'saisie'; let fileId = null;
+        if (args.fileId) {
+          const f = await chatUploads.readFile(ctx.tenant, args.fileId); if (!f) return fail('FILE_NOT_FOUND');
+          const ext = await require('./mediaPipeline').extractFullText({ buffer: f.buffer, mimetype: f.meta.type, filename: f.meta.name });
+          if (!ext.ok) return fail(ext.error || 'EXTRACTION_FAILED', 'Le support n\'a pas pu être lu : aucun contenu n\'a été ajouté.');
+          text = ext.text; name = f.meta.name; fileId = f.meta.id;
+        }
+        if (!text) return fail('NO_CONTENT', 'Fournissez un fichier ou un texte.');
+        const r = await ck.ingest(ctx.tenant, args.course, { text }, { category: args.category || 'official', sourceName: name, fileId });
+        return { ok: true, result: r };
+      } catch (e) { return fail(e.code || 'INGEST_FAILED', e.message); }
+    },
+    async verify(result) { return { verified: !!(result && result.chunks > 0) }; },
+  },
+  listCourses: {
+    description: 'Liste les formations connues (modules, nombre d\'extraits officiels/FAQ/compléments/notes internes, Service métier et groupes liés).',
+    permission: null, risk: 'READ', inputSchema: {},
+    async execute(args, ctx) { const list = await require('./courseKnowledge').listCourses(ctx.tenant); return { ok: true, result: { total: list.length, courses: list } }; },
+  },
+  searchCourse: {
+    description: 'Recherche CIBLÉE dans la base de connaissances des formations (extraits pertinents avec leur chemin module › chapitre › leçon et leur source). Pour répondre à une question de contenu, résumer un chapitre, vérifier une recette.',
+    permission: null, risk: 'READ',
+    inputSchema: { query: { type: 'string', required: true }, course: { type: 'string', description: 'Nom de la formation (facultatif).' }, includeInternal: { type: 'boolean' } },
+    async execute(args, ctx) {
+      const ck = require('./courseKnowledge');
+      const c = args.course ? await ck.findCourse(ctx.tenant, args.course) : null;
+      const owner = args.includeInternal === true || args.includeInternal === 'true';
+      const hits = await ck.search(ctx.tenant, args.query, { courseId: c && c.id, limit: 6, audience: owner ? 'owner' : 'learner', categories: owner ? ck.CATEGORIES : undefined });
+      return { ok: true, result: { found: hits.length, extracts: hits.map((h) => ({ path: h.path, category: h.category, source: h.source, text: h.text.slice(0, 700), score: h.score })) } };
+    },
+  },
+  linkCourse: {
+    description: 'Lie une formation à un Service métier et/ou à un GROUPE (WhatsApp/Telegram) : dans ce groupe, Cyrus répondra aux questions de formation (autoAnswer). groupName ou groupId pour le groupe.',
+    permission: null, risk: 'LOW_WRITE',
+    inputSchema: { course: { type: 'string', required: true }, serviceId: { type: 'string' }, channel: { type: 'string', description: 'WHATSAPP (défaut) ou TELEGRAM.' }, groupId: { type: 'string' }, groupName: { type: 'string' }, autoAnswer: { type: 'boolean', description: 'false pour lier sans réponses automatiques.' } },
+    async execute(args, ctx) {
+      const ck = require('./courseKnowledge'); const channel = chan(args.channel);
+      try {
+        if (args.serviceId) await ck.linkService(ctx.tenant, args.course, args.serviceId);
+        let groupId = args.groupId; let groupName = args.groupName;
+        if (!groupId && groupName) {
+          const mgr = channel === 'TELEGRAM' ? require('../adapters/telegramManager') : require('../adapters/whatsappManager');
+          const session = mgr.getOrCreate(ctx.tenant).session;
+          const list = session && typeof session.getGroupsSummary === 'function' ? await session.getGroupsSummary() : [];
+          const q = String(groupName).toLowerCase(); const hits = list.filter((g) => String(g.name).toLowerCase().includes(q));
+          if (hits.length !== 1) return fail(hits.length ? 'GROUP_AMBIGUOUS' : 'GROUP_NOT_FOUND', hits.length ? 'Plusieurs groupes correspondent : précisez le nom complet.' : 'Aucun groupe de ce nom sur le compte connecté.');
+          groupId = String(hits[0].id); groupName = hits[0].name;
+        }
+        let course;
+        if (groupId) course = await ck.linkGroup(ctx.tenant, args.course, { channel, id: groupId, name: groupName, autoAnswer: !(args.autoAnswer === false || args.autoAnswer === 'false') });
+        else course = await ck.findCourse(ctx.tenant, args.course);
+        if (!course) return fail('COURSE_NOT_FOUND');
+        return { ok: true, result: { course: course.name, serviceId: course.serviceId || null, groups: course.groups || [] } };
+      } catch (e) { return fail(e.code || 'LINK_FAILED', e.message); }
+    },
+  },
+  listFaqCandidates: {
+    description: 'Questions d\'apprenants qui reviennent souvent (candidates de FAQ, NON validées). Le contenu officiel n\'est jamais modifié automatiquement.',
+    permission: null, risk: 'READ', inputSchema: { min: { type: 'number' } },
+    async execute(args, ctx) { const list = await require('./courseKnowledge').faqCandidates(ctx.tenant, { min: args.min }); return { ok: true, result: { total: list.length, candidates: list.map((e) => ({ id: e.id, question: e.question, count: e.count, answeredFromCourse: e.answeredFromCourse })) } }; },
+  },
+  promoteFaq: {
+    description: 'Valide une question fréquente en FAQ officielle de la formation, avec la réponse fournie par le propriétaire (action explicite).',
+    permission: null, risk: 'LOW_WRITE',
+    inputSchema: { id: { type: 'string', required: true }, answer: { type: 'string', required: true } },
+    async execute(args, ctx) { try { return { ok: true, result: await require('./courseKnowledge').promoteFaq(ctx.tenant, String(args.id), args.answer) }; } catch (e) { return fail(e.code || 'PROMOTE_FAILED', e.message); } },
+  },
+
   // ================= COMMUNAUTÉS (création/invitation de groupes, découverte) =================
   createCommunityGroup: {
     description: 'Crée un groupe WhatsApp ou Telegram avec un nom et une liste de contacts (fichier Excel/CSV joint via fileId, liste préparée via recipientsDraftId, ou texte collé) : ajoute les participants dans le respect de leur confidentialité et, pour ceux qui ont restreint l\'ajout direct, envoie AUTOMATIQUEMENT le lien d\'invitation officiel en message privé. Le traitement continue en arrière-plan ; suivi via getCommunityGroupStatus. Action sensible : confirmation.',
@@ -619,5 +703,8 @@ const TOOLS = {
     },
   },
 };
+
+// Cycle de vie client, guidage et groupes de Service métier (module dédié).
+Object.assign(TOOLS, require('./toolsLifecycle').TOOLS);
 
 module.exports = { TOOLS, queueHandlers, launchDraft };

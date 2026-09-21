@@ -210,7 +210,7 @@ test('état des connexions : ordre par niveau, capacités déclarées, modèles 
   const s = llm.getProviderStatus();
   assert.deepEqual(s.standard, ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq', 'openrouter', 'huggingface', 'pollinations']);
   assert.deepEqual(s.reasoning.slice(0, 4), ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq']);
-  assert.deepEqual(s.capabilities['gemini-flash'].sort(), ['audio', 'complex', 'document', 'image', 'text', 'tools', 'video']);
+  assert.deepEqual(s.capabilities['gemini-flash'].sort(), ['audio', 'complex', 'document', 'image', 'search', 'text', 'tools', 'video']);
   assert.ok(!s.capabilities['gemini-primary'].includes('audio'));
   assert.ok(!s.capabilities.groq.includes('image'));
   assert.deepEqual(s.missingStrongModels, ['claude', 'openai']);

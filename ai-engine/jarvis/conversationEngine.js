@@ -109,13 +109,20 @@ function decide(state, cls, ctx) {
   if (intent !== 'STOP') {
     if (c.humanActive) return stop('HUMAN_ACTIVE');
     if (c.loopSuspected) return stop('LOOP_PROTECTION');
-    if (c.isGroup && (!c.groupReplies || !commercial || flags.sensitive)) return stop('GROUP_NOT_ADDRESSED');
+    // Groupe de FORMATION lié à un cours (automatisation autorisée par le propriétaire) : une question d'apprentissage y est légitime.
+    if (c.isGroup && !(c.learning && c.learning.active) && (!c.groupReplies || !commercial || flags.sensitive)) return stop('GROUP_NOT_ADDRESSED');
     if (flags.sensitive && !state.refusal.active) {
       return {
         action: 'REPLY', kind: 'COURTESY', template: 'SENSITIVE', reason: `SENSITIVE_${flags.sensitive}`, reopen: false, escalate: flags.sensitive === 'URGENT', noPromo: true,
         directives: base.concat([`Contexte sensible (${flags.sensitive}) : réponse humaine, brève (1-2 phrases) et respectueuse. AUCUNE promotion, aucun prix, aucune offre, aucune allusion commerciale.`]),
       };
     }
+  }
+  // ACCOMPAGNEMENT D'APPRENANT : question d'apprentissage détectée (voir ai-engine/learnerSupport.js) -> réponse pédagogique ; ni refus, ni arrêt,
+  // ni remerciement/salutation ne sont détournés (ils gardent leur traitement). Aucune consigne « pas de promotion » : parler de la formation est
+  // précisément l'objet.
+  if (c.learning && c.learning.active && !['STOP', 'REFUSAL', 'DISINTEREST', 'CANCELLATION', 'THANKS', 'CONFIRMATION', 'GREETING'].includes(intent) && !state.refusal.active) {
+    return { action: 'REPLY', kind: 'ANSWER', reason: 'LEARNING', reopen: false, escalate: !!c.learning.escalate, noPromo: false, directives: base.concat(c.learning.directives || []) };
   }
   const d = decideCore(state, cls, c);
   if (d.action === 'REPLY' && intent === 'GREETING' && cls.intents.length === 1 && !flags.smalltalk && !d.template) { d.variants = 'GREET'; d.kind = 'COURTESY'; }
@@ -222,12 +229,14 @@ async function guard(text, decision, ctx) {
   const noSell = NO_SELL_KINDS.has(decision.kind) || ctx.state.refusal.active;
   const problems = (t) => {
     if (!t) return 'EMPTY';
+    if (d.learning && d.learning.forcedReply) return null; // refus/urgence déterministes : jamais réécrits ni jugés « répétitifs »
     if (noSell && repetitionGuard.SALES_PUSH_RE.test(t)) return 'SALES_PUSH';
     if (decision.noPromo && PROMO_RE.test(t)) return 'UNSOLICITED_PROMO';
     if (privateLeak(t, d.knownText, ctx.text)) return 'PRIVATE_DATA';
     const rep = repetitionGuard.check(t, ctx.state.recentReplies);
     if (rep.repeated) return `REPEAT_${rep.kind}`;
     if (unverifiedAmount(t, d.knownText)) return 'AMOUNT_UNVERIFIED';
+    if (d.learning && d.learning.verify) { const lp = d.learning.verify(t); if (lp) return lp; }
     return null;
   };
   let issue = problems(text);
@@ -240,6 +249,7 @@ async function guard(text, decision, ctx) {
       UNSOLICITED_PROMO: 'Ta réponse précédente contenait une promotion/un prix/une offre NON sollicités : reformule en répondant uniquement à ce que dit le client, sans aucun contenu commercial.',
       PRIVATE_DATA: 'Ta réponse précédente contenait des coordonnées (numéro/e-mail) absentes des données réelles : retire-les.',
       AMOUNT_UNVERIFIED: 'Ta réponse citait un montant absent des données réelles: retire tout montant non présent dans les informations configurées.',
+      COURSE_CLAIM_UNSUPPORTED: 'Ta réponse prétendait venir du cours alors qu\'aucun extrait n\'a été retrouvé : reformule en disant clairement que cette précision n\'est pas dans le contenu de la formation, puis, si pertinent, donne un complément clairement marqué « connaissance générale ».',
     }[issue];
     try {
       const retry = String((await d.compose(decision.directives.concat([fix]), ctx)) || '').trim();
@@ -253,6 +263,7 @@ async function guard(text, decision, ctx) {
     return { text: safe || (ctx.cls.flags.greeting ? TEMPLATES.COURTESY : (decision.kind === 'ANSWER' ? TEMPLATES.HOLD : null)), issue };
   }
   if (issue === 'AMOUNT_UNVERIFIED') return { text: TEMPLATES.AMOUNT_UNVERIFIED, issue };
+  if (issue === 'COURSE_CLAIM_UNSUPPORTED') return { text: require('../learnerSupport').UNKNOWN_IN_COURSE, issue, escalate: true };
   if (issue === 'SALES_PUSH') return { text: decision.template ? TEMPLATES[decision.template] : TEMPLATES.WAIT, issue };
   if (issue === 'REPEAT_REPLY' || issue === 'REPEAT_QUESTION') {
     if (decision.kind === 'ANSWER') return { text: TEMPLATES.REPEAT_QUESTION, issue };
@@ -281,6 +292,8 @@ function applyState(state, cls, decision, sent, replyText, items, now, deps) {
   if (decision.kind === 'WAIT') state.memory.waiting = { kind: intent, when: flags.deferral || null, since: now };
   else if (['PURCHASE_INTENT', 'PAYMENT_INTENT', 'QUESTION', 'INTEREST'].includes(intent) && !flags.deferral) state.memory.waiting = null;
   for (const t of (flags.topics || [])) state.memory.questions[t] = (state.memory.questions[t] || 0) + 1;
+  // Contexte pédagogique (formation, leçon, sujet, difficulté) : permet de comprendre « Et pour le sel ? » au message suivant.
+  if (deps && deps.learning && deps.learning.memory && !deps.learning.forcedReply) state.memory.learning = deps.learning.memory;
   // Mémoire commerciale : questions posées, objections, service d'intérêt (le code décide ; l'IA n'écrit jamais dans l'état).
   const said = String(items.map((i) => i.text).join(' ')).replace(/\s+/g, ' ').trim().slice(0, 100);
   if ((intent === 'QUESTION' || intent === 'REQUEST_INFORMATION' || intent === 'REQUEST_MORE_INFORMATION') && said) { state.memory.askedQuestions = (state.memory.askedQuestions || []).concat([said]).slice(-8); }
@@ -330,14 +343,14 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
   const text = fresh.map((i) => i.text).join('\n');
 
   let cls = intentClassifier.classify(text, { state });
-  if (cls.needsArbitration && d.llm) cls = await intentClassifier.arbitrate({ text, history: d.history, llm: d.llm, base: cls });
+  if (cls.needsArbitration && d.llm && !(d.learning && d.learning.forcedReply)) cls = await intentClassifier.arbitrate({ text, history: d.history, llm: d.llm, base: cls });
 
   const recentTs = (state.recentTs || []).filter((t) => now - t < 120000);
   const subject = detectSubject(text, d.productNames);
   if (subject) state.memory.subject = subject;
   const decision = decide(state, cls, {
     now, humanActive: state.humanUntil > now, loopSuspected: recentTs.length >= 8,
-    isGroup: !!d.isGroup, groupReplies: !!d.groupReplies,
+    isGroup: !!d.isGroup, groupReplies: !!d.groupReplies, learning: d.learning,
   });
   const ctx = { tenantId, channel, from, name, text, cls, state, deps: d, decision };
   let replyText = null; let guardInfo = null; let out = null; let sent = false;
@@ -346,6 +359,7 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
     const drafted = await draft(decision, ctx);
     guardInfo = await guard(drafted, decision, ctx);
     replyText = guardInfo.text;
+    if (guardInfo.escalate) decision.escalate = true; // réponse impossible à fonder sur le cours : le formateur est prévenu
   }
   const action = decision.action === 'REPLY' && !replyText ? 'NO_ACTION' : decision.action;
   const reason = decision.action === 'REPLY' && !replyText ? `SUPPRESSED_${guardInfo && guardInfo.issue}` : decision.reason;
@@ -372,6 +386,14 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
       else if (cls.intent === 'REFUSAL' || cls.intent === 'DISINTEREST') await crm.markOptOut(tenantId, channel, from, cls.intent);
       else if (decision.reopen && state.optOut !== true) await crm.clearOptOut(tenantId, channel, from);
     } catch (e) { /* le CRM ne bloque jamais la conversation */ }
+  }
+  // SAV générique : une réclamation / un problème d'un client (privé) ouvre un dossier suivi (dédoublonné : un problème = un dossier) — quel que soit le métier.
+  if (!d.isGroup && decision.kind === 'SUPPORT' && ['COMPLAINT', 'SUPPORT', 'CANCELLATION'].includes(decision.reason)) {
+    try {
+      const t = String(text).toLowerCase();
+      const category = /livr|colis|re[cç]u|retard/.test(t) ? 'livraison' : (/pay|rembours|factur|d[ée]bit/.test(t) ? 'paiement' : (/acc[eè]s|connexion|mot de passe|lien/.test(t) ? 'acces' : (/prestation|rendez|service|intervention/.test(t) ? 'prestation' : (/produit|d[ée]fect|cass|qualit/.test(t) ? 'produit' : 'autre'))));
+      await require('../customerLifecycle').openCase(tenantId, { contact: { channel, id: String(from).split('@')[0], name }, category, summary: String(text).slice(0, 280), source: 'conversation' });
+    } catch (e) { /* le SAV ne bloque jamais la conversation */ }
   }
   if (decision.escalate && d.notify) {
     try {
