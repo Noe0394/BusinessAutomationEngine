@@ -304,13 +304,17 @@ async function handleOwnerMessage(input, deps) {
 
     // 3) Chat Intelligent (même cerveau que le tableau de bord)
     const history = d.history ? await d.history.load(tenantId) : [];
+    // Tâche qui prend du temps : un SEUL accusé de prise en charge après OWNER_ACK_MS (6 s par défaut) — jamais pour une réponse rapide.
+    const ackMs = parseInt(process.env.OWNER_ACK_MS, 10) || 6000;
+    let ackSent = false; const ackTimer = setTimeout(() => { ackSent = true; reply("⏳ Je m'en occupe — cela prend un peu plus de temps, je reviens dès que c'est fait.").catch(() => {}); }, ackMs);
     let answer = null; let turnOut = null;
     try { const out = d.chat ? await d.chat({ text, tenantId, history, session, principal, tainted, channel: adapter.channel }) : null; turnOut = out; answer = out && out.text ? out.text : null; }
     catch (err) { console.warn(`ownerChannel — Chat Intelligent en échec (tenant "${tenant}") : ${aiErrors.redact(err && (err.internalDetail || err.message))}`); answer = aiErrors.safeUserMessage(err); }
     if (!answer && d.chatFallback) {
-      try { answer = await d.chatFallback(text, history); }
+      try { answer = await d.chatFallback(text, history, tenantId); }
       catch (err) { console.warn(`ownerChannel — repli conversationnel en échec (tenant "${tenant}") : ${aiErrors.redact(err && (err.internalDetail || err.message))}`); answer = aiErrors.safeUserMessage(err); }
     }
+    clearTimeout(ackTimer); void ackSent;
     if (!answer) answer = "Je n'ai pas de réponse pour cette demande pour le moment.";
     // JAMAIS « fait » sans preuve : une affirmation d'accomplissement sans action réellement exécutée et vérifiée dans ce tour est remplacée par un message honnête.
     answer = require('./claimGuard').guard(answer, turnOut).text;

@@ -178,7 +178,19 @@ function create(d) {
       return d.chatOrchestrator.handle({ text, history, tenantId, sessionId: sid || 'owner-whatsapp', lastAssistantMessage: last, principal, tainted: !!tainted }, d.chatDeps(tenantId));
     },
     // Aucune intention/outil applicable : conversation générale, comme le fait l'onglet du tableau de bord.
-    chatFallback: async (text, history) => (await d.llmFallbackEngine.generateAIResponse(text, history)).text,
+    // Conversation courante : persona + activité réelle du compte + mémoire récente, UN seul appel (niveau standard de la cascade, doublon parallèle si un modèle est lent).
+    chatFallback: async (text, history, tenantId) => {
+      let biz = ''; try { biz = await require('./businessServices').getEngineContextText(tenantId); } catch (e) { biz = ''; }
+      const recent = (history || []).slice(-6).map((m) => `${m.role === 'assistant' ? 'Moi' : 'Vous'} : ${String(m.text || '').slice(0, 300)}`).join('\n');
+      const prompt = [
+        require('./personaManager').personaSystemPrompt('default'),
+        biz ? `Activité RÉELLE du vendeur (source de vérité, n'invente rien au-delà) :\n${biz}` : '',
+        recent ? `Échanges récents :\n${recent}` : '',
+        'Réponds directement, de façon naturelle et brève. Si la demande exige de LIRE ou de MODIFIER des données réelles du compte (contacts, messages, campagnes, groupes…), n\'invente AUCUN chiffre ni résultat : dis ce que tu vas vérifier et invite à formuler un ordre précis.',
+        `Message du vendeur : "${text}"`,
+      ].filter(Boolean).join('\n\n');
+      return (await d.llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'owner_chat', tenant: tenantId, tier: 'standard', maxTokens: 500 })).text;
+    },
     paymentDeps: (tenantId, session) => {
       const cd = d.chatDeps(tenantId);
       return { deliverToClient: cd.deliverToClient, executeOptions: cd.executeOptions };
