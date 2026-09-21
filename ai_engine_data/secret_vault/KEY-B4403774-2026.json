@@ -1,0 +1,12 @@
+{
+  "tenant": "KEY-B4403774-2026",
+  "secrets": {
+    "service_svc_mubm6tehilfl4": {
+      "updatedAt": "2026-09-21T19:13:05.362Z",
+      "v": 1,
+      "iv": "Kp707LmtY2j/831/",
+      "tag": "jI6WOzL92ZMfR1YRoR+29Q==",
+      "ct": "SCpg0IrSofcv7BiY377ueExDWSnVcPxisMNYE5pifun5NO5Wh2UEPelTxw/cm+eOBlTMHchMGglpgs3jo4vsj2Qju8CqRvOe9J+6QO7izEtyT8cSfDUC53+6agLpQUb94fYMxhPjcAVqX4GIGY4jsbJTmZMLfxdYHSIRT5wLMFnXC/i0n0Qo"
+    }
+  }
+}
