@@ -68,19 +68,5 @@
     ],
     "boundDeviceId": "51378ecc-d639-4a20-988b-b0fb9e58ccf1",
     "boundAt": "2026-09-21T16:56:45.680Z"
-  },
-  {
-    "key": "KEY-CF5EA846-2026",
-    "createdAt": "2026-09-22T14:14:06.233Z",
-    "expiresAt": "2026-09-22T14:14:04.563Z",
-    "active": false,
-    "note": "Essaie 1",
-    "allowedModules": [
-      "whatsapp",
-      "telegram",
-      "studio_video"
-    ],
-    "boundDeviceId": null,
-    "boundAt": null
   }
 ]
