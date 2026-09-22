@@ -326,16 +326,33 @@ async function listTenantsWithSavedSession() {
 // par bootResumePendingCampaigns) sont simplement reconnectés une seconde
 // fois sans effet grâce à l'idempotence de ensureConnected
 // (entry.initStarted).
+// Délai entre deux connect() successifs pendant la reconnexion de masse au
+// démarrage : sans lui, tous les tenants appairés ouvraient leur socket
+// Baileys dans la même boucle synchrone, donc en quelques millisecondes
+// depuis la MÊME IP sortante du VM — un pattern que WhatsApp traite comme
+// abusif (voir l'incident de blocage d'IP déjà documenté sur Render,
+// section "État actuel du projet" de CLAUDE.md) et qui provoquait des
+// révocations (code 401) en rafale sur plusieurs tenants distincts au
+// redémarrage, observé en production le 2026-09-22 (4 tenants sur 5
+// révoqués quasi simultanément). L'étalement imite un rythme de connexion
+// plus organique, sans rien changer au protocole lui-même.
+const BOOT_RECONNECT_STAGGER_MS = Math.max(0, parseInt(process.env.WHATSAPP_BOOT_RECONNECT_STAGGER_MS, 10) || 4000);
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function bootReconnectAllPairedTenants() {
   const tenantIds = await listTenantsWithSavedSession();
   let reconnected = 0;
   for (const tenantId of tenantIds) {
     if (tenantId === ADMIN_TENANT_ID) continue;
+    if (reconnected > 0) await delay(BOOT_RECONNECT_STAGGER_MS);
     ensureConnected(getOrCreate(tenantId));
     reconnected += 1;
   }
   if (reconnected > 0) {
-    console.log(`Reconnexion automatique de ${reconnected} session(s) WhatsApp déjà appairée(s) après redémarrage.`);
+    console.log(`Reconnexion automatique de ${reconnected} session(s) WhatsApp déjà appairée(s) après redémarrage (étalée sur ${BOOT_RECONNECT_STAGGER_MS}ms entre chaque).`);
   }
 }
 
