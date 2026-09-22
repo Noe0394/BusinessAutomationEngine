@@ -258,6 +258,11 @@ async function upsertCommunity(tenantId, c) {
     key, channel: String(c.channel).toUpperCase(), ref: String(c.ref), name: String(c.name || '').slice(0, 160), link: c.link || null,
     kind: c.kind || 'group', members: c.members != null ? Number(c.members) : (before && before.members) || null, description: String(c.description || (before && before.description) || '').slice(0, 400),
     keywords, verified: !!c.verified, tags: Array.from(new Set(['communauté', 'découverte'].concat((before && before.tags) || []))),
+    location: c.location || (before && before.location) || null,
+    // Préservés depuis `before` : une resynchronisation (voir communityDiscovery.js#syncToCrm, rappelée avant
+    // chaque adhésion/extraction côté dashboard) ne doit JAMAIS effacer l'adhésion WhatsApp déjà enregistrée par
+    // markCommunityJoined — sinon extractMembers échouerait à tort avec NOT_JOINED juste après un "Rejoindre" réussi.
+    joinedGroupId: (before && before.joinedGroupId) || null, joinedAt: (before && before.joinedAt) || null,
     firstSyncedAt: (before && before.firstSyncedAt) || now, syncedAt: now,
   };
   await save(tenantId, doc);

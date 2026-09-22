@@ -2311,6 +2311,11 @@
           <label for="cm-wa-kw">Mots-clés sectoriels (séparés par des virgules)</label>
           <input type="text" id="cm-wa-kw" placeholder="Ex. marketing digital, immobilier" />
         </div>
+        <div class="row">
+          <div class="field"><label for="cm-wa-country">Pays (facultatif)</label><input type="text" id="cm-wa-country" placeholder="Ex. Sénégal" /></div>
+          <div class="field"><label for="cm-wa-city">Ville (facultatif)</label><input type="text" id="cm-wa-city" placeholder="Ex. Dakar" /></div>
+          <div class="field"><label for="cm-wa-department">Département (facultatif)</label><input type="text" id="cm-wa-department" placeholder="Ex. Littoral" /></div>
+        </div>
         <button type="button" id="cm-wa-search-btn">🔎 Rechercher</button>
         <button type="button" id="cm-wa-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
         <p id="cm-wa-search-feedback" hidden></p>
@@ -2397,6 +2402,11 @@
           <label for="cm-tg-kw">Mots-clés sectoriels (séparés par des virgules)</label>
           <input type="text" id="cm-tg-kw" placeholder="Ex. marketing digital, immobilier" />
         </div>
+        <div class="row">
+          <div class="field"><label for="cm-tg-country">Pays (facultatif)</label><input type="text" id="cm-tg-country" placeholder="Ex. Sénégal" /></div>
+          <div class="field"><label for="cm-tg-city">Ville (facultatif)</label><input type="text" id="cm-tg-city" placeholder="Ex. Dakar" /></div>
+          <div class="field"><label for="cm-tg-department">Département (facultatif)</label><input type="text" id="cm-tg-department" placeholder="Ex. Littoral" /></div>
+        </div>
         <button type="button" id="cm-tg-search-btn">🔎 Rechercher</button>
         <button type="button" id="cm-tg-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
         <p id="cm-tg-search-feedback" hidden></p>
@@ -2413,6 +2423,11 @@
         <div class="field">
           <label for="cm-tg-people-kw">Mots-clés (séparés par des virgules)</label>
           <input type="text" id="cm-tg-people-kw" placeholder="Ex. immobilier, formation" />
+        </div>
+        <div class="row">
+          <div class="field"><label for="cm-tg-people-country">Pays (facultatif)</label><input type="text" id="cm-tg-people-country" placeholder="Ex. Sénégal" /></div>
+          <div class="field"><label for="cm-tg-people-city">Ville (facultatif)</label><input type="text" id="cm-tg-people-city" placeholder="Ex. Dakar" /></div>
+          <div class="field"><label for="cm-tg-people-department">Département (facultatif)</label><input type="text" id="cm-tg-people-department" placeholder="Ex. Littoral" /></div>
         </div>
         <button type="button" id="cm-tg-people-search-btn">🔎 Rechercher</button>
         <button type="button" id="cm-tg-people-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
@@ -11111,7 +11126,7 @@
           if (kw.length < 2) return say($('search-feedback'), 'Indiquez au moins un mot-clé.', false);
           $('search-btn').disabled = true; say($('search-feedback'), 'Recherche en cours…');
           try {
-            var res = await apiFetch('/api/communities/discover', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel, keywords: kw }) });
+            var res = await apiFetch('/api/communities/discover', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel, keywords: kw, country: $('country').value.trim(), city: $('city').value.trim(), department: $('department').value.trim() }) });
             var data = await res.json();
             if (!res.ok || !data.ok) { say($('search-feedback'), (data && data.error) || 'Recherche impossible.', false); }
             else { lastResults = data.results || []; renderResults(lastResults); say($('search-feedback'), lastResults.length + ' communauté(s) trouvée(s).' + (channel === 'WHATSAPP' ? ' (WhatsApp n\'a pas d\'annuaire officiel : résultats issus d\'annuaires publics du web, vérifiés auprès de WhatsApp quand c\'est possible.)' : ''), true); $('sync-btn').hidden = !lastResults.length; }
@@ -11153,7 +11168,7 @@
           if (kw.length < 2) return say($('feedback'), 'Indiquez au moins un mot-clé.', false);
           $('search-btn').disabled = true; say($('feedback'), 'Recherche en cours…');
           try {
-            var res = await apiFetch('/api/communities/discover-people', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'TELEGRAM', keywords: kw }) });
+            var res = await apiFetch('/api/communities/discover-people', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'TELEGRAM', keywords: kw, country: $('country').value.trim(), city: $('city').value.trim(), department: $('department').value.trim() }) });
             var data = await res.json();
             if (!res.ok || !data.ok) { say($('feedback'), (data && data.error) || 'Recherche impossible.', false); }
             else { lastResults = data.results || []; renderResults(lastResults); say($('feedback'), lastResults.length + ' personne(s) trouvée(s) (correspondance sur nom/pseudo, pas un vrai ciblage par intérêt).', true); $('sync-btn').hidden = !lastResults.length; }
@@ -11162,7 +11177,7 @@
         });
         $('sync-btn').addEventListener('click', async function () {
           try {
-            var res = await apiFetch('/api/communities/discover-people', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'TELEGRAM', keywords: $('kw').value.trim(), sync: true }) });
+            var res = await apiFetch('/api/communities/discover-people', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'TELEGRAM', keywords: $('kw').value.trim(), sync: true, country: $('country').value.trim(), city: $('city').value.trim(), department: $('department').value.trim() }) });
             var data = await res.json();
             say($('feedback'), data && data.ok ? (data.synced + ' personne(s) synchronisée(s) dans le CRM comme prospects à valider (étiquette "decouverte").') : ((data && data.error) || 'Synchronisation impossible.'), !!(data && data.ok));
           } catch (e) { /* géré */ }

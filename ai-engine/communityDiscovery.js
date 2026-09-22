@@ -17,13 +17,16 @@ const cleanKeywords = (k) => [...new Set((Array.isArray(k) ? k : String(k || '')
 
 let sleepFn = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function searchTelegram(tenant, keywords, limit) {
+// locationSuffix (voir buildLocationSuffix) : Telegram n'a aucun filtre géographique natif dans contacts.Search —
+// la localisation est donc simplement ajoutée au texte du mot-clé (ex: "immobilier Dakar"), comme le ferait une
+// recherche humaine ; ne change rien quand locationSuffix est vide.
+async function searchTelegram(tenant, keywords, limit, locationSuffix) {
   const session = require('../adapters/telegramManager').getOrCreate(tenant).session;
   if (!session || typeof session.isConnected !== 'function' || !session.isConnected()) { const e = new Error('Telegram n\'est pas connecté.'); e.code = 'TELEGRAM_NOT_CONNECTED'; throw e; }
   const out = [];
   for (const kw of keywords) {
     let found = [];
-    try { found = await session.searchPublicCommunities(kw, limit); } catch (err) { if (/FLOOD/i.test(String(err && (err.errorMessage || err.message)))) break; continue; }
+    try { found = await session.searchPublicCommunities(`${kw}${locationSuffix || ''}`, limit); } catch (err) { if (/FLOOD/i.test(String(err && (err.errorMessage || err.message)))) break; continue; }
     for (const c of found) out.push({ channel: 'TELEGRAM', ref: `@${c.username}`, name: c.title, link: `https://t.me/${c.username}`, kind: c.isChannel ? 'channel' : 'group', members: c.participants, description: '', verified: true, keyword: kw });
     await sleepFn(800);
   }
@@ -39,16 +42,51 @@ function extractInviteCodes(html) {
   return [...codes];
 }
 
-// Annuaire public : par défaut une recherche web ciblée sur les liens d'invitation officiels. Fournisseur remplaçable.
-async function webDirectorySearch(keyword) {
-  const tpl = process.env.WHATSAPP_DIRECTORY_SEARCH_URL || 'https://html.duckduckgo.com/html/?q={q}';
-  const url = tpl.replace('{q}', encodeURIComponent(`"chat.whatsapp.com" ${keyword} groupe whatsapp`));
-  const res = await axios.get(url, { timeout: 15000, responseType: 'text', headers: { 'user-agent': 'Mozilla/5.0 (compatible; CyrusDirectory/1.0)' }, validateStatus: (s) => s >= 200 && s < 400 });
-  return extractInviteCodes(typeof res.data === 'string' ? res.data : '');
+// Annuaire public : ni Google ni Facebook n'offrent d'API de recherche gratuite pour cet usage (Google bloque le
+// scraping automatisé par CAPTCHA ; Facebook a fermé la recherche de groupes par API depuis 2018) — ces moteurs
+// indexent déjà les pages PUBLIQUES (Facebook, forums, annuaires...) qui mentionnent un lien d'invitation
+// WhatsApp, ce qui couvre "tout internet" sans dépendre d'une clé payante. Interrogés EN PARALLÈLE (Promise.
+// allSettled, quelques secondes au total, jamais en série) : un moteur qui échoue ou bloque ne retarde ni ne casse
+// les autres, il contribue juste zéro résultat. Fournisseur personnalisé (WHATSAPP_DIRECTORY_SEARCH_URL) toujours
+// prioritaire s'il est défini, pour compatibilité ascendante et pour permettre de brancher un annuaire dédié.
+const SEARCH_ENGINES = [
+  { name: 'duckduckgo', urlTpl: 'https://html.duckduckgo.com/html/?q={q}' },
+  { name: 'bing', urlTpl: 'https://www.bing.com/search?q={q}&count=30' },
+  { name: 'startpage', urlTpl: 'https://www.startpage.com/sp/search?query={q}' },
+];
+
+async function fetchEngineHtml(urlTpl, query) {
+  const url = urlTpl.replace('{q}', encodeURIComponent(query));
+  const res = await axios.get(url, { timeout: 12000, responseType: 'text', headers: { 'user-agent': 'Mozilla/5.0 (compatible; CyrusDirectory/1.0)' }, validateStatus: (s) => s >= 200 && s < 400 });
+  return typeof res.data === 'string' ? res.data : '';
 }
 
-async function searchWhatsApp(tenant, keywords, limit, deps) {
-  const search = (deps && deps.directorySearch) || webDirectorySearch;
+// location : chaîne libre déjà composée (voir buildLocationSuffix) — ajoutée au texte de recherche pour préciser
+// par pays/ville/département, jamais un filtre appliqué après coup (les moteurs de recherche web font déjà ce
+// travail mieux qu'un filtrage local).
+async function webDirectorySearch(keyword, location) {
+  const query = `"chat.whatsapp.com" ${keyword}${location || ''} groupe whatsapp`;
+  const custom = process.env.WHATSAPP_DIRECTORY_SEARCH_URL;
+  const engines = custom ? [{ name: 'custom', urlTpl: custom }] : SEARCH_ENGINES;
+  const settled = await Promise.allSettled(engines.map((e) => fetchEngineHtml(e.urlTpl, query)));
+  const codes = new Set();
+  for (const r of settled) {
+    if (r.status !== 'fulfilled') continue;
+    extractInviteCodes(r.value).forEach((c) => codes.add(c));
+  }
+  return [...codes];
+}
+
+// { country?, city?, department? } -> " Ville Département Pays" (chaîne prête à concaténer à un mot-clé), ou ''
+// si rien n'est renseigné — la recherche par thématique seule reste inchangée sans localisation.
+function buildLocationSuffix(location) {
+  const l = location || {};
+  const parts = [l.city, l.department, l.country].map((s) => String(s || '').trim()).filter(Boolean);
+  return parts.length ? ` ${parts.join(' ')}` : '';
+}
+
+async function searchWhatsApp(tenant, keywords, limit, deps, locationSuffix) {
+  const search = (deps && deps.directorySearch) || ((kw) => webDirectorySearch(kw, locationSuffix));
   let session = null;
   try { session = require('../adapters/whatsappManager').getOrCreate(tenant).session; } catch (e) { session = null; }
   const canVerify = !!session && (typeof session.isConnected !== 'function' || session.isConnected()) && typeof session.getInviteInfo === 'function';
@@ -71,16 +109,17 @@ async function searchWhatsApp(tenant, keywords, limit, deps) {
   return out;
 }
 
-// input : { channel, keywords, limit?, sync? } -> { channel, keywords, results:[...], synced }
+// input : { channel, keywords, limit?, sync?, location?:{country?,city?,department?} } -> { channel, keywords, results:[...], synced }
 async function discover(tenant, input, deps) {
   const channel = String(input.channel || 'TELEGRAM').toUpperCase();
   if (!['WHATSAPP', 'TELEGRAM'].includes(channel)) { const e = new Error('Canal inconnu (WHATSAPP ou TELEGRAM).'); e.code = 'INVALID_CHANNEL'; throw e; }
   const keywords = cleanKeywords(input.keywords);
   if (!keywords.length) { const e = new Error('Indiquez au moins un mot-clé (2 caractères minimum).'); e.code = 'KEYWORDS_REQUIRED'; throw e; }
   const limit = Math.min(30, Math.max(1, Number(input.limit) || 15));
-  const raw = channel === 'TELEGRAM' ? await searchTelegram(tenant, keywords, limit) : await searchWhatsApp(tenant, keywords, limit, deps);
+  const locationSuffix = buildLocationSuffix(input.location);
+  const raw = channel === 'TELEGRAM' ? await searchTelegram(tenant, keywords, limit, locationSuffix) : await searchWhatsApp(tenant, keywords, limit, deps, locationSuffix);
   const byRef = new Map();
-  for (const r of raw) { const k = `${r.channel}:${r.ref}`; const prev = byRef.get(k); if (prev) prev.keywords = [...new Set(prev.keywords.concat(r.keyword))]; else byRef.set(k, Object.assign({}, r, { keywords: [r.keyword] })); }
+  for (const r of raw) { const k = `${r.channel}:${r.ref}`; const prev = byRef.get(k); if (prev) prev.keywords = [...new Set(prev.keywords.concat(r.keyword))]; else byRef.set(k, Object.assign({}, r, { keywords: [r.keyword], location: locationSuffix.trim() || null })); }
   const results = [...byRef.values()].map(({ keyword, ...rest }) => rest);
   const out = { channel, keywords, results, synced: 0 };
   if (input.sync) out.synced = (await syncToCrm(tenant, results)).count;
@@ -92,7 +131,7 @@ async function syncToCrm(tenant, communities) {
   let created = 0; let updated = 0;
   for (const c of communities || []) {
     if (!c || !c.ref || !c.channel) continue;
-    const r = await contactCrm.upsertCommunity(tenant, { channel: c.channel, ref: c.ref, name: c.name, link: c.link, kind: c.kind, members: c.members, description: c.description, keywords: c.keywords, verified: c.verified });
+    const r = await contactCrm.upsertCommunity(tenant, { channel: c.channel, ref: c.ref, name: c.name, link: c.link, kind: c.kind, members: c.members, description: c.description, keywords: c.keywords, verified: c.verified, location: c.location || null });
     if (r.created) created += 1; else updated += 1;
   }
   return { count: created + updated, created, updated };
@@ -111,20 +150,22 @@ async function syncToCrm(tenant, communities) {
 // WhatsApp n'a par ailleurs AUCUN annuaire public de personnes (contrairement
 // aux groupes, dont les liens d'invitation finissent indexés sur le web) :
 // aucune recherche de personnes n'y est possible par des moyens légitimes.
-async function searchPeopleTelegram(tenant, keywords, limit) {
+// locationSuffix : bien moins efficace ici que pour les groupes (le pseudo/nom d'une personne contient rarement
+// une ville), mais ajouté par cohérence avec discover() — sans effet quand vide.
+async function searchPeopleTelegram(tenant, keywords, limit, locationSuffix) {
   const session = require('../adapters/telegramManager').getOrCreate(tenant).session;
   if (!session || typeof session.isConnected !== 'function' || !session.isConnected()) { const e = new Error('Telegram n\'est pas connecté.'); e.code = 'TELEGRAM_NOT_CONNECTED'; throw e; }
   const out = [];
   for (const kw of keywords) {
     let found = [];
-    try { found = await session.searchPublicPeople(kw, limit); } catch (err) { if (/FLOOD/i.test(String(err && (err.errorMessage || err.message)))) break; continue; }
+    try { found = await session.searchPublicPeople(`${kw}${locationSuffix || ''}`, limit); } catch (err) { if (/FLOOD/i.test(String(err && (err.errorMessage || err.message)))) break; continue; }
     for (const u of found) out.push({ channel: 'TELEGRAM', ref: u.id, name: u.name, username: u.username, link: `https://t.me/${u.username}`, keyword: kw });
     await sleepFn(800);
   }
   return out;
 }
 
-// input : { channel, keywords, limit?, sync? } -> { channel, keywords, results:[...], approximate, synced }
+// input : { channel, keywords, limit?, sync?, location? } -> { channel, keywords, results:[...], approximate, synced }
 async function discoverPeople(tenant, input) {
   const channel = String(input.channel || 'TELEGRAM').toUpperCase();
   if (channel === 'WHATSAPP') { const e = new Error('WhatsApp ne fournit aucun annuaire public de personnes : aucune recherche de personnes n\'y est possible.'); e.code = 'NO_PUBLIC_PEOPLE_DIRECTORY'; throw e; }
@@ -132,7 +173,7 @@ async function discoverPeople(tenant, input) {
   const keywords = cleanKeywords(input.keywords);
   if (!keywords.length) { const e = new Error('Indiquez au moins un mot-clé (2 caractères minimum).'); e.code = 'KEYWORDS_REQUIRED'; throw e; }
   const limit = Math.min(30, Math.max(1, Number(input.limit) || 15));
-  const raw = await searchPeopleTelegram(tenant, keywords, limit);
+  const raw = await searchPeopleTelegram(tenant, keywords, limit, buildLocationSuffix(input.location));
   const byRef = new Map();
   for (const r of raw) { const k = `${r.channel}:${r.ref}`; const prev = byRef.get(k); if (prev) prev.keywords = [...new Set(prev.keywords.concat(r.keyword))]; else byRef.set(k, Object.assign({}, r, { keywords: [r.keyword] })); }
   const results = [...byRef.values()].map(({ keyword, ...rest }) => rest);

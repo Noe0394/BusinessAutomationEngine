@@ -5879,6 +5879,15 @@ try {
   const communityService = require('./ai-engine/communityService');
   const communityDiscovery = require('./ai-engine/communityDiscovery');
   const cmChannel = (req) => String((req.body && req.body.channel) || req.query.channel || 'WHATSAPP').toUpperCase();
+  // Localisation optionnelle (voir communityDiscovery.js#buildLocationSuffix) : précise une recherche par
+  // thématique par pays/ville/département — undefined si les trois sont vides (aucun effet sur la recherche).
+  const cmLocation = (req) => {
+    const b = req.body || {};
+    const country = String(b.country || '').trim();
+    const city = String(b.city || '').trim();
+    const department = String(b.department || '').trim();
+    return (country || city || department) ? { country, city, department } : undefined;
+  };
   const cmGuard = (req) => {
     const ch = cmChannel(req);
     if (!['WHATSAPP', 'TELEGRAM'].includes(ch)) return { code: 'INVALID_CHANNEL', http: 400, message: 'Canal inconnu.' };
@@ -5912,7 +5921,7 @@ try {
   app.post('/api/communities/groups/:id/pause', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.pauseJob(tenant, req.params.id) })));
   app.post('/api/communities/groups/:id/cancel', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.cancelJob(tenant, req.params.id) })));
   app.post('/api/communities/groups/:id/resume', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.resumeJob(tenant, req.params.id) })));
-  app.post('/api/communities/discover', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discover(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true })) })));
+  app.post('/api/communities/discover', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discover(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true, location: cmLocation(req) })) })));
   // Recherche parmi MES groupes déjà rejoints (nom, thème, "où je suis admin") — distinct de /discover ci-dessus qui cherche des groupes PUBLICS
   // à rejoindre. Même logique que le Chat intelligent/Self WhatsApp-Telegram ("cherche mes groupes sur X"), voir chatOrchestrator#searchMyGroups :
   // avant cette route, cette recherche n'existait que par le chat, invisible pour qui ne pense pas à le demander en discutant avec l'IA.
@@ -5925,7 +5934,7 @@ try {
   app.post('/api/communities/sync', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.syncToCrm(tenant, Array.isArray(req.body && req.body.communities) ? req.body.communities.slice(0, 100) : [])) })));
   // Recherche de PERSONNES publiques par thématique — Telegram uniquement (voir communityDiscovery#discoverPeople : WhatsApp n'a aucun
   // annuaire public de personnes). Résultat marqué `approximate: true` : correspondance sur nom/pseudo, pas un vrai ciblage par intérêt.
-  app.post('/api/communities/discover-people', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discoverPeople(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true })) })));
+  app.post('/api/communities/discover-people', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discoverPeople(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true, location: cmLocation(req) })) })));
   // Adhésion WhatsApp EXPLICITE à un groupe déjà découvert — un clic = un groupe, jamais en masse (voir joinGroupByInvite).
   app.post('/api/communities/join', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, community: await communityDiscovery.joinCommunity(tenant, { channel: cmChannel(req), ref: req.body && req.body.ref }) })));
   // Extrait les membres d'une communauté déjà découverte (et, pour WhatsApp, déjà rejointe via /join ci-dessus) comme PROSPECTS à valider —
