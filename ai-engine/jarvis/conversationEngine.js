@@ -206,11 +206,19 @@ function decideCore(state, cls, ctx) {
     const asked = (state.memory.questions || {});
     const already = topics.filter((t) => (state.memory.explained || []).includes(t));
     const repeatedTopic = topics.find((t) => (asked[t] || 0) >= 2);
-    const dirs = base.concat(['Réponds précisément à la question posée avec les seules informations réelles. Si l\'information n\'existe pas dans les données configurées, dis-le honnêtement et propose de vérifier — n\'invente rien (prix, date, lien, horaire, disponibilité).']);
+    const dirs = base.concat(['Réponds précisément à la question posée avec les seules informations réelles, sur un ton naturel et chaleureux. Si l\'information n\'existe pas dans les données configurées, dis-le honnêtement (avec la même chaleur), propose de vérifier — n\'invente rien (prix, date, lien, horaire, disponibilité).']);
     if (flags.repeatComplaint) dirs.push('Le client signale qu\'il a déjà posé cette question: reconnais-le brièvement et donne DIRECTEMENT la réponse, sans reformuler tout le pitch.');
     else if (already.length) dirs.push(`Le sujet (${already.join(', ')}) a déjà été traité: réponds uniquement à ce qui est demandé, en une phrase, sans tout répéter.`);
     if (flags.topicChange) dirs.push('Le client change de sujet: abandonne le fil précédent et traite ce nouveau sujet.');
-    return res({ action: 'REPLY', kind: 'ANSWER', escalate: !!repeatedTopic, reason: 'QUESTION', directives: dirs });
+    // Question à caractère commercial/activité alors qu'AUCUN Service Métier n'est configuré (voir
+    // ai-engine/businessServices.js#getPrioritizedContext, priorityService vaut `null` seulement quand ce module
+    // l'a explicitement vérifié et qu'aucun service n'existe) : le propriétaire est notifié (self-chat WhatsApp /
+    // Chat Intelligent — voir handleBatch ci-dessous) pour qu'il configure une fiche ou réponde lui-même, plutôt
+    // que de laisser la question sans suite. Comparaison stricte à `null` (pas juste falsy) : un appelant qui ne
+    // fournit pas ce champ (ex. ai-engine/emotionalCloser.js, autre source de faits métier) laisse `undefined` et
+    // n'est jamais concerné par cette escalade.
+    const noServiceForBusinessQuestion = c.priorityService === null && commercialAllowed(cls, state, now);
+    return res({ action: 'REPLY', kind: 'ANSWER', escalate: !!repeatedTopic || noServiceForBusinessQuestion, businessRequestNoService: noServiceForBusinessQuestion, reason: 'QUESTION', directives: dirs });
   }
   if (intent === 'PURCHASE_INTENT' || intent === 'PAYMENT_INTENT') {
     return res({ action: 'REPLY', kind: 'ANSWER', reason: intent, directives: base.concat(['Le client veut acheter/payer: indique la prochaine étape en t\'appuyant UNIQUEMENT sur les modalités réellement configurées. Sans elles, dis que le vendeur confirme les modalités. Ne déclare JAMAIS un paiement reçu ni un accès accordé.']) });
@@ -368,6 +376,7 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
   const decision = decide(state, cls, {
     now, humanActive: state.humanUntil > now, loopSuspected: recentTs.length >= 8,
     isGroup: !!d.isGroup, groupReplies: !!d.groupReplies, learning: d.learning, engagement,
+    priorityService: d.priorityService,
   });
   const ctx = { tenantId, channel, from, name, text, cls, state, deps: d, decision };
   let replyText = null; let guardInfo = null; let out = null; let sent = false;
@@ -416,7 +425,13 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
     try {
       // Jamais l'identifiant technique (JID/LID) : nom, sinon vrai numéro, sinon « non identifié » (contactIdentity).
       const who = await require('../contactIdentity').labelFor(tenantId, channel, from, name ? { pushName: name } : null);
-      await d.notify(`Conversation ${channel} avec ${who} (${cls.intent}) : intervention du vendeur recommandée.`);
+      // Cas spécifique : question commerciale/sur l'activité alors qu'aucun Service Métier n'est configuré (voir
+      // decideCore#businessRequestNoService) — message distinct pour que le propriétaire comprenne l'action
+      // attendue (configurer une fiche), plutôt que le message générique d'escalade.
+      const msg = decision.businessRequestNoService
+        ? `💼 ${who} vous a posé une question sur votre activité/vos services (${cls.intent}), mais aucun Service Métier n'est encore configuré pour y répondre avec de vraies informations. J'ai répondu honnêtement sans rien inventer — configurez une fiche dans l'onglet Services Métiers pour que je puisse répondre correctement la prochaine fois.`
+        : `Conversation ${channel} avec ${who} (${cls.intent}) : intervention du vendeur recommandée.`;
+      await d.notify(msg);
     } catch (e) { /* non bloquant */ }
   }
 
