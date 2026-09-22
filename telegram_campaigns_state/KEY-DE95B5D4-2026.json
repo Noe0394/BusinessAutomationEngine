@@ -1,0 +1,11 @@
+{
+  "tenantId": "KEY-DE95B5D4-2026",
+  "activeCampaignId": null,
+  "networkHealth": {
+    "consecutiveSlowSends": 0,
+    "consecutiveOverloadFailures": 0,
+    "holdUntil": 0,
+    "networkStatus": "normal"
+  },
+  "campaigns": []
+}
