@@ -2208,8 +2208,8 @@
           <input type="text" id="cm-wa-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
         </div>
         <button type="button" id="cm-wa-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
-        <button type="button" id="cm-wa-pause-btn" hidden>⏸ Pause</button>
-        <button type="button" id="cm-wa-resume-btn" hidden>▶️ Reprendre</button>
+        <button type="button" id="cm-wa-pause-btn" hidden>⏸ Pause</button>
+        <button type="button" id="cm-wa-resume-btn" hidden>▶️ Reprendre</button>
         <button type="button" id="cm-wa-stop-btn" hidden style="background:#c0392b;color:#fff">⏹ Arrêter la création</button>
         <p id="cm-wa-create-feedback" hidden></p>
         <div id="cm-wa-progress" hidden></div>
@@ -2250,8 +2250,8 @@
           <input type="text" id="cm-tg-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
         </div>
         <button type="button" id="cm-tg-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
-        <button type="button" id="cm-tg-pause-btn" hidden>⏸ Pause</button>
-        <button type="button" id="cm-tg-resume-btn" hidden>▶️ Reprendre</button>
+        <button type="button" id="cm-tg-pause-btn" hidden>⏸ Pause</button>
+        <button type="button" id="cm-tg-resume-btn" hidden>▶️ Reprendre</button>
         <button type="button" id="cm-tg-stop-btn" hidden style="background:#c0392b;color:#fff">⏹ Arrêter la création</button>
         <p id="cm-tg-create-feedback" hidden></p>
         <div id="cm-tg-progress" hidden></div>
@@ -2337,6 +2337,23 @@
        Chargé AVANT le script principal ci-dessous qui lit cette variable. -->
   <script src="config.js"></script>
   <script>
+    // Applique le thème/couleur choisis par l'utilisateur (réglages "🎨 Apparence") AVANT le premier rendu, pour éviter un flash de la
+    // mauvaise couleur. Réglage strictement local à cet appareil (localStorage) ; voir public/ui-v2.js pour la construction du panneau.
+    // Placé en tête de cet unique bloc <script> inline (garde-fou de build : un seul bloc, pas de bloc séparé) pour s'exécuter le plus tôt possible.
+    (function () {
+      try {
+        var mode = localStorage.getItem('cyrusTheme') || 'dark';
+        var light = mode === 'light' || (mode === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+        document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme-mode', mode);
+        var accent = localStorage.getItem('cyrusAccent');
+        if (accent === 'custom') {
+          var hex = localStorage.getItem('cyrusAccentCustom');
+          if (hex) { document.documentElement.setAttribute('data-accent', 'custom'); document.documentElement.style.setProperty('--accent', hex); }
+        } else if (accent) { document.documentElement.setAttribute('data-accent', accent); }
+      } catch (e) { /* stockage indisponible : thème sombre par défaut, jamais bloquant */ }
+    })();
+
     // Base URL du backend, uniquement nécessaire quand ce dashboard est
     // servi séparément du serveur Express (ex. interface statique sur
     // Vercel + backend Node/Express H24 sur Hugging Face Spaces) — dans ce

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Génère public/ui-v2.generated.css : surcharges du thème sombre (ui-v2.css) pour TOUTES les règles claires de public/dashboard.html (fonds blancs / pastel, textes sombres,
 // bordures claires). Lit les blocs <style>, retrouve chaque règle qui pose une couleur claire/sombre « du thème clair » et émet la règle sombre équivalente, avec le
-// MÊME sélecteur (donc la même portée). À relancer quand le CSS du dashboard change :   node scripts/gen-ui-v2-overrides.js
+// MÊME sélecteur (donc la même portée). Chaque règle émise est SCOPÉE à ":root:not([data-theme=\"light\"]) <sélecteur>" : en thème CLAIR (choisi par
+// l'utilisateur dans 🎨 Apparence), ces surcharges ne s'appliquent jamais et les couleurs claires d'origine de dashboard.html s'affichent normalement.
+// À relancer quand le CSS du dashboard change :   node scripts/gen-ui-v2-overrides.js
 const fs = require('fs');
 const path = require('path');
 const SRC = path.join(__dirname, '..', 'public', 'dashboard.html');
@@ -66,8 +68,10 @@ for (const r of rules(css)) {
     }
   }
   if (!add.length) continue;
-  const rule = `${sels} { ${[...new Set(add)].join('; ')}; }`; const key = (r.media || '') + rule; if (seen.has(key)) continue; seen.add(key);
+  // Scopé au thème SOMBRE uniquement : en clair, l'utilisateur retrouve les couleurs d'origine de dashboard.html (déjà claires), sans neutralisation.
+  const scopedSel = sels.split(',').map((s) => `:root:not([data-theme="light"]) ${s.trim()}`).join(', ');
+  const rule = `${scopedSel} { ${[...new Set(add)].join('; ')}; }`; const key = (r.media || '') + rule; if (seen.has(key)) continue; seen.add(key);
   emit.push(r.media ? `${r.media} { ${rule} }` : rule);
 }
-fs.writeFileSync(OUT, `/* GÉNÉRÉ par scripts/gen-ui-v2-overrides.js — ne pas éditer à la main (relancer le script). */\n${emit.join('\n')}\n`);
+fs.writeFileSync(OUT, `/* GÉNÉRÉ par scripts/gen-ui-v2-overrides.js — ne pas éditer à la main (relancer le script). Scopé au thème sombre : voir data-theme sur <html>. */\n${emit.join('\n')}\n`);
 console.log(`${emit.length} surcharges écrites dans ${path.relative(process.cwd(), OUT)}`);

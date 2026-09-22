@@ -1,34 +1,60 @@
-/* CYRUS — interface v2 : sombre, aérée, premium. Chargé APRÈS le CSS du dashboard (ordre du document) ; les couleurs claires d'origine sont neutralisées par
-   ui-v2.generated.css (généré), ce fichier pose les jetons de design et le style des composants. */
+/* CYRUS — interface v2 : aérée, premium, ENTIÈREMENT PERSONNALISABLE (thème clair/sombre/auto + couleur d'accent au choix, réglages → bouton 🎨).
+   Chargé APRÈS le CSS du dashboard (ordre du document) ; les couleurs claires d'origine sont neutralisées EN THÈME SOMBRE UNIQUEMENT par
+   ui-v2.generated.css (généré, scindé par thème) — ce fichier pose les jetons de design (thème + accent) et le style des composants. */
+
+/* ---------- jetons de THÈME : sombre par défaut, clair sur demande (data-theme="light" posé sur <html> par ui-v2.js) ---------- */
 :root {
   color-scheme: dark;
   --bg: #090a10; --bg-2: #0d0f18;
   --surface: rgba(255,255,255,.035); --surface-2: rgba(255,255,255,.055); --surface-3: rgba(255,255,255,.085);
   --border: rgba(255,255,255,.085); --border-strong: rgba(255,255,255,.16);
   --text: #eceef6; --text-2: #c3c7d8; --muted: #8b90a3;
-  --accent: #7c5cff; --accent-2: #a78bfa; --accent-soft: rgba(124,92,255,.16);
+  --bg-elevated: rgba(13,15,24,.72); --overlay: rgba(19,21,32,.97); --input-bg: rgba(255,255,255,.04); --input-bg-focus: rgba(255,255,255,.06);
+  --select-bg: #14161f; --scrollbar: rgba(255,255,255,.18);
   --ok: #34e39b; --ok-soft: rgba(52,227,155,.12); --warn: #fbbf24; --warn-soft: rgba(251,191,36,.12); --err: #f87171; --err-soft: rgba(248,113,113,.12);
   --radius: 16px; --radius-sm: 10px;
   --font: 'Inter', 'Plus Jakarta Sans', 'SF Pro Text', -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
   --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 12px 40px -18px rgba(0,0,0,.65);
+  --robot-opacity: .085; --robot-line: var(--accent, #7c5cff); --robot-screen: rgba(255,255,255,.5);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f5f8; --bg-2: #eceef4;
+  --surface: rgba(20,22,33,.035); --surface-2: rgba(20,22,33,.045); --surface-3: rgba(20,22,33,.07);
+  --border: rgba(20,22,33,.09); --border-strong: rgba(20,22,33,.16);
+  --text: #15161f; --text-2: #40424f; --muted: #6d7080;
+  --bg-elevated: rgba(255,255,255,.78); --overlay: rgba(255,255,255,.98); --input-bg: rgba(20,22,33,.03); --input-bg-focus: rgba(20,22,33,.05);
+  --select-bg: #ffffff; --scrollbar: rgba(20,22,33,.18);
+  --shadow: 0 1px 0 rgba(255,255,255,.6) inset, 0 12px 30px -18px rgba(20,22,33,.22);
+  --robot-opacity: .05; --robot-screen: rgba(20,22,33,.35);
 }
 
-html body { font-family: var(--font); background: radial-gradient(1100px 520px at 12% -8%, rgba(124,92,255,.13), transparent 60%), radial-gradient(900px 480px at 100% 0%, rgba(52,227,155,.05), transparent 55%), var(--bg) !important; color: var(--text) !important; -webkit-font-smoothing: antialiased; letter-spacing: -.005em; line-height: 1.5; }
+/* ---------- jetons de COULEUR D'ACCENT : 6 préréglages (data-accent sur <html>) + une couleur libre (posée en style inline par ui-v2.js) ;
+   volontairement INDÉPENDANTS du thème (le violet reste le même violet en clair comme en sombre). ---------- */
+:root, :root[data-accent="violet"] { --accent: #7c5cff; --accent-2: #9b7bff; --accent-soft: rgba(124,92,255,.16); --accent-border: rgba(124,92,255,.45); --accent-shadow: rgba(124,92,255,.7); --accent-focus: rgba(124,92,255,.22); }
+:root[data-accent="blue"]  { --accent: #3b82f6; --accent-2: #60a5fa; --accent-soft: rgba(59,130,246,.16);  --accent-border: rgba(59,130,246,.45);  --accent-shadow: rgba(59,130,246,.7);  --accent-focus: rgba(59,130,246,.22); }
+:root[data-accent="green"] { --accent: #10b981; --accent-2: #34d399; --accent-soft: rgba(16,185,129,.16);  --accent-border: rgba(16,185,129,.45);  --accent-shadow: rgba(16,185,129,.7);  --accent-focus: rgba(16,185,129,.22); }
+:root[data-accent="amber"] { --accent: #ea9a0c; --accent-2: #fbbf24; --accent-soft: rgba(245,158,11,.18);  --accent-border: rgba(245,158,11,.48);  --accent-shadow: rgba(245,158,11,.7);  --accent-focus: rgba(245,158,11,.22); }
+:root[data-accent="rose"]  { --accent: #f43f5e; --accent-2: #fb7185; --accent-soft: rgba(244,63,94,.16);   --accent-border: rgba(244,63,94,.45);   --accent-shadow: rgba(244,63,94,.7);   --accent-focus: rgba(244,63,94,.22); }
+:root[data-accent="teal"]  { --accent: #14b8a6; --accent-2: #2dd4bf; --accent-soft: rgba(20,184,166,.16);  --accent-border: rgba(20,184,166,.45);  --accent-shadow: rgba(20,184,166,.7);  --accent-focus: rgba(20,184,166,.22); }
+
+html body { font-family: var(--font); background: radial-gradient(1100px 520px at 12% -8%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%), radial-gradient(900px 480px at 100% 0%, rgba(52,227,155,.05), transparent 55%), var(--bg) !important; color: var(--text) !important; -webkit-font-smoothing: antialiased; letter-spacing: -.005em; line-height: 1.5; }
+html body { background: radial-gradient(1100px 520px at 12% -8%, rgba(124,92,255,.13), transparent 60%), radial-gradient(900px 480px at 100% 0%, rgba(52,227,155,.05), transparent 55%), var(--bg) !important; } /* repli sans color-mix() */
 html body :where(button, input, select, textarea) { font-family: var(--font); }
 
 /* ---------- en-tête + navigation ---------- */
-html body header { background: rgba(13,15,24,.72) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); animation: none; padding: .7rem 1.4rem; }
+html body header { background: var(--bg-elevated) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); animation: none; padding: .7rem 1.4rem; }
 html body header h1 { font-size: .95rem; font-weight: 600; letter-spacing: .06em; }
 html body header button { background: var(--surface-2); border: 1px solid var(--border) !important; border-radius: var(--radius-sm); font-weight: 500; transition: background .2s, border-color .2s, transform .15s; }
 html body header button:hover { background: var(--surface-3); border-color: var(--border-strong) !important; }
-html body nav#tabs { background: rgba(9,10,16,.8) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); padding: .6rem 1rem; gap: .4rem; scrollbar-width: none; }
+html body nav#tabs { background: var(--bg-elevated) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); padding: .6rem 1rem; gap: .4rem; scrollbar-width: none; }
 html body nav#tabs::-webkit-scrollbar { display: none; }
 html body nav#tabs button { background: transparent !important; color: var(--muted) !important; border: 1px solid transparent; border-radius: 999px; font-weight: 500; font-size: .84rem; padding: .5rem .95rem; min-height: 36px; box-shadow: none; transition: color .2s, background .2s, border-color .2s; white-space: nowrap; }
 html body nav#tabs button:hover { color: var(--text) !important; background: var(--surface) !important; }
-html body nav#tabs button.active { color: #fff !important; background: var(--accent-soft) !important; border-color: rgba(124,92,255,.45); box-shadow: 0 0 0 1px rgba(124,92,255,.15), 0 6px 20px -10px rgba(124,92,255,.7); }
+html body nav#tabs button.active { color: var(--accent) !important; background: var(--accent-soft) !important; border-color: var(--accent-border); box-shadow: 0 0 0 1px var(--accent-focus), 0 6px 20px -10px var(--accent-shadow); }
 
 /* ---------- cartes ---------- */
-html body .panel { background: transparent !important; box-shadow: none; padding: 1.75rem 1.25rem; margin: 0 auto; max-width: 1180px; border-radius: 0; }
+html body .panel { background: transparent !important; box-shadow: none; padding: 1.75rem 1.25rem; margin: 0 auto; max-width: 1180px; border-radius: 0; position: relative; z-index: 1; }
 html body .panel.active { min-height: calc(100vh - 120px); }
 html body #panel-studio.active { max-width: none; }
 html body .panel > h2 { font-size: 1.5rem; font-weight: 650; letter-spacing: -.02em; margin: 0 0 1.5rem; color: var(--text); }
@@ -43,12 +69,12 @@ html body .warning-box { background: var(--warn-soft) !important; border-color: 
 
 /* ---------- champs ---------- */
 html body :where(input[type=text], input[type=tel], input[type=number], input[type=email], input[type=password], input[type=search], input[type=url], input[type=datetime-local], input[type=time], input[type=date], select, textarea) {
-  background: rgba(255,255,255,.04) !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: var(--radius-sm); padding: .7rem .9rem; min-height: 44px;
+  background: var(--input-bg) !important; color: var(--text) !important; border: 1px solid var(--border) !important; border-radius: var(--radius-sm); padding: .7rem .9rem; min-height: 44px;
   transition: border-color .2s, box-shadow .2s, background .2s;
 }
-html body :where(input, select, textarea):focus { outline: none; border-color: rgba(124,92,255,.7) !important; box-shadow: 0 0 0 3px rgba(124,92,255,.2); background: rgba(255,255,255,.06) !important; }
-html body ::placeholder { color: #6f7488; }
-html body select option { background: #12141d; color: var(--text); }
+html body :where(input, select, textarea):focus { outline: none; border-color: var(--accent-border) !important; box-shadow: 0 0 0 3px var(--accent-focus); background: var(--input-bg-focus) !important; }
+html body ::placeholder { color: var(--muted); opacity: .8; }
+html body select option { background: var(--select-bg); color: var(--text); }
 html body .field label { font-weight: 500; font-size: .84rem; color: var(--text-2); margin-bottom: .4rem; }
 html body input[type=checkbox], html body input[type=radio] { accent-color: var(--accent); }
 
@@ -60,9 +86,9 @@ html body :where(.panel button):not([class]), html body .group-actions button, h
   background: var(--surface-2) !important; color: var(--text) !important; border: 1px solid var(--border) !important;
 }
 html body :where(.panel button):not([class]):hover, html body .group-actions button:hover, html body .mode-toggle button:hover { background: var(--surface-3) !important; border-color: var(--border-strong) !important; }
-html body .mode-toggle button.active { background: var(--accent-soft) !important; border-color: rgba(124,92,255,.5) !important; color: #fff !important; }
+html body .mode-toggle button.active { background: var(--accent-soft) !important; border-color: var(--accent-border) !important; color: var(--accent) !important; }
 html body .panel button[type=submit], html body #login-screen button, html body .gc-send, html body .btn-primary {
-  background: linear-gradient(135deg, #7c5cff, #9b7bff) !important; border: none !important; color: #fff !important; box-shadow: 0 8px 24px -10px rgba(124,92,255,.8);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2)) !important; border: none !important; color: #fff !important; box-shadow: 0 8px 24px -10px var(--accent-shadow);
 }
 html body .panel button[type=submit]:hover, html body .gc-send:hover { filter: brightness(1.08); }
 html body .open-whatsapp-btn { background: linear-gradient(135deg, #1fbf75, #25d366) !important; border-radius: var(--radius-sm); font-weight: 600; }
@@ -90,8 +116,9 @@ html body #pairing-code-display { background: var(--surface-2) !important; borde
 html body .empty { color: var(--muted) !important; }
 html body hr { border: none; border-top: 1px solid var(--border); }
 html body a { color: var(--accent-2); }
-html body ::selection { background: rgba(124,92,255,.4); }
-html body * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
+html body ::selection { background: rgba(124,92,255,.35); }
+html body ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+html body * { scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
 
 /* ---------- Chat Intelligent ---------- */
 html body .gc-autopanel { background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: var(--radius); padding: 1.25rem; }
@@ -101,8 +128,8 @@ html body .gc-switch { color: var(--text-2); }
 /* ---------- aide : icône « ? » + infobulle (remplace les longs paragraphes) ---------- */
 .cy-help { position: relative; display: inline-flex; vertical-align: middle; margin-left: .5rem; }
 .cy-help > button { all: unset; box-sizing: border-box; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 600 .72rem var(--font); color: var(--muted); border: 1px solid var(--border-strong); cursor: help; transition: color .2s, border-color .2s, background .2s; }
-.cy-help > button:hover, .cy-help > button:focus-visible, .cy-help.open > button { color: #fff; background: var(--accent-soft); border-color: rgba(124,92,255,.6); }
-.cy-help .cy-tip { position: absolute; left: 50%; top: calc(100% + 10px); transform: translateX(-50%) translateY(4px); width: max-content; max-width: min(340px, 78vw); padding: .8rem 1rem; border-radius: 12px; background: rgba(20,22,33,.96); border: 1px solid var(--border-strong); color: var(--text-2); font: 400 .8rem/1.55 var(--font); letter-spacing: 0; text-transform: none; box-shadow: 0 18px 50px -12px rgba(0,0,0,.8); backdrop-filter: blur(12px); opacity: 0; pointer-events: none; z-index: 60; text-align: left; white-space: normal; transition: opacity .18s, transform .18s; }
+.cy-help > button:hover, .cy-help > button:focus-visible, .cy-help.open > button { color: #fff; background: var(--accent-soft); border-color: var(--accent-border); }
+.cy-help .cy-tip { position: absolute; left: 50%; top: calc(100% + 10px); transform: translateX(-50%) translateY(4px); width: max-content; max-width: min(340px, 78vw); padding: .8rem 1rem; border-radius: 12px; background: var(--overlay); border: 1px solid var(--border-strong); color: var(--text-2); font: 400 .8rem/1.55 var(--font); letter-spacing: 0; text-transform: none; box-shadow: 0 18px 50px -12px rgba(0,0,0,.5); backdrop-filter: blur(12px); opacity: 0; pointer-events: none; z-index: 60; text-align: left; white-space: normal; transition: opacity .18s, transform .18s; }
 .cy-help:hover .cy-tip, .cy-help:focus-within .cy-tip, .cy-help.open .cy-tip { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
 .cy-help.cy-help-block { display: flex; margin: -.75rem 0 1rem; }
 @media (max-width: 640px) { .cy-help .cy-tip { left: 0; transform: translateY(4px); } .cy-help:hover .cy-tip, .cy-help:focus-within .cy-tip, .cy-help.open .cy-tip { transform: translateY(0); } }
@@ -125,7 +152,7 @@ html body tbody tr:nth-child(n+9) { animation-delay: 0s; } /* pas de cascade sur
 /* ---------- modales : entrée/sortie ---------- */
 @keyframes cy-modal-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 html body .modal-overlay { transition: opacity .18s ease; backdrop-filter: blur(3px); }
-html body .modal-box { animation: cy-modal-in .22s cubic-bezier(.22,1,.36,1) both; background: rgba(17,19,29,.98) !important; border: 1px solid var(--border-strong); box-shadow: var(--shadow); }
+html body .modal-box { animation: cy-modal-in .22s cubic-bezier(.22,1,.36,1) both; background: var(--overlay) !important; border: 1px solid var(--border-strong); box-shadow: var(--shadow); }
 
 /* ---------- états de chargement : un discret effet de scintillement plutôt qu'un texte figé ---------- */
 .cy-loading { position: relative; display: inline-block; color: var(--muted) !important; }
@@ -133,6 +160,61 @@ html body .modal-box { animation: cy-modal-in .22s cubic-bezier(.22,1,.36,1) bot
 @keyframes cy-spin { to { transform: rotate(360deg); } }
 
 /* ---------- barre de progression (création de groupe) : remplissage animé + pastille « en cours » pulsée ---------- */
-html body [id$="-progress"] > div:first-child > div { transition: width .5s cubic-bezier(.22,1,.36,1) !important; }
+html body [id$="-progress"] > div:first-child > div { transition: width .5s cubic-bezier(.22,1,.36,1) !important; background: var(--accent) !important; }
 @keyframes cy-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
 .cy-live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: .4em; animation: cy-live-pulse 1.4s ease-in-out infinite; vertical-align: middle; }
+
+/* =====================================================================================================================
+   RÉGLAGES D'APPARENCE — bouton flottant 🎨 + panneau (thème clair/sombre/auto, couleur d'accent). Injectés par ui-v2.js.
+   ===================================================================================================================== */
+#cy-appearance-btn { position: fixed; right: 18px; bottom: 18px; z-index: 500; width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.15rem; background: var(--overlay); color: var(--text); border: 1px solid var(--border-strong); box-shadow: 0 10px 30px -10px rgba(0,0,0,.5); cursor: pointer; transition: transform .18s, border-color .2s; }
+#cy-appearance-btn:hover { transform: scale(1.06); border-color: var(--accent-border); }
+#cy-appearance-panel { position: fixed; right: 18px; bottom: 74px; z-index: 500; width: 268px; max-width: calc(100vw - 36px); background: var(--overlay); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 24px 60px -16px rgba(0,0,0,.55); padding: 1.1rem; backdrop-filter: blur(16px); color: var(--text); font: 400 .85rem/1.4 var(--font); animation: cy-modal-in .18s cubic-bezier(.22,1,.36,1) both; }
+#cy-appearance-panel h4 { margin: 0 0 .6rem; font-size: .8rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--muted); }
+#cy-appearance-panel .cy-app-row { display: flex; gap: .4rem; margin-bottom: 1rem; }
+#cy-appearance-panel .cy-app-row:last-of-type { margin-bottom: 0; }
+#cy-appearance-panel button.cy-theme-opt { flex: 1; padding: .5rem .3rem; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); font-size: .76rem; cursor: pointer; text-align: center; transition: all .15s; }
+#cy-appearance-panel button.cy-theme-opt.active { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); font-weight: 600; }
+#cy-appearance-panel .cy-swatches { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; }
+#cy-appearance-panel .cy-swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); transition: transform .15s, border-color .15s; padding: 0; }
+#cy-appearance-panel .cy-swatch:hover { transform: scale(1.12); }
+#cy-appearance-panel .cy-swatch.active { border-color: var(--text); }
+#cy-appearance-panel .cy-swatch-custom { position: relative; width: 26px; height: 26px; border-radius: 50%; overflow: hidden; border: 2px dashed var(--border-strong); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+#cy-appearance-panel .cy-swatch-custom input[type=color] { position: absolute; inset: -4px; width: 34px; height: 34px; border: none; padding: 0; cursor: pointer; opacity: 0; }
+#cy-appearance-panel .cy-swatch-custom span { font-size: .7rem; color: var(--muted); pointer-events: none; }
+#cy-appearance-panel .cy-app-hint { margin-top: .9rem; font-size: .72rem; color: var(--muted); line-height: 1.5; }
+
+/* =====================================================================================================================
+   ROBOT HOLOGRAMME — animation de fond discrète, présente sur toutes les pages (injectée par ui-v2.js, derrière le contenu).
+   Un tracé vectoriel léger (aucune image/vidéo, aucun réseau) : silhouette humanoïde devant des écrans holographiques,
+   mouvement subtil (respiration, tête, bras), balayages lumineux sur les écrans. Opacité volontairement faible pour ne
+   jamais gêner la lecture ; coupé sur mobile étroit et respecte la préférence « moins d'animations ».
+   ===================================================================================================================== */
+#cy-robot-bg { position: fixed; right: 0; bottom: 0; width: min(48vw, 620px); height: min(56vh, 620px); pointer-events: none; z-index: 0; opacity: var(--robot-opacity); mix-blend-mode: var(--robot-blend, normal); transition: opacity .6s ease; }
+#cy-robot-bg svg { width: 100%; height: 100%; display: block; }
+#cy-robot-bg .cy-r-screen-glass { fill: rgba(255,255,255,.02); }
+#cy-robot-bg .cy-r-line { stroke: var(--robot-line); fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+#cy-robot-bg .cy-r-fill { fill: var(--robot-line); }
+#cy-robot-bg .cy-r-dim { stroke: var(--robot-line); opacity: .45; }
+#cy-robot-bg .cy-r-sweep { fill: var(--robot-screen); opacity: 0; }
+#cy-robot-bg .cy-r-bob { animation: cy-r-bob 5.5s ease-in-out infinite; transform-origin: 160px 210px; }
+#cy-robot-bg .cy-r-head { animation: cy-r-head 7s ease-in-out infinite; transform-origin: 160px 96px; }
+#cy-robot-bg .cy-r-arm-l { animation: cy-r-arm-l 4.5s ease-in-out infinite; transform-origin: 118px 150px; }
+#cy-robot-bg .cy-r-arm-r { animation: cy-r-arm-r 3.6s ease-in-out infinite; transform-origin: 202px 150px; }
+#cy-robot-bg .cy-r-particle { animation: cy-r-float 9s ease-in-out infinite; }
+#cy-robot-bg .cy-r-particle:nth-child(2) { animation-delay: -3s; }
+#cy-robot-bg .cy-r-particle:nth-child(3) { animation-delay: -6s; }
+#cy-robot-bg .cy-r-s1 .cy-r-sweep { animation: cy-r-sweep 4.5s linear infinite; }
+#cy-robot-bg .cy-r-s2 .cy-r-sweep { animation: cy-r-sweep 5.6s linear infinite; animation-delay: -1.8s; }
+#cy-robot-bg .cy-r-s3 .cy-r-sweep { animation: cy-r-sweep 6.3s linear infinite; animation-delay: -3.4s; }
+#cy-robot-bg .cy-r-flicker { animation: cy-r-flicker 3.2s ease-in-out infinite; }
+@keyframes cy-r-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@keyframes cy-r-head { 0%,100% { transform: rotate(0deg); } 30% { transform: rotate(-3deg); } 65% { transform: rotate(2deg); } }
+@keyframes cy-r-arm-l { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(6deg); } }
+@keyframes cy-r-arm-r { 0%,100% { transform: rotate(0deg); } 45% { transform: rotate(-9deg); } 70% { transform: rotate(-2deg); } }
+@keyframes cy-r-float { 0%,100% { transform: translate(0,0); opacity: .5; } 50% { transform: translate(6px,-14px); opacity: 1; } }
+@keyframes cy-r-sweep { 0% { transform: translateY(-40px); opacity: 0; } 8% { opacity: .55; } 92% { opacity: .55; } 100% { transform: translateY(160px); opacity: 0; } }
+@keyframes cy-r-flicker { 0%,100% { opacity: 1; } 48% { opacity: 1; } 50% { opacity: .55; } 52% { opacity: 1; } 78% { opacity: .8; } }
+@media (max-width: 900px) { #cy-robot-bg { width: 62vw; height: 42vh; opacity: calc(var(--robot-opacity) * .8); } }
+@media (max-width: 560px) { #cy-robot-bg { display: none; } } /* trop petit pour rester discret sans gêner le contenu : coupé */
+@media (prefers-reduced-motion: reduce) { #cy-robot-bg *, #cy-robot-bg { animation: none !important; } }
