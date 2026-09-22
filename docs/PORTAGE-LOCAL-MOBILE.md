@@ -17,16 +17,58 @@ l'`ai-engine/` VPS (62 absents), et les 13 présents étaient pour la plupart de
 alertCenter, businessServices, communityDiscovery, autoResponder, etc.) — le téléphone n'a pas de backend Node
 (voir CLAUDE.md section 3-4 : l'embarquement d'un runtime Node sur mobile — `nodejs-mobile-react-native` — a été
 tenté puis ABANDONNÉ le 2026-09-10, GramJS/Telegram fait planter le process natif ; ne pas retenter cette piste).
-Ordre de dépendances techniques établi par l'audit (à respecter, indépendant des priorités business) :
-1. `lib/ai/llmFallbackEngine.js` + dépendances (cascade IA — bloque tout le reste) — **FAIT côté PC le 2026-09-22**.
-2. `toolRegistry.js` + `authz.js` + `untrusted.js` (pont technique central de `chatOrchestrator`).
-3. `ai-engine/jarvis/agentLoop.js` (seul fichier manquant du dossier jarvis côté PC) + resynchroniser `conversationEngine.js`.
-4. `contactIdentity.js` (requis par alertCenter/ownerChannel/groupCampaigns/communityDiscovery).
-5. `alertCenter.js` + `ownerChannel.js` + `pendingActions.js` (canal propriétaire — requis avant le répondeur contextuel).
-6. `businessServices.js` (requis par autoResponder/groupCampaigns/adCampaigns).
-7. `autoResponder.js` + `alwaysOn.js` + `responderKeeper.js` + `clientAiQuota.js`/`clientLimitGuard.js`.
-8. `conversationRouter.js`/`conversationContext.js`/`conversationPolicy.js`/`engagement.js`/`botSignature.js`/`claimGuard.js` (répondeur contextuel).
-9. Reste (communautés, campagnes, apprenants, cycle de vie, task queue) — peu de dépendances croisées entre eux, ordonnable librement.
+
+### État détaillé PC (`local-client/`) au 2026-09-22, fin de session
+
+**FAIT et vérifié** (64 fichiers `ai-engine/*.js` de premier niveau + `jarvis/*` + `agents/*` chargent tous sans
+erreur — `require()` réel testé sur chacun, pas seulement `node -c`) :
+- Cascade IA complète (`lib/ai/llmFallbackEngine.js` + `aiErrors.js` + `marketingSkills.js` + `skills/*`) — testée
+  en réel (appel `generateAIResponse` → réponse reçue via le repli Pollinations).
+- `loopGuard.js`, `clientAiQuota.js`, `aiUsageLedger.js`, `authz.js`, `untrusted.js`, `toolAgent.js`,
+  `capabilityGap.js` — copiés tels quels (self-containés, aucune adaptation requise).
+- `toolRegistry.js`, `serviceCommands.js`, `activityIntelligence.js` — copiés tels quels, débloqués par
+  l'adaptation de `toolsExtra.js`/`toolsLifecycle.js` ci-dessous.
+- `toolsExtra.js`, `toolsLifecycle.js` — **ADAPTÉS** : la résolution de session `adapters/{whatsapp,telegram}Manager.
+  getOrCreate(tenant).session` (multi-tenant, VPS) devient `require('../lib/{whatsapp,telegram}')` directement
+  (mono-compte local, pas de registre de tenants).
+- `botSignature.js` — copié tel quel : `isNumberOfOtherTenant` (concept multi-tenant, "un autre compte sur ce
+  serveur") n'a pas d'équivalent mono-compte ; le `try/catch` existant dégrade déjà proprement vers `false`
+  (vérifié), juste commenté pour expliciter que c'est voulu.
+- `guidedSetup.js`, `cyrusSelf.js` — **ADAPTÉS** : même substitution `peek(tenant).session` → session locale
+  directe pour les vérifications `isConnected()`.
+- `jarvis/agentLoop.js` (seul fichier manquant du dossier jarvis) — copié tel quel.
+- `jarvis/conversationEngine.js` — **RESYNCHRONISÉ** (127 lignes de retard résorbées : accompagnement apprenant,
+  mémoire commerciale, garde-fous `claimGuard`/`learnerSupport`, registre d'engagement, ET la notification
+  "question commerciale sans service" ajoutée cette nuit sur le VPS).
+- `contactCrm.js`, `personaManager.js`, `offerClarifier.js`, `messageHistory.js`, `voiceProcessor.js`,
+  `manualPaymentValidator.js`, `emotionalCloser.js` — **RESYNCHRONISÉS** (dérive purement additive vérifiée par
+  diff avant copie, aucune logique locale spécifique perdue).
+- Les ~45 autres fichiers manquants sans dépendance directe à `adapters/` (alertCenter, ownerChannel,
+  pendingActions, businessServices, contactIdentity, contactsPipeline, contactExtractor, campaignService +
+  `lib/campaignStatus.js`, campaignContinuity, groupCampaigns(+Parser), adCampaigns(+Parser), customerLifecycle,
+  courseKnowledge, learnerSupport, taskQueue, mediaPipeline, chatUploads, ocrProvider, memoryQuery, secretVault,
+  knowledgeBase, notifications, toolsConversation, toolsServices, conversationRouter, conversationContext,
+  conversationPolicy, engagement, claimGuard, clientLimitGuard, modelRouter, alwaysOn, responderKeeper,
+  autoResponder, assistantLayer, activityStore) — copiés tels quels.
+
+**PAS FAIT, bloqué sur un vrai écart de capacité ou un risque identifié** (ne pas copier tel quel sans traiter
+ceci en premier) :
+- **`chatOrchestrator.js`** (546 lignes locales vs 1601 VPS) — **PIÈGE TROUVÉ** : la version VPS exige désormais un
+  principal d'autorisation (`authz.currentPrincipal()` + `input.tenantId` obligatoires, voir `authz.js` porté ci-
+  dessus) et BLOQUE toute la conversation ("Je ne peux pas traiter cette demande") sans lui — or l'appel actuel de
+  `local-client/index.js:370` (`chatOrchestrator.handle({ text, history, sessionId, lastAssistantMessage }, ...)`)
+  ne fournit ni `tenantId` ni principal. Un remplacement direct aurait cassé tout le Chat Intelligent local.
+  À faire : soit établir un principal OWNER fixe côté local-client avant l'appel (mono-compte, aucun risque
+  d'usurpation réel), soit adapter `handle()`/`handleInner` pour accepter l'absence de principal en mode local.
+  Fonctions exportées compatibles par ailleurs (`detectIntent`, `handle` toujours présents côté VPS, en plus des
+  nouveaux `isQuickChat`/`handleOwnerQueue`/`searchMyGroups`).
+- **`communityDiscovery.js`, `communityService.js`** — nécessitent des méthodes que `local-client/lib/whatsapp.js`
+  (whatsapp-web.js) n'expose PAS encore : `createGroup`, `addGroupParticipants`, `setGroupDescription`,
+  `getGroupInviteLink`, `checkNumbersOnWhatsApp`, `getInviteInfo`, `joinGroupByInvite`. `lib/telegram.js` a un
+  écart similaire (`createCommunityGroup`, `getGroupEntity`, `resolveRecipient`, `exportGroupInviteLink`,
+  `searchPublicCommunities`, `searchPublicPeople`). Ce n'est PAS un simple changement de chemin de require — il
+  faut D'ABORD étendre `lib/whatsapp.js`/`lib/telegram.js` avec ces capacités (whatsapp-web.js et GramJS les
+  supportent tous les deux nativement, à vérifier API par API) avant de porter ces deux fichiers.
 
 **Suivi séparé nécessaire** : `local-client/lib/aiGateway.js` (utilisé par `local-client/index.js` pour la
 génération d'image/vidéo/PDF longue) pointe encore vers Firebase Functions en priorité — à repointer vers le
@@ -35,20 +77,28 @@ Worker Cloudflare (`cloudflare/license-worker/src/media.js`/`textCascade.js`) po
 description de `local-client/package.json` affirmait à tort une dépendance VPS pour l'IA/les licences — mise à
 jour pour refléter la consigne "zéro dépendance VPS" actuelle.
 
+### Téléphone (`mobile/webapp/`) — état au 2026-09-22
+**NON commencé.** Nécessite une réécriture en JS navigateur (pas de copie possible, zéro backend Node — voir
+note d'architecture ci-dessus) des mêmes comportements que ci-dessus, avec la cascade IA appelée via un Worker
+Cloudflare plutôt qu'en direct (consigne utilisateur du 2026-09-22 : "les cloud fonctions se tournent directement
+vers Cloudflare"). Première étape logique une fois le PC stabilisé : décider si `cloudflare/license-worker/src/
+textCascade.js` (déjà existant, à vérifier s'il couvre toute la cascade ou seulement un sous-ensemble) devient le
+point d'entrée unique IA pour le téléphone.
+
 | # | Mise à jour VPS (branche `feat/jarvis-engine`, fusionnée dans `main`) | Fichiers VPS principaux | PC | Téléphone |
 |---|---|---|---|---|
-| 1 | Moteur conversationnel Jarvis (refus respecté, anti-répétition, NO_ACTION, file/debounce, agent multi-outils, exécution directe des ordres sans contradiction) | `ai-engine/jarvis/*`, `chatOrchestrator.js`, `toolRegistry.js` | À FAIRE | À FAIRE |
-| 2 | Mémoire 7×24 h par jour (segments par jour, verrous, historique WhatsApp à l'appairage, messages sortants, outil `queryMemory`) | `ai-engine/messageHistory.js`, `memoryQuery.js`, adapters Baileys | À FAIRE | À FAIRE |
-| 3 | Répondeur permanent (compte « toujours actif », gardien de sessions, réglages `/api/auto-responder`) | `ai-engine/alwaysOn.js`, `responderKeeper.js`, `autoResponder.js` | À FAIRE | À FAIRE |
-| 4 | Import de numéros : coller une liste, Excel/CSV, photo OCR, normalisation, doublons, validation, compteurs et tableau des statuts, intégrés aux onglets WhatsApp et Telegram | `ai-engine/contactsPipeline.js`, `ocrProvider.js`, `public/dashboard.html` (`impBuild`) | À FAIRE | À FAIRE |
-| 5 | Campagnes suivies dans les onglets WhatsApp/Telegram : statuts, programmation, pause/reprise/annulation, rapport CSV, protection + reprise automatique + continuité manuelle | `ai-engine/campaignService.js`, `lib/campaignStatus.js`, `queues/*`, `public/dashboard.html` (`cmpMount`) | À FAIRE | À FAIRE |
-| 6 | File de tâches + worker (lancement programmé) | `ai-engine/taskQueue*` | À FAIRE | À FAIRE |
+| 1 | Moteur conversationnel Jarvis (refus respecté, anti-répétition, NO_ACTION, file/debounce, agent multi-outils, exécution directe des ordres sans contradiction) | `ai-engine/jarvis/*`, `chatOrchestrator.js`, `toolRegistry.js` | PARTIEL (jarvis/* + toolRegistry.js FAIT ; chatOrchestrator.js bloqué sur l'adaptation authz/principal, voir détail plus bas) | À FAIRE |
+| 2 | Mémoire 7×24 h par jour (segments par jour, verrous, historique WhatsApp à l'appairage, messages sortants, outil `queryMemory`) | `ai-engine/messageHistory.js`, `memoryQuery.js`, adapters Baileys | FAIT (fichiers copiés/resynchronisés, non testé en conditions réelles) | À FAIRE |
+| 3 | Répondeur permanent (compte « toujours actif », gardien de sessions, réglages `/api/auto-responder`) | `ai-engine/alwaysOn.js`, `responderKeeper.js`, `autoResponder.js` | PARTIEL (fichiers copiés, non branchés à un point d'entrée/route ni testés) | À FAIRE |
+| 4 | Import de numéros : coller une liste, Excel/CSV, photo OCR, normalisation, doublons, validation, compteurs et tableau des statuts, intégrés aux onglets WhatsApp et Telegram | `ai-engine/contactsPipeline.js`, `ocrProvider.js`, `public/dashboard.html` (`impBuild`) | PARTIEL (contactsPipeline.js/ocrProvider.js copiés et chargent ; UI `impBuild` du dashboard PC pas vérifiée/portée) | À FAIRE |
+| 5 | Campagnes suivies dans les onglets WhatsApp/Telegram : statuts, programmation, pause/reprise/annulation, rapport CSV, protection + reprise automatique + continuité manuelle | `ai-engine/campaignService.js`, `lib/campaignStatus.js`, `queues/*`, `public/dashboard.html` (`cmpMount`) | PARTIEL (campaignService.js + lib/campaignStatus.js copiés et chargent ; `queues/*` de local-client à vérifier séparément, UI `cmpMount` pas portée) | À FAIRE |
+| 6 | File de tâches + worker (lancement programmé) | `ai-engine/taskQueue*` | PARTIEL (fichier copié, pas de worker/planificateur branché dans local-client/index.js) | À FAIRE |
 | 7 | Licences et IA sur Cloudflare (Worker + D1) à la place de Firebase : clients déjà basculés côté `local-client/lib` et mobile pour l'URL, à revérifier | `cloudflare/license-worker/`, `lib/cloudflareSync.js` | PARTIEL (licences ; IA texte = cascade directe, voir ligne "Livraison 2026-09-21" plus bas ; `aiGateway.js` image/vidéo encore sur Firebase, à migrer) | PARTIEL |
 | 8 | Clé créée dans le générateur Cloudflare reconnue tout de suite par le VPS (synchronisation immédiate) | `licenses.js` | À FAIRE (vérifier `local-client/lib/license.js`) | À FAIRE |
 | 9 | CORS : origine identique au Host acceptée (domaine DuckDNS) | `index.js` | Sans objet (pas de CORS local) | Sans objet |
-| 12 | Campagnes de groupes administrés (ciblage, scheduler, intérêt, preuve, objectif) | `ai-engine/groupCampaigns.js`, `groupCampaignParser.js`, `toolsExtra.js`, `chatOrchestrator.js`, `assistantLayer.js`, `index.js` | À FAIRE | À FAIRE |
-| 11 | Campagnes Facebook Ads (Service Métier : configuration Chat, origine, message initial exact) | `ai-engine/adCampaigns.js`, `adCampaignParser.js`, `businessServices.js`, `toolsExtra.js`, `chatOrchestrator.js` | À FAIRE | À FAIRE |
-| 10 | Couche d'assistance générale : identité des contacts (JID/LID ≠ numéro), routage privé/métier, centre d'alertes, canal propriétaire (self-chat → Chat Intelligent), actions en attente `PA-XXXX` + OUI/NON, vérification API, import de listes appliqué à la source d'envoi | `ai-engine/{contactIdentity,alertCenter,conversationRouter,ownerChannel,pendingActions,assistantLayer,manualPaymentValidator}.js`, `adapters/whatsappEngineBaileys.js` (indices d'identité, self-chat), `lib/whatsappRecipients.js` (déjà copié dans `local-client/lib`), `public/dashboard.html` (`impBuild`) | PARTIEL (`whatsappRecipients.js` seulement) | À FAIRE |
+| 12 | Campagnes de groupes administrés (ciblage, scheduler, intérêt, preuve, objectif) | `ai-engine/groupCampaigns.js`, `groupCampaignParser.js`, `toolsExtra.js`, `chatOrchestrator.js`, `assistantLayer.js`, `index.js` | PARTIEL (groupCampaigns.js/Parser + toolsExtra.js FAIT et adapté ; chatOrchestrator.js/routes index.js pas encore branchés) | À FAIRE |
+| 11 | Campagnes Facebook Ads (Service Métier : configuration Chat, origine, message initial exact) | `ai-engine/adCampaigns.js`, `adCampaignParser.js`, `businessServices.js`, `toolsExtra.js`, `chatOrchestrator.js` | PARTIEL (fichiers copiés ; chatOrchestrator.js pas encore branché) | À FAIRE |
+| 10 | Couche d'assistance générale : identité des contacts (JID/LID ≠ numéro), routage privé/métier, centre d'alertes, canal propriétaire (self-chat → Chat Intelligent), actions en attente `PA-XXXX` + OUI/NON, vérification API, import de listes appliqué à la source d'envoi | `ai-engine/{contactIdentity,alertCenter,conversationRouter,ownerChannel,pendingActions,assistantLayer,manualPaymentValidator}.js`, `adapters/whatsappEngineBaileys.js` (indices d'identité, self-chat), `lib/whatsappRecipients.js` (déjà copié dans `local-client/lib`), `public/dashboard.html` (`impBuild`) | PARTIEL (tous les fichiers `ai-engine/*.js` copiés/resynchronisés et chargent sans erreur ; `impBuild` du dashboard PC pas vérifié, self-chat propriétaire pas testé en réel) | À FAIRE |
 
 ## Règles de portage à respecter
 - Reprendre le comportement, pas le code VPS tel quel : le PC et le téléphone restent locaux (WhatsApp local, SQLite/IndexedDB).
@@ -75,27 +125,54 @@ jour pour refléter la consigne "zéro dépendance VPS" actuelle.
 
 ## Livraison 2026-09-21 (soir) — Agency Agents : spécialistes sous la tutelle du Service Orchestrateur
 Voir docs/AGENCY-AGENTS.md. À porter vers local-client/ et mobile/webapp/ : ai-engine/agents/ (+ catalog), scripts/sync-agency-agents.js, branchements autoResponder.composeReply et chatOrchestrator.handleInner, outils listSpecialists/setSpecialistStatus, champs Service métier (specialists, lifecycle…).
+**PC : PARTIEL (2026-09-22)** — `ai-engine/agents/` (agentRegistry.js, orchestrationService.js, specialistRunner.js,
+specialistSelector.js, catalog/) copié tel quel et charge sans erreur. `scripts/sync-agency-agents.js` non copié ;
+branchement dans `autoResponder.composeReply`/`chatOrchestrator.handleInner` en attente du déblocage de
+`chatOrchestrator.js` (voir piège authz ci-dessus). Téléphone : NON PORTÉ.
 
 ## Livraison 2026-09-21 (nuit) — Communautés : création/invitation de groupes + découverte (WhatsApp/Telegram)
 À porter vers local-client/ et mobile/webapp/ : ai-engine/communityService.js, communityDiscovery.js, contactCrm (communities), outils createCommunityGroup/getCommunityGroupStatus/discoverCommunities/listCommunities (toolsExtra), intention community (chatOrchestrator), primitives moteurs (adapters/whatsappEngineBaileys.js : checkNumbersOnWhatsApp/createGroup/addGroupParticipants/getGroupInviteLink/getInviteInfo ; adapters/telegram.js : createCommunityGroup/inviteUserToGroup/exportGroupInviteLink/searchPublicCommunities), routes /api/communities/*, sections UI cm-wa/cm-tg. Variables : COMMUNITY_MAX_MEMBERS, COMMUNITY_WA_BATCH, COMMUNITY_DELAY_MIN_MS/MAX_MS, WHATSAPP_DIRECTORY_SEARCH_URL.
+**PC : BLOQUÉ (2026-09-22)** — `communityDiscovery.js`/`communityService.js` nécessitent des méthodes que
+`local-client/lib/whatsapp.js`/`lib/telegram.js` n'exposent pas encore (createGroup, addGroupParticipants,
+checkNumbersOnWhatsApp, getInviteInfo, joinGroupByInvite côté WhatsApp ; createCommunityGroup, getGroupEntity,
+resolveRecipient, exportGroupInviteLink, searchPublicCommunities/People côté Telegram) — à étendre en premier
+(whatsapp-web.js et GramJS supportent ces opérations nativement, capacité à vérifier/câbler méthode par méthode).
+`contactCrm.js` (communities) déjà resynchronisé (fait partie du portage général). Téléphone : NON PORTÉ.
 
 ## Livraison 2026-09-21 (nuit 2) — Accompagnement des apprenants (base pédagogique, recherche ciblée, groupes de formation)
 Voir docs/ACCOMPAGNEMENT-APPRENANTS.md. À porter vers local-client/ et mobile/webapp/ : ai-engine/courseKnowledge.js, learnerSupport.js, mediaPipeline.extractFullText, autoResponder.composeLearning, conversationEngine (décision LEARNING), assistantLayer.route, outils ingestCourse/listCourses/searchCourse/linkCourse/listFaqCandidates/promoteFaq, isSearchAvailable du gateway. Variables : LEARNER_WEB_SEARCH.
+**PC : PARTIEL (2026-09-22)** — courseKnowledge.js, learnerSupport.js, mediaPipeline.js, assistantLayer.js copiés et
+chargent (dont la décision LEARNING de conversationEngine, déjà resynchronisée). Non vérifié en conditions réelles
+(ingestion d'un vrai support de cours). Téléphone : NON PORTÉ.
 
 ## Livraison 2026-09-21 (nuit 3) — Cyrus multi-métiers : cycle de vie client, auto-connaissance, guidage, Rapport & Activité, auto-amélioration
 Voir docs/CYRUS-MULTI-METIERS.md. À porter vers local-client/ et mobile/webapp/ : ai-engine/customerLifecycle.js, cyrusSelf.js, guidedSetup.js, activityIntelligence.js, toolsLifecycle.js (fusionné par toolsExtra), taskQueue (états WAITING_EXTERNAL/VERIFYING/PAUSED + gestionnaire FOLLOW_UP), storageAdapter (namespaces locaux), businessServices (champ groups), chatOrchestrator (intentions selfknow/guide/lifecycle/activityreport), conversationEngine (ouverture auto d'un dossier SAV), autoResponder (groupe lié à un service), routes /api/reports/intelligence|improvements|analysis (index.js) et section « Centre d'intelligence » de l'onglet Rapports (dashboard.html). Statut : NON PORTÉ.
+**PC : PARTIEL (2026-09-22)** — customerLifecycle.js, cyrusSelf.js (adapté), guidedSetup.js (adapté),
+activityIntelligence.js, toolsLifecycle.js (adapté) tous copiés/adaptés et chargent. Manque : routes
+`/api/reports/*` dans local-client/index.js, section dashboard PC correspondante — NON PORTÉ. Téléphone : NON PORTÉ.
 
 ## Livraison 2026-09-21 (nuit 4) — Répondeur contextuel (mémoire 7 jours, politique pilotable, groupes, arbitrage IA), anti-boucle, jamais « fait » sans preuve
 Voir docs/REPONDEUR-CONTEXTUEL.md. À porter vers local-client/ et mobile/webapp/ : botSignature.js, claimGuard.js, conversationContext.js, conversationPolicy.js, engagement.js, toolsConversation.js, extraits autoResponder/conversationEngine/ownerChannel/chatOrchestrator, index.js (waAddressing, routes), panneau du dashboard. Statut : NON PORTÉ.
+**PC : PARTIEL (2026-09-22)** — botSignature.js, claimGuard.js, conversationContext.js, conversationPolicy.js,
+engagement.js, toolsConversation.js tous copiés et chargent (le "arbitrage IA" de conversationEngine, déjà
+resynchronisé, en dépend). Manque : `index.js` (waAddressing, routes) et panneau dashboard PC — NON PORTÉ.
+Téléphone : NON PORTÉ.
 
 ## Livraison 2026-09-22 — Stabilité multi-licences WhatsApp (révocations en rafale au redémarrage)
 Correctif de fiabilité, pas une fonctionnalité visible : `adapters/whatsappManager.js` (étalement des reconnexions au démarrage, `WHATSAPP_BOOT_RECONNECT_STAGGER_MS`), réglages `MAX_ACTIVE_SESSIONS`/`PROACTIVE_IDLE_DISCONNECT_MS` (config VPS uniquement, sans objet pour le PC/téléphone qui n'ont qu'un seul compte local). À porter vers local-client/ et mobile/webapp/ : SANS OBJET (le multi-tenant/sessionRegulator n'existe pas en mode local mono-compte).
 
 ## Livraison 2026-09-22 — Découverte de personnes par thématique, adhésion/extraction de membres, moteurs de recherche combinés + filtres géo
-À porter vers local-client/ et mobile/webapp/ : `ai-engine/communityDiscovery.js` (discoverPeople, extractMembers, joinCommunity, syncPeopleToCrm, recherche multi-moteurs DuckDuckGo+Bing+Startpage, paramètre `location`), `ai-engine/contactCrm.js` (getCommunity, markCommunityJoined, champ `location`), `adapters/telegram.js` (getGroupMembers résolution par @username, searchPublicPeople), `adapters/whatsappEngineBaileys.js` (joinGroupByInvite), routes `/api/communities/discover-people|join|extract-members` (index.js), sections UI (cm-wa/cm-tg/cm-tg-people, champs pays/ville/département). Variable : `WHATSAPP_DIRECTORY_SEARCH_URL` (fournisseur personnalisé, prioritaire sur les 3 moteurs par défaut). Statut : NON PORTÉ.
+À porter vers local-client/ et mobile/webapp/ : `ai-engine/communityDiscovery.js` (discoverPeople, extractMembers, joinCommunity, syncPeopleToCrm, recherche multi-moteurs DuckDuckGo+Bing+Startpage, paramètre `location`), `ai-engine/contactCrm.js` (getCommunity, markCommunityJoined, champ `location`), `adapters/telegram.js` (getGroupMembers résolution par @username, searchPublicPeople), `adapters/whatsappEngineBaileys.js` (joinGroupByInvite), routes `/api/communities/discover-people|join|extract-members` (index.js), sections UI (cm-wa/cm-tg/cm-tg-people, champs pays/ville/département). Variable : `WHATSAPP_DIRECTORY_SEARCH_URL` (fournisseur personnalisé, prioritaire sur les 3 moteurs par défaut).
+**PC : BLOQUÉ**, même cause que la livraison "Communautés" du 2026-09-21 ci-dessus (écart de capacité `lib/
+whatsapp.js`/`lib/telegram.js`) — `contactCrm.js` (getCommunity/markCommunityJoined/location) déjà resynchronisé.
+Téléphone : NON PORTÉ.
 
 ## Livraison 2026-09-22 — Partage de contenu (texte/image/vidéo/document) dans des groupes WhatsApp
-À porter vers local-client/ (WhatsApp local uniquement — sans objet pour mobile/webapp, qui n'a pas de moteur WhatsApp serveur) : `queues/campaignEngine.js` (`recipientType: 'groups'`, même patron que `queues/telegramCampaignEngine.js` déjà utilisé côté Telegram), route `POST /api/groups/broadcast` (index.js), section « 📣 Partager du contenu dans des groupes » de l'onglet WhatsApp (dashboard.html). Statut : NON PORTÉ.
+À porter vers local-client/ (WhatsApp local uniquement — sans objet pour mobile/webapp, qui n'a pas de moteur WhatsApp serveur) : `queues/campaignEngine.js` (`recipientType: 'groups'`, même patron que `queues/telegramCampaignEngine.js` déjà utilisé côté Telegram), route `POST /api/groups/broadcast` (index.js), section « 📣 Partager du contenu dans des groupes » de l'onglet WhatsApp (dashboard.html). Statut : NON PORTÉ (pas commencé cette session — `local-client/queues/` à auditer séparément).
 
 ## Livraison 2026-09-22 — Répondeur : notification du propriétaire si question commerciale sans Service Métier configuré
-À porter vers local-client/ et mobile/webapp/ : `ai-engine/jarvis/conversationEngine.js` (paramètre `priorityService` sur `decide()`/`decideCore()`, champ `businessRequestNoService`, message de notification dédié dans `handleBatch`). Dépend du portage encore NON FAIT de l'item #10 (canal propriétaire/alertCenter) et de la ligne 1 (moteur conversationnel Jarvis) ci-dessus — à porter APRÈS eux, pas isolément. Statut : NON PORTÉ.
+À porter vers local-client/ et mobile/webapp/ : `ai-engine/jarvis/conversationEngine.js` (paramètre `priorityService` sur `decide()`/`decideCore()`, champ `businessRequestNoService`, message de notification dédié dans `handleBatch`). Dépend du portage encore NON FAIT de l'item #10 (canal propriétaire/alertCenter) et de la ligne 1 (moteur conversationnel Jarvis) ci-dessus — à porter APRÈS eux, pas isolément.
+**PC : FAIT côté code** — `conversationEngine.js` resynchronisé inclut déjà ce comportement (fait partie du portage
+général de cette session) ; `alertCenter.js`/`ownerChannel.js` (dont dépend la notification réelle) copiés aussi.
+Chaîne complète NON testée en conditions réelles (nécessite `autoResponder.js` branché + un compte WhatsApp/
+Telegram local connecté). Téléphone : NON PORTÉ.

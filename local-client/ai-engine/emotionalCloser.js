@@ -66,7 +66,8 @@ function shouldEscalate(text, analysis, session) {
 // deviné depuis le fil) permet de cibler l'offre la plus pertinente parmi
 // plusieurs déjà clarifiées ; sans correspondance, on fournit la plus
 // récente à titre de contexte général.
-function buildBusinessFacts(businessProfile) {
+// tenantId facultatif (rétrocompatibilité) : sans lui, on ne peut pas lire le Service métier réel et on reste prudent (aucun moyen annoncé).
+async function buildBusinessFacts(businessProfile, tenantId) {
   const offers = businessProfile.offers || [];
   if (!offers.length) return { facts: 'Aucune offre précise n\'est encore configurée côté vendeur — reste généraliste, ne mentionne AUCUN prix ni AUCUNE caractéristique inventée.', offer: null };
   const offer = offers[offers.length - 1];
@@ -80,14 +81,19 @@ function buildBusinessFacts(businessProfile) {
   if (offer.format) parts.push(`Format de délivrance : ${offer.format}.`);
   const maxDiscount = parseFloat(process.env.MAX_DISCOUNT_PERCENT) || 15;
   parts.push(`Remise maximale autorisée par le vendeur : ${maxDiscount}% (ne jamais promettre plus).`);
-  const paymentConfigured = ['MOBILE_MONEY_ORANGE', 'MOBILE_MONEY_MTN', 'MOBILE_MONEY_MOOV', 'MOBILE_MONEY_WAVE'].some((k) => !!process.env[k]);
-  parts.push(paymentConfigured ? 'Un moyen de paiement Mobile Money est disponible pour finaliser.' : 'Aucun moyen de paiement n\'est encore configuré — ne promets pas de lien de paiement immédiat.');
+  // Source de vérité UNIQUE des moyens de paiement : le(s) Service(s) métier réellement configuré(s) (commercial.paymentTerms) — jamais une variable
+  // d'environnement globale, jamais un « lien de paiement » (cette fonction n'existe pas). Générique pour tout métier.
+  let paymentTerms = [];
+  if (tenantId) { try { paymentTerms = (await require('./businessServices').list(tenantId)).filter((s) => (s.lifecycle || 'active') === 'active' && s.commercial && String(s.commercial.paymentTerms || '').trim()).map((s) => s.commercial.paymentTerms); } catch (e) { paymentTerms = []; } }
+  parts.push(paymentTerms.length
+    ? `Moyens de paiement RÉELLEMENT configurés (communique-les tels quels, jamais un lien) : ${paymentTerms.join(' | ')}.`
+    : 'Aucun moyen de paiement n\'est configuré : ne promets jamais de lien de paiement (cette fonction n\'existe pas) — dis-le clairement si le client demande comment payer.');
   return { facts: parts.join(' '), offer };
 }
 
 async function composeClosingReply({ text, history, analysis, strategy, facts, domain, directives }) {
   const prompt = [
-    personaManager.personaSystemPrompt(domain),
+    personaManager.personaSystemPrompt(domain, { audience: 'customer' }),
     'Tu es EN CONVERSATION DIRECTE avec un PROSPECT/CLIENT final sur WhatsApp/Telegram (pas le vendeur) — posture de Conseiller-Vendeur empathique et persuasif (Closer), jamais un bot de support froid ni scolaire.',
     `Message du client : "${text}"`,
     `Profil émotionnel détecté : intention=${analysis.intent}, sentiment=${analysis.sentiment}, intérêt=${analysis.interest}, objection probable=${analysis.objection_primary}, hésitation=${analysis.hesitation}/1, confiance=${analysis.trust}/1, émotion dominante=${analysis.dominant_emotion}.`,
@@ -162,10 +168,12 @@ async function handleCustomerMessage({ tenantId, channel, from, text }) {
     session.escalated = true;
     await saveSession(tenantId, channel, from, session);
     const label = channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+    // Nom / vrai numéro, jamais l'identifiant technique (JID/LID) — voir ai-engine/contactIdentity.js.
+    const who = await require('./contactIdentity').labelFor(tenantId, channel, from);
     platformOrchestrator.notifyTenantChat(
       tenantId,
-      `🔥 Prospect chaud à haute valeur sur ${label} (${from}) — ${escalationReason === 'HIGH_VALUE_SIGNAL' ? 'signal d\'un besoin sur mesure/volume important' : 'hésitation persistante malgré un intérêt élevé'}. Tu veux reprendre la main ?`,
-      [{ icon: '🔥', label: `Escalade prospect ${from}`, status: 'warning' }],
+      `🔥 Prospect chaud à haute valeur sur ${label} (${who}) — ${escalationReason === 'HIGH_VALUE_SIGNAL' ? 'signal d\'un besoin sur mesure/volume important' : 'hésitation persistante malgré un intérêt élevé'}. Tu veux reprendre la main ?`,
+      [{ icon: '🔥', label: `Escalade prospect ${who}`, status: 'warning' }],
     ).catch((err) => console.error('emotionalCloser — échec de notification d\'escalade :', err.message));
     return 'Je transmets votre demande directement à notre équipe pour un suivi personnalisé — on revient vers vous très vite !';
   }
@@ -175,7 +183,7 @@ async function handleCustomerMessage({ tenantId, channel, from, text }) {
   // Refus, répétition, NO_ACTION, montants : décidés par le moteur Jarvis
   // (même logique que l'auto-réponse), l'IA ne fait que rédiger.
   const strategy = humanContext.selectStrategy(analysis);
-  const { facts } = buildBusinessFacts(businessProfile);
+  const { facts } = await buildBusinessFacts(businessProfile, tenantId);
   const out = await conversationEngine.handleBatch({ tenantId, channel, from, items: [{ text }] }, {
     crm: contactCrm,
     knownText: facts,

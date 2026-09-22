@@ -1,0 +1,28 @@
+{
+  "source": "https://github.com/msitarzewski/agency-agents",
+  "commit": "87f8301cad3823a9a34d762036ae923a0eff306f",
+  "syncedAt": "2026-09-21T12:40:12.114Z",
+  "license": "MIT (AgentLand Contributors)",
+  "agents": 279,
+  "perDivision": {
+    "academic": 6,
+    "design": 10,
+    "engineering": 64,
+    "finance": 5,
+    "game-development": 21,
+    "gis": 13,
+    "healthcare": 3,
+    "marketing": 36,
+    "paid-media": 7,
+    "product": 5,
+    "project-management": 7,
+    "research": 1,
+    "sales": 9,
+    "security": 12,
+    "spatial-computing": 6,
+    "specialized": 59,
+    "support": 6,
+    "testing": 9
+  },
+  "rejected": []
+}

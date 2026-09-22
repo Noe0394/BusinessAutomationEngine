@@ -107,6 +107,48 @@ async function markPurchase(tenantId, channel, from, purchase) {
   return contact;
 }
 
+// Normalise un numéro vers son identité CANONIQUE : chiffres seuls (le « + »
+// est retiré — il ferait diverger la clé de contact, car sanitize() convertit
+// « + » en « _ », d'où deux clés distinctes pour le même numéro). Renvoie null
+// si invalide (< 8 chiffres) — ces lignes sont rejetées à l'import.
+function normalizePhone(raw) {
+  if (raw == null) return null;
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length < 8) return null;
+  return digits;
+}
+
+// Import RÉEL de contacts (depuis un fichier Excel/CSV déjà parsé et mappé côté
+// client). Chaque entrée : { phone, name?, fields? }. Déduplication par
+// (canal, numéro normalisé) — au sein du lot ET contre l'existant. Les lignes
+// sans numéro valide sont rejetées (comptées). Retourne un RAPPORT réel.
+async function importContacts(tenantId, contacts, opts) {
+  const o = opts || {};
+  const channel = String(o.channel || 'WHATSAPP').toUpperCase();
+  const source = o.source || 'import';
+  const doc = await load(tenantId);
+  const seenInBatch = new Set();
+  let imported = 0; let updated = 0; let duplicates = 0; let invalid = 0;
+  for (const entry of (Array.isArray(contacts) ? contacts : [])) {
+    const phone = normalizePhone(entry && (entry.phone || entry.number || entry.telephone));
+    if (!phone) { invalid += 1; continue; }
+    const key = contactKey(channel, phone);
+    if (seenInBatch.has(key)) { duplicates += 1; continue; }
+    seenInBatch.add(key);
+    const existed = !!doc.contacts[key];
+    const contact = ensureContact(doc, channel, phone);
+    if (entry.name && !contact.name) contact.name = String(entry.name).slice(0, 120);
+    contact.source = contact.source || source;
+    if (entry.fields && typeof entry.fields === 'object') {
+      contact.fields = Object.assign({}, contact.fields || {}, entry.fields);
+    }
+    addTagsTo(contact, ['importé', TAG_PROSPECT]);
+    if (existed) { updated += 1; } else { imported += 1; }
+  }
+  save(tenantId, doc);
+  return { total: (Array.isArray(contacts) ? contacts.length : 0), imported, updated, duplicates, invalid, source, channel };
+}
+
 // Liste des contacts (filtrable par tag et/ou canal), du plus récemment vu au
 // plus ancien.
 async function list(tenantId, opts) {
@@ -140,7 +182,7 @@ async function counts(tenantId) {
 const TAG_OPTOUT = 'ne_pas_contacter';
 function identityOf(from) {
   const raw = String(from == null ? '' : from).split('@')[0];
-  return (String(raw).replace(/\D/g, '').length >= 8 ? String(raw).replace(/\D/g, '') : raw);
+  return normalizePhone(raw) || raw;
 }
 
 async function markOptOut(tenantId, channel, from, reason) {
@@ -182,8 +224,83 @@ async function optedOutSet(tenantId, channel) {
   return out;
 }
 
+async function getContact(tenantId, channel, from) {
+  const doc = await load(tenantId);
+  return doc.contacts[contactKey(channel, identityOf(from))] || null;
+}
+async function updateContact(tenantId, channel, from, patch) {
+  const doc = await load(tenantId);
+  const contact = ensureContact(doc, channel, identityOf(from));
+  const allowed = ['name', 'stage', 'notes', 'fields'];
+  for (const k of allowed) if (patch && patch[k] !== undefined) contact[k] = k === 'fields' ? Object.assign({}, contact.fields || {}, patch[k]) : patch[k];
+  save(tenantId, doc);
+  return contact;
+}
+async function removeContact(tenantId, channel, from) {
+  const doc = await load(tenantId);
+  const key = contactKey(channel, identityOf(from));
+  const existed = !!doc.contacts[key];
+  delete doc.contacts[key];
+  if (existed) save(tenantId, doc);
+  return existed;
+}
+
+// ---- COMMUNAUTÉS DÉCOUVERTES (groupes/canaux publics) : dans la MÊME base CRM (doc.communities), volontairement SÉPARÉES des contacts-personnes
+// (doc.contacts) : une communauté n'est jamais une cible de campagne « personne ». Clé = canal + identifiant public (@username / code d'invitation).
+async function upsertCommunity(tenantId, c) {
+  const doc = await load(tenantId);
+  doc.communities = doc.communities || {};
+  const key = contactKey(c.channel, c.ref);
+  const before = doc.communities[key] || null;
+  const now = new Date().toISOString();
+  const keywords = Array.from(new Set([].concat((before && before.keywords) || [], c.keywords || []).map((k) => String(k).toLowerCase()).filter(Boolean)));
+  doc.communities[key] = {
+    key, channel: String(c.channel).toUpperCase(), ref: String(c.ref), name: String(c.name || '').slice(0, 160), link: c.link || null,
+    kind: c.kind || 'group', members: c.members != null ? Number(c.members) : (before && before.members) || null, description: String(c.description || (before && before.description) || '').slice(0, 400),
+    keywords, verified: !!c.verified, tags: Array.from(new Set(['communauté', 'découverte'].concat((before && before.tags) || []))),
+    location: c.location || (before && before.location) || null,
+    // Préservés depuis `before` : une resynchronisation (voir communityDiscovery.js#syncToCrm, rappelée avant
+    // chaque adhésion/extraction côté dashboard) ne doit JAMAIS effacer l'adhésion WhatsApp déjà enregistrée par
+    // markCommunityJoined — sinon extractMembers échouerait à tort avec NOT_JOINED juste après un "Rejoindre" réussi.
+    joinedGroupId: (before && before.joinedGroupId) || null, joinedAt: (before && before.joinedAt) || null,
+    firstSyncedAt: (before && before.firstSyncedAt) || now, syncedAt: now,
+  };
+  await save(tenantId, doc);
+  return { created: !before, community: doc.communities[key] };
+}
+async function listCommunities(tenantId, opts) {
+  const doc = await load(tenantId);
+  let items = Object.values(doc.communities || {});
+  const o = opts || {};
+  if (o.channel) items = items.filter((c) => c.channel === String(o.channel).toUpperCase());
+  if (o.keyword) { const k = String(o.keyword).toLowerCase(); items = items.filter((c) => (c.keywords || []).includes(k) || String(c.name).toLowerCase().includes(k)); }
+  return items.sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt)));
+}
+async function getCommunity(tenantId, channel, ref) {
+  const doc = await load(tenantId);
+  return (doc.communities || {})[contactKey(channel, ref)] || null;
+}
+// Adhésion WhatsApp EXPLICITE à un groupe déjà découvert (voir
+// adapters/whatsappEngineBaileys.js#joinGroupByInvite) : mémorise le JID réel
+// du groupe rejoint (distinct de `ref`, le code d'invitation) pour que
+// communityDiscovery#extractMembers sache ensuite quel groupe lire sans
+// dépendre d'un second appel de résolution.
+async function markCommunityJoined(tenantId, channel, ref, joinedGroupId) {
+  const doc = await load(tenantId);
+  const key = contactKey(channel, ref);
+  const community = doc.communities && doc.communities[key];
+  if (!community) return null;
+  community.joinedGroupId = String(joinedGroupId || '');
+  community.joinedAt = new Date().toISOString();
+  await save(tenantId, doc);
+  return community;
+}
+
 module.exports = {
+  upsertCommunity, listCommunities, getCommunity, markCommunityJoined,
+  getContact, updateContact, removeContact,
   markOptOut, clearOptOut, isOptedOut, optedOutSet, identityOf, TAG_OPTOUT,
   recordSeen, addTags, setStage, markPurchase, list, counts,
+  importContacts, normalizePhone,
   TAG_NEW, TAG_PROSPECT, TAG_CLIENT, NAMESPACE,
 };

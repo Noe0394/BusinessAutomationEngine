@@ -87,28 +87,15 @@ async function transcribeWithGroqWhisper(buffer, mimetype, filename) {
 // Gemini (multimodal) : transcription directe en un seul appel — utile
 // comme 2e niveau indépendant de Groq (clé/quota séparés).
 async function transcribeWithGemini(buffer, mimetype) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-
-  const res = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
-    {
-      contents: [{
-        role: 'user',
-        parts: [
-          { text: 'Transcris cet audio mot pour mot, dans sa langue d\'origine (ne traduis rien). Réponds UNIQUEMENT avec la transcription brute, aucun commentaire ni formatage.' },
-          { inline_data: { mime_type: mimetype || 'audio/ogg', data: buffer.toString('base64') } },
-        ],
-      }],
-    },
-    { timeout: AUDIO_REQUEST_TIMEOUT_MS, maxBodyLength: Infinity },
+  if (!process.env.GEMINI_API_KEY) return null;
+  // Passe par l'AI Gateway (lib/ai/llmFallbackEngine.js) : la capacité « audio » est routée vers un modèle qui l'accepte réellement,
+  // sans nom de modèle ni clé dans ce module.
+  const r = await llmFallbackEngine.generateAIResponse(
+    "Transcris cet audio mot pour mot, dans sa langue d'origine (ne traduis rien). Réponds UNIQUEMENT avec la transcription brute, aucun commentaire ni formatage.",
+    [], null, undefined, null,
+    { purpose: 'voice_transcription', media: [{ mimeType: mimetype || 'audio/ogg', data: buffer }] },
   );
-  const text = res.data && res.data.candidates && res.data.candidates[0]
-    && res.data.candidates[0].content && res.data.candidates[0].content.parts && res.data.candidates[0].content.parts[0]
-    ? res.data.candidates[0].content.parts[0].text
-    : null;
-  if (!text) throw new Error('Réponse Gemini Audio vide ou de forme inattendue.');
-  return { text: text.trim(), language: null };
+  return { text: String(r.text || '').trim(), language: null };
 }
 
 const STT_PROVIDERS = [
@@ -129,12 +116,12 @@ async function transcribeAudio(buffer, mimetype, filename) {
         if (result === null) continue; // clé absente : niveau sauté
         return { ...result, provider: provider.name };
       } catch (err) {
-        const reason = (err.response && err.response.status) ? `HTTP ${err.response.status}` : (err.message || String(err));
+        const reason = require('../lib/ai/aiErrors').redact((err.response && err.response.status) ? `HTTP ${err.response.status}` : (err.internalDetail || err.message || String(err)));
         errors.push(`${provider.name}: ${reason}`);
         console.warn(`voiceProcessor — échec STT "${provider.name}" (${reason}), passage au suivant.`);
       }
     }
-    throw new Error(`Échec de la transcription audio (tous les fournisseurs ont échoué) : ${errors.join(' | ') || 'aucune clé API configurée'}.`);
+    throw new (require('../lib/ai/aiErrors').AiUnavailableError)(`transcription audio : ${errors.join(' | ') || 'aucune clé API configurée'}`);
   });
 }
 
