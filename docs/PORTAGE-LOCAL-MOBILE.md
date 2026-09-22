@@ -1,11 +1,39 @@
 # Portage des mises à jour VPS vers PC (`local-client/`) et téléphone (`mobile/webapp/`)
 
-**Consigne utilisateur (2026-09-20)** : toutes les mises à jour faites sur le VPS doivent être appliquées
-INTÉGRALEMENT, plus tard, aux branches locales PC et téléphone. Ce fichier est la liste de référence :
-toute nouvelle livraison VPS y ajoute une ligne. Le portage n'est PAS commencé (différé à la demande de l'utilisateur).
+**Consigne utilisateur (2026-09-20, précisée le 2026-09-22)** : toutes les mises à jour faites sur le VPS
+doivent être appliquées INTÉGRALEMENT au PC et au téléphone, SAUF ce qui les différencie structurellement
+(WhatsApp/Telegram tournent en LOCAL sur chaque appareil, jamais sur un VPS — zéro dépendance VPS). Les
+interfaces (dashboard) doivent être IDENTIQUES sur les trois cibles. Ce fichier est la liste de référence :
+toute nouvelle livraison VPS y ajoute une ligne. **Portage démarré le 2026-09-22** (PC en premier).
 
 Statuts : `À FAIRE` = non commencé, `PARTIEL` = commencé, `FAIT` = livré et vérifié.
 Le PC et le téléphone gardent leur mode « zéro serveur » : le portage adapte, il ne branche pas ces apps sur le VPS.
+Quand un appel réseau distant est réellement nécessaire (licences, génération IA lourde), il pointe vers
+Cloudflare (`cloudflare/license-worker/`), JAMAIS vers Firebase/Firestore ni vers le VPS central.
+
+**Écart constaté à l'audit du 2026-09-22** : `local-client/ai-engine/` n'avait que 13 fichiers sur les ~75 de
+l'`ai-engine/` VPS (62 absents), et les 13 présents étaient pour la plupart des copies anciennes désynchronisées
+(jusqu'à 1785 lignes d'écart). `mobile/webapp/` n'a AUCUNE trace des concepts clés du moteur IA (conversationEngine,
+alertCenter, businessServices, communityDiscovery, autoResponder, etc.) — le téléphone n'a pas de backend Node
+(voir CLAUDE.md section 3-4 : l'embarquement d'un runtime Node sur mobile — `nodejs-mobile-react-native` — a été
+tenté puis ABANDONNÉ le 2026-09-10, GramJS/Telegram fait planter le process natif ; ne pas retenter cette piste).
+Ordre de dépendances techniques établi par l'audit (à respecter, indépendant des priorités business) :
+1. `lib/ai/llmFallbackEngine.js` + dépendances (cascade IA — bloque tout le reste) — **FAIT côté PC le 2026-09-22**.
+2. `toolRegistry.js` + `authz.js` + `untrusted.js` (pont technique central de `chatOrchestrator`).
+3. `ai-engine/jarvis/agentLoop.js` (seul fichier manquant du dossier jarvis côté PC) + resynchroniser `conversationEngine.js`.
+4. `contactIdentity.js` (requis par alertCenter/ownerChannel/groupCampaigns/communityDiscovery).
+5. `alertCenter.js` + `ownerChannel.js` + `pendingActions.js` (canal propriétaire — requis avant le répondeur contextuel).
+6. `businessServices.js` (requis par autoResponder/groupCampaigns/adCampaigns).
+7. `autoResponder.js` + `alwaysOn.js` + `responderKeeper.js` + `clientAiQuota.js`/`clientLimitGuard.js`.
+8. `conversationRouter.js`/`conversationContext.js`/`conversationPolicy.js`/`engagement.js`/`botSignature.js`/`claimGuard.js` (répondeur contextuel).
+9. Reste (communautés, campagnes, apprenants, cycle de vie, task queue) — peu de dépendances croisées entre eux, ordonnable librement.
+
+**Suivi séparé nécessaire** : `local-client/lib/aiGateway.js` (utilisé par `local-client/index.js` pour la
+génération d'image/vidéo/PDF longue) pointe encore vers Firebase Functions en priorité — à repointer vers le
+Worker Cloudflare (`cloudflare/license-worker/src/media.js`/`textCascade.js`) pour respecter la consigne
+"Cloudflare, jamais Firebase". Non fait, distinct du portage `ai-engine/` ci-dessus. Corrigé au passage : la
+description de `local-client/package.json` affirmait à tort une dépendance VPS pour l'IA/les licences — mise à
+jour pour refléter la consigne "zéro dépendance VPS" actuelle.
 
 | # | Mise à jour VPS (branche `feat/jarvis-engine`, fusionnée dans `main`) | Fichiers VPS principaux | PC | Téléphone |
 |---|---|---|---|---|
@@ -15,7 +43,7 @@ Le PC et le téléphone gardent leur mode « zéro serveur » : le portage adapt
 | 4 | Import de numéros : coller une liste, Excel/CSV, photo OCR, normalisation, doublons, validation, compteurs et tableau des statuts, intégrés aux onglets WhatsApp et Telegram | `ai-engine/contactsPipeline.js`, `ocrProvider.js`, `public/dashboard.html` (`impBuild`) | À FAIRE | À FAIRE |
 | 5 | Campagnes suivies dans les onglets WhatsApp/Telegram : statuts, programmation, pause/reprise/annulation, rapport CSV, protection + reprise automatique + continuité manuelle | `ai-engine/campaignService.js`, `lib/campaignStatus.js`, `queues/*`, `public/dashboard.html` (`cmpMount`) | À FAIRE | À FAIRE |
 | 6 | File de tâches + worker (lancement programmé) | `ai-engine/taskQueue*` | À FAIRE | À FAIRE |
-| 7 | Licences et IA sur Cloudflare (Worker + D1) à la place de Firebase : clients déjà basculés côté `local-client/lib` et mobile pour l'URL, à revérifier | `cloudflare/license-worker/`, `lib/cloudflareSync.js` | PARTIEL | PARTIEL |
+| 7 | Licences et IA sur Cloudflare (Worker + D1) à la place de Firebase : clients déjà basculés côté `local-client/lib` et mobile pour l'URL, à revérifier | `cloudflare/license-worker/`, `lib/cloudflareSync.js` | PARTIEL (licences ; IA texte = cascade directe, voir ligne "Livraison 2026-09-21" plus bas ; `aiGateway.js` image/vidéo encore sur Firebase, à migrer) | PARTIEL |
 | 8 | Clé créée dans le générateur Cloudflare reconnue tout de suite par le VPS (synchronisation immédiate) | `licenses.js` | À FAIRE (vérifier `local-client/lib/license.js`) | À FAIRE |
 | 9 | CORS : origine identique au Host acceptée (domaine DuckDNS) | `index.js` | Sans objet (pas de CORS local) | Sans objet |
 | 12 | Campagnes de groupes administrés (ciblage, scheduler, intérêt, preuve, objectif) | `ai-engine/groupCampaigns.js`, `groupCampaignParser.js`, `toolsExtra.js`, `chatOrchestrator.js`, `assistantLayer.js`, `index.js` | À FAIRE | À FAIRE |
@@ -32,6 +60,14 @@ Le PC et le téléphone gardent leur mode « zéro serveur » : le portage adapt
 ## Livraison VPS 2026-09-21 — Chat intelligent : gateway IA, sécurité, médias, conversation commerciale, limite par client
 À porter INTÉGRALEMENT vers `local-client/` (PC) et `mobile/webapp/` (téléphone) :
 - `lib/ai/llmFallbackEngine.js` + `lib/ai/aiErrors.js` (routage Gemma 4 31B → Gemma 4 26B → Flash → Groq → OpenRouter → HF…, capacités, retry ciblé, erreurs génériques) ; copies : `firebase-functions/index.js` (NE PAS toucher, projet partagé RIEA) et `cloudflare/license-worker/src/textCascade.js`.
+  **PC : FAIT le 2026-09-22.** Copie conforme + `lib/ai/marketingSkills.js` + `lib/ai/skills/*` (dépendances directes) +
+  `ai-engine/loopGuard.js`/`clientAiQuota.js`/`aiUsageLedger.js` (dépendances indirectes, self-containées via
+  `storageAdapter`, aucune adaptation nécessaire — API `get`/`set` déjà identique côté PC). Remplace l'ancien stub qui
+  routait tout vers `lib/aiGateway.js` (Firebase en priorité, VPS en repli) — la cascade appelle désormais les
+  fournisseurs DIRECTEMENT depuis le PC, comme le VPS, sans aucune dépendance externe. Vérifié en réel (test
+  fonctionnel `generateAIResponse` → repli Pollinations sans clé configurée, réponse reçue). `local-client/.env.example`
+  complété avec toutes les variables de la cascade. Téléphone : NON PORTÉ (voir la note d'architecture en tête de
+  fichier — nécessite une réécriture JS navigateur, pas une copie).
 - `ai-engine/authz.js`, `untrusted.js`, `toolRegistry.js` (deny-by-default, rôles, teinte), `chatOrchestrator.handle` (principal obligatoire).
 - `ai-engine/mediaPipeline.js`, `chatUploads.js` (extraction), `ownerChannel.js` (adaptateurs WhatsApp/Telegram, médias), `adapters/telegram.js` + `telegramManager.js` (self-chat « Messages sauvegardés »).
 - `ai-engine/clientAiQuota.js`, `clientLimitGuard.js`, `autoResponder.js`, `assistantLayer.js` (10 échanges IA/heure/client, groupes par membre, propriétaire illimité), `businessServices.getPrioritizedContext`, mémoire commerciale (`jarvis/conversationEngine.js`, `intentClassifier.js`).
