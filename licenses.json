@@ -73,7 +73,7 @@
     "key": "KEY-CF5EA846-2026",
     "createdAt": "2026-09-22T14:14:06.233Z",
     "expiresAt": "2026-09-22T14:14:04.563Z",
-    "active": true,
+    "active": false,
     "note": "Essaie 1",
     "allowedModules": [
       "whatsapp",
