@@ -946,6 +946,18 @@ function createSession(tenantId) {
     return { id: i.id, subject: i.subject || '', description: i.desc || '', size: i.size != null ? i.size : (i.participants || []).length, createdAt: i.creation || null };
   }
 
+  // Adhésion à un groupe via son code d'invitation — action EXPLICITE, jamais
+  // déclenchée automatiquement par la découverte de communautés (voir
+  // ai-engine/communityDiscovery.js) : chaque adhésion doit rester un clic
+  // volontaire du propriétaire, groupe par groupe, pour ne pas reproduire le
+  // pattern de connexions/actions en rafale qui a déjà provoqué des
+  // révocations WhatsApp (voir adapters/whatsappManager.js).
+  async function joinGroupByInvite(code) {
+    if (!sock) throw new Error('Adaptateur WhatsApp non initialisé.');
+    const groupId = await sock.groupAcceptInvite(String(code));
+    return { id: groupId };
+  }
+
   async function getGroupMetadata(groupId) {
     if (!sock) {
       throw new Error('Adaptateur WhatsApp non initialisé.');
@@ -1122,6 +1134,7 @@ function createSession(tenantId) {
     getGroupInviteLink,
     setGroupDescription,
     getInviteInfo,
+    joinGroupByInvite,
     onIncomingMessage,
     onOutgoingMessage,
     onHistoryMessage,

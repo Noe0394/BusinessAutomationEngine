@@ -271,9 +271,28 @@ async function listCommunities(tenantId, opts) {
   if (o.keyword) { const k = String(o.keyword).toLowerCase(); items = items.filter((c) => (c.keywords || []).includes(k) || String(c.name).toLowerCase().includes(k)); }
   return items.sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt)));
 }
+async function getCommunity(tenantId, channel, ref) {
+  const doc = await load(tenantId);
+  return (doc.communities || {})[contactKey(channel, ref)] || null;
+}
+// Adhésion WhatsApp EXPLICITE à un groupe déjà découvert (voir
+// adapters/whatsappEngineBaileys.js#joinGroupByInvite) : mémorise le JID réel
+// du groupe rejoint (distinct de `ref`, le code d'invitation) pour que
+// communityDiscovery#extractMembers sache ensuite quel groupe lire sans
+// dépendre d'un second appel de résolution.
+async function markCommunityJoined(tenantId, channel, ref, joinedGroupId) {
+  const doc = await load(tenantId);
+  const key = contactKey(channel, ref);
+  const community = doc.communities && doc.communities[key];
+  if (!community) return null;
+  community.joinedGroupId = String(joinedGroupId || '');
+  community.joinedAt = new Date().toISOString();
+  await save(tenantId, doc);
+  return community;
+}
 
 module.exports = {
-  upsertCommunity, listCommunities,
+  upsertCommunity, listCommunities, getCommunity, markCommunityJoined,
   getContact, updateContact, removeContact,
   markOptOut, clearOptOut, isOptedOut, optedOutSet, identityOf, TAG_OPTOUT,
   recordSeen, addTags, setStage, markPurchase, list, counts,

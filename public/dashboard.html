@@ -126,11 +126,11 @@
     .row { display: flex; gap: 1rem; flex-wrap: wrap; }
     .row .field { flex: 1; min-width: 200px; }
 
-    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone, #share-import-drop-zone, #share-custom-media-drop-zone, #fb-sched-media-drop-zone {
+    #drop-zone, #import-drop-zone, #tg-drop-zone, #tg-dm-drop-zone, #tg-dm-file-drop-zone, #wa-bc-drop-zone, #fb-import-drop-zone, #fb-groups-media-drop-zone, #fb-publish-media-drop-zone, #sched-contacts-drop-zone, #sched-media-drop-zone, #rule-media-drop-zone, #share-import-drop-zone, #share-custom-media-drop-zone, #fb-sched-media-drop-zone {
       border: 2px dashed #999; border-radius: 8px; padding: 1.5rem; text-align: center;
       color: #666; cursor: pointer; margin-bottom: 1rem;
     }
-    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover, #share-import-drop-zone.dragover, #share-custom-media-drop-zone.dragover, #fb-sched-media-drop-zone.dragover {
+    #drop-zone.dragover, #import-drop-zone.dragover, #tg-drop-zone.dragover, #tg-dm-drop-zone.dragover, #tg-dm-file-drop-zone.dragover, #wa-bc-drop-zone.dragover, #fb-import-drop-zone.dragover, #fb-groups-media-drop-zone.dragover, #fb-publish-media-drop-zone.dragover, #sched-contacts-drop-zone.dragover, #sched-media-drop-zone.dragover, #rule-media-drop-zone.dragover, #share-import-drop-zone.dragover, #share-custom-media-drop-zone.dragover, #fb-sched-media-drop-zone.dragover {
       background: #eef8f4; border-color: #075E54;
     }
 
@@ -618,6 +618,49 @@
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div class="subsection">
+        <h3>📣 Partager du contenu dans des groupes</h3>
+        <p class="empty">Poste UNE FOIS un message (texte et/ou image/vidéo/document) dans chaque groupe sélectionné — vu directement par tous ses membres, jamais un message privé à chacun d'eux (pour ça, voir "Groupes &amp; Contacts" ci-dessus). Inclut tout groupe où ce compte participe, y compris un groupe tout juste rejoint via "Communautés → Découvrir des communautés thématiques".</p>
+        <button type="button" id="wa-bc-load-btn">Lister mes groupes</button>
+        <input type="text" id="wa-bc-search" placeholder="Rechercher un groupe par nom..." />
+        <div class="group-actions">
+          <button type="button" id="wa-bc-select-all-btn">Tout sélectionner</button>
+          <button type="button" id="wa-bc-deselect-all-btn">Tout désélectionner</button>
+          <span id="wa-bc-selected-count">0 groupe(s) sélectionné(s)</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>Nom du groupe</th><th>Membres</th></tr></thead>
+            <tbody id="wa-bc-groups-body"><tr><td colspan="3" class="empty">Cliquez sur "Lister mes groupes".</td></tr></tbody>
+          </table>
+        </div>
+
+        <div class="warning-box" style="margin-top: 1.5rem;">
+          ⚠️ Respectez un délai d'au moins 10 à 15 secondes entre chaque groupe pour éviter les limitations anti-abus de WhatsApp, voire une restriction temporaire du compte.
+        </div>
+
+        <div class="field">
+          <label for="wa-bc-message">Message (texte)</label>
+          <textarea id="wa-bc-message" placeholder="Écrivez votre message ici... 😀"></textarea>
+        </div>
+        <div class="field">
+          <label>Pièce jointe (optionnel — image, vidéo ou document)</label>
+          <div id="wa-bc-drop-zone">Glissez-déposez un fichier ici, ou touchez pour parcourir</div>
+          <input type="file" id="wa-bc-file" accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx" hidden />
+          <p id="wa-bc-file-name" class="empty">Aucun fichier sélectionné.</p>
+        </div>
+
+        <div class="row">
+          <div class="field"><label for="wa-bc-batch-size">Nombre de groupes par lot</label><input type="number" id="wa-bc-batch-size" value="5" min="1" /></div>
+          <div class="field"><label for="wa-bc-delay-seconds">Délai entre chaque groupe (secondes)</label><input type="number" id="wa-bc-delay-seconds" value="15" min="1" /></div>
+          <div class="field"><label for="wa-bc-batch-pause-seconds">Pause après un lot (secondes)</label><input type="number" id="wa-bc-batch-pause-seconds" value="45" min="1" /></div>
+          <div class="field"><label for="wa-bc-dedupe-window-hours">Ignorer les doublons envoyés depuis (heures)</label><input type="number" id="wa-bc-dedupe-window-hours" value="48" min="1" max="720" /></div>
+        </div>
+
+        <button type="button" id="wa-bc-send-btn" class="send-button">🚀 Partager dans les groupes sélectionnés</button>
+        <p id="wa-bc-feedback" hidden></p>
       </div>
 
       <div class="subsection">
@@ -2271,10 +2314,11 @@
         <button type="button" id="cm-wa-search-btn">🔎 Rechercher</button>
         <button type="button" id="cm-wa-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
         <p id="cm-wa-search-feedback" hidden></p>
+        <p class="empty">Pour trouver des PERSONNES par thématique : WhatsApp n'a aucun annuaire public de personnes. Rejoignez un groupe ci-dessous (« Rejoindre ») puis « Extraire les membres » pour les ajouter au CRM comme prospects à valider — rien n'est envoyé automatiquement.</p>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th></tr></thead>
-            <tbody id="cm-wa-results"><tr><td colspan="5" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th><th>Actions</th></tr></thead>
+            <tbody id="cm-wa-results"><tr><td colspan="6" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -2356,10 +2400,27 @@
         <button type="button" id="cm-tg-search-btn">🔎 Rechercher</button>
         <button type="button" id="cm-tg-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
         <p id="cm-tg-search-feedback" hidden></p>
+        <p class="empty">Un groupe/canal public se lit sans y adhérer : « Extraire les membres » les ajoute directement au CRM comme prospects à valider — rien n'est envoyé automatiquement.</p>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th></tr></thead>
-            <tbody id="cm-tg-results"><tr><td colspan="5" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th><th>Actions</th></tr></thead>
+            <tbody id="cm-tg-results"><tr><td colspan="6" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top:1.5rem;">🔎 Rechercher des personnes par thématique</h3>
+        <p class="empty">Correspondance sur le NOM/PSEUDO public d'un compte (ex. « immobilier » trouve un compte nommé « ImmobilierParis ») — Telegram n'expose aucun centre d'intérêt réel sur un profil, ce n'est donc qu'une approximation. Non disponible sur WhatsApp, qui n'a aucun annuaire public de personnes.</p>
+        <div class="field">
+          <label for="cm-tg-people-kw">Mots-clés (séparés par des virgules)</label>
+          <input type="text" id="cm-tg-people-kw" placeholder="Ex. immobilier, formation" />
+        </div>
+        <button type="button" id="cm-tg-people-search-btn">🔎 Rechercher</button>
+        <button type="button" id="cm-tg-people-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
+        <p id="cm-tg-people-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Pseudo</th><th>Lien</th></tr></thead>
+            <tbody id="cm-tg-people-results"><tr><td colspan="3" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -3987,6 +4048,122 @@
         feedback.className = 'error';
         feedback.textContent = 'Erreur réseau lors de l\'export.';
       }
+    });
+
+    // ---------- WhatsApp : partage de contenu dans des groupes (texte/image/vidéo/document) ----------
+    // Distinct de "Groupes & Contacts" ci-dessus (qui extrait les membres pour un envoi individuel en privé) :
+    // ici, un message est posté UNE FOIS dans chaque groupe sélectionné, vu par tous ses membres. Réutilise le
+    // Gestionnaire Multi-Campagnes déjà présent dans cet onglet (voir startCampaignQueuePolling ci-dessous) pour
+    // le suivi/pause/reprise/arrêt — pas de mini-suivi dédié séparé, contrairement à l'ancien flux Telegram plus
+    // bas (celui-ci date d'avant le Gestionnaire Multi-Campagnes).
+    const waBcState = { groups: [], selectedIds: new Set() };
+    let selectedWaBcFile = null;
+
+    function waBcUpdateSelectedUI() {
+      document.getElementById('wa-bc-selected-count').textContent = waBcState.selectedIds.size + ' groupe(s) sélectionné(s)';
+    }
+    function waBcCurrentFiltered() {
+      const q = document.getElementById('wa-bc-search').value.trim().toLowerCase();
+      return q ? waBcState.groups.filter((g) => (g.subject || '').toLowerCase().includes(q)) : waBcState.groups;
+    }
+    function waBcRenderTable(groups) {
+      const tbody = document.getElementById('wa-bc-groups-body');
+      tbody.innerHTML = '';
+      if (groups.length === 0) { tbody.innerHTML = '<tr><td colspan="3" class="empty">Aucun groupe trouvé.</td></tr>'; return; }
+      groups.forEach((g) => {
+        const tr = document.createElement('tr');
+        const checkTd = document.createElement('td');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = waBcState.selectedIds.has(g.id);
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) waBcState.selectedIds.add(g.id);
+          else waBcState.selectedIds.delete(g.id);
+          waBcUpdateSelectedUI();
+        });
+        checkTd.appendChild(checkbox);
+        const nameTd = document.createElement('td'); nameTd.textContent = g.subject || '(sans nom)';
+        const countTd = document.createElement('td'); countTd.textContent = Array.isArray(g.participants) ? g.participants.length : '-';
+        tr.appendChild(checkTd); tr.appendChild(nameTd); tr.appendChild(countTd);
+        tbody.appendChild(tr);
+      });
+    }
+    async function waBcLoadGroups() {
+      const tbody = document.getElementById('wa-bc-groups-body');
+      tbody.innerHTML = '<tr><td colspan="3" class="empty">Chargement...</td></tr>';
+      try {
+        const res = await apiFetch('/api/groups');
+        const data = await res.json();
+        if (!res.ok) { tbody.innerHTML = '<tr><td colspan="3" class="empty">' + (data.error || 'Erreur lors du chargement.') + '</td></tr>'; return; }
+        waBcState.groups = Array.isArray(data) ? data : [];
+        waBcRenderTable(waBcCurrentFiltered());
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">Erreur réseau lors du chargement.</td></tr>';
+      }
+    }
+    document.getElementById('wa-bc-load-btn').addEventListener('click', waBcLoadGroups);
+    document.getElementById('wa-bc-search').addEventListener('input', () => waBcRenderTable(waBcCurrentFiltered()));
+    document.getElementById('wa-bc-select-all-btn').addEventListener('click', () => {
+      waBcCurrentFiltered().forEach((g) => waBcState.selectedIds.add(g.id));
+      waBcRenderTable(waBcCurrentFiltered()); waBcUpdateSelectedUI();
+    });
+    document.getElementById('wa-bc-deselect-all-btn').addEventListener('click', () => {
+      waBcCurrentFiltered().forEach((g) => waBcState.selectedIds.delete(g.id));
+      waBcRenderTable(waBcCurrentFiltered()); waBcUpdateSelectedUI();
+    });
+
+    const waBcDropZone = document.getElementById('wa-bc-drop-zone');
+    const waBcFileInput = document.getElementById('wa-bc-file');
+    waBcDropZone.addEventListener('click', () => waBcFileInput.click());
+    waBcDropZone.addEventListener('dragover', (e) => { e.preventDefault(); waBcDropZone.classList.add('dragover'); });
+    waBcDropZone.addEventListener('dragleave', () => waBcDropZone.classList.remove('dragover'));
+    waBcDropZone.addEventListener('drop', (e) => {
+      e.preventDefault(); waBcDropZone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) waBcSetSelectedFile(e.dataTransfer.files[0]);
+    });
+    waBcFileInput.addEventListener('change', () => { if (waBcFileInput.files && waBcFileInput.files[0]) waBcSetSelectedFile(waBcFileInput.files[0]); });
+    function waBcSetSelectedFile(file) { selectedWaBcFile = file; document.getElementById('wa-bc-file-name').textContent = 'Fichier sélectionné : ' + file.name; }
+
+    function waBcShowFeedback(message, isError) {
+      const el = document.getElementById('wa-bc-feedback');
+      el.hidden = false; el.textContent = message; el.className = isError ? 'error' : 'ok';
+    }
+
+    document.getElementById('wa-bc-send-btn').addEventListener('click', async () => {
+      const message = document.getElementById('wa-bc-message').value.trim();
+      if (waBcState.selectedIds.size === 0) return waBcShowFeedback('Sélectionnez au moins un groupe ci-dessus.', true);
+      if (!message && !selectedWaBcFile) return waBcShowFeedback('Ajoutez un texte et/ou une pièce jointe.', true);
+
+      const sequence = [];
+      if (selectedWaBcFile) sequence.push({ type: 'media' });
+      if (message) sequence.push({ type: 'text', text: message });
+
+      const fd = new FormData();
+      fd.append('groupIds', JSON.stringify(Array.from(waBcState.selectedIds)));
+      fd.append('sequence', JSON.stringify(sequence));
+      if (selectedWaBcFile) fd.append('media', selectedWaBcFile);
+      fd.append('batchSize', document.getElementById('wa-bc-batch-size').value);
+      fd.append('delaySeconds', document.getElementById('wa-bc-delay-seconds').value);
+      fd.append('batchPauseSeconds', document.getElementById('wa-bc-batch-pause-seconds').value);
+      fd.append('duplicateWindowHours', document.getElementById('wa-bc-dedupe-window-hours').value);
+
+      const sendBtn = document.getElementById('wa-bc-send-btn');
+      sendBtn.disabled = true;
+      try {
+        const res = await apiFetch('/api/groups/broadcast', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) { waBcShowFeedback(data.error || 'Échec du lancement.', true); }
+        else {
+          waBcShowFeedback(
+            data.status === 'campaign_queued'
+              ? '⚪ Diffusion "' + data.name + '" ajoutée EN ATTENTE (' + data.total + ' groupe(s)) — une autre campagne WhatsApp est déjà en cours. Lancez-la depuis le Gestionnaire Multi-Campagnes ci-dessous.'
+              : '🚀 Diffusion lancée sur ' + data.total + ' groupe(s), délai ' + data.delaySeconds + 's — suivez la progression dans le Gestionnaire Multi-Campagnes ci-dessous.',
+            false,
+          );
+          pollCampaignQueue();
+        }
+      } catch (err) { waBcShowFeedback('Erreur de communication avec le serveur.', true); }
+      sendBtn.disabled = false;
     });
 
     // ---------- WhatsApp : Import Excel / CSV ----------
@@ -10878,9 +11055,26 @@
           } catch (e) { if (e.message !== 'unauthorized') say($('mine-feedback'), 'Erreur de communication avec le serveur.', false); }
           $('mine-search-btn').disabled = false;
         });
+        // Adhésion (WhatsApp uniquement) puis extraction de membres : chaque action est un clic volontaire, groupe par groupe —
+        // jamais en masse ni automatique (voir joinGroupByInvite côté serveur). La communauté doit être en base CRM avant ces
+        // deux actions (extractMembers/joinCommunity la cherchent par ref) : on la synchronise donc seule au premier clic.
+        function ensureSynced(c) {
+          return apiFetch('/api/communities/sync', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel, communities: [c] }) });
+        }
+        async function extractMembers(c, btn, feedbackEl) {
+          btn.disabled = true; say(feedbackEl, 'Extraction des membres en cours…');
+          try {
+            await ensureSynced(c);
+            var res = await apiFetch('/api/communities/extract-members', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel, ref: c.ref }) });
+            var data = await res.json();
+            if (!res.ok || !data.ok) { say(feedbackEl, (data && data.error) || 'Extraction impossible.', false); btn.disabled = false; return; }
+            say(feedbackEl, data.found + ' membre(s) trouvé(s), ' + data.synced + ' ajouté(s) au CRM comme prospects (étiquette "decouverte").', true);
+            btn.textContent = '✅ Extrait';
+          } catch (e) { say(feedbackEl, 'Erreur de communication avec le serveur.', false); btn.disabled = false; }
+        }
         function renderResults(list) {
           var body = $('results'); body.textContent = '';
-          if (!list.length) { var tr0 = document.createElement('tr'); var td0 = document.createElement('td'); td0.colSpan = 5; td0.className = 'empty'; td0.textContent = 'Aucune communauté trouvée pour ces mots-clés.'; tr0.appendChild(td0); body.appendChild(tr0); return; }
+          if (!list.length) { var tr0 = document.createElement('tr'); var td0 = document.createElement('td'); td0.colSpan = 6; td0.className = 'empty'; td0.textContent = 'Aucune communauté trouvée pour ces mots-clés.'; tr0.appendChild(td0); body.appendChild(tr0); return; }
           list.forEach(function (c) {
             var tr = document.createElement('tr');
             [c.name || '-', c.kind === 'channel' ? 'Canal' : 'Groupe', c.members != null ? String(c.members) : '-'].forEach(function (v) { var td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
@@ -10888,6 +11082,27 @@
             if (c.link && /^https:\/\/(t\.me|chat\.whatsapp\.com)\//.test(c.link)) { var a = document.createElement('a'); a.href = c.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = c.link.replace('https://', ''); tdl.appendChild(a); } else tdl.textContent = '-';
             tr.appendChild(tdl);
             var tds = document.createElement('td'); tds.textContent = c.verified ? '✅ vérifié' : '⚠️ non vérifié'; tr.appendChild(tds);
+            var tda = document.createElement('td'); tda.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+            var rowFeedback = document.createElement('span'); rowFeedback.hidden = true; rowFeedback.style.cssText = 'font-size:.8rem;flex-basis:100%;';
+            var extractBtn = document.createElement('button'); extractBtn.type = 'button'; extractBtn.textContent = '👥 Extraire les membres';
+            extractBtn.addEventListener('click', function () { extractMembers(c, extractBtn, rowFeedback); });
+            if (channel === 'WHATSAPP') {
+              var joinBtn = document.createElement('button'); joinBtn.type = 'button'; joinBtn.textContent = '➕ Rejoindre';
+              extractBtn.disabled = true; extractBtn.title = 'Rejoignez d\'abord ce groupe (WhatsApp ne permet pas de lire les membres sans en être membre).';
+              joinBtn.addEventListener('click', async function () {
+                joinBtn.disabled = true; say(rowFeedback, 'Adhésion en cours…');
+                try {
+                  await ensureSynced(c);
+                  var res = await apiFetch('/api/communities/join', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: channel, ref: c.ref }) });
+                  var data = await res.json();
+                  if (!res.ok || !data.ok) { say(rowFeedback, (data && data.error) || 'Adhésion impossible.', false); joinBtn.disabled = false; return; }
+                  say(rowFeedback, 'Groupe rejoint.', true); joinBtn.textContent = '✅ Rejoint'; extractBtn.disabled = false; extractBtn.title = '';
+                } catch (e) { say(rowFeedback, 'Erreur de communication avec le serveur.', false); joinBtn.disabled = false; }
+              });
+              tda.appendChild(joinBtn);
+            }
+            tda.appendChild(extractBtn); tda.appendChild(rowFeedback);
+            tr.appendChild(tda);
             body.appendChild(tr);
           });
         }
@@ -10912,6 +11127,47 @@
         });
       }
       setup('wa', 'WHATSAPP'); setup('tg', 'TELEGRAM');
+
+      // Recherche de PERSONNES par thématique (Telegram uniquement — voir la note affichée dans la section : WhatsApp n'a aucun
+      // annuaire public de personnes). Bloc autonome, hors du setup(p, channel) générique ci-dessus car spécifique à un seul canal.
+      (function initPeopleSearch() {
+        var $ = function (s) { return document.getElementById('cm-tg-people-' + s); };
+        if (!$('search-btn')) return;
+        var lastResults = [];
+        function say(el, msg, ok) { el.hidden = false; el.textContent = msg; el.className = ok === false ? 'error' : (ok ? 'ok' : 'empty'); }
+        function renderResults(list) {
+          var body = $('results'); body.textContent = '';
+          if (!list.length) { var tr0 = document.createElement('tr'); var td0 = document.createElement('td'); td0.colSpan = 3; td0.className = 'empty'; td0.textContent = 'Aucune personne trouvée pour ces mots-clés.'; tr0.appendChild(td0); body.appendChild(tr0); return; }
+          list.forEach(function (u) {
+            var tr = document.createElement('tr');
+            var tdn = document.createElement('td'); tdn.textContent = u.name || '-'; tr.appendChild(tdn);
+            var tdu = document.createElement('td'); tdu.textContent = u.username ? ('@' + u.username) : '-'; tr.appendChild(tdu);
+            var tdl = document.createElement('td');
+            if (u.link) { var a = document.createElement('a'); a.href = u.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = u.link.replace('https://', ''); tdl.appendChild(a); } else tdl.textContent = '-';
+            tr.appendChild(tdl);
+            body.appendChild(tr);
+          });
+        }
+        $('search-btn').addEventListener('click', async function () {
+          var kw = $('kw').value.trim();
+          if (kw.length < 2) return say($('feedback'), 'Indiquez au moins un mot-clé.', false);
+          $('search-btn').disabled = true; say($('feedback'), 'Recherche en cours…');
+          try {
+            var res = await apiFetch('/api/communities/discover-people', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'TELEGRAM', keywords: kw }) });
+            var data = await res.json();
+            if (!res.ok || !data.ok) { say($('feedback'), (data && data.error) || 'Recherche impossible.', false); }
+            else { lastResults = data.results || []; renderResults(lastResults); say($('feedback'), lastResults.length + ' personne(s) trouvée(s) (correspondance sur nom/pseudo, pas un vrai ciblage par intérêt).', true); $('sync-btn').hidden = !lastResults.length; }
+          } catch (e) { if (e.message !== 'unauthorized') say($('feedback'), 'Erreur de communication avec le serveur.', false); }
+          $('search-btn').disabled = false;
+        });
+        $('sync-btn').addEventListener('click', async function () {
+          try {
+            var res = await apiFetch('/api/communities/discover-people', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ channel: 'TELEGRAM', keywords: $('kw').value.trim(), sync: true }) });
+            var data = await res.json();
+            say($('feedback'), data && data.ok ? (data.synced + ' personne(s) synchronisée(s) dans le CRM comme prospects à valider (étiquette "decouverte").') : ((data && data.error) || 'Synchronisation impossible.'), !!(data && data.ok));
+          } catch (e) { /* géré */ }
+        });
+      })();
     })();
   </script>
   <!-- Interface v2 : thème sombre + aide en infobulles + animations Motion (chargés en dernier pour l'ordre de la cascade). -->

@@ -10,6 +10,7 @@
 // Aucun envoi, aucune adhésion automatique : ce module ne fait que LISTER et enregistrer.
 const axios = require('axios');
 const contactCrm = require('./contactCrm');
+const { jidToE164 } = require('../lib/whatsappRecipients');
 
 const MAX_KEYWORDS = 5;
 const cleanKeywords = (k) => [...new Set((Array.isArray(k) ? k : String(k || '').split(/[,;\n]/)).map((s) => String(s).trim().toLowerCase().replace(/[\u0000-\u001f]/g, ' ')).filter((s) => s.length >= 2 && s.length <= 60))].slice(0, MAX_KEYWORDS);
@@ -97,4 +98,135 @@ async function syncToCrm(tenant, communities) {
   return { count: created + updated, created, updated };
 }
 
-module.exports = { discover, syncToCrm, extractInviteCodes, cleanKeywords, webDirectorySearch, _setSleep: (fn) => { sleepFn = fn; } };
+// ---------------------------------------------------------------------------
+// RECHERCHE DE PERSONNES PAR THÉMATIQUE — Telegram uniquement : contrairement
+// aux groupes/canaux (titre + description en clair, donc réellement liés à un
+// thème), un profil personne n'expose que son nom/pseudo — Telegram et
+// WhatsApp n'exposent aucun "centre d'intérêt" public. Une recherche par
+// mot-clé sur des PERSONNES reste donc une correspondance de TEXTE sur le
+// nom/pseudo (ex: chercher "immobilier" trouve un compte nommé
+// "ImmobilierParis"), jamais un vrai ciblage par intérêt réel de la personne —
+// annoncé explicitement à l'appelant via `approximate: true` plutôt que
+// présenté comme une correspondance thématique fiable.
+// WhatsApp n'a par ailleurs AUCUN annuaire public de personnes (contrairement
+// aux groupes, dont les liens d'invitation finissent indexés sur le web) :
+// aucune recherche de personnes n'y est possible par des moyens légitimes.
+async function searchPeopleTelegram(tenant, keywords, limit) {
+  const session = require('../adapters/telegramManager').getOrCreate(tenant).session;
+  if (!session || typeof session.isConnected !== 'function' || !session.isConnected()) { const e = new Error('Telegram n\'est pas connecté.'); e.code = 'TELEGRAM_NOT_CONNECTED'; throw e; }
+  const out = [];
+  for (const kw of keywords) {
+    let found = [];
+    try { found = await session.searchPublicPeople(kw, limit); } catch (err) { if (/FLOOD/i.test(String(err && (err.errorMessage || err.message)))) break; continue; }
+    for (const u of found) out.push({ channel: 'TELEGRAM', ref: u.id, name: u.name, username: u.username, link: `https://t.me/${u.username}`, keyword: kw });
+    await sleepFn(800);
+  }
+  return out;
+}
+
+// input : { channel, keywords, limit?, sync? } -> { channel, keywords, results:[...], approximate, synced }
+async function discoverPeople(tenant, input) {
+  const channel = String(input.channel || 'TELEGRAM').toUpperCase();
+  if (channel === 'WHATSAPP') { const e = new Error('WhatsApp ne fournit aucun annuaire public de personnes : aucune recherche de personnes n\'y est possible.'); e.code = 'NO_PUBLIC_PEOPLE_DIRECTORY'; throw e; }
+  if (channel !== 'TELEGRAM') { const e = new Error('Canal inconnu (TELEGRAM uniquement pour la recherche de personnes).'); e.code = 'INVALID_CHANNEL'; throw e; }
+  const keywords = cleanKeywords(input.keywords);
+  if (!keywords.length) { const e = new Error('Indiquez au moins un mot-clé (2 caractères minimum).'); e.code = 'KEYWORDS_REQUIRED'; throw e; }
+  const limit = Math.min(30, Math.max(1, Number(input.limit) || 15));
+  const raw = await searchPeopleTelegram(tenant, keywords, limit);
+  const byRef = new Map();
+  for (const r of raw) { const k = `${r.channel}:${r.ref}`; const prev = byRef.get(k); if (prev) prev.keywords = [...new Set(prev.keywords.concat(r.keyword))]; else byRef.set(k, Object.assign({}, r, { keywords: [r.keyword] })); }
+  const results = [...byRef.values()].map(({ keyword, ...rest }) => rest);
+  const out = { channel, keywords, results, approximate: true, synced: 0 };
+  if (input.sync) out.synced = (await syncPeopleToCrm(tenant, results)).count;
+  return out;
+}
+
+// Synchronise des PERSONNES découvertes (recherche directe ou extraction de
+// membres, voir extractMembers ci-dessous) vers le CRM comme PROSPECTS à
+// valider — jamais contactées automatiquement (voir
+// ai-engine/contactCrm.js#recordSeen, qui étiquette tout nouveau contact
+// `prospect`, et ai-engine/clientLimitGuard.js/campaignEngine.js, qui restent
+// les SEULS chemins d'envoi réel, jamais déclenchés ici). Le(s) mot-clé(s) de
+// découverte sont ajoutés comme étiquettes pour retrouver ce lot plus tard.
+async function syncPeopleToCrm(tenant, people) {
+  let created = 0; let updated = 0;
+  for (const p of people || []) {
+    if (!p || !p.ref || !p.channel) continue;
+    const { isNew } = await contactCrm.recordSeen(tenant, { channel: p.channel, from: p.ref, name: p.name });
+    await contactCrm.addTags(tenant, p.channel, p.ref, ['decouverte'].concat(p.keywords || []));
+    if (isNew) created += 1; else updated += 1;
+  }
+  return { count: created + updated, created, updated };
+}
+
+// ---------------------------------------------------------------------------
+// EXTRACTION DE MEMBRES D'UNE COMMUNAUTÉ DÉCOUVERTE — deuxième voie
+// (indirecte) pour trouver des personnes par thème : une fois un groupe
+// public lié à un thème découvert (voir discover), on en extrait les membres
+// comme « personnes intéressées par ce thème ».
+//   • Telegram : lit le groupe public directement — AUCUNE adhésion requise
+//     (voir adapters/telegram.js#getGroupMembers, qui résout désormais un
+//     @username public sans avoir besoin d'un id numérique déjà connu).
+//   • WhatsApp : Baileys ne peut lire les participants que des groupes dont ce
+//     compte est RÉELLEMENT membre (aucune API de prévisualisation) — voir
+//     joinCommunity ci-dessous, une adhésion EXPLICITE et VOLONTAIRE, jamais
+//     déclenchée automatiquement par cette fonction.
+async function extractMembersTelegram(tenant, community) {
+  const session = require('../adapters/telegramManager').getOrCreate(tenant).session;
+  if (!session || typeof session.isConnected !== 'function' || !session.isConnected()) { const e = new Error('Telegram n\'est pas connecté.'); e.code = 'TELEGRAM_NOT_CONNECTED'; throw e; }
+  const members = await session.getGroupMembers(community.ref, { limit: 200 });
+  return members.map((m) => ({ channel: 'TELEGRAM', ref: m.id, name: m.name }));
+}
+
+async function extractMembersWhatsApp(tenant, community) {
+  if (!community.joinedGroupId) { const e = new Error('Ce groupe WhatsApp n\'a pas encore été rejoint — utilisez joinCommunity avant d\'extraire ses membres.'); e.code = 'NOT_JOINED'; throw e; }
+  const session = require('../adapters/whatsappManager').getOrCreate(tenant).session;
+  const participants = await session.getGroupParticipants(community.joinedGroupId);
+  const out = [];
+  for (const p of (participants || [])) {
+    // Même règle que /api/groups/export-members (index.js) : .jid porte le
+    // vrai numéro, .id peut être un @lid (identité anonyme) sans rapport avec
+    // le numéro réel — un membre indérivable est omis plutôt que d'y laisser
+    // un numéro faux.
+    const phoneJid = p.jid && !p.jid.endsWith('@lid') ? p.jid : (p.id && !p.id.endsWith('@lid') ? p.id : null);
+    const e164 = phoneJid ? jidToE164(phoneJid) : '';
+    if (!phoneJid || !e164) continue;
+    out.push({ channel: 'WHATSAPP', ref: phoneJid, name: (typeof session.getContactName === 'function' && session.getContactName(phoneJid)) || '' });
+  }
+  return out;
+}
+
+// input : { channel, ref } -> { channel, ref, found, synced }
+async function extractMembers(tenant, input) {
+  const channel = String((input && input.channel) || '').toUpperCase();
+  const ref = input && input.ref;
+  if (!ref) { const e = new Error('Indiquez la communauté (ref) dont extraire les membres.'); e.code = 'REF_REQUIRED'; throw e; }
+  const community = await contactCrm.getCommunity(tenant, channel, ref);
+  if (!community) { const e = new Error('Communauté inconnue — lancez d\'abord une découverte (discover) puis synchronisez-la.'); e.code = 'COMMUNITY_NOT_FOUND'; throw e; }
+  const people = channel === 'TELEGRAM' ? await extractMembersTelegram(tenant, community) : await extractMembersWhatsApp(tenant, community);
+  const withKeywords = people.map((p) => Object.assign({ keywords: community.keywords }, p));
+  const { count } = await syncPeopleToCrm(tenant, withKeywords);
+  return { channel, ref, found: people.length, synced: count };
+}
+
+// Adhésion WhatsApp EXPLICITE à un groupe déjà découvert — un clic = un
+// groupe, jamais en masse (voir la justification complète dans
+// adapters/whatsappEngineBaileys.js#joinGroupByInvite : imiter une adhésion
+// en rafale a déjà provoqué des révocations WhatsApp par le passé).
+async function joinCommunity(tenant, input) {
+  const channel = String((input && input.channel) || '').toUpperCase();
+  const ref = input && input.ref;
+  if (channel !== 'WHATSAPP') { const e = new Error('L\'adhésion explicite n\'est utile que pour WhatsApp (Telegram se lit sans adhésion).'); e.code = 'INVALID_CHANNEL'; throw e; }
+  if (!ref) { const e = new Error('Indiquez la communauté (ref) à rejoindre.'); e.code = 'REF_REQUIRED'; throw e; }
+  const community = await contactCrm.getCommunity(tenant, channel, ref);
+  if (!community) { const e = new Error('Communauté inconnue — lancez d\'abord une découverte (discover) puis synchronisez-la.'); e.code = 'COMMUNITY_NOT_FOUND'; throw e; }
+  const session = require('../adapters/whatsappManager').getOrCreate(tenant).session;
+  const { id } = await session.joinGroupByInvite(ref);
+  return contactCrm.markCommunityJoined(tenant, channel, ref, id);
+}
+
+module.exports = {
+  discover, syncToCrm, extractInviteCodes, cleanKeywords, webDirectorySearch,
+  discoverPeople, extractMembers, joinCommunity, syncPeopleToCrm,
+  _setSleep: (fn) => { sleepFn = fn; },
+};

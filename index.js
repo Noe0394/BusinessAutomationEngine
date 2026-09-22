@@ -1554,6 +1554,87 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
   });
 });
 
+// Partage de contenu DANS des groupes WhatsApp (un message posté UNE FOIS
+// par groupe, vu par tous ses membres) — distinct de /api/messages/queue en
+// mode groupes ci-dessus, qui EXTRAIT les membres pour leur écrire à chacun
+// en privé (deux besoins différents, jamais mélangés). Réutilise le MÊME
+// moteur de campagne (CampaignEngine#start avec recipientType:'groups', voir
+// queues/campaignEngine.js) : séquence texte/média, pacing, pause/reprise et
+// Gestionnaire Multi-Campagnes déjà éprouvés — seul le registre de refus
+// (propre aux personnes) est ignoré pour ce type de destinataire. Cible tout
+// groupe où le compte participe (admin ou simple membre — y compris un
+// groupe tout juste rejoint via la découverte thématique, voir
+// ai-engine/communityDiscovery.js#joinCommunity), pas seulement les groupes
+// administrés (contrairement à ai-engine/groupCampaigns.js, qui reste le
+// moteur à privilégier pour une VRAIE campagne commerciale avec suivi de
+// paiement).
+app.post('/api/groups/broadcast', requireAccess, requireModule('whatsapp'), attachWhatsapp, whatsappMediaUpload.array('media', 10), async (req, res) => {
+  const { delaySeconds, batchSize, batchPauseSeconds, sequenceDelayMin, sequenceDelayMax, duplicateWindowHours } = req.body;
+  let { groupIds, sequence } = req.body;
+
+  if (typeof groupIds === 'string') {
+    try { groupIds = JSON.parse(groupIds); } catch (err) { groupIds = groupIds.split(',').map((n) => n.trim()).filter(Boolean); }
+  }
+  if (!Array.isArray(groupIds) || groupIds.length === 0) {
+    return res.status(400).json({ error: 'Fournissez "groupIds" (tableau des groupes ciblés).' });
+  }
+
+  if (typeof sequence === 'string') {
+    try { sequence = JSON.parse(sequence); } catch (err) { sequence = null; }
+  }
+  const files = req.files || [];
+  let resolvedSequence = [];
+  if (Array.isArray(sequence) && sequence.length > 0) {
+    let fileIdx = 0;
+    for (const step of sequence) {
+      if (step && step.type === 'media') {
+        const file = files[fileIdx]; fileIdx += 1;
+        if (!file) return res.status(400).json({ error: 'Le nombre de fichiers envoyés ne correspond pas au nombre d\'étapes média de la séquence.' });
+        resolvedSequence.push(await buildWhatsappMediaStep(file));
+      } else {
+        resolvedSequence.push({ type: 'text', text: String((step && step.text) || '') });
+      }
+    }
+    if (fileIdx !== files.length) return res.status(400).json({ error: 'Le nombre de fichiers envoyés ne correspond pas au nombre d\'étapes média de la séquence.' });
+  } else {
+    if (req.body.message) resolvedSequence.push({ type: 'text', text: req.body.message });
+    for (const file of files) resolvedSequence.push(await buildWhatsappMediaStep(file));
+  }
+  if (resolvedSequence.length === 0) {
+    return res.status(400).json({ error: 'Fournissez au moins un message texte ou un média dans la séquence.' });
+  }
+
+  const fixedDelaySeconds = delaySeconds !== undefined && delaySeconds !== '' ? parseFloat(delaySeconds) : undefined;
+  const parsedBatchSize = batchSize !== undefined && batchSize !== '' ? parseInt(batchSize, 10) : undefined;
+  const parsedBatchPauseSeconds = batchPauseSeconds !== undefined && batchPauseSeconds !== '' ? parseFloat(batchPauseSeconds) : undefined;
+  const seqDelayMinMs = Math.max(1, parseFloat(sequenceDelayMin) || 2) * 1000;
+  const seqDelayMaxMs = Math.max(seqDelayMinMs, (parseFloat(sequenceDelayMax) || 5) * 1000);
+
+  const campaign = await req.campaignEngine.start(groupIds, {
+    name: req.body.name,
+    recipientType: 'groups',
+    delaySeconds: fixedDelaySeconds,
+    batchSize: parsedBatchSize,
+    batchPauseSeconds: parsedBatchPauseSeconds,
+    sequence: resolvedSequence,
+    sequenceDelayMinMs: seqDelayMinMs,
+    sequenceDelayMaxMs: seqDelayMaxMs,
+    duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
+    enqueueIfBusy: true,
+  });
+
+  res.status(202).json({
+    status: campaign.status === 'queued' ? 'campaign_queued' : 'campaign_started',
+    id: campaign.id,
+    name: campaign.name,
+    total: campaign.total,
+    delaySeconds: fixedDelaySeconds || 15,
+    batchSize: parsedBatchSize || groupIds.length,
+    batchPauseSeconds: parsedBatchPauseSeconds || (fixedDelaySeconds || 15) * 3,
+    steps: resolvedSequence.length,
+  });
+});
+
 // Pause manuelle (bouton "Mettre en Pause") : ne finalise rien, la
 // progression et la liste des destinataires restants sont conservées pour
 // une reprise via /api/messages/resume — voir CampaignEngine#pause.
@@ -5842,6 +5923,14 @@ try {
   }));
   app.get('/api/communities/directory', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, communities: await contactCrm.listCommunities(tenant, { channel: req.query.channel, keyword: req.query.keyword }) })));
   app.post('/api/communities/sync', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.syncToCrm(tenant, Array.isArray(req.body && req.body.communities) ? req.body.communities.slice(0, 100) : [])) })));
+  // Recherche de PERSONNES publiques par thématique — Telegram uniquement (voir communityDiscovery#discoverPeople : WhatsApp n'a aucun
+  // annuaire public de personnes). Résultat marqué `approximate: true` : correspondance sur nom/pseudo, pas un vrai ciblage par intérêt.
+  app.post('/api/communities/discover-people', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discoverPeople(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true })) })));
+  // Adhésion WhatsApp EXPLICITE à un groupe déjà découvert — un clic = un groupe, jamais en masse (voir joinGroupByInvite).
+  app.post('/api/communities/join', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, community: await communityDiscovery.joinCommunity(tenant, { channel: cmChannel(req), ref: req.body && req.body.ref }) })));
+  // Extrait les membres d'une communauté déjà découverte (et, pour WhatsApp, déjà rejointe via /join ci-dessus) comme PROSPECTS à valider —
+  // jamais contactés automatiquement (voir communityDiscovery#syncPeopleToCrm).
+  app.post('/api/communities/extract-members', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.extractMembers(tenant, { channel: cmChannel(req), ref: req.body && req.body.ref })) })));
 }
 
 app.use((err, req, res, next) => {

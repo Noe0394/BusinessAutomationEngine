@@ -539,7 +539,7 @@ class CampaignEngine {
   // envoie réellement en ce moment).
   _publicStatus(campaign) {
     const {
-      id, name, total, sent, success, failed, skippedDuplicates, duplicateWindowHours,
+      id, name, recipientType, total, sent, success, failed, skippedDuplicates, duplicateWindowHours,
       status, paused, userPaused, stopRequested, createdAt, startedAt, finishedAt, results,
       resumeError, cancelReason, lastProcessedIndex, sentContactIds, pendingContactIds,
     } = campaign;
@@ -547,6 +547,7 @@ class CampaignEngine {
     const base = {
       id,
       name,
+      recipientType: recipientType || 'contacts',
       total,
       sent,
       success,
@@ -749,8 +750,10 @@ class CampaignEngine {
         continue;
       }
 
-      // Registre de refus (Jarvis) : un contact qui a dit non / stop n'est plus sollicité.
-      if (await isOptedOutRecipient(this.tenantId, 'WHATSAPP', normalizeRecipientEntry(recipients[i], this.session.getContactName).to)) {
+      // Registre de refus (Jarvis) : un contact qui a dit non / stop n'est plus sollicité — non applicable à une
+      // campagne de GROUPES (voir recipientType ci-dessous, même règle que queues/telegramCampaignEngine.js) :
+      // ce registre suit des PERSONNES, jamais des groupes.
+      if (campaign.recipientType !== 'groups' && await isOptedOutRecipient(this.tenantId, 'WHATSAPP', normalizeRecipientEntry(recipients[i], this.session.getContactName).to)) {
         campaign.results[i].status = 'skipped_optout';
         campaign.results[i].timestamp = new Date().toISOString();
         campaign.sent += 1;
@@ -882,6 +885,12 @@ class CampaignEngine {
     const id = crypto.randomUUID();
     const name = (options.name && String(options.name).trim()) || `Campagne du ${new Date().toLocaleString('fr-FR')}`;
     const willRunImmediately = !busy;
+    // 'groups' : `recipients` sont des JID de GROUPES WhatsApp (ex: "123@g.us"), pas des personnes — un message posté
+    // UNE FOIS dans le groupe, vu par tous ses membres, jamais un envoi individuel à chacun d'eux (voir
+    // ai-engine/communityDiscovery.js pour la découverte/adhésion, distinct de ce moteur d'envoi). Même patron que
+    // queues/telegramCampaignEngine.js#recipientType : le reste du moteur (séquence, pacing, pause/reprise, anti-
+    // doublons) est déjà générique sur `to`, seul le registre de refus (ci-dessus) est explicitement contourné.
+    const recipientType = options.recipientType === 'groups' ? 'groups' : 'contacts';
 
     const persistableSequence = await persistSequenceMedia(this.tenantId, id, options.sequence || []);
     this.resolvedSequences.set(id, await resolveSequenceMedia(persistableSequence));
@@ -900,6 +909,7 @@ class CampaignEngine {
     const campaign = {
       id,
       name,
+      recipientType,
       total: recipients.length,
       sent: 0,
       success: 0,

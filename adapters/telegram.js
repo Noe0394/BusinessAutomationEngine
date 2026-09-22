@@ -691,10 +691,21 @@ function createSession(tenantId) {
     if (!connected) return [];
     try {
       const limit = Number((opts && opts.limit) || 200) || 200;
-      const numId = Number(String(groupId).trim());
-      if (!numId) return [];
+      const raw = String(groupId).trim();
+      const numId = Number(raw);
+      // Un groupe/canal PUBLIC découvert via searchPublicCommunities (voir
+      // ai-engine/communityDiscovery.js) n'est identifié que par son
+      // @username, jamais son id numérique interne — on le résout donc
+      // directement par ce username plutôt que de rejeter l'appel comme
+      // avant (limité aux groupes déjà connus par id numérique).
       let entity = null;
-      try { entity = await client.getEntity(numId); } catch (e) { entity = numId; }
+      if (numId) {
+        try { entity = await client.getEntity(numId); } catch (e) { entity = numId; }
+      } else {
+        const username = raw.replace(/^@/, '');
+        if (!username) return [];
+        try { entity = await client.getEntity(username); } catch (e) { return []; }
+      }
       const participants = await client.getParticipants(entity, { limit });
       return (participants || []).map((u) => ({
         id: u && u.id != null ? u.id.toString() : null,
@@ -806,6 +817,25 @@ function createSession(tenantId) {
     })).filter((c) => c.id && c.username); // seuls les publics (avec @username) ont un lien officiel
   }
 
+  // Recherche GLOBALE Telegram (même API contacts.Search que ci-dessus, mais
+  // volet r.users) : PERSONNES publiques (avec @username) dont le nom ou le
+  // pseudo correspond au mot-clé — Telegram n'expose aucun "centre d'intérêt"
+  // sur un profil, donc ceci reste une correspondance texte sur nom/pseudo,
+  // jamais un vrai ciblage par thématique de la personne elle-même (voir
+  // ai-engine/communityDiscovery.js#searchPeopleTelegram, qui prévient
+  // l'appelant de cette limite).
+  async function searchPublicPeople(query, limit) {
+    if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+    const r = await client.invoke(new Api.contacts.Search({ q: String(query).slice(0, 100), limit: Math.min(50, Number(limit) || 20) }));
+    return (r.users || []).map((u) => ({
+      id: u.id != null ? u.id.toString() : null,
+      username: u.username || null,
+      firstName: u.firstName || '', lastName: u.lastName || '',
+      name: [u.firstName, u.lastName].filter(Boolean).join(' ') || u.username || '',
+      phone: u.phone || null,
+    })).filter((u) => u.id && u.username); // seuls les publics (avec @username) sont contactables sans être déjà en contact
+  }
+
   async function sendMessage(chatId, text) {
     if (!connected) {
       throw new Error('TELEGRAM_NOT_CONNECTED');
@@ -864,6 +894,7 @@ function createSession(tenantId) {
     inviteUserToGroup,
     exportGroupInviteLink,
     searchPublicCommunities,
+    searchPublicPeople,
     sendMessage,
     sendMedia,
     sendVoiceNote,
