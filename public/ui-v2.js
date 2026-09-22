@@ -66,12 +66,30 @@
     for (var j = 0; j < panels.length; j += 1) obs.observe(panels[j], { attributes: true, attributeFilter: ['class'] });
   }
 
+  // ---------------------------------------------------------------- 3) états de chargement / en cours (discrets, jamais du texte figé)
+  function enhanceLoading(root) {
+    var scope = root || document;
+    var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
+    var node; var targets = [];
+    while ((node = walker.nextNode())) { if (/^\s*Chargement\b/.test(node.nodeValue || '') && node.parentElement && !node.parentElement.classList.contains('cy-loading')) targets.push(node.parentElement); }
+    for (var i = 0; i < targets.length; i += 1) targets[i].classList.add('cy-loading');
+    // Pastille pulsée devant un statut « en cours » réel (jamais posée sur un statut terminé) — repère visuel uniquement, aucune donnée modifiée.
+    var live = scope.querySelectorAll ? scope.querySelectorAll('.rep-evt, #panel-communities [id$="-progress"] > div') : [];
+    for (var j = 0; j < live.length; j += 1) {
+      var el = live[j]; var t = (el.textContent || '');
+      if (/\b(?:RUNNING|QUEUED|En cours|Vérification)\b/.test(t) && !el.querySelector('.cy-live-dot') && el.firstChild) {
+        var dot = document.createElement('span'); dot.className = 'cy-live-dot'; el.insertBefore(dot, el.firstChild);
+      }
+    }
+  }
+
   function init() {
     try { enhanceHelp(document); } catch (e) { /* jamais bloquant */ }
+    try { enhanceLoading(document); } catch (e) { /* jamais bloquant */ }
     try { watchPanels(); } catch (e) { /* jamais bloquant */ }
     try { var a = document.querySelector('.panel.active'); if (a) animateIn(a); } catch (e) { /* jamais bloquant */ }
-    // contenu affiché après connexion / rendu tardif : une passe supplémentaire, idempotente
-    setTimeout(function () { try { enhanceHelp(document); } catch (e) { /* rien */ } }, 1200);
+    // contenu affiché après connexion / rendu tardif, ou mis à jour dynamiquement (progression, rapport) : passes répétées, idempotentes.
+    setInterval(function () { try { enhanceHelp(document); enhanceLoading(document); } catch (e) { /* rien */ } }, 1500);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

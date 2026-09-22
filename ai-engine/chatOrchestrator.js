@@ -99,6 +99,9 @@ const INBOX_RE = /((?:as|ai|avez)-?\s*(?:tu|je|vous)\s+re[çc]u\s+(?:des?\s+|de\
 // groupes ne doit pas lancer le moteur d'objectifs. La véritable exécution
 // ("écris aux membres du groupe X …") reste gérée par 'goal' (à enrichir).
 const GROUPS_RE = /(mes\s+groupes?|liste[rz]?\s+(?:mes\s+)?groupes?|quels?\s+(?:sont\s+)?(?:mes\s+)?groupes?|combien\s+de\s+groupes?|groupes?\s+(?:dont|o[ùu])\s+je\s+suis\s+admin|groupes?\s+que\s+j.?administre|mes\s+groupes?\s+admin)/i;
+// « Cherche/trouve le groupe Épicerie » : recherche parmi MES PROPRES groupes connectés (jamais la découverte publique, déjà couverte par
+// COMMUNITY_SEARCH_RE et vérifiée avant ce point) — même intention 'groups', avec extraction du nom recherché (voir handleGroups ci-dessous).
+const GROUP_SEARCH_MINE_RE = /\b(?:cherch\w*|trouve\w*|recherch\w*|montre\w*|affiche\w*)\b[^.?!]{0,15}\b(?:mon|le|un|ce)?\s*groupes?\b/i;
 // Consultation du CRM (contacts étiquetés prospect/client, comptages).
 // AVANT 'goal' (GOAL_RE capte "prospect") : une question sur les contacts
 // étiquetés ne doit pas lancer le moteur d'objectifs.
@@ -173,7 +176,11 @@ const CONVPOLICY_RE = /(?:comportement|politique|r[èe]glages?)\s+(?:du\s+)?r[é
 
 // CONVERSATION COURANTE (salutation, question simple, échange) : aucune action ni donnée du compte demandée → réponse directe du modèle (UN appel, niveau standard, doublon
 // parallèle), sans spécialistes ni boucle d'outils. Un ordre (envoyer, créer, lister, importer, programmer…), un fichier joint ou un long texte prennent le chemin complet.
-const ACTION_RE = /\b(?:envoi\w*|envoy\w+|cr[ée]e\w*|cr[ée]er|lance\w*|list\w*|montre\w*|affiche\w*|programm\w*|planifi\w*|import\w*|ajout\w*|supprim\w*|efface\w*|configur\w*|g[ée]n[èe]r\w*|publi\w*|relanc\w*|cherch\w*|trouv\w*|activ\w*|d[ée]sactiv\w*|arr[êe]t\w*|stopp\w*|modifi\w*|chang\w*|mets?|compt\w*|export\w*|t[ée]l[ée]charg\w*|pay\w*|valid\w*|annul\w*|rapport\w*|campagn\w*|contacts?|groupes?|fichiers?|excel|csv|pdf|image|vid[ée]o|stats?|statistiques?|service\w*|commandes?|prospects?|clients?|abonn\w*|message\w*|whatsapp|telegram|facebook|tiktok|youtube|paiement\w*|prix|tarifs?)\b/i;
+// VERBES d'action uniquement (jamais un simple nom comme « service », « prix », « clients », « tarifs »…) : un nom seul dans une question
+// informationnelle (« quels sont mes tarifs ? », « combien coûte le service ? ») ne doit PAS forcer le chemin lent (boucle d'outils + spécialistes) —
+// seul un ordre avec un verbe d'action réel le justifie. Une question sur l'activité est déjà bien répondue par le chemin rapide (contexte métier réel
+// injecté dans le prompt, voir assistantLayer.chatFallback), plus vite et sans détour inutile.
+const ACTION_RE = /\b(?:envoi\w*|envoy\w+|cr[ée]e\w*|cr[ée]er|lance\w*|list\w*|montre\w*|affiche\w*|programm\w*|planifi\w*|import\w*|ajout\w*|supprim\w*|efface\w*|retir\w*|configur\w*|g[ée]n[èe]r\w*|publi\w*|relanc\w*|cherch\w*|trouv\w*|activ\w*|d[ée]sactiv\w*|arr[êe]t\w*|stopp\w*|modifi\w*|renomm\w*|chang\w*|mets?|compt\w*|export\w*|t[ée]l[ée]charg\w*|pay\w*|valid\w*|annul\w*|connect\w*|d[ée]connect\w*|restaur\w*)\b/i;
 // L'avis des spécialistes ne doit jamais faire attendre : passé ce délai, on continue sans lui.
 const SPECIALIST_BUDGET_MS = Math.max(0, parseInt(process.env.OWNER_SPECIALIST_BUDGET_MS, 10) || 4000);
 const withSpecialistBudget = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), SPECIALIST_BUDGET_MS))]);
@@ -223,7 +230,7 @@ function detectIntent(text, lastAssistantMessage) {
   // "partage à tous mes groupes admin" serait pris pour une question de liste.
   if (RECURRING_RE.test(text)) return 'recurring';
   if (GROUPPOST_RE.test(text) && !/membre/i.test(text)) return 'grouppost';
-  if (GROUPS_RE.test(text)) return 'groups';
+  if (GROUPS_RE.test(text) || GROUP_SEARCH_MINE_RE.test(text)) return 'groups';
   // « relance mes prospects » = ACTION de campagne (objectif), pas une consultation du CRM ; « aide-moi à définir mon offre » = offre.
   if (/\brelanc\w*\s+(?:mes|les|tous|toutes|ces)\s+(?:prospects?|clients?|contacts?)/i.test(text) && !/\?\s*$/.test(text)) return 'goal';
   if (/(?:d[ée]finir|structurer|construire|pr[ée]ciser)\s+(?:mon|mes|ma|l['’])\s*(?:offres?|catalogue|produits?)/i.test(text)) return 'offer';
@@ -287,13 +294,15 @@ async function buildPersonaFacts(tenantId) {
   const domain = personaManager.inferDomain(profile);
   const recentOffers = (profile.offers || []).slice(-3)
     .map((o) => `${o.name || o.category}${o.price ? ` (${o.price})` : ''}`);
-  const paymentConfigured = ['MOBILE_MONEY_ORANGE', 'MOBILE_MONEY_MTN', 'MOBILE_MONEY_MOOV', 'MOBILE_MONEY_WAVE']
-    .some((k) => !!process.env[k]);
+  // Source de vérité UNIQUE des moyens de paiement : le(s) Service(s) métier réellement configuré(s) (commercial.paymentTerms), quel que soit le
+  // métier — jamais une variable d'environnement globale ni un « lien de paiement » (Cyrus ne sait pas en générer). Voir ai-engine/businessServices.js.
+  let paymentTerms = [];
+  try { paymentTerms = (await businessServices.list(tenantId)).filter((s) => (s.lifecycle || 'active') === 'active' && s.commercial && String(s.commercial.paymentTerms || '').trim()).map((s) => `${s.name} : ${s.commercial.paymentTerms}`); } catch (e) { paymentTerms = []; }
   const parts = [];
   if (recentOffers.length) parts.push(`Offres déjà configurées : ${recentOffers.join(', ')}.`);
-  parts.push(paymentConfigured
-    ? 'Le lien/l\'instruction de paiement Mobile Money est configuré et actif.'
-    : 'Aucun moyen de paiement Mobile Money n\'est configuré pour le moment.');
+  parts.push(paymentTerms.length
+    ? `Moyens de paiement RÉELLEMENT configurés (à communiquer tels quels, jamais un lien) : ${paymentTerms.join(' | ')}.`
+    : 'Aucun moyen de paiement n\'est configuré dans les Services métiers pour le moment : ne jamais en inventer un ni promettre de « lien de paiement » (cette fonction n\'existe pas) — dis-le clairement.');
   return { domain, facts: parts.join(' ') };
 }
 
@@ -823,25 +832,40 @@ async function handleGroups(text, tenantId, deps) {
   const total = groups.length;
   const adminOnly = /(admin|administre|dont\s+je\s+suis|o[ùu]\s+je\s+suis)/i.test(text);
   if (adminOnly) groups = groups.filter((g) => g.isAdmin);
-  const subj = text.match(/(?:sur|contenant|th[èe]me|[àa]\s+propos\s+de|parlant\s+de)\s+["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
-  if (subj) {
-    const kw = subj[1].trim().toLowerCase();
+  // Nom recherché : soit un lien explicite (sur/contenant/thème/à propos de/parlant de X), soit directement après « groupe(s) » (« cherche le
+  // groupe Épicerie ») — en excluant les mots qui ne sont pas un nom (telegram/whatsapp/dont/où/que/admin/publics).
+  const subjLinked = text.match(/(?:sur|contenant|th[èe]me|[àa]\s+propos\s+de|parlant\s+de)\s+["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
+  // NOTE : \b ne fonctionne pas de façon fiable après une lettre accentuée (où/privé/thème…) en JS — (?=\s|$|[.,;:!?]) le remplace partout ici.
+  const subjBare = !subjLinked && text.match(/groupes?\s+(?!telegram(?=\s|$|[.,;:!?])|whatsapp(?=\s|$|[.,;:!?])|dont(?=\s|$|[.,;:!?])|o[ùu](?=\s|$|[.,;:!?])|que(?=\s|$|[.,;:!?])|admin\w*(?=\s|$|[.,;:!?])|publics?(?=\s|$|[.,;:!?])|priv[ée]s?(?=\s|$|[.,;:!?])|sur(?=\s|$|[.,;:!?])|contenant(?=\s|$|[.,;:!?])|th[èe]me(?=\s|$|[.,;:!?])|[àa]\s+propos(?=\s|$|[.,;:!?])|parlant(?=\s|$|[.,;:!?]))["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
+  const subjName = (subjLinked && subjLinked[1]) || (subjBare && subjBare[1]);
+  if (subjName) {
+    const kw = subjName.trim().toLowerCase();
     groups = groups.filter((g) => (g.name || '').toLowerCase().includes(kw));
   }
   if (!groups.length) {
     return {
       text: adminOnly
         ? `Je ne trouve aucun groupe ${label} dont tu es admin (sur ${total} groupe(s) au total).`
-        : `Aucun groupe ${label} trouvé${subj ? ' pour ce sujet' : ''} (${total} au total).`,
+        : (subjName ? `Aucun groupe ${label} ne correspond à « ${subjName.trim()} » (sur ${total} groupe(s) au total) — vérifie le nom, ou dis-moi « liste mes groupes ${label} » pour voir la liste complète.` : `Aucun groupe ${label} trouvé (${total} au total).`),
       actionLog: [{ icon: '👥', label: `0 groupe ${label}`, status: 'done' }],
     };
   }
   const sorted = groups.slice().sort((a, b) => (b.size || 0) - (a.size || 0));
   const top = sorted.slice(0, 20);
-  const lines = top.map((g) => `• ${g.name}${g.isAdmin ? ' 👑 (admin)' : ''} — ${g.size || 0} membre(s)`);
+  // Recherche CIBLÉE (nom précis, peu de résultats) : le lien réel est joint quand la plateforme le fournit — jamais fabriqué. WhatsApp seul l'expose
+  // aujourd'hui (Baileys) ; Telegram n'a pas d'équivalent générique côté adaptateur → simplement omis, jamais inventé.
+  if (subjName && channel === 'WHATSAPP' && top.length <= 5) {
+    try {
+      const session = require('../adapters/whatsappManager').getOrCreate(tenantId).session;
+      if (session && typeof session.getGroupInviteLink === 'function') {
+        for (const g of top) { try { g.link = await session.getGroupInviteLink(g.id); } catch (e) { /* lien indisponible pour ce groupe (droits/erreur réseau) : omis, jamais fabriqué */ } }
+      }
+    } catch (e) { /* moteur non disponible : pas de lien, jamais inventé */ }
+  }
+  const lines = top.map((g) => `• ${g.name}${g.isAdmin ? ' 👑 (admin)' : ''} — ${g.size || 0} membre(s)${g.link ? ` — ${g.link}` : ''}`);
   const header = adminOnly
     ? `Tes groupes ${label} où tu es admin (${groups.length}) :`
-    : `Tes groupes ${label} (${groups.length}${subj ? ' correspondant au sujet' : ''}) :`;
+    : `Tes groupes ${label} (${groups.length}${subjName ? ` correspondant à « ${subjName.trim()} »` : ''}) :`;
   const more = groups.length > top.length ? `\n… et ${groups.length - top.length} autre(s).` : '';
   return {
     text: [header, ...lines].join('\n') + more,
@@ -1085,8 +1109,8 @@ async function handlePayment(text, history, tenantId, deps) {
     amount: parsed.amount, currency: parsed.currency, product: parsed.product, tenantId,
   }, { tenantId });
   if (!out.ok) {
-    const hint = out.error === 'NO_MOBILE_MONEY_NUMBER_CONFIGURED'
-      ? ' Configurez au moins un numéro Mobile Money (MOBILE_MONEY_ORANGE/MTN/MOOV/WAVE dans .env) pour activer cet outil.'
+    const hint = out.error === 'NO_PAYMENT_METHOD_CONFIGURED' || out.error === 'NO_MOBILE_MONEY_NUMBER_CONFIGURED'
+      ? ' Aucun moyen de paiement n\'est configuré dans vos Services métiers : ajoutez-en un (numéro Mobile Money, etc.) dans l\'onglet « Services Métiers », je ne peux pas en inventer un.'
       : '';
     return { text: `Impossible de générer l'instruction de paiement (${out.error}).${hint}` };
   }

@@ -116,3 +116,23 @@ html body .gc-autopanel .gc-switch { display: block; margin: .6rem 0; font-size:
 html body .gc-autopanel .gc-switch select { display: block; width: 100%; margin-top: .35rem; }
 html body .gc-autopanel .gc-switch input[type=checkbox] { margin-right: .5rem; }
 html body .gc-autopanel .gc-auto-title { display: flex; align-items: center; gap: .25rem; margin-top: .4rem; }
+
+/* ---------- apparition douce des listes dynamiques : rapport d'activité, résultats de groupes/communautés, tableaux — sans JS, dès l'insertion ---------- */
+@keyframes cy-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+html body .rep-evt, html body #panel-communities tbody tr, html body .table-wrap tbody tr, html body .sequence-step { animation: cy-rise .28s cubic-bezier(.22,1,.36,1) both; }
+html body tbody tr:nth-child(n+9) { animation-delay: 0s; } /* pas de cascade sur de longues listes (coût perçu, jamais un ralentissement réel) */
+
+/* ---------- modales : entrée/sortie ---------- */
+@keyframes cy-modal-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+html body .modal-overlay { transition: opacity .18s ease; backdrop-filter: blur(3px); }
+html body .modal-box { animation: cy-modal-in .22s cubic-bezier(.22,1,.36,1) both; background: rgba(17,19,29,.98) !important; border: 1px solid var(--border-strong); box-shadow: var(--shadow); }
+
+/* ---------- états de chargement : un discret effet de scintillement plutôt qu'un texte figé ---------- */
+.cy-loading { position: relative; display: inline-block; color: var(--muted) !important; }
+.cy-loading::after { content: ''; display: inline-block; width: 1em; height: 1em; margin-left: .5em; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); vertical-align: -0.15em; animation: cy-spin .7s linear infinite; }
+@keyframes cy-spin { to { transform: rotate(360deg); } }
+
+/* ---------- barre de progression (création de groupe) : remplissage animé + pastille « en cours » pulsée ---------- */
+html body [id$="-progress"] > div:first-child > div { transition: width .5s cubic-bezier(.22,1,.36,1) !important; }
+@keyframes cy-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+.cy-live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: .4em; animation: cy-live-pulse 1.4s ease-in-out infinite; vertical-align: middle; }

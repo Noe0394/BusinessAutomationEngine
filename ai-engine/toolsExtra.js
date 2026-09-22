@@ -153,6 +153,13 @@ const TOOLS = {
       description: { type: 'string' }, fileId: { type: 'string', description: 'Fichier de contacts joint (Excel/CSV/image OCR), ex. f_xxx.' },
       recipientsDraftId: { type: 'string', description: 'Liste déjà préparée par prepareContactsFromSource.' }, text: { type: 'string', description: 'Contacts collés en texte.' },
       inviteMessage: { type: 'string', description: 'Message d\'invitation (variables {nom} {groupe} {lien}).' },
+      batchSize: { type: 'number', description: 'Nombre de personnes par lot avant une pause (défaut : cadence de sécurité standard).' },
+      delayBetweenItems: { type: 'number', description: 'Délai en millisecondes entre deux personnes (ex. « 10 secondes » → 10000).' },
+      delayBetweenBatches: { type: 'number', description: 'Délai en millisecondes entre deux lots (ex. « 2 minutes » → 120000).' },
+      pauseEveryNBatches: { type: 'number', description: 'Pause plus longue toutes les N lots (0 = désactivé).' },
+      pauseDuration: { type: 'number', description: 'Durée en millisecondes de cette pause plus longue.' },
+      initialDelay: { type: 'number', description: 'Délai en millisecondes avant le tout premier ajout.' },
+      maxItems: { type: 'number', description: 'Nombre maximal de personnes traitées pour cette reprise (le reste attend la reprise suivante).' },
     },
     async prepare(args, ctx) {
       let count = null;
@@ -165,6 +172,8 @@ const TOOLS = {
     },
     async execute(args, ctx) {
       const input = { channel: chan(args.channel), title: args.title, description: args.description, inviteMessage: args.inviteMessage };
+      const timing = {}; for (const k of ['batchSize', 'delayBetweenItems', 'delayBetweenBatches', 'pauseEveryNBatches', 'pauseDuration', 'initialDelay', 'maxItems']) if (args[k] !== undefined) timing[k] = args[k];
+      if (Object.keys(timing).length) input.timing = timing;
       if (args.recipientsDraftId) input.recipientsId = args.recipientsDraftId;
       else if (args.fileId) {
         const f = await chatUploads.readFile(ctx.tenant, args.fileId); if (!f) return fail('FILE_NOT_FOUND');
@@ -175,6 +184,20 @@ const TOOLS = {
       catch (e) { return fail(e.code || 'GROUP_START_FAILED', e.message); }
     },
     async verify(result) { return { verified: !!(result && result.jobId) }; },
+  },
+  configureGroupTiming: {
+    description: 'Règle la temporisation (cadence) de la création/alimentation d\'un groupe : taille des lots, délai entre deux personnes, pause entre deux lots, pause plus longue toutes les N lots, délai initial, nombre maximal de personnes par reprise. Le traitement doit être en pause pour changer sa cadence (sinon : « mets d\'abord l\'ajout en pause »).',
+    permission: null, risk: 'LOW_WRITE',
+    inputSchema: {
+      jobId: { type: 'string', required: true }, batchSize: { type: 'number' }, delayBetweenItems: { type: 'number' }, delayBetweenBatches: { type: 'number' },
+      pauseEveryNBatches: { type: 'number' }, pauseDuration: { type: 'number' }, initialDelay: { type: 'number' }, maxItems: { type: 'number' }, autoPauseOnError: { type: 'boolean' },
+    },
+    async execute(args, ctx) {
+      const patch = {}; for (const k of ['batchSize', 'delayBetweenItems', 'delayBetweenBatches', 'pauseEveryNBatches', 'pauseDuration', 'initialDelay', 'maxItems', 'autoPauseOnError']) if (args[k] !== undefined) patch[k] = args[k];
+      try { const job = await require('./communityService').setTiming(ctx.tenant, args.jobId, patch); return { ok: true, result: { jobId: job.id, timing: job.timing } }; }
+      catch (e) { return fail(e.code || 'TIMING_UPDATE_FAILED', e.message); }
+    },
+    async verify(result, args, ctx) { const j = await require('./communityService').getJob(ctx.tenant, args.jobId); return { verified: !!j && JSON.stringify(j.timing) === JSON.stringify(result.timing) }; },
   },
   getCommunityGroupStatus: {
     description: 'Progression et rapport RÉELS d\'une création de groupe (ajoutés, invitations envoyées en message privé, déjà membres, absents de la plateforme, refus, échecs). Sans jobId : liste des derniers groupes.',

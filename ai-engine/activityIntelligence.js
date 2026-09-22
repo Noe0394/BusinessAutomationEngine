@@ -84,6 +84,24 @@ async function collect(tenant, f) {
     }
   }
 
+  // Opérations de groupe (création + alimentation, WhatsApp/Telegram) — mission §18 : plateforme, groupe, prévu/traité/réussi/échoué, pauses, durée,
+  // erreur, statut, intervention nécessaire. Une opération EN COURS ou en pause n'est ni « faite » ni « bloquée » à tort : NOT_DONE tant qu'elle
+  // continue normalement, BLOCKED seulement si elle attend réellement une intervention (limite de débit, pause utilisateur, échecs).
+  const groupJobs = await safe(() => require('./communityService').listJobs(tenant), []);
+  for (const j of groupJobs) {
+    const done = ['DONE', 'DONE_WITH_ISSUES'].includes(j.status);
+    const blocked = ['PAUSED_RATE_LIMIT', 'PAUSED_USER', 'FAILED', 'CANCELLED'].includes(j.status);
+    const c = j.counts || {};
+    const durationMs = j.finishedAt && j.createdAt ? (Date.parse(j.finishedAt) - Date.parse(j.createdAt)) : null;
+    push({
+      id: j.id, ts: j.finishedAt ? Date.parse(j.finishedAt) : Date.parse(j.createdAt), source: 'group_operation', actionType: 'group_operation', channel: j.channel, group: j.title,
+      status: done ? (j.status === 'DONE_WITH_ISSUES' ? 'TO_IMPROVE' : 'DONE') : (blocked ? 'BLOCKED' : 'NOT_DONE'),
+      title: `Groupe ${j.title} (${j.channel})`,
+      detail: `${c.added || 0}/${c.total || 0} ajoutés, ${c.invited_dm || 0} invités, ${c.failed || 0} échec(s)${durationMs ? `, ${Math.round(durationMs / 1000)} s` : ''}${j.batchesDone ? `, ${j.batchesDone} lot(s)` : ''}`,
+      reason: blocked ? j.error : null,
+      how: done ? `cadence : lots de ${j.timing ? j.timing.batchSize : '?'} , ${c.added || 0} ajoutés directement, ${c.invited_dm || 0} invités par message privé` : null,
+    });
+  }
   const camps = await safe(() => require('./campaignService').list(tenant, null), []);
   for (const c of camps) push({ id: c.id, ts: c.launchedAt || c.startedAt || c.createdAt || 0, source: 'campaign', actionType: 'campaign', channel: c.channel, campaign: c.name || c.id, serviceId: c.serviceId || null,
     status: ['completed', 'done', 'launched'].includes(lc(c.status)) ? 'DONE' : (['failed', 'error', 'paused'].includes(lc(c.status)) ? 'BLOCKED' : 'NOT_DONE'), title: `Campagne ${c.name || c.id}`, detail: `statut ${c.status}${c.sent != null ? `, ${c.sent} envoyés` : ''}`, reason: ['failed', 'error', 'paused'].includes(lc(c.status)) ? `campagne ${c.status}` : null });
@@ -151,6 +169,10 @@ async function diagnose(tenant) {
     if (!(c.price != null || (s.products || []).some((p) => p && p.price != null))) miss.push('prix'); if (!c.paymentTerms) miss.push('conditions de paiement'); if (!c.supportRules) miss.push('règles SAV');
     if (miss.length) add({ key: `SERVICE_INCOMPLETE:${s.id}`, serviceId: s.id, observation: `Le service « ${s.name} » n'a pas : ${miss.join(', ')}.`, diagnostic: 'Sans ces informations, je ne peux pas répondre précisément et je transmets plus souvent.', recommendation: `Compléter le service « ${s.name} » (${miss.join(', ')}).`, kind: 'NEEDS_VALIDATION' });
   }
+  // Opérations de groupe récurrentes en échec/limitées : signal réel d'un problème (cadence trop agressive, compte restreint…) — jamais un chiffre inventé.
+  const groupJobs = await safe(() => require('./communityService').listJobs(tenant), []);
+  const recentGroupIssues = groupJobs.filter((j) => ['FAILED', 'PAUSED_RATE_LIMIT'].includes(j.status) && Date.now() - Date.parse(j.createdAt || 0) < 7 * DAY);
+  if (recentGroupIssues.length >= 2) add({ key: 'GROUP_OPS_STRUGGLING', observation: `${recentGroupIssues.length} opération(s) de groupe limitée(s) ou en échec cette semaine (${[...new Set(recentGroupIssues.map((j) => j.channel))].join(', ')}).`, diagnostic: 'La cadence actuelle (taille de lot, délais) déclenche trop souvent une limitation de débit ou un échec.', recommendation: 'Ralentir la cadence (augmenter le délai entre personnes/lots ou réduire la taille des lots) pour ces opérations.', kind: 'NEEDS_VALIDATION' });
   const failed = (await safe(() => require('./taskQueue').list(tenant, { state: 'FAILED' }), [])).filter((t) => Date.now() - (t.finishedAt || 0) < 7 * DAY);
   if (failed.length >= 2) add({ key: 'TASKS_FAILING', observation: `${failed.length} tâche(s) automatique(s) en échec cette semaine (${[...new Set(failed.map((t) => t.type))].join(', ')}).`, diagnostic: 'Un traitement échoue de façon répétée : cause technique possible.', recommendation: 'Faire examiner ces échecs (changement technique : jamais appliqué automatiquement).', kind: 'TECHNICAL' });
   return out;

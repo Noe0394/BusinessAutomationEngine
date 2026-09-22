@@ -5820,8 +5820,12 @@ try {
     const input = { channel: cmChannel(req), title: b.title, description: b.description, inviteMessage: b.inviteMessage, text: b.text, defaultCountryCode: b.defaultCountryCode };
     if (req.file) { if (/^image\//.test(req.file.mimetype || '')) input.image = req.file.buffer; else input.file = { buffer: req.file.buffer, name: req.file.originalname, type: req.file.mimetype }; }
     if (b.recipientsId) input.recipientsId = b.recipientsId;
+    if (b.timing) { try { input.timing = typeof b.timing === 'string' ? JSON.parse(b.timing) : b.timing; } catch (e) { /* temporisation ignorée si mal formée : les défauts s'appliquent */ } }
     return { ok: true, group: await communityService.startGroup(tenant, input) };
   }));
+  // Temporisation de la création/alimentation d'un groupe (taille de lot, délais, pauses…) — voir communityService.TIMING_BOUNDS.
+  app.get('/api/communities/timing-bounds', requireAccess, (req, res) => res.json({ ok: true, bounds: communityService.TIMING_BOUNDS }));
+  app.post('/api/communities/groups/:id/timing', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.setTiming(tenant, req.params.id, req.body || {}) })));
   app.get('/api/communities/groups', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, groups: await communityService.listJobs(tenant) })));
   app.get('/api/communities/groups/:id', requireAccess, cmRoute(async (req, tenant) => { const g = await communityService.getJob(tenant, req.params.id); if (!g) throw Object.assign(new Error('Groupe introuvable.'), { code: 'NOT_FOUND' }); return { ok: true, group: g }; }));
   app.post('/api/communities/groups/:id/pause', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.pauseJob(tenant, req.params.id) })));

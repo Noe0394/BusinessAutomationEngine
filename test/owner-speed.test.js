@@ -49,6 +49,15 @@ test("SELF-CHAT : réponse rapide = aucun accusé ; tâche longue = UN accusé �
   } finally { slow.restore(); delete process.env.OWNER_ACK_MS; }
 });
 
+test('SELF-CHAT : une conversation courante LENTE (fournisseur IA en difficulté) ne déclenche JAMAIS le ⏳ — seul le TYPE de demande décide, jamais le chronomètre', async () => {
+  process.env.OWNER_ACK_MS = '80'; const sent = [];
+  const slowButQuick = fakeOwner(async () => null, async () => { await new Promise((r) => setTimeout(r, 250)); return 'Bonjour ! Ça va bien, merci.'; }, sent);
+  try {
+    await slowButQuick.run('Bonjour, comment vas-tu ?');
+    assert.deepEqual(sent, ['Bonjour ! Ça va bien, merci.'], "aucun accusé pour une salutation, même lente");
+  } finally { slowButQuick.restore(); delete process.env.OWNER_ACK_MS; }
+});
+
 test('PASSERELLE : le doublon parallèle existe aussi au niveau « raisonnement » (délai plus long) ; avis des spécialistes borné', () => {
   const root = path.join(__dirname, '..');
   const gw = fs.readFileSync(path.join(root, 'lib/ai/llmFallbackEngine.js'), 'utf8');

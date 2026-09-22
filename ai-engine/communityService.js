@@ -22,6 +22,38 @@ const cfg = () => ({
 });
 let sleepFn = (ms) => new Promise((r) => setTimeout(r, ms));
 const pause = (min, max) => sleepFn(min + Math.floor(Math.random() * Math.max(1, max - min)));
+// jitter ±20 % (moins mécanique, plus proche d'un rythme humain) autour d'une valeur unique de configuration.
+const jittered = (ms) => sleepFn(Math.max(0, Math.round(ms * (0.8 + Math.random() * 0.4))));
+
+// ---------------------------------------------------------------------------- GroupOperationTiming
+// Temporisation RÉELLEMENT configurable (par opération, persistée avec la tâche) — un outil de STABILITÉ et de respect des plateformes, jamais un
+// moyen de contourner leurs protections (voir isFlood/PAUSED_RATE_LIMIT, toujours actifs quelle que soit la configuration ci-dessous).
+// WhatsApp et Telegram n'ont PAS les mêmes contraintes : un « lot » est le nombre de personnes traitées entre deux pauses ; chaque personne d'un lot
+// est ajoutée par un appel RÉEL séparé à la plateforme (jamais une pause simulée sans action, jamais une action sans la pause configurée derrière).
+const TIMING_BOUNDS = {
+  batchSize: [1, 20], delayBetweenItems: [1000, 300000], delayBetweenBatches: [0, 1800000],
+  pauseEveryNBatches: [0, 50], pauseDuration: [0, 3600000], initialDelay: [0, 300000], maxItems: [1, 5000],
+};
+function clampInt(v, [lo, hi], def) { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : def; }
+function defaultTiming(channel) {
+  const c = cfg();
+  return {
+    platform: channel, enabled: true, batchSize: channel === 'TELEGRAM' ? 1 : c.waBatch,
+    delayBetweenItems: c.delayMin, delayBetweenBatches: Math.round(c.delayMax * 1.4),
+    pauseEveryNBatches: 0, pauseDuration: 0, initialDelay: 0, maxItems: cfg().maxMembers, autoPauseOnError: false,
+  };
+}
+// Fusionne des réglages utilisateur (partiels) avec les défauts, VALIDÉS et bornés — jamais une valeur hors limites, jamais 0 délai par défaut
+// (la temporisation resterait sinon un habillage sans effet réel). `enabled:false` retombe explicitement sur le comportement historique (un seul
+// appel groupé par lot, cadence héritée de l'environnement) — utile pour une reprise créée avant cette fonctionnalité.
+function resolveTiming(channel, overrides) {
+  const d = defaultTiming(channel); const o = overrides || {};
+  if (o.enabled === false) return Object.assign(d, { enabled: false });
+  const t = { platform: channel, enabled: true, autoPauseOnError: o.autoPauseOnError === true };
+  for (const k of Object.keys(TIMING_BOUNDS)) t[k] = clampInt(o[k], TIMING_BOUNDS[k], d[k]);
+  if (channel === 'TELEGRAM') t.batchSize = 1; // granularité réelle de l'API Telegram (un ajout = un appel) : jamais simulée plus grosse
+  return t;
+}
 const running = new Map();   // tenant:channel -> jobId (un seul traitement à la fois)
 const promises = new Map();  // jobId -> promesse du traitement (tests / attente)
 const cancelRequests = new Set(); // jobId dont l'arrêt définitif a été demandé : pris en compte avant chaque lot / invitation
@@ -139,7 +171,7 @@ function publicJob(job, withMembers) {
   for (const m of job.members) c[m.status] = (c[m.status] || 0) + 1;
   return {
     id: job.id, channel: job.channel, title: job.title, status: liveStatus(job), error: job.error || null, phase: job.phase || null,
-    progress: progressOf(job),
+    progress: progressOf(job), timing: job.timing || null, batchesDone: job.batchesDone || 0,
     group: job.group ? { id: job.group.id, subject: job.group.subject, link: job.group.link || null } : null,
     counts: Object.assign({ total: job.members.length, added: 0, invited_dm: 0, already_member: 0, not_on_platform: 0, opted_out: 0, failed: 0, pending: 0, needs_invite: 0 }, c),
     createdAt: job.createdAt, finishedAt: job.finishedAt || null,
@@ -174,7 +206,7 @@ async function resolveMembers(tenant, channel, input) {
 
 // ---------------------------------------------------------------------------- traitement
 async function runJob(tenant, job) {
-  const c = cfg();
+  const timing = job.timing || (job.timing = resolveTiming(job.channel, {}));
   const key = `${sanitize(tenant)}:${job.channel}`;
   try {
     const driver = DRIVERS[job.channel](tenant);
@@ -194,17 +226,23 @@ async function runJob(tenant, job) {
       if (!todo().length) { job.status = 'DONE'; job.error = 'NO_ELIGIBLE_MEMBER'; return; }
       job.group = await driver.create(job.title, job.description); await saveJob(tenant, job);
     }
-    // 1) ajout DIRECT, par petits lots espacés, dans le respect de la confidentialité
-    let paused = false; job.phase = 'ajout'; await saveJob(tenant, job);
+    // 1) ajout DIRECT, PERSONNE PAR PERSONNE (chaque ajout = un vrai appel à la plateforme), avec la temporisation configurée pour CETTE opération
+    // (job.timing — voir resolveTiming ci-dessus) : délai entre deux personnes, pause à la fin de chaque lot de `batchSize` personnes, pause plus
+    // longue toutes les N lots, limite du nombre de personnes traitées CETTE reprise (reprenable), arrêt sur erreur si demandé.
+    let paused = false; let capped = false; job.phase = 'ajout'; await saveJob(tenant, job);
+    if (timing.initialDelay && !job.initialDelayDone) { await jittered(timing.initialDelay); job.initialDelayDone = true; await saveJob(tenant, job); }
+    let itemsThisRun = 0; let sinceBatchBoundary = job.itemsSinceBatchBoundary || 0; let batchesDone = job.batchesDone || 0;
     while (todo().length && !paused) {
       if (stopped(job)) { cancelNow(); return; }
-      const batch = todo().slice(0, driver.batchSize());
+      if (itemsThisRun >= timing.maxItems) { capped = true; break; }
+      const member = todo()[0];
       let results;
-      try { results = await driver.add(job.group, batch); }
+      try { results = await driver.add(job.group, [member]); }
       catch (err) {
         if (driver.isFlood(err)) { paused = true; break; }
-        batch.forEach((m) => { m.status = 'failed'; m.reason = 'Erreur technique'; });
-        await saveJob(tenant, job); await pause(c.delayMin, c.delayMax); continue;
+        member.status = 'failed'; member.reason = 'Erreur technique';
+        if (timing.autoPauseOnError) { await saveJob(tenant, job); paused = true; job.pausedReason = 'ERROR'; break; }
+        await saveJob(tenant, job); itemsThisRun += 1; await jittered(timing.delayBetweenItems); continue;
       }
       for (const r of results) {
         if (r.outcome === 'added') r.member.status = 'added';
@@ -213,12 +251,30 @@ async function runJob(tenant, job) {
         else if (r.outcome === 'flood') { paused = true; }
         else { r.member.status = 'failed'; r.member.reason = r.reason; }
       }
-      batch.filter((m) => m.status === 'pending' && !paused).forEach((m) => { m.status = 'failed'; m.reason = 'Sans réponse de la plateforme'; });
+      if (member.status === 'pending' && !paused) { member.status = 'failed'; member.reason = 'Sans réponse de la plateforme'; }
+      itemsThisRun += 1;
+      if (member.status === 'failed' && timing.autoPauseOnError) { await saveJob(tenant, job); paused = true; job.pausedReason = 'ERROR'; break; }
       await saveJob(tenant, job);
-      if (todo().length && !paused) await pause(c.delayMin, c.delayMax);
+      if (paused) break;
+      if (itemsThisRun >= timing.maxItems && todo().length) { capped = true; break; }
+      if (!todo().length) break;
+      sinceBatchBoundary += 1;
+      if (sinceBatchBoundary >= timing.batchSize) {
+        sinceBatchBoundary = 0; batchesDone += 1; job.batchesDone = batchesDone; job.itemsSinceBatchBoundary = 0;
+        if (timing.pauseEveryNBatches && batchesDone % timing.pauseEveryNBatches === 0) await jittered(timing.pauseDuration);
+        else await jittered(timing.delayBetweenBatches);
+      } else { job.itemsSinceBatchBoundary = sinceBatchBoundary; await jittered(timing.delayBetweenItems); }
     }
     if (stopped(job)) { cancelNow(); return; }
-    if (paused) { job.status = 'PAUSED_RATE_LIMIT'; job.error = 'La plateforme a limité le débit : traitement mis en pause pour protéger le compte (reprise possible plus tard).'; return; }
+    if (paused) {
+      job.status = 'PAUSED_RATE_LIMIT';
+      job.error = job.pausedReason === 'ERROR' ? 'Une erreur bloquante est survenue (arrêt configuré) : traitement mis en pause, reprise possible.' : 'La plateforme a limité le débit : traitement mis en pause pour protéger le compte (reprise possible plus tard).';
+      return;
+    }
+    if (capped) {
+      job.status = 'PAUSED_RATE_LIMIT'; job.error = `Limite de ${timing.maxItems} personne(s) par reprise atteinte (réglage de temporisation) : reprenez pour continuer avec les personnes restantes.`;
+      return;
+    }
 
     // 2) restrictions d'ajout : lien d'invitation OFFICIEL en message privé (jamais de contournement)
     const invitees = job.members.filter((m) => m.status === 'needs_invite');
@@ -231,7 +287,7 @@ async function runJob(tenant, job) {
           if (stopped(job)) { cancelNow(); return; }
           try { await driver.dm(m, renderInvite(job.inviteMessage, { name: m.name, group: job.group.subject, link: job.group.link })); m.status = 'invited_dm'; m.reason = 'Lien d\'invitation envoyé en message privé'; }
           catch (err) { if (driver.isFlood(err)) { job.status = 'PAUSED_RATE_LIMIT'; job.error = 'Limitation de débit pendant l\'envoi des invitations : reprise possible plus tard.'; return; } m.status = 'failed'; m.reason = 'Envoi de l\'invitation impossible'; }
-          await saveJob(tenant, job); await pause(c.delayMin, c.delayMax);
+          await saveJob(tenant, job); await jittered(timing.delayBetweenItems);
         }
       }
     }
@@ -264,6 +320,7 @@ async function startGroup(tenant, input) {
     id: uid(), tenant: sanitize(tenant), channel, title, description: String(input.description || '').slice(0, 250), inviteMessage: input.inviteMessage ? String(input.inviteMessage) : null,
     status: 'QUEUED', createdAt: new Date().toISOString(), group: null, truncated: members.length > capped.length ? members.length - capped.length : 0,
     members: capped.map((m, i) => ({ id: i, identifier: m.identifier, name: m.name || '', status: 'pending', verified: false })),
+    timing: resolveTiming(channel, input.timing),
   };
   running.set(key, job.id);
   await saveJob(tenant, job);
@@ -309,4 +366,15 @@ async function getJob(tenant, jobId) { const j = (await loadDoc(tenant)).jobs[jo
 async function listJobs(tenant) { return Object.values((await loadDoc(tenant)).jobs).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).map((j) => publicJob(j, false)); }
 const waitFor = (jobId) => promises.get(jobId) || Promise.resolve();
 
-module.exports = { startGroup, resumeJob, cancelJob, pauseJob, getJob, listJobs, waitFor, renderInvite, DEFAULT_INVITE, DRIVERS, _setSleep: (fn) => { sleepFn = fn; }, _running: running };
+// Change la temporisation d'un traitement (persistée). Un traitement EN COURS doit d'abord être mis en pause : la nouvelle cadence s'applique dès
+// la reprise (le traitement en cours ne relit pas sa configuration en plein lot, pour ne jamais changer de rythme au milieu d'une action réelle).
+async function setTiming(tenant, jobId, patch) {
+  const doc = await loadDoc(tenant); const job = doc.jobs[jobId];
+  if (!job) { const e = new Error('Groupe introuvable.'); e.code = 'NOT_FOUND'; throw e; }
+  const key = `${sanitize(tenant)}:${job.channel}`;
+  if (running.get(key) === job.id && !pauseRequests.has(job.id) && !cancelRequests.has(job.id)) { const e = new Error('Mettez le traitement en pause avant de changer sa cadence.'); e.code = 'PAUSE_FIRST'; throw e; }
+  job.timing = resolveTiming(job.channel, Object.assign({}, job.timing, patch));
+  await saveJob(tenant, job); return publicJob(job, false);
+}
+
+module.exports = { startGroup, resumeJob, cancelJob, pauseJob, setTiming, resolveTiming, TIMING_BOUNDS, getJob, listJobs, waitFor, renderInvite, DEFAULT_INVITE, DRIVERS, _setSleep: (fn) => { sleepFn = fn; }, _running: running };
