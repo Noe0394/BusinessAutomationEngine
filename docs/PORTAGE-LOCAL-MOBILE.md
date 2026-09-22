@@ -51,3 +51,15 @@ Voir docs/CYRUS-MULTI-METIERS.md. À porter vers local-client/ et mobile/webapp/
 
 ## Livraison 2026-09-21 (nuit 4) — Répondeur contextuel (mémoire 7 jours, politique pilotable, groupes, arbitrage IA), anti-boucle, jamais « fait » sans preuve
 Voir docs/REPONDEUR-CONTEXTUEL.md. À porter vers local-client/ et mobile/webapp/ : botSignature.js, claimGuard.js, conversationContext.js, conversationPolicy.js, engagement.js, toolsConversation.js, extraits autoResponder/conversationEngine/ownerChannel/chatOrchestrator, index.js (waAddressing, routes), panneau du dashboard. Statut : NON PORTÉ.
+
+## Livraison 2026-09-22 — Stabilité multi-licences WhatsApp (révocations en rafale au redémarrage)
+Correctif de fiabilité, pas une fonctionnalité visible : `adapters/whatsappManager.js` (étalement des reconnexions au démarrage, `WHATSAPP_BOOT_RECONNECT_STAGGER_MS`), réglages `MAX_ACTIVE_SESSIONS`/`PROACTIVE_IDLE_DISCONNECT_MS` (config VPS uniquement, sans objet pour le PC/téléphone qui n'ont qu'un seul compte local). À porter vers local-client/ et mobile/webapp/ : SANS OBJET (le multi-tenant/sessionRegulator n'existe pas en mode local mono-compte).
+
+## Livraison 2026-09-22 — Découverte de personnes par thématique, adhésion/extraction de membres, moteurs de recherche combinés + filtres géo
+À porter vers local-client/ et mobile/webapp/ : `ai-engine/communityDiscovery.js` (discoverPeople, extractMembers, joinCommunity, syncPeopleToCrm, recherche multi-moteurs DuckDuckGo+Bing+Startpage, paramètre `location`), `ai-engine/contactCrm.js` (getCommunity, markCommunityJoined, champ `location`), `adapters/telegram.js` (getGroupMembers résolution par @username, searchPublicPeople), `adapters/whatsappEngineBaileys.js` (joinGroupByInvite), routes `/api/communities/discover-people|join|extract-members` (index.js), sections UI (cm-wa/cm-tg/cm-tg-people, champs pays/ville/département). Variable : `WHATSAPP_DIRECTORY_SEARCH_URL` (fournisseur personnalisé, prioritaire sur les 3 moteurs par défaut). Statut : NON PORTÉ.
+
+## Livraison 2026-09-22 — Partage de contenu (texte/image/vidéo/document) dans des groupes WhatsApp
+À porter vers local-client/ (WhatsApp local uniquement — sans objet pour mobile/webapp, qui n'a pas de moteur WhatsApp serveur) : `queues/campaignEngine.js` (`recipientType: 'groups'`, même patron que `queues/telegramCampaignEngine.js` déjà utilisé côté Telegram), route `POST /api/groups/broadcast` (index.js), section « 📣 Partager du contenu dans des groupes » de l'onglet WhatsApp (dashboard.html). Statut : NON PORTÉ.
+
+## Livraison 2026-09-22 — Répondeur : notification du propriétaire si question commerciale sans Service Métier configuré
+À porter vers local-client/ et mobile/webapp/ : `ai-engine/jarvis/conversationEngine.js` (paramètre `priorityService` sur `decide()`/`decideCore()`, champ `businessRequestNoService`, message de notification dédié dans `handleBatch`). Dépend du portage encore NON FAIT de l'item #10 (canal propriétaire/alertCenter) et de la ligne 1 (moteur conversationnel Jarvis) ci-dessus — à porter APRÈS eux, pas isolément. Statut : NON PORTÉ.
