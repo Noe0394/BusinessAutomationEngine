@@ -334,7 +334,9 @@ test('SERVICE MÉTIER + FORMATION : règles d\'accompagnement portées par le se
   process.env.LEARNER_WEB_SEARCH = 'false'; prompts.length = 0;
   try { await ask(T, from, 'Quelle quantité de sel dois-je utiliser ?', 1); } finally { delete process.env.LEARNER_WEB_SEARCH; }
   assert.match(prompts[prompts.length - 1], /Règles d'accompagnement des apprenants/);
-  assert.ok(prompts[prompts.length - 1].length < 9000, 'contexte borné : ' + prompts[prompts.length - 1].length);
+  // Seuil relevé (persona client allongée par la règle de vouvoiement obligatoire, ~650 caractères, ajoutée sur demande explicite de l'utilisateur) :
+  // reste une garde réelle contre un chargement non borné des ressources du cours (qui produirait des dizaines de milliers de caractères, pas quelques centaines).
+  assert.ok(prompts[prompts.length - 1].length < 10500, 'contexte borné : ' + prompts[prompts.length - 1].length);
 });
 
 test('QUOTA : un tour d\'apprentissage compte comme UN échange (limite 10/h) et s\'arrête après la limite', async () => {

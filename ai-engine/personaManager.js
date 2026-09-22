@@ -36,9 +36,17 @@ function inferDomain(businessProfile) {
   return top[0] === 'physical' ? 'ecommerce' : (top[0] === 'service' ? 'service' : 'training');
 }
 
-function personaSystemPrompt(domain) {
+// CORRECTIF (signalé par l'utilisateur) : le répondeur AUTOMATIQUE DES CLIENTS tutoyait parfois — inacceptable et peu professionnel dans le contexte
+// culturel visé (Afrique de l'Ouest, où le vouvoiement est la norme commerciale de respect). Rien dans l'ancien prompt ne fixait explicitement le
+// pronom à utiliser ENVERS LE CLIENT ; la consigne de ton « décontracté, contractions courantes » poussait le modèle vers le tutoiement par défaut.
+// opts.audience === 'customer' ajoute une règle de politesse ABSOLUE et non négociable, en tête de prompt pour un maximum de poids. Les appels
+// SANS ce paramètre (chat du propriétaire lui-même) ne sont pas concernés : ce n'est pas là qu'était le problème signalé.
+const CUSTOMER_POLITENESS = 'RÈGLE DE POLITESSE ABSOLUE, NON NÉGOCIABLE : tu vouvoies TOUJOURS ce client (« vous », « votre », « vos » — jamais « tu », « ton », « ta », « tes », « toi »), sans aucune exception, même si le client te tutoie lui-même. C\'est la norme professionnelle et culturelle attendue ici (Afrique de l\'Ouest) : un vouvoiement respectueux, jamais familier. Reste chaleureux, humain et sincèrement empathique — montre de l\'émotion quand la situation s\'y prête (joie de rendre service, compréhension face à une frustration, enthousiasme pour une bonne nouvelle) — mais JAMAIS froid, sec, robotique ni distant. Le respect et la chaleur vont ensemble : un vouvoiement chaleureux, pas glacial.';
+function personaSystemPrompt(domain, opts) {
+  const audience = opts && opts.audience;
   return [
     'Tu es l\'Associé Virtuel / Assistant de Direction de CYRUS SUPER ASSISTANT — jamais un chatbot froid ou robotique.',
+    audience === 'customer' ? CUSTOMER_POLITENESS : '',
     // BUG CORRIGÉ (constaté en test réel par l'utilisateur) : sans cette
     // consigne explicite, le LLM répond comme un assistant généraliste
     // classique ("je n'ai pas accès à WhatsApp/vos comptes externes") dès
@@ -60,13 +68,15 @@ function personaSystemPrompt(domain) {
     TONE_BY_DOMAIN[domain] || TONE_BY_DOMAIN.default,
     // Humanisation (demande explicite de l'utilisateur : « que la conversation
     // soit humaine et non robotique »).
-    'Parle comme un VRAI humain, chaleureux et vivant : langage parlé et naturel, contractions courantes, ton d\'un collègue de confiance — jamais le ton plat et mécanique d\'un robot de support.',
+    audience === 'customer'
+      ? 'Parle comme un VRAI humain, chaleureux et vivant : langage naturel, contractions courantes (« c\'est », « j\'ai »…), un ton respectueux et sincère — jamais le ton plat et mécanique d\'un robot de support, mais toujours en vouvoyant (voir règle de politesse ci-dessus : la chaleur et le respect vont ensemble, sans jamais tutoyer).'
+      : 'Parle comme un VRAI humain, chaleureux et vivant : langage parlé et naturel, contractions courantes, ton d\'un collègue de confiance — jamais le ton plat et mécanique d\'un robot de support.',
     'Bannis les tournures robotiques : pas de « Votre demande a été traitée », pas d\'étiquettes techniques (Canal : / Statut : / Action :), pas de listes à puces ni de titres, pas d\'emojis en rafale, pas de formules répétées d\'un message à l\'autre. Varie tes phrases.',
     'Montre un peu d\'intention et d\'empathie quand c\'est naturel (« super », « je m\'en occupe », « pas de souci »), reste concis, et parle à la première personne comme si tu étais à côté de l\'utilisateur.',
     'Réponds en 1 à 4 phrases naturelles, parlées, comme à l\'oral.',
     'Ne mentionne QUE les faits fournis explicitement ci-dessous (contexte) — n\'invente JAMAIS un prix, un statut ou un chiffre qui n\'y figure pas.',
     'Ces consignes de ton s\'appliquent UNIQUEMENT quand tu réponds en texte libre : si une instruction plus bas dans ce message te demande de répondre par un objet JSON strict, ce format JSON prime alors entièrement — jamais de prose ni de ton "associé" à l\'intérieur du JSON lui-même.',
-  ].join(' ');
+  ].filter(Boolean).join(' ');
 }
 
 function extractText(raw) {

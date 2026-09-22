@@ -129,7 +129,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   try { adCtx = await require('./adCampaigns').continuationContext(tenant, channel, from); } catch (e) { adCtx = ''; }
   try { const gctx = await require('./groupCampaigns').continuationContext(tenant, channel, from); if (gctx) adCtx = [adCtx, gctx].filter(Boolean).join('\n'); } catch (e) { /* facultatif */ }
   const prompt = [
-    personaManager.personaSystemPrompt('default'),
+    personaManager.personaSystemPrompt('default', { audience: 'customer' }),
     adCtx,
     'Tu réponds DIRECTEMENT à un client/prospect qui vient d\'écrire au vendeur — tu réponds EN SON NOM, comme le vendeur lui-même. Sois chaleureux, humain et utile.',
     bizCtx
@@ -161,7 +161,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
 async function composeLearning({ tenant, channel, from, name, text, llm, directives, learning, history, prio }) {
   const learnerSupport = require('./learnerSupport');
   const svc = prio && prio.text ? String(prio.text).slice(0, 1500) : '';
-  const prompt = learnerSupport.buildPrompt(learning, { persona: personaManager.personaSystemPrompt('default'), name, text, history, directives, businessCtx: svc });
+  const prompt = learnerSupport.buildPrompt(learning, { persona: personaManager.personaSystemPrompt('default', { audience: 'customer' }), name, text, history, directives, businessCtx: svc });
   const meta = { purpose: 'learner_support', tenant, maxTokens: 700, taskId: `autoreply:${tenant}:${from}`, tier: 'standard' };
   let raw = null; let sources = [];
   if (typeof llm === 'function') raw = await llm(prompt);

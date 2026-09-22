@@ -93,7 +93,7 @@ async function buildBusinessFacts(businessProfile, tenantId) {
 
 async function composeClosingReply({ text, history, analysis, strategy, facts, domain, directives }) {
   const prompt = [
-    personaManager.personaSystemPrompt(domain),
+    personaManager.personaSystemPrompt(domain, { audience: 'customer' }),
     'Tu es EN CONVERSATION DIRECTE avec un PROSPECT/CLIENT final sur WhatsApp/Telegram (pas le vendeur) — posture de Conseiller-Vendeur empathique et persuasif (Closer), jamais un bot de support froid ni scolaire.',
     `Message du client : "${text}"`,
     `Profil émotionnel détecté : intention=${analysis.intent}, sentiment=${analysis.sentiment}, intérêt=${analysis.interest}, objection probable=${analysis.objection_primary}, hésitation=${analysis.hesitation}/1, confiance=${analysis.trust}/1, émotion dominante=${analysis.dominant_emotion}.`,
