@@ -5832,6 +5832,14 @@ try {
   app.post('/api/communities/groups/:id/cancel', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.cancelJob(tenant, req.params.id) })));
   app.post('/api/communities/groups/:id/resume', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.resumeJob(tenant, req.params.id) })));
   app.post('/api/communities/discover', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discover(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true })) })));
+  // Recherche parmi MES groupes déjà rejoints (nom, thème, "où je suis admin") — distinct de /discover ci-dessus qui cherche des groupes PUBLICS
+  // à rejoindre. Même logique que le Chat intelligent/Self WhatsApp-Telegram ("cherche mes groupes sur X"), voir chatOrchestrator#searchMyGroups :
+  // avant cette route, cette recherche n'existait que par le chat, invisible pour qui ne pense pas à le demander en discutant avec l'IA.
+  app.get('/api/communities/my-groups', requireAccess, cmRoute(async (req, tenant) => {
+    const res = await require('./ai-engine/chatOrchestrator').searchMyGroups(cmChannel(req), { adminOnly: req.query.adminOnly === 'true', subject: req.query.subject }, tenant, { runtime: intelligenceBridge.runtime });
+    if (!res.ok) throw Object.assign(new Error(res.error === 'ENGINE_UNAVAILABLE' ? 'Moteur non disponible.' : `Échec de la récupération des groupes (${res.error}).`), { code: res.error });
+    return res;
+  }));
   app.get('/api/communities/directory', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, communities: await contactCrm.listCommunities(tenant, { channel: req.query.channel, keyword: req.query.keyword }) })));
   app.post('/api/communities/sync', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.syncToCrm(tenant, Array.isArray(req.body && req.body.communities) ? req.body.communities.slice(0, 100) : [])) })));
 }

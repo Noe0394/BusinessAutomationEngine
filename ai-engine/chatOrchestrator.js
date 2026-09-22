@@ -811,45 +811,25 @@ async function handleActionsReport(tenantId) {
 // Base concrète pour cibler ensuite une campagne (extraction + envoi), qui
 // passe par le moteur de campagne existant sur confirmation.
 // ---------------------------------------------------------------------------
-async function handleGroups(text, tenantId, deps) {
-  if (!deps.runtime || !deps.runtime.actionExecutor) {
-    return { text: 'Je ne peux pas lister les groupes pour le moment (moteur non disponible).' };
-  }
-  const channel = /telegram/i.test(text) ? 'TELEGRAM' : 'WHATSAPP';
-  const label = channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+// searchMyGroups() — cœur RÉUTILISABLE de la recherche parmi les groupes déjà rejoints (filtre admin + sujet, tri par taille, enrichissement du
+// lien WhatsApp réel pour une recherche ciblée). Retourne des données structurées, pas un texte de chat : utilisé à la fois par handleGroups()
+// (Self WhatsApp/Telegram, Chat Intelligent) et par la route HTTP /api/communities/my-groups (recherche visible dans l'onglet Communautés du
+// dashboard — avant, cette recherche n'existait qu'en discutant avec l'IA, invisible pour qui ne pense pas à le demander par chat).
+async function searchMyGroups(channel, { adminOnly, subject } = {}, tenantId, deps) {
+  if (!deps.runtime || !deps.runtime.actionExecutor) return { ok: false, error: 'ENGINE_UNAVAILABLE' };
   const out = await deps.runtime.actionExecutor.execute('LIST_GROUPS', { channel, tenantId }, { tenantId });
-  if (!out.ok) return { text: `Je n'ai pas pu récupérer tes groupes ${label} (${out.error}).` };
+  if (!out.ok) return { ok: false, error: out.error || 'LIST_GROUPS_FAILED' };
   const r = out.result || {};
-  if (r.connected === false) {
-    return {
-      text: r.paired
-        ? `Ton compte ${label} est appairé mais la connexion se rétablit — réessaie dans un instant pour que je liste tes groupes.`
-        : `Je ne suis pas connecté à ${label} — appaire d'abord le compte dans l'onglet ${label}.`,
-      actionLog: [{ icon: '🔄', label: `${label} ${r.paired ? 'reconnexion' : 'non appairé'}`, status: 'warning' }],
-    };
-  }
+  if (r.connected === false) return { ok: true, connected: false, paired: !!r.paired, groups: [], total: 0 };
   let groups = Array.isArray(r.groups) ? r.groups : [];
   const total = groups.length;
-  const adminOnly = /(admin|administre|dont\s+je\s+suis|o[ùu]\s+je\s+suis)/i.test(text);
   if (adminOnly) groups = groups.filter((g) => g.isAdmin);
-  // Nom recherché : soit un lien explicite (sur/contenant/thème/à propos de/parlant de X), soit directement après « groupe(s) » (« cherche le
-  // groupe Épicerie ») — en excluant les mots qui ne sont pas un nom (telegram/whatsapp/dont/où/que/admin/publics).
-  const subjLinked = text.match(/(?:sur|contenant|th[èe]me|[àa]\s+propos\s+de|parlant\s+de)\s+["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
-  // NOTE : \b ne fonctionne pas de façon fiable après une lettre accentuée (où/privé/thème…) en JS — (?=\s|$|[.,;:!?]) le remplace partout ici.
-  const subjBare = !subjLinked && text.match(/groupes?\s+(?!telegram(?=\s|$|[.,;:!?])|whatsapp(?=\s|$|[.,;:!?])|dont(?=\s|$|[.,;:!?])|o[ùu](?=\s|$|[.,;:!?])|que(?=\s|$|[.,;:!?])|admin\w*(?=\s|$|[.,;:!?])|publics?(?=\s|$|[.,;:!?])|priv[ée]s?(?=\s|$|[.,;:!?])|sur(?=\s|$|[.,;:!?])|contenant(?=\s|$|[.,;:!?])|th[èe]me(?=\s|$|[.,;:!?])|[àa]\s+propos(?=\s|$|[.,;:!?])|parlant(?=\s|$|[.,;:!?]))["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
-  const subjName = (subjLinked && subjLinked[1]) || (subjBare && subjBare[1]);
+  const subjName = subject && String(subject).trim();
   if (subjName) {
-    const kw = subjName.trim().toLowerCase();
+    const kw = subjName.toLowerCase();
     groups = groups.filter((g) => (g.name || '').toLowerCase().includes(kw));
   }
-  if (!groups.length) {
-    return {
-      text: adminOnly
-        ? `Je ne trouve aucun groupe ${label} dont tu es admin (sur ${total} groupe(s) au total).`
-        : (subjName ? `Aucun groupe ${label} ne correspond à « ${subjName.trim()} » (sur ${total} groupe(s) au total) — vérifie le nom, ou dis-moi « liste mes groupes ${label} » pour voir la liste complète.` : `Aucun groupe ${label} trouvé (${total} au total).`),
-      actionLog: [{ icon: '👥', label: `0 groupe ${label}`, status: 'done' }],
-    };
-  }
+  const matched = groups.length;
   const sorted = groups.slice().sort((a, b) => (b.size || 0) - (a.size || 0));
   const top = sorted.slice(0, 20);
   // Recherche CIBLÉE (nom précis, peu de résultats) : le lien réel est joint quand la plateforme le fournit — jamais fabriqué. WhatsApp seul l'expose
@@ -862,14 +842,45 @@ async function handleGroups(text, tenantId, deps) {
       }
     } catch (e) { /* moteur non disponible : pas de lien, jamais inventé */ }
   }
-  const lines = top.map((g) => `• ${g.name}${g.isAdmin ? ' 👑 (admin)' : ''} — ${g.size || 0} membre(s)${g.link ? ` — ${g.link}` : ''}`);
+  return { ok: true, connected: true, total, matched, groups: top, truncated: matched > top.length };
+}
+
+async function handleGroups(text, tenantId, deps) {
+  const channel = /telegram/i.test(text) ? 'TELEGRAM' : 'WHATSAPP';
+  const label = channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp';
+  const adminOnly = /(admin|administre|dont\s+je\s+suis|o[ùu]\s+je\s+suis)/i.test(text);
+  // Nom recherché : soit un lien explicite (sur/contenant/thème/à propos de/parlant de X), soit directement après « groupe(s) » (« cherche le
+  // groupe Épicerie ») — en excluant les mots qui ne sont pas un nom (telegram/whatsapp/dont/où/que/admin/publics).
+  const subjLinked = text.match(/(?:sur|contenant|th[èe]me|[àa]\s+propos\s+de|parlant\s+de)\s+["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
+  // NOTE : \b ne fonctionne pas de façon fiable après une lettre accentuée (où/privé/thème…) en JS — (?=\s|$|[.,;:!?]) le remplace partout ici.
+  const subjBare = !subjLinked && text.match(/groupes?\s+(?!telegram(?=\s|$|[.,;:!?])|whatsapp(?=\s|$|[.,;:!?])|dont(?=\s|$|[.,;:!?])|o[ùu](?=\s|$|[.,;:!?])|que(?=\s|$|[.,;:!?])|admin\w*(?=\s|$|[.,;:!?])|publics?(?=\s|$|[.,;:!?])|priv[ée]s?(?=\s|$|[.,;:!?])|sur(?=\s|$|[.,;:!?])|contenant(?=\s|$|[.,;:!?])|th[èe]me(?=\s|$|[.,;:!?])|[àa]\s+propos(?=\s|$|[.,;:!?])|parlant(?=\s|$|[.,;:!?]))["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
+  const subjName = (subjLinked && subjLinked[1]) || (subjBare && subjBare[1]);
+  const res = await searchMyGroups(channel, { adminOnly, subject: subjName }, tenantId, deps);
+  if (!res.ok) return { text: res.error === 'ENGINE_UNAVAILABLE' ? 'Je ne peux pas lister les groupes pour le moment (moteur non disponible).' : `Je n'ai pas pu récupérer tes groupes ${label} (${res.error}).` };
+  if (res.connected === false) {
+    return {
+      text: res.paired
+        ? `Ton compte ${label} est appairé mais la connexion se rétablit — réessaie dans un instant pour que je liste tes groupes.`
+        : `Je ne suis pas connecté à ${label} — appaire d'abord le compte dans l'onglet ${label}.`,
+      actionLog: [{ icon: '🔄', label: `${label} ${res.paired ? 'reconnexion' : 'non appairé'}`, status: 'warning' }],
+    };
+  }
+  if (!res.matched) {
+    return {
+      text: adminOnly
+        ? `Je ne trouve aucun groupe ${label} dont tu es admin (sur ${res.total} groupe(s) au total).`
+        : (subjName ? `Aucun groupe ${label} ne correspond à « ${subjName.trim()} » (sur ${res.total} groupe(s) au total) — vérifie le nom, ou dis-moi « liste mes groupes ${label} » pour voir la liste complète.` : `Aucun groupe ${label} trouvé (${res.total} au total).`),
+      actionLog: [{ icon: '👥', label: `0 groupe ${label}`, status: 'done' }],
+    };
+  }
+  const lines = res.groups.map((g) => `• ${g.name}${g.isAdmin ? ' 👑 (admin)' : ''} — ${g.size || 0} membre(s)${g.link ? ` — ${g.link}` : ''}`);
   const header = adminOnly
-    ? `Tes groupes ${label} où tu es admin (${groups.length}) :`
-    : `Tes groupes ${label} (${groups.length}${subjName ? ` correspondant à « ${subjName.trim()} »` : ''}) :`;
-  const more = groups.length > top.length ? `\n… et ${groups.length - top.length} autre(s).` : '';
+    ? `Tes groupes ${label} où tu es admin (${res.matched}) :`
+    : `Tes groupes ${label} (${res.matched}${subjName ? ` correspondant à « ${subjName.trim()} »` : ''}) :`;
+  const more = res.truncated ? `\n… et ${res.matched - res.groups.length} autre(s).` : '';
   return {
     text: [header, ...lines].join('\n') + more,
-    actionLog: [{ icon: '👥', label: `${groups.length} groupe(s) ${label}`, status: 'done' }],
+    actionLog: [{ icon: '👥', label: `${res.matched} groupe(s) ${label}`, status: 'done' }],
   };
 }
 
@@ -1587,4 +1598,4 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
   }
 }
 
-module.exports = { detectIntent, isQuickChat, handle, handleOwnerQueue };
+module.exports = { detectIntent, isQuickChat, handle, handleOwnerQueue, searchMyGroups };

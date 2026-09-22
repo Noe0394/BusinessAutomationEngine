@@ -2186,6 +2186,12 @@
          (GET /api/reports/activity). Portée par tenant (clé de licence). -->
     <!-- Onglet : Communautés — création de groupes et découverte de groupes/canaux (WhatsApp + Telegram), sections déplacées ici pour être visibles. -->
     <section class="panel" id="panel-communities">
+      <style>
+        #panel-communities .cm-timing { margin: .6rem 0; border: 1px solid rgba(0,0,0,.12); border-radius: 10px; padding: .1rem .8rem .8rem; }
+        #panel-communities .cm-timing summary { cursor: pointer; padding: .6rem 0; font-weight: 600; }
+        #panel-communities .cm-timing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .6rem .8rem; }
+        #panel-communities .cm-timing .field { margin: 0; }
+      </style>
       <h2>👥 Communautés</h2>
       <div class="subsection" id="cm-wa-section">
         <h3>👥 Communautés — créer un groupe et découvrir des groupes/canaux (WhatsApp)</h3>
@@ -2207,12 +2213,55 @@
           <label for="cm-wa-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
           <input type="text" id="cm-wa-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
         </div>
+        <details class="cm-timing" id="cm-wa-timing-box">
+          <summary>⚙️ Temporisation avancée (facultatif — sinon des valeurs prudentes par défaut sont utilisées)</summary>
+          <div class="cm-timing-grid">
+            <div class="field"><label for="cm-wa-timing-batch">Taille des lots</label><input type="number" id="cm-wa-timing-batch" min="1" max="20" placeholder="ex. 2" /></div>
+            <div class="field"><label for="cm-wa-timing-items">Délai entre 2 personnes (s)</label><input type="number" id="cm-wa-timing-items" min="1" max="300" placeholder="ex. 10" /></div>
+            <div class="field"><label for="cm-wa-timing-batches">Délai entre 2 lots (s)</label><input type="number" id="cm-wa-timing-batches" min="0" max="1800" placeholder="ex. 120" /></div>
+            <div class="field"><label for="cm-wa-timing-pause-every">Pause toutes les N lots</label><input type="number" id="cm-wa-timing-pause-every" min="0" max="50" placeholder="ex. 5" /></div>
+            <div class="field"><label for="cm-wa-timing-pause-min">Durée de cette pause (min)</label><input type="number" id="cm-wa-timing-pause-min" min="0" max="60" placeholder="ex. 15" /></div>
+            <div class="field"><label for="cm-wa-timing-initial">Délai avant de démarrer (s)</label><input type="number" id="cm-wa-timing-initial" min="0" max="300" placeholder="ex. 0" /></div>
+            <div class="field"><label for="cm-wa-timing-max">Maximum par exécution</label><input type="number" id="cm-wa-timing-max" min="1" max="5000" placeholder="illimité" /></div>
+          </div>
+        </details>
         <button type="button" id="cm-wa-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
         <button type="button" id="cm-wa-pause-btn" hidden>⏸ Pause</button>
         <button type="button" id="cm-wa-resume-btn" hidden>▶️ Reprendre</button>
         <button type="button" id="cm-wa-stop-btn" hidden style="background:#c0392b;color:#fff">⏹ Arrêter la création</button>
+        <button type="button" id="cm-wa-timing-edit-btn" hidden>🎚 Ajuster la temporisation</button>
         <p id="cm-wa-create-feedback" hidden></p>
         <div id="cm-wa-progress" hidden></div>
+        <details class="cm-timing" id="cm-wa-timing-edit-box" hidden>
+          <summary>🎚 Nouvelle temporisation (le groupe doit être en pause — s'appliquera à la reprise)</summary>
+          <div class="cm-timing-grid">
+            <div class="field"><label for="cm-wa-etiming-batch">Taille des lots</label><input type="number" id="cm-wa-etiming-batch" min="1" max="20" /></div>
+            <div class="field"><label for="cm-wa-etiming-items">Délai entre 2 personnes (s)</label><input type="number" id="cm-wa-etiming-items" min="1" max="300" /></div>
+            <div class="field"><label for="cm-wa-etiming-batches">Délai entre 2 lots (s)</label><input type="number" id="cm-wa-etiming-batches" min="0" max="1800" /></div>
+            <div class="field"><label for="cm-wa-etiming-pause-every">Pause toutes les N lots</label><input type="number" id="cm-wa-etiming-pause-every" min="0" max="50" /></div>
+            <div class="field"><label for="cm-wa-etiming-pause-min">Durée de cette pause (min)</label><input type="number" id="cm-wa-etiming-pause-min" min="0" max="60" /></div>
+            <div class="field"><label for="cm-wa-etiming-initial">Délai avant de démarrer (s)</label><input type="number" id="cm-wa-etiming-initial" min="0" max="300" /></div>
+            <div class="field"><label for="cm-wa-etiming-max">Maximum par exécution</label><input type="number" id="cm-wa-etiming-max" min="1" max="5000" /></div>
+          </div>
+          <button type="button" id="cm-wa-etiming-apply-btn">✔ Appliquer</button>
+          <p id="cm-wa-etiming-feedback" hidden></p>
+        </details>
+
+        <h3 style="margin-top:1.5rem;">🔎 Rechercher parmi mes groupes</h3>
+        <p class="empty">Cherche parmi les groupes que vous avez déjà rejoints (par nom/thème, ou ceux où vous êtes admin) — distinct de la découverte de nouveaux groupes publics ci-dessous. Fonctionne aussi en le demandant directement dans le Chat Intelligent.</p>
+        <div class="field">
+          <label for="cm-wa-mine-kw">Nom ou thème (facultatif)</label>
+          <input type="text" id="cm-wa-mine-kw" placeholder="Ex. marketing, épicerie…" />
+        </div>
+        <label style="display:flex;align-items:center;gap:.4rem;font-weight:400;margin:.3rem 0;"><input type="checkbox" id="cm-wa-mine-admin" style="width:auto;" /> Seulement où je suis admin</label>
+        <button type="button" id="cm-wa-mine-search-btn">🔎 Rechercher parmi mes groupes</button>
+        <p id="cm-wa-mine-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Admin</th><th>Membres</th><th>Lien</th></tr></thead>
+            <tbody id="cm-wa-mine-results"><tr><td colspan="4" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
 
         <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
         <div class="field">
@@ -2249,12 +2298,55 @@
           <label for="cm-tg-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
           <input type="text" id="cm-tg-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
         </div>
+        <details class="cm-timing" id="cm-tg-timing-box">
+          <summary>⚙️ Temporisation avancée (facultatif — sinon des valeurs prudentes par défaut sont utilisées)</summary>
+          <div class="cm-timing-grid">
+            <div class="field"><label for="cm-tg-timing-batch">Taille des lots</label><input type="number" id="cm-tg-timing-batch" min="1" max="20" placeholder="ex. 2" /></div>
+            <div class="field"><label for="cm-tg-timing-items">Délai entre 2 personnes (s)</label><input type="number" id="cm-tg-timing-items" min="1" max="300" placeholder="ex. 10" /></div>
+            <div class="field"><label for="cm-tg-timing-batches">Délai entre 2 lots (s)</label><input type="number" id="cm-tg-timing-batches" min="0" max="1800" placeholder="ex. 120" /></div>
+            <div class="field"><label for="cm-tg-timing-pause-every">Pause toutes les N lots</label><input type="number" id="cm-tg-timing-pause-every" min="0" max="50" placeholder="ex. 5" /></div>
+            <div class="field"><label for="cm-tg-timing-pause-min">Durée de cette pause (min)</label><input type="number" id="cm-tg-timing-pause-min" min="0" max="60" placeholder="ex. 15" /></div>
+            <div class="field"><label for="cm-tg-timing-initial">Délai avant de démarrer (s)</label><input type="number" id="cm-tg-timing-initial" min="0" max="300" placeholder="ex. 0" /></div>
+            <div class="field"><label for="cm-tg-timing-max">Maximum par exécution</label><input type="number" id="cm-tg-timing-max" min="1" max="5000" placeholder="illimité" /></div>
+          </div>
+        </details>
         <button type="button" id="cm-tg-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
         <button type="button" id="cm-tg-pause-btn" hidden>⏸ Pause</button>
         <button type="button" id="cm-tg-resume-btn" hidden>▶️ Reprendre</button>
         <button type="button" id="cm-tg-stop-btn" hidden style="background:#c0392b;color:#fff">⏹ Arrêter la création</button>
+        <button type="button" id="cm-tg-timing-edit-btn" hidden>🎚 Ajuster la temporisation</button>
         <p id="cm-tg-create-feedback" hidden></p>
         <div id="cm-tg-progress" hidden></div>
+        <details class="cm-timing" id="cm-tg-timing-edit-box" hidden>
+          <summary>🎚 Nouvelle temporisation (le groupe doit être en pause — s'appliquera à la reprise)</summary>
+          <div class="cm-timing-grid">
+            <div class="field"><label for="cm-tg-etiming-batch">Taille des lots</label><input type="number" id="cm-tg-etiming-batch" min="1" max="20" /></div>
+            <div class="field"><label for="cm-tg-etiming-items">Délai entre 2 personnes (s)</label><input type="number" id="cm-tg-etiming-items" min="1" max="300" /></div>
+            <div class="field"><label for="cm-tg-etiming-batches">Délai entre 2 lots (s)</label><input type="number" id="cm-tg-etiming-batches" min="0" max="1800" /></div>
+            <div class="field"><label for="cm-tg-etiming-pause-every">Pause toutes les N lots</label><input type="number" id="cm-tg-etiming-pause-every" min="0" max="50" /></div>
+            <div class="field"><label for="cm-tg-etiming-pause-min">Durée de cette pause (min)</label><input type="number" id="cm-tg-etiming-pause-min" min="0" max="60" /></div>
+            <div class="field"><label for="cm-tg-etiming-initial">Délai avant de démarrer (s)</label><input type="number" id="cm-tg-etiming-initial" min="0" max="300" /></div>
+            <div class="field"><label for="cm-tg-etiming-max">Maximum par exécution</label><input type="number" id="cm-tg-etiming-max" min="1" max="5000" /></div>
+          </div>
+          <button type="button" id="cm-tg-etiming-apply-btn">✔ Appliquer</button>
+          <p id="cm-tg-etiming-feedback" hidden></p>
+        </details>
+
+        <h3 style="margin-top:1.5rem;">🔎 Rechercher parmi mes groupes</h3>
+        <p class="empty">Cherche parmi les groupes que vous avez déjà rejoints (par nom/thème, ou ceux où vous êtes admin) — distinct de la découverte de nouveaux groupes publics ci-dessous. Fonctionne aussi en le demandant directement dans le Chat Intelligent.</p>
+        <div class="field">
+          <label for="cm-tg-mine-kw">Nom ou thème (facultatif)</label>
+          <input type="text" id="cm-tg-mine-kw" placeholder="Ex. marketing, épicerie…" />
+        </div>
+        <label style="display:flex;align-items:center;gap:.4rem;font-weight:400;margin:.3rem 0;"><input type="checkbox" id="cm-tg-mine-admin" style="width:auto;" /> Seulement où je suis admin</label>
+        <button type="button" id="cm-tg-mine-search-btn">🔎 Rechercher parmi mes groupes</button>
+        <p id="cm-tg-mine-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Admin</th><th>Membres</th><th>Lien</th></tr></thead>
+            <tbody id="cm-tg-mine-results"><tr><td colspan="4" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
 
         <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
         <div class="field">
@@ -10621,6 +10713,32 @@
 
     // ---- Communautés : création/invitation de groupes + découverte (onglets WhatsApp et Telegram) -------------------------------------
     (function initCommunities() {
+      // Temporisation : champs saisis en secondes/minutes côté interface (plus lisible), convertis en millisecondes pour l'API
+      // (voir ai-engine/communityService.js#TIMING_BOUNDS, qui travaille en ms). readTiming ignore les champs laissés vides (défauts
+      // prudents du serveur appliqués). writeTiming fait l'inverse pour préremplir le formulaire d'ajustement avec la temporisation réelle du job.
+      function readTiming(prefix, $) {
+        var t = {};
+        var num = function (id) { var v = $(id).value; return v === '' ? undefined : Number(v); };
+        var batch = num(prefix + 'batch'); if (batch != null) t.batchSize = batch;
+        var items = num(prefix + 'items'); if (items != null) t.delayBetweenItems = Math.round(items * 1000);
+        var batches = num(prefix + 'batches'); if (batches != null) t.delayBetweenBatches = Math.round(batches * 1000);
+        var pauseEvery = num(prefix + 'pause-every'); if (pauseEvery != null) t.pauseEveryNBatches = pauseEvery;
+        var pauseMin = num(prefix + 'pause-min'); if (pauseMin != null) t.pauseDuration = Math.round(pauseMin * 60000);
+        var initial = num(prefix + 'initial'); if (initial != null) t.initialDelay = Math.round(initial * 1000);
+        var max = num(prefix + 'max'); if (max != null) t.maxItems = max;
+        return t;
+      }
+      function writeTiming(prefix, $, timing) {
+        var t = timing || {};
+        var set = function (id, v) { $(id).value = (v === undefined || v === null) ? '' : v; };
+        set(prefix + 'batch', t.batchSize);
+        set(prefix + 'items', t.delayBetweenItems != null ? Math.round(t.delayBetweenItems / 1000) : undefined);
+        set(prefix + 'batches', t.delayBetweenBatches != null ? Math.round(t.delayBetweenBatches / 1000) : undefined);
+        set(prefix + 'pause-every', t.pauseEveryNBatches);
+        set(prefix + 'pause-min', t.pauseDuration != null ? Math.round(t.pauseDuration / 60000) : undefined);
+        set(prefix + 'initial', t.initialDelay != null ? Math.round(t.initialDelay / 1000) : undefined);
+        set(prefix + 'max', t.maxItems);
+      }
       function setup(p, channel) {
         var $ = function (s) { return document.getElementById('cm-' + p + '-' + s); };
         if (!$('create-btn')) return;
@@ -10642,9 +10760,12 @@
           ];
           if (job.group && job.group.link) lines.push('Lien du groupe : ' + job.group.link);
           lines.forEach(function (l) { var d = document.createElement('div'); d.textContent = l; box.appendChild(d); });
-          $('resume-btn').hidden = ['PAUSED_RATE_LIMIT', 'DONE_WITH_ISSUES', 'PAUSED_USER', 'INTERRUPTED'].indexOf(job.status) < 0;
+          var paused = ['PAUSED_RATE_LIMIT', 'DONE_WITH_ISSUES', 'PAUSED_USER', 'INTERRUPTED'].indexOf(job.status) >= 0;
+          $('resume-btn').hidden = !paused;
           if ($('pause-btn')) { $('pause-btn').hidden = ['QUEUED', 'RUNNING'].indexOf(job.status) < 0; $('pause-btn').disabled = false; }
           if ($('stop-btn')) { $('stop-btn').hidden = ['QUEUED', 'RUNNING', 'PAUSING', 'CANCELLING', 'PAUSED_RATE_LIMIT', 'PAUSED_USER', 'INTERRUPTED'].indexOf(job.status) < 0; $('stop-btn').disabled = job.status === 'CANCELLING'; }
+          // Ajuster la temporisation : seulement possible pendant une pause (voir communityService.setTiming), s'applique à la reprise suivante.
+          if ($('timing-edit-btn')) { $('timing-edit-btn').hidden = !paused; if (!paused) $('timing-edit-box').hidden = true; }
         }
         function poll(id) {
           if (pollTimer) clearInterval(pollTimer);
@@ -10666,6 +10787,7 @@
           if ($('invite').value.trim()) fd.append('inviteMessage', $('invite').value.trim());
           var f = $('file').files[0]; if (f) fd.append('file', f, f.name);
           if (!$('text').value.trim() && !f) return say($('create-feedback'), 'Ajoutez des contacts (texte ou fichier).', false);
+          var timing = readTiming('timing-', $); if (Object.keys(timing).length) fd.append('timing', JSON.stringify(timing));
           $('create-btn').disabled = true; say($('create-feedback'), 'Préparation de la liste et création du groupe…');
           try {
             var res = await apiFetch('/api/communities/groups', { method: 'POST', body: fd });
@@ -10714,6 +10836,47 @@
             var data = await res.json();
             if (data && data.ok) { say($('create-feedback'), 'Reprise du traitement.', true); poll(currentJob.id); } else say($('create-feedback'), (data && data.error) || 'Reprise impossible.', false);
           } catch (e) { /* géré */ }
+        });
+        if ($('timing-edit-btn')) $('timing-edit-btn').addEventListener('click', function () {
+          writeTiming('etiming-', $, currentJob && currentJob.timing);
+          $('timing-edit-box').hidden = !$('timing-edit-box').hidden;
+        });
+        if ($('etiming-apply-btn')) $('etiming-apply-btn').addEventListener('click', async function () {
+          if (!currentJob) return;
+          var patch = readTiming('etiming-', $);
+          if (!Object.keys(patch).length) return say($('etiming-feedback'), 'Renseignez au moins un réglage.', false);
+          $('etiming-apply-btn').disabled = true;
+          try {
+            var res = await apiFetch('/api/communities/groups/' + encodeURIComponent(currentJob.id) + '/timing', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
+            var data = await res.json();
+            if (data && data.ok) { currentJob = data.group; say($('etiming-feedback'), 'Nouvelle temporisation enregistrée — cliquez « Reprendre » pour l\'appliquer.', true); }
+            else say($('etiming-feedback'), (data && data.error) || 'Réglage impossible (le groupe doit être en pause).', false);
+          } catch (e) { say($('etiming-feedback'), 'Erreur de communication avec le serveur.', false); }
+          $('etiming-apply-btn').disabled = false;
+        });
+        function renderMyGroups(list) {
+          var body = $('mine-results'); body.textContent = '';
+          if (!list.length) { var tr0 = document.createElement('tr'); var td0 = document.createElement('td'); td0.colSpan = 4; td0.className = 'empty'; td0.textContent = 'Aucun groupe trouvé.'; tr0.appendChild(td0); body.appendChild(tr0); return; }
+          list.forEach(function (g) {
+            var tr = document.createElement('tr');
+            [g.name || '-', g.isAdmin ? '👑 admin' : '-', g.size != null ? String(g.size) : '-'].forEach(function (v) { var td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+            var tdl = document.createElement('td');
+            if (g.link) { var a = document.createElement('a'); a.href = g.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = g.link.replace('https://', ''); tdl.appendChild(a); } else tdl.textContent = '-';
+            tr.appendChild(tdl);
+            body.appendChild(tr);
+          });
+        }
+        if ($('mine-search-btn')) $('mine-search-btn').addEventListener('click', async function () {
+          $('mine-search-btn').disabled = true; say($('mine-feedback'), 'Recherche en cours…');
+          try {
+            var qs = 'channel=' + channel + '&adminOnly=' + ($('mine-admin').checked ? 'true' : 'false') + ($('mine-kw').value.trim() ? '&subject=' + encodeURIComponent($('mine-kw').value.trim()) : '');
+            var res = await apiFetch('/api/communities/my-groups?' + qs);
+            var data = await res.json();
+            if (!res.ok || !data.ok) { say($('mine-feedback'), (data && data.error) || 'Recherche impossible.', false); }
+            else if (data.connected === false) { say($('mine-feedback'), data.paired ? 'La connexion se rétablit, réessayez dans un instant.' : ('Non connecté : appairez d\'abord le compte dans l\'onglet ' + (channel === 'TELEGRAM' ? 'Telegram' : 'WhatsApp') + '.'), false); renderMyGroups([]); }
+            else { renderMyGroups(data.groups || []); say($('mine-feedback'), (data.matched || 0) + ' groupe(s) trouvé(s)' + (data.truncated ? ' (affichage limité aux 20 plus grands)' : '') + '.', true); }
+          } catch (e) { if (e.message !== 'unauthorized') say($('mine-feedback'), 'Erreur de communication avec le serveur.', false); }
+          $('mine-search-btn').disabled = false;
         });
         function renderResults(list) {
           var body = $('results'); body.textContent = '';

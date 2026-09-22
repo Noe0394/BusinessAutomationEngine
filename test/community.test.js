@@ -263,11 +263,21 @@ test('INTERFACE + ROUTES : sections dans les onglets WhatsApp ET Telegram, route
   // Les deux sections vivent dans un onglet dédié « Communautés », rattaché aux modules WhatsApp/Telegram de la licence (sinon masqué).
   const cm = html.slice(html.indexOf('id="panel-communities"'), html.indexOf('id="panel-reports"'));
   assert.ok(cm.includes('cm-wa-create-btn') && cm.includes('cm-tg-create-btn') && cm.includes('cm-wa-stop-btn') && cm.includes('cm-tg-stop-btn'));
+  // Temporisation visible dans l'interface (pas seulement pilotable par l'IA) : champs de réglage à la création + ajustement pendant une pause.
+  for (const p of ['wa', 'tg']) {
+    for (const f of ['batch', 'items', 'batches', 'pause-every', 'pause-min', 'initial', 'max']) {
+      assert.ok(cm.includes(`cm-${p}-timing-${f}`), `champ de temporisation manquant : cm-${p}-timing-${f}`);
+      assert.ok(cm.includes(`cm-${p}-etiming-${f}`), `champ d'ajustement de temporisation manquant : cm-${p}-etiming-${f}`);
+    }
+    assert.ok(cm.includes(`cm-${p}-timing-edit-btn`) && cm.includes(`cm-${p}-etiming-apply-btn`));
+    // Recherche parmi MES groupes visible dans l'interface (pas seulement accessible en discutant avec l'IA) — distincte de la découverte publique.
+    assert.ok(cm.includes(`cm-${p}-mine-kw`) && cm.includes(`cm-${p}-mine-admin`) && cm.includes(`cm-${p}-mine-search-btn`) && cm.includes(`cm-${p}-mine-results`));
+  }
   assert.match(html, /data-tab="communities"/); assert.match(html, /whatsapp: ['whatsapp', 'relance', 'communities']/); assert.match(html, /telegram: ['telegram', 'relance', 'communities']/);
   assert.ok(!/onclick=|onchange=|oninput=|onsubmit=/.test(html));
   const re = /<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/gi; let m; while ((m = re.exec(html))) assert.doesNotThrow(() => new Function(m[2]));
   const idx = fs.readFileSync(path.join(root, 'index.js'), 'utf8');
-  for (const route of ["post('/api/communities/groups'", "get('/api/communities/groups'", "get('/api/communities/groups/:id'", "post('/api/communities/groups/:id/resume'", "post('/api/communities/groups/:id/cancel'", "post('/api/communities/discover'", "get('/api/communities/directory'", "post('/api/communities/sync'"]) {
+  for (const route of ["post('/api/communities/groups'", "get('/api/communities/groups'", "get('/api/communities/groups/:id'", "post('/api/communities/groups/:id/resume'", "post('/api/communities/groups/:id/timing'", "get('/api/communities/timing-bounds'", "get('/api/communities/my-groups'", "post('/api/communities/discover'", "get('/api/communities/directory'", "post('/api/communities/sync'"]) {
     const line = idx.split('\n').find((l) => l.includes(route)); assert.ok(line && /requireAccess/.test(line), route);
   }
   assert.match(idx, /MODULE_NOT_ALLOWED/);

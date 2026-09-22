@@ -59,3 +59,20 @@ test('COMMUNITY DISCOVERY — Telegram/WhatsApp : jamais un JID/LID présenté c
   const kws = disc.cleanKeywords('Épicerie, Boulangerie ; x');
   assert.deepEqual(kws, ['épicerie', 'boulangerie']); // 'x' trop court (< 2 caractères... en fait 1) est écarté
 });
+
+// searchMyGroups() est le cœur RÉUTILISABLE extrait de handleGroups pour aussi alimenter GET /api/communities/my-groups (recherche visible
+// dans l'onglet Communautés du dashboard, pas seulement accessible en discutant avec l'IA).
+test('searchMyGroups() : données structurées réutilisables par la route HTTP du dashboard (filtre admin, sujet, non connecté, moteur absent)', async () => {
+  const groups = [{ id: '1@g.us', name: 'Épicerie Awa', size: 40, isAdmin: true }, { id: '2@g.us', name: 'Foot entre amis', size: 8, isAdmin: false }];
+  const deps = { runtime: fakeRuntime(groups) };
+  const all = await orch.searchMyGroups('WHATSAPP', {}, 'gs5', deps);
+  assert.equal(all.ok, true); assert.equal(all.connected, true); assert.equal(all.matched, 2);
+  const admins = await orch.searchMyGroups('WHATSAPP', { adminOnly: true }, 'gs5', deps);
+  assert.equal(admins.matched, 1); assert.equal(admins.groups[0].name, 'Épicerie Awa');
+  const bySubject = await orch.searchMyGroups('WHATSAPP', { subject: 'foot' }, 'gs5', deps);
+  assert.equal(bySubject.matched, 1); assert.equal(bySubject.groups[0].name, 'Foot entre amis');
+  const notConnected = await orch.searchMyGroups('WHATSAPP', {}, 'gs5', { runtime: { actionExecutor: { execute: async () => ({ ok: true, result: { connected: false, paired: true } }) } } });
+  assert.equal(notConnected.ok, true); assert.equal(notConnected.connected, false); assert.equal(notConnected.paired, true);
+  const noEngine = await orch.searchMyGroups('WHATSAPP', {}, 'gs5', {});
+  assert.equal(noEngine.ok, false); assert.equal(noEngine.error, 'ENGINE_UNAVAILABLE');
+});
