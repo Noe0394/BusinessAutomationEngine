@@ -27,6 +27,12 @@
     if (rows.some(g => g.id === id)) throw new Error('Ce groupe est déjà dans la liste.');
     rows.push({ id, name, link, addedAt: Date.now(), lastAction: '' }); save(rows);
   }
+  function exportGroups() {
+    const rows = load().map(g => ({ Nom: g.name || '', Lien: g.link || g.id || '', Identifiant: g.id || '', Ajoute: g.addedAt ? new Date(g.addedAt).toLocaleString() : '', DerniereAction: g.lastAction || '' }));
+    if (!rows.length) { feedback('fb-share-import-feedback', 'Aucun groupe à exporter.', true); return; }
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Groupes Facebook');
+    XLSX.writeFile(wb, 'groupes_facebook.xlsx'); feedback('fb-share-import-feedback', rows.length + ' groupe(s) exporté(s) en Excel.');
+  }
   async function importGroups(file) {
     const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]]; const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
@@ -89,6 +95,7 @@
       event.target.value = '';
     });
     $('fb-share-select-all').addEventListener('change', event => document.querySelectorAll('.fb-share-group-check').forEach(c => { c.checked = event.target.checked; }));
+    $('fb-share-export-groups').addEventListener('click', exportGroups);
     $('fb-share-copy-message').addEventListener('click', copyMessage);
     $('fb-share-open-selected').addEventListener('click', openSelected);
     render();

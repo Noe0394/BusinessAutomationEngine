@@ -87,6 +87,158 @@ async function main() {
   app.use(express.json({ limit: '15mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
 
+  // Facebook Messenger / Pages : adaptateur Meta officiel local. La clef
+  // App Secret reste dans DATA_DIR ou l'environnement, jamais dans le DOM.
+  const FacebookMessengerAdapter = require('./lib/facebook');
+  const facebook = new FacebookMessengerAdapter();
+  const crypto = require('crypto');
+  const facebookOAuthStates = new Map();
+  const facebookQueueJobs = new Map();
+  const facebookRedirectUri = process.env.LOCAL_FB_REDIRECT_URI || `http://localhost:${PORT}/api/facebook/callback`;
+  app.get('/api/facebook/status', async (_req, res) => {
+    try { res.json({ configured: facebook.isConfigured(), connectAvailable: facebook.isConnectAvailable(), redirectUri: facebookRedirectUri, ...(await facebook.checkConnection()) }); }
+    catch (err) { res.status(502).json({ error: err.message }); }
+  });
+  app.post('/api/facebook/oauth-config', (req, res) => {
+    const appId = String(req.body?.appId || '').trim();
+    const appSecret = String(req.body?.appSecret || '').trim();
+    if (!appId || !appSecret) return res.status(400).json({ error: 'App ID et App Secret sont requis.' });
+    try {
+      const result = require('./lib/oauthConfig').set('facebook', { appId, appSecret });
+      res.json({ ok: true, ...result, redirectUri: facebookRedirectUri });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.get('/api/facebook/connect', (req, res) => {
+    if (!facebook.isConnectAvailable()) return res.status(400).send('Configurez FB_APP_ID/FB_APP_SECRET dans les réglages locaux avant de connecter Facebook.');
+    const state = crypto.randomBytes(24).toString('hex');
+    for (const [key, expiry] of facebookOAuthStates) if (expiry < Date.now()) facebookOAuthStates.delete(key);
+    facebookOAuthStates.set(state, Date.now() + 10 * 60 * 1000);
+    res.redirect(facebook.getAuthUrl(facebookRedirectUri, state));
+  });
+  app.get('/api/facebook/callback', async (req, res) => {
+    const state = String(req.query.state || '');
+    const expiresAt = facebookOAuthStates.get(state);
+    facebookOAuthStates.delete(state);
+    if (!expiresAt || expiresAt < Date.now() || !req.query.code) return res.redirect('/?fbConnect=failed');
+    try { await facebook.handleOAuthCallback(String(req.query.code), facebookRedirectUri); res.redirect('/?fbConnect=success'); }
+    catch (err) { console.error('Facebook OAuth local:', err.response?.data || err.message); res.redirect('/?fbConnect=failed'); }
+  });
+  app.post('/api/facebook/logout', (_req, res) => res.json(facebook.disconnect()));
+  app.get('/api/facebook/conversations', async (_req, res) => {
+    if (!facebook.isConfigured()) return res.status(409).json({ error: 'Connectez une Page Facebook.' });
+    try { res.json({ conversations: await facebook.getConversations() }); }
+    catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+  app.post('/api/facebook/conversations/:id/message', async (req, res) => {
+    const message = String(req.body?.message || '').trim();
+    if (!facebook.isConfigured()) return res.status(409).json({ error: 'Connectez une Page Facebook.' });
+    if (!message) return res.status(400).json({ error: 'Le message est requis.' });
+    try { res.json(await facebook.sendMessage(String(req.params.id), message)); }
+    catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+  app.post('/api/facebook/contacts/resolve', async (req, res) => {
+    if (!facebook.isConfigured()) return res.status(409).json({ error: 'Connectez une Page Facebook.' });
+    const contacts = req.body?.contacts;
+    if (!Array.isArray(contacts) || contacts.length === 0 || contacts.length > 2000) return res.status(400).json({ error: 'Importez entre 1 et 2000 contacts.' });
+    try { res.json({ contacts: await facebook.resolveRecipientsFromConversations(contacts) }); }
+    catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+  app.post('/api/facebook/queue', async (req, res) => {
+    if (!facebook.isConfigured()) return res.status(409).json({ error: 'Connectez une Page Facebook.' });
+    const recipients = Array.isArray(req.body?.recipients) ? [...new Set(req.body.recipients.map(String).filter(Boolean))] : [];
+    const message = String(req.body?.message || '').trim();
+    const media = req.body?.media;
+    if (!recipients.length || recipients.length > 500 || (!message && !media?.base64)) return res.status(400).json({ error: 'Sélectionnez 1 à 500 destinataires et saisissez un message ou joignez un média.' });
+    if (media && (!media.base64 || media.base64.length > 15 * 1024 * 1024)) return res.status(413).json({ error: 'Fichier absent ou trop volumineux (maximum 10 Mo).' });
+    if (media && !/^(image\/|video\/)/i.test(String(media.type || ''))) return res.status(400).json({ error: 'Seules les images et vidéos sont acceptées pour Messenger.' });
+    const mediaBuffer = media ? Buffer.from(media.base64, 'base64') : null;
+    if (mediaBuffer && mediaBuffer.length > 10 * 1024 * 1024) return res.status(413).json({ error: 'La pièce jointe dépasse 10 Mo.' });
+    let eligible;
+    try { eligible = new Set((await facebook.getConversations()).map(item => String(item.recipientId)).filter(Boolean)); }
+    catch (err) { return res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+    const rejectedCount = recipients.filter(recipient => !eligible.has(recipient)).length;
+    if (rejectedCount) return res.status(400).json({ error: `${rejectedCount} destinataire(s) ne correspondent pas à une conversation Messenger existante de la Page; aucun envoi lancé.` });
+    const id = crypto.randomUUID();
+    const job = { id, status: 'running', total: recipients.length, sent: 0, createdAt: new Date().toISOString(), results: [] };
+    facebookQueueJobs.set(id, job);
+    res.status(202).json({ id, status: job.status, total: job.total, minDelaySeconds: 10, maxDelaySeconds: 15 });
+    facebook.sendBulk(recipients, message, {
+      minDelaySeconds: 10,
+      maxDelaySeconds: 15,
+      batchSize: 25,
+      onProgress: (progress) => { job.sent = progress.sent; },
+      media: mediaBuffer ? { buffer: mediaBuffer, mimetype: media.type, filename: media.name || 'media' } : null,
+    }).then((results) => { job.results = results; job.status = 'completed'; job.completedAt = new Date().toISOString(); })
+      .catch((err) => { job.status = 'failed'; job.error = err.response?.data?.error?.message || err.message; job.completedAt = new Date().toISOString(); });
+    if (facebookQueueJobs.size > 30) {
+      const finished = [...facebookQueueJobs.values()].filter(item => item.status !== 'running').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      while (facebookQueueJobs.size > 30 && finished.length) facebookQueueJobs.delete(finished.shift().id);
+    }
+  });
+  app.get('/api/facebook/queue/:id', (req, res) => {
+    const job = facebookQueueJobs.get(String(req.params.id));
+    if (!job) return res.status(404).json({ error: 'File Messenger introuvable.' });
+    res.json(job);
+  });
+  app.post('/api/facebook/publish', async (req, res) => {
+    if (!facebook.isConfigured()) return res.status(409).json({ error: 'Connectez une Page Facebook.' });
+    const message = String(req.body?.message || '').trim();
+    const link = String(req.body?.link || '').trim();
+    const media = req.body?.media;
+    if (!message && !link && !media?.base64) return res.status(400).json({ error: 'Un texte, un lien ou un média est requis.' });
+    if (media && (!media.base64 || media.base64.length > 15 * 1024 * 1024)) return res.status(413).json({ error: 'Fichier absent ou trop volumineux (maximum 10 Mo).' });
+    if (media && !/^(image\/|video\/)/i.test(String(media.type || ''))) return res.status(400).json({ error: 'Facebook accepte ici uniquement une image ou une vidéo. Les PDF ne sont pas pris en charge.' });
+    const mediaBuffer = media ? Buffer.from(media.base64, 'base64') : null;
+    if (mediaBuffer && mediaBuffer.length > 10 * 1024 * 1024) return res.status(413).json({ error: 'La pièce jointe dépasse 10 Mo.' });
+    const scheduledDate = req.body?.scheduledPublishTime ? new Date(req.body.scheduledPublishTime) : null;
+    const scheduledUnix = scheduledDate ? Math.floor(scheduledDate.getTime() / 1000) : undefined;
+    if (scheduledDate && (!Number.isFinite(scheduledUnix) || scheduledUnix < Math.floor(Date.now() / 1000) + 600 || scheduledUnix > Math.floor(Date.now() / 1000) + 75 * 86400)) {
+      return res.status(400).json({ error: 'Meta exige une programmation entre 10 minutes et 75 jours.' });
+    }
+    try { res.json(await facebook.publishPost({ message, link, mediaBuffer, mediaMimetype: media?.type, mediaFilename: media?.name, scheduledPublishTime: scheduledDate?.toISOString() })); }
+    catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+  app.get('/api/facebook/posts', async (_req, res) => {
+    if (!facebook.isConfigured()) return res.status(409).json({ error: 'Connectez une Page Facebook.' });
+    try { res.json({ posts: await facebook.getPagePosts({ limit: 20 }) }); }
+    catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+  app.get('/api/facebook/groups', (_req, res) => res.json({ groups: facebook.getManagedGroups() }));
+  app.put('/api/facebook/groups', (req, res) => {
+    try { res.json({ groups: facebook.setManagedGroups(req.body?.groups) }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  app.post('/api/facebook/groups', (req, res) => {
+    const id = String(req.body?.id || '').trim();
+    const name = String(req.body?.name || '').trim();
+    if (!id) return res.status(400).json({ error: 'L’identifiant du groupe est requis.' });
+    try { res.json({ groups: facebook.addManagedGroup(id, name) }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.delete('/api/facebook/groups/:id', (req, res) => {
+    try { res.json({ groups: facebook.removeManagedGroup(String(req.params.id)) }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.get('/api/facebook/posts/:postId/comments', async (req, res) => {
+    if (!facebook.isConfigured()) return res.status(409).json({ error: 'Connectez une Page Facebook.' });
+    try { res.json({ comments: await facebook.getPostComments(String(req.params.postId)) }); }
+    catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+  app.post('/api/facebook/comments/:commentId/reply', async (req, res) => {
+    const message = String(req.body?.message || '').trim();
+    if (!message) return res.status(400).json({ error: 'La réponse est vide.' });
+    try { res.json(await facebook.replyToComment(String(req.params.commentId), message)); }
+    catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+  app.post('/api/facebook/comments/:commentId/moderate', async (req, res) => {
+    try { res.json(await facebook.moderateComment(String(req.params.commentId), { hide: req.body?.hide !== false })); }
+    catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+  app.delete('/api/facebook/comments/:commentId', async (req, res) => {
+    try { res.json(await facebook.deleteComment(String(req.params.commentId))); }
+    catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+
   // Gestionnaire de campagnes unifié porté du VPS; l'ancien moteur mono-PC
   // reste disponible sous /api/legacy-campaigns pour sa file et la relance.
   const campaignService = require('./ai-engine/campaignService');
@@ -956,7 +1108,7 @@ async function main() {
     }
   });
 
-  app.listen(PORT, () => {
+  app.listen(PORT, '127.0.0.1', () => {
     console.log(`Interface locale disponible sur http://localhost:${PORT}`);
     open(`http://localhost:${PORT}`).catch(() => {
       console.warn('Impossible d\'ouvrir automatiquement le navigateur — ouvrez l\'URL ci-dessus manuellement.');

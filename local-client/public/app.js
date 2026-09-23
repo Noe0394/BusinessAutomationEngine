@@ -16,6 +16,7 @@ function showTab(name) {
   if (name === 'aide') aideInit();
   if (name === 'reports') reportsInit();
   if (name === 'prospects') adContactsInit();
+  if (name === 'facebook') facebookLocalInit();
   if (name === 'communities' && window.__cmReattach) { window.__cmReattach.wa && window.__cmReattach.wa(); window.__cmReattach.tg && window.__cmReattach.tg(); }
 }
 

@@ -91,6 +91,7 @@
     <button id="nav-media" onclick="showTab('media')">🖼️ Studio Média</button>
     <button id="nav-aide" onclick="showTab('aide')">📚 Centre d'aide</button>
     <button id="nav-reports" onclick="showTab('reports')">📊 Rapports & Activités</button>
+    <button id="nav-facebook" onclick="showTab('facebook')">Facebook / Messenger</button>
     <button id="nav-facebook-share" onclick="showTab('facebook-share')">📣 Groupes / Diffusion Facebook</button>
     <button id="nav-prospects" onclick="showTab('prospects')">🎯 Prospects publicitaires</button>
   </nav>
@@ -839,6 +840,54 @@
     </div>
   </section>
 
+  <section class="tab" id="tab-facebook">
+    <h2>Facebook et Messenger</h2>
+    <div class="card">
+      <h3>Connexion à une Page Facebook</h3>
+      <p>Connexion officielle Meta OAuth. L’App Secret est enregistré uniquement dans les données locales de ce PC.</p>
+      <label for="fb-app-id">Meta App ID</label><input id="fb-app-id" autocomplete="off">
+      <label for="fb-app-secret">Meta App Secret</label><input id="fb-app-secret" type="password" autocomplete="new-password">
+      <button id="fb-save-config">Enregistrer la configuration</button>
+      <button id="fb-connect">Se connecter avec Facebook</button>
+      <button id="fb-disconnect">Déconnecter la Page</button>
+      <p id="fb-status" role="status">Vérification…</p><p id="fb-feedback" role="status"></p>
+    </div>
+    <div class="card">
+      <h3>Publier sur la Page</h3>
+      <label for="fb-page-message">Texte</label><textarea id="fb-page-message"></textarea>
+      <label for="fb-page-link">Lien (facultatif)</label><input id="fb-page-link" type="url">
+      <label for="fb-page-media">Image ou vidéo (facultatif)</label><input id="fb-page-media" type="file" accept="image/*,video/*">
+      <label for="fb-page-time">Programmer (facultatif, heure locale)</label><input id="fb-page-time" type="datetime-local">
+      <button id="fb-page-publish">Publier / programmer</button><button id="fb-page-refresh">Actualiser les publications</button>
+      <div id="fb-page-posts"></div>
+      <div id="fb-page-comments"></div>
+    </div>
+    <div class="card">
+      <h3>Conversations Messenger de la Page</h3>
+      <button id="fb-messenger-refresh">Charger les conversations</button><p id="fb-messenger-feedback" role="status"></p>
+      <div class="row"><select id="fb-messenger-conversation"><option value="">Choisir une conversation</option></select><input id="fb-messenger-message" placeholder="Réponse Messenger"></div>
+      <button id="fb-messenger-send">Envoyer la réponse</button>
+      <small>Meta n’autorise les réponses que dans les conditions de messagerie applicables à la Page. Les autorisations avancées peuvent nécessiter l’App Review.</small>
+    </div>
+    <div class="card">
+      <h3>Relance Messenger par liste</h3>
+      <p>Importez des contacts. Seuls les profils déjà associés à une conversation de cette Page seront sélectionnables; Meta applique toujours sa fenêtre de messagerie.</p>
+      <label for="fb-contacts-file">Contacts CSV / Excel</label><input id="fb-contacts-file" type="file" accept=".csv,.xlsx,.xls">
+      <p id="fb-contacts-feedback" role="status"></p>
+      <div id="fb-contacts-matches"></div>
+      <label for="fb-queue-message">Message de relance</label><textarea id="fb-queue-message"></textarea>
+      <label for="fb-queue-media">Média joint (facultatif)</label><input id="fb-queue-media" type="file" accept="image/*,video/*">
+      <button id="fb-queue-send">Envoyer aux contacts sélectionnés</button>
+      <p id="fb-queue-progress" role="status"></p>
+    </div>
+    <div class="card">
+      <h3>Groupes Facebook gérés</h3>
+      <p>Enregistrez les groupes dont vous avez besoin dans les outils de partage. Meta ne permet plus la publication directe automatisée par API dans les groupes.</p>
+      <div class="row"><input id="fb-managed-group-name" placeholder="Nom du groupe"><input id="fb-managed-group-id" placeholder="Identifiant du groupe"><button id="fb-managed-group-add">Ajouter</button></div>
+      <div id="fb-managed-groups"></div>
+    </div>
+  </section>
+
   <section class="tab" id="tab-facebook-share">
     <h2>Groupes / Diffusion</h2>
     <p>Le partage s’ouvre dans Facebook pour un choix manuel du groupe. Facebook ne permet pas à l’application de présélectionner le groupe ni de confirmer que la publication a été validée.</p>
@@ -847,6 +896,7 @@
       <p>Importez un fichier Excel/CSV avec les colonnes « Nom du Groupe » et « Lien du Groupe » (ou ID), ou ajoutez un groupe manuellement.</p>
       <input type="file" id="fb-share-import" accept=".csv,.xlsx,.xls">
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input id="fb-share-group-name" placeholder="Nom du groupe"><input id="fb-share-group-link" placeholder="Lien ou ID Facebook"><button type="button" id="fb-share-add-group">Ajouter</button></div>
+      <button type="button" id="fb-share-export-groups">Exporter la liste des groupes en Excel</button>
       <p id="fb-share-import-feedback" role="status"></p>
       <div style="overflow:auto"><table><thead><tr><th><input type="checkbox" id="fb-share-select-all"></th><th>Nom</th><th>Identifiant / lien</th><th>Dernière action</th><th></th></tr></thead><tbody id="fb-share-groups-body"><tr><td colspan="5">Aucun groupe enregistré.</td></tr></tbody></table></div>
     </div>
@@ -878,6 +928,7 @@
 <script src="/reports-help.js"></script>
 <script src="/ad-contacts.js"></script>
 <script src="/facebook-share.js"></script>
+<script src="/facebook-page.js"></script>
 <script src="/campaign-manager.js"></script>
 <script src="/app.js"></script>
 <script src="/relance.js"></script>

@@ -421,7 +421,7 @@ Cette section consolide l'avancement actuel et remplace les anciens statuts prov
 - Telephone : campagnes avec programmation locale, instantane de destinataires, controle et historique; relance manuelle rattachee a la campagne; fiches Services Metiers et contexte soumis sur opt-in; aide, rapports locaux, communautes/extractions et prospects/contacts locaux.
 - PC et telephone : ecran d'assistance au partage Facebook, import CSV/XLSX et partage manuel via les mecanismes officiels. Le statut indique l'ouverture du partage, jamais une publication confirmee.
 - Telephone : stockage IndexedDB v5 pour fiches metier et extractions; les rapports et contacts restent locaux, sans synchronisation VPS. La reponse automatique mobile ne repond qu'aux correspondances FAQ exactes en message prive; le pont Telegram ne fournit pas d'evenement entrant exploitable.
-- L'adaptateur Facebook API et sa configuration locale (`local-client/lib/facebook.js`, `local-client/lib/oauthConfig.js`) ont ete amorces, mais ne sont raccordes ni aux routes ni a l'interface : ils ne constituent pas une integration operationnelle.
+- Adaptateur Facebook branche sur les operations principales dans l'onglet PC local; voir le bilan tranche Facebook plus bas pour la couverture et les fonctions encore absentes.
 
 ### Verifications executees
 
@@ -434,10 +434,41 @@ Cette section consolide l'avancement actuel et remplace les anciens statuts prov
 ### Reste a faire
 
 1. Faire l'inventaire exhaustif des 14 onglets et de chaque action VPS, puis completer les correspondances PC et mobile. Les interfaces ne sont pas encore identiques a 100%; certains ecrans mobiles restent simplifiees ou adaptes aux ponts natifs.
-2. Finir et securiser Facebook/Messenger: OAuth, routes et UI PC, stockage/permissions des jetons, appels Graph API autorises, et solution mobile equivalente. Valider les exigences et limites actuelles de Meta avant d'activer une action distante. L'adaptateur PC commence est actuellement inutilise.
+2. Completer Facebook/Messenger sur PC et telephone: la connexion OAuth, la Page et les conversations principales fonctionnent maintenant uniquement sur le PC local; capture de prospects, regles, imports, file d'envoi, planificateur commun et passerelle mobile securisee restent a porter.
 3. Completer les fonctions communautaires du VPS qui ne sont pas encore disponibles localement, notamment decouverte, creation et invitation de membres selon les capacites reelles de chaque plateforme.
 4. Porter sur telephone les integrations Services Metiers connectees et les capacites VPS de rapports/analyse IA et mesure des ameliorations; aujourd'hui ses rapports ne couvrent que les donnees IndexedDB locales.
 5. Ajouter ou documenter une passerelle entrante Telegram pour rendre possible une reponse automatique Telegram; aujourd'hui le pont web mobile n'expose pas les messages entrants.
 6. Porter l'attribution publicitaire verifiee et la prise en charge Messenger sur le mobile; la vue prospects mobile n'infere pas une provenance publicitaire.
 7. Reprendre le build Android avec JDK 21, puis effectuer une recette manuelle sur PC et appareil Android avec les comptes de test et transports concernes.
 8. Reprendre la parite et les tests de bout en bout jusqu'a ce que chaque ecart restant soit implemente ou explicitement bloque par une limite documentee de plateforme/API.
+
+## Tranche suivante - operations Facebook locales (2026-09-23)
+
+Le releve du tableau VPS (`public/dashboard.html`) a confirme un onglet Facebook distinct comprenant connexion Meta, publications de Page, conversations Messenger, commentaires et groupes geres. Le partage assiste livre precedemment ne couvre pas ces fonctions.
+
+### PC local ajoute dans cette tranche (en cours, non commitee)
+
+- Onglet Facebook/Messenger raccorde au client local.
+- OAuth Meta avec etat aleatoire a usage unique, expiration de 10 minutes et rappel local; App ID/Secret saisis dans l'interface et conserves dans le dossier de donnees local, hors du navigateur.
+- Etat de connexion, deconnexion, publications texte/lien/image/video, programmation dans les fenetres imposees par Meta, lecture des publications et conversations, reponses Messenger, lecture/reponse/masquage/suppression de commentaires et registre local des groupes geres.
+- Le serveur PC est maintenant lie a `127.0.0.1` pour garder ses routes locales et ses secrets hors du reseau local. La publication directe dans les groupes n'est pas exposee car Meta a retire la permission necessaire; le partage officiel manuel reste disponible.
+
+### Limites et suite obligatoire
+
+- Fonctions Facebook VPS encore absentes du PC: capture de prospects via webhooks/commentaires, regles de mots-cles, import/mise en correspondance des contacts, file d'envoi Messenger et publication planifiee via le planificateur commun. Le registre de groupes PC est maintenant synchronise avec l'ecran de partage; le mobile conserve son registre local.
+- `mobile/webapp` ne conserve aucun secret Meta et n'a pas de serveur local; il garde le partage Facebook manuel. Pour porter publication Page et Messenger sans exposer le secret dans l'application, il faut une passerelle serveur autorisee et une authentification mobile appropriee, puis les memes commandes/retours d'etat dans l'interface telephone.
+- Le rapprochement integral des 14 onglets/actions VPS avec les interfaces PC et mobile reste requis. Aucun commit ne doit figer un portage partiel tant que ce chantier continue.
+- Verification executee pour cette tranche : controles `node --check` sur serveur et UI Facebook PC; `git diff --check`; les 51 tests cibles passent; un test de fumee avec Axios simule valide les operations adapter (statut, Page, conversations, publication, envoi Messenger, commentaires et moderation). La synchronisation Capacitor passe aussi. La connexion Meta et l'URI OAuth exigent encore une recette avec une application de developpement Meta autorisee.
+
+### Harmonisation supplementaire Facebook (PC + telephone)
+
+- L'ecran Groupes / Diffusion exporte maintenant la liste en Excel sur PC et mobile avec nom, lien, identifiant, date d'ajout et derniere action.
+- Sur PC, la liste de partage est fusionnee avec le registre de groupes de l'onglet Facebook et synchronisee localement; sur mobile elle reste dans le stockage local de l'appareil. Le fichier Android synchronise correspond aux sources (`facebook-share.js` et `index.html`, SHA-256 verifies).
+- Suite ciblee deja executee: 51/51; test simule de l'adaptateur et registre de groupes reussi; `node --check`, controle des selecteurs UI et `git diff --check` reussis; `npm run sync` reussi. Les appels Meta en direct et la recette sur appareil n'ont pas ete executes.
+
+### File de relance Messenger PC (2026-09-23)
+
+- Import CSV/Excel de contacts et rapprochement cote serveur avec les conversations Messenger existantes de la Page par PSID/identifiant ou nom. L'interface montre les correspondances et exige une selection explicite; les contacts sans conversation ne peuvent pas etre coches.
+- Envoi texte ou media image/video en file, progression consultable, lot de 25 et temporisation aleatoire de 10 a 15 secondes. Le serveur revalide lui-meme chaque destinataire contre les conversations de la Page avant de lancer; liste plafonnee a 500 et media a 10 Mo.
+- Les erreurs Meta restent affichees par destinataire dans le resultat; cette protection n'etend pas la fenetre de messagerie Meta et l'application ne pretend pas que l'API a accepte les messages sans retour confirme.
+- La file locale et sa progression sont en memoire et disparaissent si le processus s'arrete; la durabilite apres redemarrage et le bouton d'arret de file restent a implementer si requis par le VPS.

@@ -22,7 +22,8 @@ function readJsonFile(filePath) {
 }
 
 function writeJsonFile(filePath, data) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
 }
 
 const FACEBOOK_TOKEN_PATH = process.env.LOCAL_FB_TOKEN_PATH || path.join(require('./paths').DATA_DIR, 'facebook_token.json');
@@ -385,6 +386,27 @@ class FacebookMessengerAdapter {
     }
     const groups = this.getManagedGroups().filter((g) => g.id !== id);
     groups.push({ id, name: String(name || '').trim() || id, addedAt: new Date().toISOString() });
+    writeJsonFile(FACEBOOK_GROUPS_PATH, { groups });
+    return groups;
+  }
+
+  setManagedGroups(input) {
+    if (!Array.isArray(input)) throw new Error('GROUPS_MUST_BE_ARRAY');
+    const groups = [];
+    const seen = new Set();
+    for (const item of input) {
+      const id = String(item?.id || '').trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      groups.push({
+        id,
+        name: String(item?.name || id).trim().slice(0, 200) || id,
+        link: String(item?.link || '').trim().slice(0, 2048),
+        lastAction: String(item?.lastAction || '').slice(0, 240),
+        addedAt: item?.addedAt || new Date().toISOString(),
+      });
+      if (groups.length >= 500) break;
+    }
     writeJsonFile(FACEBOOK_GROUPS_PATH, { groups });
     return groups;
   }

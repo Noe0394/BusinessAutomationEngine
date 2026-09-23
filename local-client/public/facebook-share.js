@@ -2,10 +2,31 @@
 (function () {
   const KEY = 'cyrus.facebook.managedGroups.v1';
   const $ = id => document.getElementById(id);
+  const serverSync = !window.Capacitor && ['localhost', '127.0.0.1'].includes(location.hostname);
+  let persistTimer = null;
   const feedback = (id, message, error) => { const el = $(id); el.textContent = message; el.className = error ? 'error' : ''; };
   const norm = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   function load() { try { const rows = JSON.parse(localStorage.getItem(KEY) || '[]'); return Array.isArray(rows) ? rows : []; } catch (_) { return []; } }
-  function save(rows) { localStorage.setItem(KEY, JSON.stringify(rows)); render(); }
+  function save(rows) {
+    localStorage.setItem(KEY, JSON.stringify(rows)); render();
+    if (serverSync) {
+      clearTimeout(persistTimer);
+      persistTimer = setTimeout(() => fetch('/api/facebook/groups', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: load() }) }).catch(() => {}), 150);
+    }
+  }
+  async function syncServerGroups(mergeLegacyLocal) {
+    if (!serverSync) return;
+    const response = await fetch('/api/facebook/groups');
+    if (!response.ok) return;
+    const payload = await response.json();
+    const merged = new Map((payload.groups || []).map(g => [String(g.id), g]));
+    if (mergeLegacyLocal !== false) for (const group of load()) merged.set(String(group.id), Object.assign({}, merged.get(String(group.id)) || {}, group));
+    const rows = Array.from(merged.values());
+    localStorage.setItem(KEY, JSON.stringify(rows));
+    const saved = await fetch('/api/facebook/groups', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: rows }) });
+    if (saved.ok) { const latest = await saved.json(); localStorage.setItem(KEY, JSON.stringify(latest.groups || rows)); }
+    render();
+  }
   function displayLink(group) { return group.link || group.id || ''; }
   function render() {
     const body = $('fb-share-groups-body'); body.replaceChildren();
@@ -26,6 +47,12 @@
     const rows = load(); const id = link;
     if (rows.some(g => g.id === id)) throw new Error('Ce groupe est déjà dans la liste.');
     rows.push({ id, name, link, addedAt: Date.now(), lastAction: '' }); save(rows);
+  }
+  function exportGroups() {
+    const rows = load().map(g => ({ Nom: g.name || '', Lien: g.link || g.id || '', Identifiant: g.id || '', Ajoute: g.addedAt ? new Date(g.addedAt).toLocaleString() : '', DerniereAction: g.lastAction || '' }));
+    if (!rows.length) { feedback('fb-share-import-feedback', 'Aucun groupe à exporter.', true); return; }
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Groupes Facebook');
+    XLSX.writeFile(wb, 'groupes_facebook.xlsx'); feedback('fb-share-import-feedback', rows.length + ' groupe(s) exporté(s) en Excel.');
   }
   async function importGroups(file) {
     const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' });
@@ -89,8 +116,11 @@
       event.target.value = '';
     });
     $('fb-share-select-all').addEventListener('change', event => document.querySelectorAll('.fb-share-group-check').forEach(c => { c.checked = event.target.checked; }));
+    $('fb-share-export-groups').addEventListener('click', exportGroups);
     $('fb-share-copy-message').addEventListener('click', copyMessage);
     $('fb-share-open-selected').addEventListener('click', openSelected);
     render();
+    syncServerGroups(true).catch(() => {});
   });
+  window.CyrusFacebookShare = { render, sync: syncServerGroups };
 })();
