@@ -87,8 +87,10 @@ l'arrêt (simple note), les plans d'objectif sont exécutés directement (`CHAT_
 
 **Répondeur permanent** : `AUTO_REPLY_ALWAYS_ON_TENANTS` (liste) ou réglage `alwaysOn` (outil `setAutoReply`, `POST /api/auto-responder`).
 Un compte permanent répond en continu sur WhatsApp ET Telegram (pause explicite possible : `paused`). Le gardien
-(`ai-engine/responderKeeper.js`) vérifie chaque minute les sessions, relance une session appairée mais coupée (au plus une tentative
-toutes les 5 min), et ces sessions ne sont jamais évincées. État : `GET /api/auto-responder/status`, outil `getAutoReplyStatus`.
+(`ai-engine/responderKeeper.js`) vérifie les sessions toutes les 15 s (resserré le 2026-09-23, exigence « réactif en
+permanence » — la vérification est locale, aucun coût réseau tant que la session est déjà connectée), relance une session
+appairée mais coupée (au plus une tentative toutes les 90 s par compte/canal, `KICK_MIN_INTERVAL_MS`, pour ne pas marteler
+les serveurs des plateformes en cas de coupure réelle), et ces sessions ne sont jamais évincées. État : `GET /api/auto-responder/status`, outil `getAutoReplyStatus`.
 
 ## Couche d'assistance générale (2026-09-20) — identité, alertes, conversations privées, canal propriétaire
 

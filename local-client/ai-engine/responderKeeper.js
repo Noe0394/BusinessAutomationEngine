@@ -2,9 +2,12 @@
 // WhatsApp et Telegram existent, sont démarrées et se reconnectent si elles tombent (jamais plus d'une tentative toutes
 // les KICK_MIN_INTERVAL_MS par compte et par canal, pour ne pas marteler les serveurs des plateformes).
 // Ne contourne aucune protection : il relance la connexion normale du gestionnaire de sessions.
+// Cadence resserrée le 2026-09-23 (exigence explicite : répondeur réactif en permanence) — la vérification elle-même est
+// locale (isPaired()/isConnected(), aucun appel réseau tant que la session est déjà connectée), donc un sondage plus
+// fréquent ne charge pas les plateformes ; seul KICK_MIN_INTERVAL_MS protège contre le martèlement en cas de coupure réelle.
 const alwaysOn = require('./alwaysOn');
 
-const KICK_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const KICK_MIN_INTERVAL_MS = 90 * 1000;
 const state = new Map(); // `${tenant}:${channel}` -> { lastKickAt, lastState, lastError, kicks }
 let timer = null;
 
@@ -45,7 +48,7 @@ function start(managers, opts) {
   const o = opts || {};
   const run = () => { try { tick(managers, o); } catch (e) { console.error('responderKeeper :', e.message); } };
   run();
-  timer = setInterval(run, o.intervalMs || 60 * 1000);
+  timer = setInterval(run, o.intervalMs || 15 * 1000);
   if (timer.unref) timer.unref();
   return timer;
 }
