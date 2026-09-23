@@ -2139,9 +2139,14 @@
           </div>
         </div>
         <label>Projet associé (facultatif)</label><input id="svc-project" placeholder="ex : Formation en ligne" />
-        <label>Description</label><textarea id="svc-desc" rows="2" placeholder="Ce que tu proposes"></textarea>
 
-        <details><summary>💰 Informations commerciales</summary>
+        <label style="font-weight:600;">📝 Mémoire de votre activité (recommandé — écrivez tout ici)</label>
+        <textarea id="svc-memo" rows="6" placeholder="Écrivez ou collez tout ce qui concerne votre activité : produits, prix, promotions et dates, horaires, règles, livraison, FAQ, moyens de paiement (numéro, opérateur, titulaire)...&#10;&#10;Ex. : « Je propose une formation Épicerie et Bouillon à 8 000 FCFA. Elle commence le 19 septembre sur WhatsApp et Telegram. Promotion à 5 000 FCFA jusqu'au 25 septembre. Paiement Wave au XX XX XX XX au nom de X et Orange Money au XX XX XX XX au nom de Y. »"></textarea>
+        <div class="svc-hint">Cyrus lit ce texte et en comprend automatiquement le prix, les promotions, les moyens de paiement, etc. — les champs ci-dessous restent disponibles en complément/correction, mais ne sont plus obligatoires.</div>
+
+        <label>Description (facultatif si déjà dans la mémoire ci-dessus)</label><textarea id="svc-desc" rows="2" placeholder="Ce que tu proposes"></textarea>
+
+        <details><summary>💰 Informations commerciales (facultatif si déjà dans la mémoire ci-dessus)</summary>
           <div class="svc-grid">
             <div><label>Prix</label><input id="svc-price" type="number" placeholder="15000" /></div>
             <div><label>Devise</label><input id="svc-currency" value="FCFA" /></div>
@@ -10490,6 +10495,7 @@
       f('svc-form-title').textContent = service ? 'Modifier le service' : 'Nouveau Service Métier';
       f('svc-id').value = s.id || '';
       f('svc-name').value = s.name || ''; f('svc-type').value = s.type || 'formation'; f('svc-project').value = s.project || '';
+      f('svc-memo').value = c.memo || '';
       f('svc-desc').value = c.description || '';
       f('svc-price').value = c.price != null ? c.price : ''; f('svc-currency').value = c.currency || 'FCFA';
       f('svc-promo').value = c.promoPrice != null ? c.promoPrice : ''; f('svc-target').value = c.target || '';
@@ -10515,6 +10521,7 @@
       return {
         name: f('svc-name'), type: f('svc-type'), project: f('svc-project') || null,
         commercial: {
+          memo: f('svc-memo'),
           price: f('svc-price') ? Number(f('svc-price')) : null, currency: f('svc-currency') || 'FCFA',
           promoPrice: f('svc-promo') ? Number(f('svc-promo')) : null, target: f('svc-target'),
           description: f('svc-desc'), advantages: f('svc-advantages'), objections: f('svc-objections'),

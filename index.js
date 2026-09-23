@@ -4453,7 +4453,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
         };
         assistantMessage = {
           role: 'assistant',
-          text: String(parsed.summary || raw).slice(0, 2000) + (saleIntent ? '\n\n💰 Une fois généré, donnez-moi le prix et je prépare le lien de paiement.' : ''),
+          text: String(parsed.summary || raw).slice(0, 2000) + (saleIntent ? '\n\n💰 Une fois généré, donnez-moi le prix : je le proposerai à l\'acheteur avec vos moyens de paiement réellement configurés (Service métier) — Cyrus ne génère jamais de lien de paiement.' : ''),
           createdAt: new Date().toISOString(),
           actions: [{ ...actionByIntent[intent], payload: parsed }],
           saleIntent,
@@ -4553,7 +4553,7 @@ app.post('/api/ai-studio/sessions/:id/actions', requireAccess, requireModule('st
     // image/livre, `result` est déjà le contenu final (pas un job différé
     // comme la vidéo, voir POST .../video-status pour son propre chaînage).
     if (action !== 'generate_video' && result && result.text && findRecentSaleIntent(existing.messages)) {
-      result = { ...result, text: `${result.text}\n\n💰 Quel est le prix ? Je prépare le lien de paiement dès que vous me le donnez.` };
+      result = { ...result, text: `${result.text}\n\n💰 Quel est le prix ? Je le proposerai à l'acheteur avec vos moyens de paiement réellement configurés (Service métier) — Cyrus ne génère jamais de lien de paiement.` };
     }
 
     const assistantMessage = { role: 'assistant', createdAt: new Date().toISOString(), ...result };
@@ -4614,7 +4614,7 @@ app.post('/api/ai-studio/sessions/:id/video-status', requireAccess, requireModul
     // réellement terminé plutôt qu'au moment du clic sur le bouton.
     const existingForSale = await aiStudioStore.getSession(tenantId, req.params.id);
     const saleHint = findRecentSaleIntent(existingForSale && existingForSale.messages)
-      ? '\n\n💰 Quel est le prix ? Je prépare le lien de paiement dès que vous me le donnez.'
+      ? '\n\n💰 Quel est le prix ? Je le proposerai à l\'acheteur avec vos moyens de paiement réellement configurés (Service métier) — Cyrus ne génère jamais de lien de paiement.'
       : '';
     const assistantMessage = {
       role: 'assistant',

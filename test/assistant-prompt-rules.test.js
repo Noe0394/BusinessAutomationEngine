@@ -13,6 +13,7 @@ platformOrchestrator.notifyTenantChat = async () => {};
 const contactIdentity = require('../ai-engine/contactIdentity');
 const alertCenter = require('../ai-engine/alertCenter');
 const autoResponder = require('../ai-engine/autoResponder');
+const businessServices = require('../ai-engine/businessServices');
 const conversationState = require('../ai-engine/jarvis/conversationState');
 const storage = require('../ai-engine/storageAdapter');
 
@@ -158,7 +159,10 @@ test('promesse tenue : si l\'IA dit « je transmets au vendeur », le propriéta
     assert.equal(notes.length, 1, 'alerte propriétaire pour : ' + phrases[i]);
     assert.match(notes[0], /Question sans réponse dans le Service métier/);
   }
-  // une réponse qui n'annonce rien de tel ne déclenche aucune alerte
+  // une réponse qui n'annonce rien de tel ne déclenche aucune alerte — service RÉELLEMENT configuré (prix
+  // 8000 FCFA) pour isoler ce cas du garde-fou séparé "question commerciale sans aucun Service métier configuré"
+  // (voir jarvis/conversationEngine.js#businessRequestNoService), qui alerterait sinon légitimement pour un autre motif.
+  await businessServices.create('pr9', { name: 'Service pr9', commercial: { price: 8000, currency: 'FCFA' } });
   notes.length = 0;
   await autoResponder.handleIncoming({ tenantId: 'pr9', channel: 'WHATSAPP', from: '22670123499@s.whatsapp.net', name: 'Awa', text: "C'est combien ?", messageId: 'PR9' }, { runtime, llm: async () => 'Le service coûte 8 000 FCFA.', settings: { whatsapp: true, debounceMs: 0 } });
   assert.equal(notes.length, 0);

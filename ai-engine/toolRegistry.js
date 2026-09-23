@@ -131,15 +131,16 @@ const TOOLS = {
   configureBusinessService: {
     // Brancher une URL/clé fournie par un contenu externe ferait partir des données vers un tiers : confirmation exigée.
     confirmWhenTainted: (a) => !!(a && (a.baseUrl || a.apiKey)),
-    description: 'Crée (et éventuellement connecte l\'API + teste) un Service Métier à partir d\'instructions en langage naturel : nom, type d\'activité, prix, produits, règles, objectifs, et connexion API (URL + clé + permissions). Retourne le service créé et, si une API est fournie, le résultat RÉEL du test de connexion.',
+    description: 'Crée (et éventuellement connecte l\'API + teste) un Service Métier à partir d\'instructions en langage naturel : nom, et de préférence "memo" (TOUT ce que l\'utilisateur dit de son activité en texte libre — produits, prix, promos, horaires, dates, règles, paiement... Cyrus en extrait automatiquement ce qu\'il peut). Les champs structurés (price, description...) restent utilisables en complément/correction, mais ne sont PLUS nécessaires : ne les redemande jamais un par un si l\'utilisateur a déjà tout donné en texte libre, transmets ce texte tel quel dans "memo". Retourne le service créé et, si une API est fournie, le résultat RÉEL du test de connexion.',
     permission: null,
     risk: 'LOW_WRITE',
     inputSchema: {
       name: { type: 'string', required: true, description: 'Nom du service/projet.' },
+      memo: { type: 'string', required: false, description: 'Mémoire libre de l\'activité : TOUT ce que l\'utilisateur a dit (produits, prix, promos, dates, règles, paiement, FAQ...), transmis tel quel — Cyrus en extrait automatiquement les champs structurés. Toujours préférable à remplir les champs un par un.' },
       type: { type: 'string', required: false, description: 'Type d\'activité (formation, ecommerce, service…).' },
-      price: { type: 'number', required: false, description: 'Prix principal.' },
+      price: { type: 'number', required: false, description: 'Prix principal (facultatif si déjà dans "memo").' },
       currency: { type: 'string', required: false, description: 'Devise (défaut FCFA).' },
-      description: { type: 'string', required: false, description: 'Description de l\'offre.' },
+      description: { type: 'string', required: false, description: 'Description de l\'offre (facultatif si déjà dans "memo").' },
       products: { type: 'string', required: false, description: 'Produits, format « Nom|Prix » séparés par des points-virgules ou des retours ligne.' },
       rules: { type: 'string', required: false, description: 'Règles commerciales, une par ligne ou séparées par « ; ».' },
       objectives: { type: 'string', required: false, description: 'Objectifs, séparés par « ; ».' },
@@ -161,7 +162,10 @@ const TOOLS = {
       const existing = (await businessServices.list(ctx.tenant)).find((s) => String(s.name).trim().toLowerCase() === String(args.name).trim().toLowerCase());
       const payload = {
         name: args.name, type: args.type || (existing && existing.type) || 'autre', connection: args.baseUrl ? connection : (existing ? existing.connection : connection), scopes: scopes.length ? scopes : (existing ? existing.scopes : scopes),
-        commercial: Object.assign({}, existing ? existing.commercial : {}, { price: args.price != null ? Number(args.price) : (existing && existing.commercial ? existing.commercial.price : null), currency: args.currency || (existing && existing.commercial && existing.commercial.currency) || 'FCFA', description: args.description || (existing && existing.commercial && existing.commercial.description) || '' }),
+        commercial: Object.assign({}, existing ? existing.commercial : {}, {
+          memo: args.memo != null ? String(args.memo).slice(0, 8000) : (existing && existing.commercial ? existing.commercial.memo : ''),
+          price: args.price != null ? Number(args.price) : (existing && existing.commercial ? existing.commercial.price : null), currency: args.currency || (existing && existing.commercial && existing.commercial.currency) || 'FCFA', description: args.description || (existing && existing.commercial && existing.commercial.description) || '',
+        }),
         products: products.length ? products : (existing ? existing.products : products), rules: args.rules ? splitList(args.rules) : (existing ? existing.rules : []), objectives: args.objectives ? splitList(args.objectives) : (existing ? existing.objectives : []),
       };
       const svc = existing ? await businessServices.update(ctx.tenant, existing.id, payload) : await businessServices.create(ctx.tenant, payload);
