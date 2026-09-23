@@ -267,6 +267,13 @@
           if (waMessages.length > 200) waMessages.shift();
           renderWaList();
           if (waActiveContact) renderWaThread();
+          if (window.CyrusBusinessServices) window.CyrusBusinessServices.handleIncomingWA(data.payload).catch(err => console.warn('Réponse FAQ mobile :', err.message));
+          break;
+        case 'groups':
+          if (window.CyrusParity) window.CyrusParity.renderGroups('WHATSAPP', data.payload.groups || []);
+          break;
+        case 'group-members':
+          if (window.CyrusParity) window.CyrusParity.renderMembers('WHATSAPP', data.payload);
           break;
         case 'send-result':
           if (!data.payload.ok) alert('Echec envoi WhatsApp: ' + data.payload.error);
@@ -281,6 +288,12 @@
           break;
         case 'bridge-ready':
           tgBridgeReady = true;
+          break;
+        case 'groups':
+          if (window.CyrusParity) window.CyrusParity.renderGroups('TELEGRAM', data.payload.groups || []);
+          break;
+        case 'group-members':
+          if (window.CyrusParity) window.CyrusParity.renderMembers('TELEGRAM', data.payload);
           break;
         case 'send-result':
           if (!data.payload.ok) alert('Echec envoi Telegram: ' + data.payload.error);
@@ -382,7 +395,8 @@
   }
 
   document.getElementById('ai-text-btn').addEventListener('click', async () => {
-    const prompt = document.getElementById('ai-prompt').value.trim();
+    const rawPrompt = document.getElementById('ai-prompt').value.trim();
+    const prompt = window.CyrusBusinessServices ? await window.CyrusBusinessServices.promptContext(rawPrompt) : rawPrompt;
     const errorEl = document.getElementById('ai-error');
     const resultEl = document.getElementById('ai-result');
     if (!prompt) return;
@@ -403,7 +417,8 @@
   });
 
   document.getElementById('ai-image-btn').addEventListener('click', async () => {
-    const prompt = document.getElementById('ai-prompt').value.trim();
+    const rawPrompt = document.getElementById('ai-prompt').value.trim();
+    const prompt = window.CyrusBusinessServices ? await window.CyrusBusinessServices.promptContext(rawPrompt) : rawPrompt;
     const errorEl = document.getElementById('ai-error');
     const resultEl = document.getElementById('ai-result');
     if (!prompt) return;

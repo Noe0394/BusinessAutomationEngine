@@ -51,6 +51,7 @@ function createLocalRuntime({ whatsapp, telegram, campaigns, llm }) {
         text: p.text || p.message || '',
         channel: ch,
         delayMinMs: p.minDelayMs, delayMaxMs: p.maxDelayMs,
+        media: (() => { const item = Array.isArray(p.sequence) && p.sequence.find(x => x && x.type === 'media'); return item && item.buffer ? { base64: item.buffer.toString('base64'), mimetype: item.mimetype || 'application/octet-stream', filename: item.filename || '' } : null; })(),
       });
       campaigns.startCampaign(created.id);
       return { ok: true, result: { channel: ch.toUpperCase(), campaignId: created.id, recipients: recipients.length, status: 'started' } };
@@ -215,8 +216,30 @@ function createLocalRuntime({ whatsapp, telegram, campaigns, llm }) {
     } catch (err) { return { ok: false, error: err.message }; }
   }
 
+  async function stopCampaign(payload) {
+    const p = payload || {};
+    try { campaigns.cancelCampaign(p.campaignId); return { ok: true }; }
+    catch (err) { return { ok: false, error: err.message }; }
+  }
+
+  async function getCampaignStatus(payload) {
+    const p = payload || {}; const c = campaigns.getCampaign(p.campaignId);
+    if (!c || String(c.config && c.config.channel || 'whatsapp').toUpperCase() !== String(p.channel || 'WHATSAPP').toUpperCase()) return { ok: false, error: 'CAMPAIGN_NOT_FOUND' };
+    const results = c.results || [];
+    const sent = results.filter(r => r.status === 'sent').length;
+    const failed = results.filter(r => r.status === 'error').length;
+    const pendingCount = results.filter(r => r.status === 'pending').length;
+    return { ok: true, result: { id: c.id, name: c.name, status: c.status, networkStatus: 'normal', total: results.length, sent, success: sent, failed, pendingCount, skippedDuplicates: c.blockedCount || 0, createdAt: c.createdAt, startedAt: c.startedAt, finishedAt: c.finishedAt, campaigns: [{ id: c.id, name: c.name, status: c.status, total: results.length, sent, success: sent, failed, pendingCount, skippedDuplicates: c.blockedCount || 0, createdAt: c.createdAt, startedAt: c.startedAt, finishedAt: c.finishedAt }] } };
+  }
+
+  async function getCampaignRecipients(payload) {
+    const p = payload || {}; const c = campaigns.getCampaign(p.campaignId);
+    if (!c) return { ok: false, error: 'CAMPAIGN_NOT_FOUND' };
+    return { ok: true, result: { recipients: (c.results || []).map(r => ({ name: r.nom || '', number: r.to, status: r.status === 'error' ? 'failed' : r.status, lastAttemptAt: r.sentAt || null, error: r.error || null })) } };
+  }
+
   const methods = {
-    extractMembers, sendCampaign, sendMessage, pauseCampaign, resumeCampaign,
+    extractMembers, sendCampaign, sendMessage, pauseCampaign, resumeCampaign, stopCampaign, getCampaignStatus, getCampaignRecipients,
     getRecentMessages, sendMessageVerified, listGroups, resolveGroups, sendToGroups,
   };
 

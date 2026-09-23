@@ -18,8 +18,14 @@
   let running = false;
   let paused = false;
   let currentCampaignId = null;
+  let scheduledTimer = null;
+  let scheduledResume = false;
+  let cancelled = false;
+  let currentMedia = null;
   let sentIdentifiers = new Set();
   let failedIdentifiers = new Set();
+  let campaignHistory = [];
+  let campaignRecipients = [];
 
   function channel() {
     return document.getElementById('camp-channel').value;
@@ -70,16 +76,38 @@
   // "Demarrer" - une campagne 'done' ne bloque en revanche jamais une
   // nouvelle campagne ulterieure vers les memes contacts.
   function restoreRunningCampaign() {
-    return db.getLatestCampaign(channel()).then(function (c) {
-      if (c && c.status === 'running') {
+    return Promise.all([db.getLatestCampaign(channel()), db.getContacts(channel())]).then(function (values) {
+      const c = values[0]; contacts = values[1] || [];
+      if (c && (c.status === 'running' || c.status === 'scheduled' || c.status === 'paused')) {
         currentCampaignId = c.id;
+        campaignRecipients = Array.isArray(c.recipients) ? c.recipients : [];
+        if (campaignRecipients.length) contacts = campaignRecipients;
         sentIdentifiers = new Set(c.sent || []);
         failedIdentifiers = new Set(c.failed || []);
-        setStatus('Campagne interrompue reprise (' + sentIdentifiers.size + '/' + (c.total || 0) + ' déjà envoyés) — cliquez sur "Démarrer" pour continuer.');
+        currentMedia = c.media || null;
+        if (c.message) document.getElementById('camp-message').value = c.message;
+        if (c.scheduledAt) {
+          const at = Number(c.scheduledAt); const input = document.getElementById('camp-schedule');
+          input.value = new Date(at - new Date(at).getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        }
+        if (c.status === 'scheduled' && c.scheduledAt) {
+          const at = Number(c.scheduledAt);
+          setStatus('Scheduled for ' + new Date(at).toLocaleString() + '; the app must stay active.');
+          if (scheduledTimer) clearTimeout(scheduledTimer);
+          const arm = function () {
+            const remaining = at - Date.now();
+            if (remaining > 2147480000) { scheduledTimer = setTimeout(arm, 2147480000); return; }
+            scheduledTimer = setTimeout(function () { scheduledTimer = null; scheduledResume = true; runCampaign(); }, Math.max(0, remaining));
+          };
+          arm();
+        } else {
+          setStatus((c.status === 'paused' ? 'Paused campaign (' : 'Interrupted campaign (') + sentIdentifiers.size + '/' + (c.total || 0) + ' already sent); tap Start to resume.');
+        }
       } else {
-        currentCampaignId = null;
-        sentIdentifiers = new Set();
-        failedIdentifiers = new Set();
+        currentCampaignId = null; currentMedia = null;
+        campaignRecipients = [];
+        sentIdentifiers = new Set(); failedIdentifiers = new Set();
+        if (scheduledTimer) clearTimeout(scheduledTimer); scheduledTimer = null;
       }
     });
   }
@@ -127,6 +155,7 @@
     refreshContactsCount();
     restoreRunningCampaign();
     renderBlocklist();
+    renderCampaignHistory();
   });
   refreshContactsCount();
   restoreRunningCampaign();
@@ -328,27 +357,36 @@
     if (!template) { alert('Message vide.'); return; }
     if (contacts.length === 0) { alert('Aucun contact importé.'); return; }
 
+    const mediaInput = document.getElementById('camp-media-input');
+    const mediaFile = mediaInput && mediaInput.files[0];
+    if (mediaFile) currentMedia = { data: await readFileAsBase64(mediaFile), mimetype: mediaFile.type, filename: mediaFile.name };
     const scheduleInput = document.getElementById('camp-schedule').value;
-    if (scheduleInput) {
+    running = true; paused = false; cancelled = false;
+    currentCampaignId = currentCampaignId || ('camp-' + Date.now());
+    if (!campaignRecipients.length) campaignRecipients = contacts.map(c => ({ channel: c.channel || channel(), identifier: c.identifier, name: c.name || '' }));
+    if (scheduledTimer) { clearTimeout(scheduledTimer); scheduledTimer = null; }
+    if (scheduleInput && !scheduledResume) {
       const target = new Date(scheduleInput).getTime();
       const waitMs = target - Date.now();
       if (waitMs > 0) {
-        setStatus('Programmée : démarrage dans ' + Math.round(waitMs / 60000) + ' min...');
-        await sleep(waitMs);
+        setStatus('Scheduled for ' + new Date(target).toLocaleString() + '; keep the app active.');
+        await db.saveCampaign({ id: currentCampaignId, channel: channel(), total: contacts.length, recipients: campaignRecipients, message: template, sent: Array.from(sentIdentifiers), failed: Array.from(failedIdentifiers), media: currentMedia, scheduledAt: target, updatedAt: Date.now(), status: 'scheduled' });
+        while (target > Date.now() && running && !paused) await sleep(Math.min(60000, target - Date.now()));
+        if (!running || paused) {
+          if (paused) await db.saveCampaign({ id: currentCampaignId, channel: channel(), total: contacts.length, recipients: campaignRecipients, message: template,
+            sent: Array.from(sentIdentifiers), failed: Array.from(failedIdentifiers), media: currentMedia,
+            scheduledAt: target, updatedAt: Date.now(), status: 'paused' });
+          setStatus('Schedule paused.'); return;
+        }
       }
     }
-
-    const mediaInput = document.getElementById('camp-media-input');
-    const mediaFile = mediaInput && mediaInput.files[0];
-    const media = mediaFile
-      ? { data: await readFileAsBase64(mediaFile), mimetype: mediaFile.type, filename: mediaFile.name }
-      : null;
+    scheduledResume = false;
+    const media = currentMedia;
 
     const batchSize = parseInt(document.getElementById('camp-batch-size').value, 10) || 0;
     const batchPauseMs = (parseInt(document.getElementById('camp-batch-pause').value, 10) || 0) * 1000;
     let sentInBatch = 0;
 
-    currentCampaignId = currentCampaignId || ('camp-' + Date.now());
     running = true;
     paused = false;
 
@@ -357,7 +395,7 @@
     setProgress(done, contacts.length);
 
     for (const contact of remaining) {
-      if (!running || paused) break;
+      if (!running || paused || cancelled) break;
 
       const vars = personalization.buildPersonalizationVars(contact.name, contact.identifier);
       const text = personalization.personalizeMessage(template, vars);
@@ -383,7 +421,7 @@
         failedIdentifiers.add(contact.identifier);
       } else {
         sentIdentifiers.add(contact.identifier);
-        await db.recordSent(webviewId, contact.identifier, 'campaign');
+        await db.recordSent(webviewId, contact.identifier, 'campaign', currentCampaignId);
       }
       done += 1;
       setProgress(done, contacts.length);
@@ -392,11 +430,12 @@
         id: currentCampaignId,
         channel: webviewId,
         total: contacts.length,
+        recipients: campaignRecipients,
         message: template,
         sent: Array.from(sentIdentifiers),
         failed: Array.from(failedIdentifiers),
         updatedAt: Date.now(),
-        status: 'running',
+        media: currentMedia, scheduledAt: null, status: 'running',
       });
 
       sentInBatch += 1;
@@ -408,26 +447,45 @@
     }
 
     running = false;
-    if (paused) {
+    if (cancelled) {
+      setStatus('Campagne annulée après l’envoi en cours (' + done + '/' + contacts.length + ').');
+      await db.saveCampaign({ id: currentCampaignId, channel: channel(), total: contacts.length, recipients: campaignRecipients, message: template,
+        sent: Array.from(sentIdentifiers), failed: Array.from(failedIdentifiers), updatedAt: Date.now(), media: currentMedia,
+        scheduledAt: null, status: 'cancelled' });
+    } else if (paused) {
       setStatus('En pause (' + done + '/' + contacts.length + ').');
+      await db.saveCampaign({ id: currentCampaignId, channel: channel(), total: contacts.length, recipients: campaignRecipients, message: template,
+        sent: Array.from(sentIdentifiers), failed: Array.from(failedIdentifiers), media: currentMedia,
+        scheduledAt: null, updatedAt: Date.now(), status: 'paused' });
     } else {
       setStatus('Campagne terminée (' + done + '/' + contacts.length + ').');
       await db.saveCampaign({
-        id: currentCampaignId, channel: channel(), total: contacts.length, message: template,
+        id: currentCampaignId, channel: channel(), total: contacts.length, recipients: campaignRecipients, message: template,
         sent: Array.from(sentIdentifiers), failed: Array.from(failedIdentifiers),
-        updatedAt: Date.now(), status: 'done',
+        updatedAt: Date.now(), media: currentMedia, scheduledAt: null, status: 'done',
       });
     }
+    renderCampaignHistory();
   }
 
   document.getElementById('camp-start-btn').addEventListener('click', function () {
     if (running) return;
+    if (scheduledTimer) { clearTimeout(scheduledTimer); scheduledTimer = null; scheduledResume = true; }
     runCampaign();
   });
 
   document.getElementById('camp-pause-btn').addEventListener('click', function () {
     paused = true;
     running = false;
+  });
+
+  document.getElementById('camp-cancel-btn').addEventListener('click', async function () {
+    const c = await db.getLatestCampaign(channel());
+    if (scheduledTimer) { clearTimeout(scheduledTimer); scheduledTimer = null; }
+    cancelled = true; paused = false; running = false;
+    if (c) await db.saveCampaign(Object.assign({}, c, { status: 'cancelled', scheduledAt: null, updatedAt: Date.now() }));
+    setStatus('Campagne annulée. Les contacts déjà envoyés restent dans l’historique.');
+    renderCampaignHistory();
   });
 
   // Rapport final de campagne (équivalent de la fenêtre modale de
@@ -443,14 +501,70 @@
       const sentCount = (c.sent || []).length;
       const failedCount = (c.failed || []).length;
       const pendingCount = Math.max(0, (c.total || 0) - sentCount - failedCount);
+      const statusText = escapeHtml(c.status || 'inconnu') + (c.scheduledAt ? ' · programmée le ' + escapeHtml(new Date(c.scheduledAt).toLocaleString()) : '');
       const rows = (c.failed || []).map(function (id) { return '<li>' + escapeHtml(id) + '</li>'; }).join('');
       el.innerHTML = '<div class="card" style="margin-bottom:0;">'
         + '<div><b>' + sentCount + '</b> envoyé(s) · <b>' + failedCount + '</b> échec(s) · <b>' + pendingCount + '</b> en attente</div>'
-        + (failedCount ? '<ul style="margin-top:6px;">' + rows + '</ul>' : '')
+        + '<p>État : ' + statusText + '</p>'
+        + (failedCount ? '<ul style="margin-top:6px;">' + rows + '</ul><button type="button" id="camp-report-export">Exporter les échecs (Excel)</button>' : '')
         + '</div>';
       el.style.display = 'block';
+      const exportBtn = document.getElementById('camp-report-export');
+      if (exportBtn) exportBtn.addEventListener('click', function () {
+        window.Cyrus.fileExport.exportRows((c.failed || []).map(id => ({ Canal: c.channel, Identifiant: id, Statut: 'Échec' })), 'echecs-campagne', 'xlsx');
+      });
     });
   });
+
+  async function renderCampaignHistory() {
+    const host = document.getElementById('camp-history-content');
+    try {
+      campaignHistory = await db.getCampaigns(channel());
+      campaignHistory.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      host.replaceChildren();
+      if (!campaignHistory.length) { host.textContent = 'Aucune campagne enregistrée pour ce canal.'; return; }
+      campaignHistory.forEach(c => {
+        const card = document.createElement('div'); card.className = 'card';
+        const title = document.createElement('b'); title.textContent = c.message || ('Campagne ' + c.id); card.appendChild(title);
+        const details = document.createElement('p');
+        details.textContent = (c.status || 'inconnu') + ' · ' + (c.sent || []).length + ' envoyés · ' + (c.failed || []).length + ' échecs · ' + Math.max(0, (c.total || 0) - (c.sent || []).length - (c.failed || []).length) + ' en attente' + (c.scheduledAt ? ' · programmée le ' + new Date(c.scheduledAt).toLocaleString() : '');
+        card.appendChild(details);
+        const date = document.createElement('small'); date.textContent = c.updatedAt ? 'Mise à jour : ' + new Date(c.updatedAt).toLocaleString() : 'Date indisponible'; card.appendChild(date);
+        const recipientButton = document.createElement('button'); recipientButton.className = 'secondary'; recipientButton.textContent = 'Afficher les destinataires (' + (Array.isArray(c.recipients) ? c.recipients.length : c.total || 0) + ')';
+        const recipientList = document.createElement('div'); recipientList.hidden = true;
+        recipientButton.addEventListener('click', function () {
+          recipientList.hidden = !recipientList.hidden;
+          recipientButton.textContent = (recipientList.hidden ? 'Afficher' : 'Masquer') + ' les destinataires (' + (Array.isArray(c.recipients) ? c.recipients.length : c.total || 0) + ')';
+          if (recipientList.childElementCount) return;
+          const sent = new Set(c.sent || []); const failed = new Set(c.failed || []);
+          const rows = Array.isArray(c.recipients) ? c.recipients : [];
+          if (!rows.length) { recipientList.textContent = 'Cette ancienne campagne ne conserve pas le détail des destinataires.'; return; }
+          rows.slice(0, 500).forEach(r => {
+            const line = document.createElement('p');
+            const id = r.identifier || r.id || '';
+            line.textContent = (r.name ? r.name + ' · ' : '') + id + ' · ' + (sent.has(id) ? 'Envoyé' : failed.has(id) ? 'Échec' : 'En attente');
+            recipientList.appendChild(line);
+          });
+          if (rows.length > 500) { const note = document.createElement('small'); note.textContent = 'Affichage limité aux 500 premiers destinataires.'; recipientList.appendChild(note); }
+        });
+        card.appendChild(recipientButton); card.appendChild(recipientList);
+        host.appendChild(card);
+      });
+    } catch (error) { host.textContent = 'Historique indisponible : ' + error.message; }
+  }
+  document.getElementById('camp-history-refresh').addEventListener('click', renderCampaignHistory);
+  document.getElementById('camp-history-export').addEventListener('click', async function () {
+    if (!campaignHistory.length) await renderCampaignHistory();
+    const rows = campaignHistory.map(c => ({
+      Canal: c.channel, Campagne: c.message || c.id, État: c.status || '', Total: c.total || 0,
+      Envoyés: (c.sent || []).length, Échecs: (c.failed || []).length,
+      'En attente': Math.max(0, (c.total || 0) - (c.sent || []).length - (c.failed || []).length),
+      Programmée: c.scheduledAt ? new Date(c.scheduledAt).toLocaleString() : '',
+      'Dernière mise à jour': c.updatedAt ? new Date(c.updatedAt).toLocaleString() : '',
+    }));
+    if (rows.length) window.Cyrus.fileExport.exportRows(rows, 'historique-campagnes', 'xlsx');
+  });
+  renderCampaignHistory();
 
   function escapeHtml(s) {
     return String(s || '').replace(/[&<>"']/g, function (c) {

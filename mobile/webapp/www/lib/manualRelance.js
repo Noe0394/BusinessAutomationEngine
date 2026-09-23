@@ -5,7 +5,7 @@
 // (/api/messages/manual-queue, /api/messages/manual-import) sont remplaces
 // par une lecture directe d'IndexedDB (lib/db.js) : la file "pending/failed
 // de la derniere campagne" devient "contacts du canal absents de
-// campaign.sent", et l'anti-doublons 48h de l'import direct devient
+  // campaign.sent", et l'anti-doublons 48h de l'import direct devient
 // db.wasSentRecently(). Le composant visuel (relance.js, a la racine de
 // www/) ne fait plus que lire/appeler cet objet.
 (function () {
@@ -46,7 +46,12 @@
   // Reprend les contacts du canal encore 'pending'/'failed' de la derniere
   // campagne connue (equivalent local de GET /api/messages/manual-queue).
   async function loadQueue(channel) {
-    const [campaign, contacts] = await Promise.all([db.getLatestCampaign(channel), db.getContacts(channel)]);
+    const [campaign, currentContacts] = await Promise.all([db.getLatestCampaign(channel), db.getContacts(channel)]);
+    // Les campagnes récentes gardent l'instantané d'origine. Les anciennes
+    // lignes (antérieures à ce champ) retombent sur le carnet local existant.
+    const contacts = campaign && Array.isArray(campaign.recipients)
+      ? campaign.recipients
+      : currentContacts;
     const sentSet = new Set((campaign && campaign.sent) || []);
     const failedSet = new Set((campaign && campaign.failed) || []);
     const template = (campaign && campaign.message) || '';
@@ -135,7 +140,7 @@
     const item = current();
     if (!item) return;
 
-    await db.recordSent(state.channel, item.identifier, 'manual');
+    await db.recordSent(state.channel, item.identifier, 'manual', state.source === 'campaign' && state.campaign ? state.campaign.id : null);
 
     if (state.source === 'campaign' && state.campaign) {
       const sent = new Set(state.campaign.sent || []);

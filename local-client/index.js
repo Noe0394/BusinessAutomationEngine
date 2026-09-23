@@ -53,6 +53,9 @@ const contactCrm = require('./ai-engine/contactCrm');
 const conversationHistory = require('./ai-engine/messageHistory');
 const manualPaymentValidator = require('./ai-engine/manualPaymentValidator');
 const recurringTasks = require('./queues/recurringTasks');
+const businessServices = require('./ai-engine/businessServices');
+const communityService = require('./ai-engine/communityService');
+const communityDiscovery = require('./ai-engine/communityDiscovery');
 
 const localRuntime = createLocalRuntime({
   whatsapp, telegram, campaigns,
@@ -83,6 +86,216 @@ async function main() {
   const app = express();
   app.use(express.json({ limit: '15mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
+
+  // Gestionnaire de campagnes unifié porté du VPS; l'ancien moteur mono-PC
+  // reste disponible sous /api/legacy-campaigns pour sa file et la relance.
+  const campaignService = require('./ai-engine/campaignService');
+  const chatUploadsStore = require('./ai-engine/chatUploads');
+  const taskQueue = require('./ai-engine/taskQueue');
+  const cmpRoute = (fn) => async (req, res) => {
+    try { res.json(await fn(req, 'local')); }
+    catch (err) { if (!err.http) console.error('campagnes locales :', err.message); res.status(err.http || 500).json({ error: err.message || 'Erreur interne.', code: err.code || 'INTERNAL' }); }
+  };
+  app.post('/api/campaigns/recipients', cmpRoute(async (req) => {
+    const b = req.body || {};
+    const inbound = (b.file && b.file.base64) || (b.image && b.image.base64) || '';
+    if (inbound.length > 14 * 1024 * 1024) throw Object.assign(new Error('Fichier trop volumineux (maximum 10 Mo).'), { http: 413, code: 'FILE_TOO_LARGE' });
+    const contacts = Array.isArray(b.contacts) ? b.contacts.map(x => ({ phone: x.telephone || x.phone || x.identifier || '', name: x.nom || x.name || '' })) : undefined;
+    const file = b.file && b.file.base64 ? { buffer: Buffer.from(b.file.base64, 'base64'), name: b.file.name || 'contacts.csv', type: b.file.type || 'text/csv' } : null;
+    const image = b.image && b.image.base64 ? Buffer.from(b.image.base64, 'base64') : null;
+    return campaignService.prepareRecipients('local', { text: b.text, rows: contacts, file: file && !/^image\//i.test(file.type) ? file : null, image: image || (file && /^image\//i.test(file.type) ? file.buffer : null) }, { defaultCountryCode: b.defaultCountryCode });
+  }));
+  app.get('/api/campaigns/recipients/:id', cmpRoute((req) => campaignService.getRecipientsPage('local', req.params.id, req.query)));
+  app.post('/api/campaigns/media', cmpRoute(async (req) => {
+    const b = req.body || {}; if (!b.base64) throw Object.assign(new Error('Aucun fichier fourni.'), { http: 400, code: 'NO_FILE' });
+    if (b.base64.length > 14 * 1024 * 1024) throw Object.assign(new Error('Média trop volumineux (maximum 10 Mo).'), { http: 413, code: 'FILE_TOO_LARGE' });
+    return chatUploadsStore.save('local', { originalname: b.name, mimetype: b.type, buffer: Buffer.from(b.base64, 'base64') });
+  }));
+  app.post('/api/campaigns', cmpRoute((req) => campaignService.createCampaign('local', req.body || {}, null)));
+  app.get('/api/campaigns', cmpRoute(async () => ({ campaigns: await campaignService.list('local', localRuntime) })));
+  app.get('/api/campaigns/:id', cmpRoute((req) => campaignService.get('local', req.params.id, localRuntime, req.query)));
+  app.post('/api/campaigns/:id/launch', cmpRoute((req) => campaignService.launch('local', req.params.id, localRuntime, null)));
+  app.post('/api/campaigns/:id/schedule', cmpRoute((req) => campaignService.schedule('local', req.params.id, req.body && req.body.at)));
+  app.post('/api/campaigns/:id/pause', cmpRoute((req) => campaignService.control('local', req.params.id, 'pause', localRuntime)));
+  app.post('/api/campaigns/:id/resume', cmpRoute((req) => campaignService.control('local', req.params.id, 'resume', localRuntime)));
+  app.post('/api/campaigns/:id/cancel', cmpRoute((req) => campaignService.control('local', req.params.id, 'cancel', localRuntime)));
+  app.get('/api/campaigns/:id/report', cmpRoute((req) => campaignService.report('local', req.params.id, localRuntime)));
+  taskQueue.startWorker(() => ({ LAUNCH_CAMPAIGN: async task => {
+    try { return { ok: true, result: await campaignService.launch('local', task.payload.draftId, localRuntime, null) }; }
+    catch (err) { return { ok: false, error: err.message, retryable: false }; }
+  } }), 30000);
+
+  const knowledgeBase = require('./ai-engine/knowledgeBase');
+  const activityIntelligence = require('./ai-engine/activityIntelligence');
+  const activityStore = require('./ai-engine/activityStore');
+  const aiUsageLedger = require('./ai-engine/aiUsageLedger');
+  app.get('/api/docs', (req, res) => {
+    if (req.query.q) return res.json({ ok: true, results: knowledgeBase.search(req.query.q, 5) });
+    res.json({ ok: true, doc: knowledgeBase.all() });
+  });
+  app.get('/api/docs/:id', (req, res) => {
+    const article = knowledgeBase.get(req.params.id);
+    if (!article) return res.status(404).json({ error: 'Article introuvable.' });
+    res.json({ ok: true, article });
+  });
+  app.get('/api/ad-campaigns/new-contacts', async (_req, res) => {
+    try { res.json({ ok: true, contacts: await require('./ai-engine/adCampaigns').listNewAdContacts('local') }); }
+    catch (err) { console.error('Contacts publicitaires locaux :', err.message); res.status(500).json({ error: 'Registre indisponible.' }); }
+  });
+  app.get('/api/reports/ai-usage', async (_req, res) => res.json({ ok: true, usage: await aiUsageLedger.summary() }));
+  app.get('/api/reports/activity', async (_req, res) => res.json({ ok: true, activity: await activityStore.summary(undefined, 100) }));
+  app.get('/api/reports/intelligence', async (req, res) => {
+    try { res.json({ ok: true, report: await activityIntelligence.buildReport('local', req.query) }); }
+    catch (err) { console.error('Rapport local :', err.message); res.status(500).json({ error: 'Rapport indisponible.' }); }
+  });
+  app.get('/api/reports/improvements', async (_req, res) => {
+    try { const d = await activityIntelligence.loadImprovements('local'); res.json({ ok: true, items: d.items.slice(0, 50) }); }
+    catch (err) { res.status(500).json({ error: 'Indisponible.' }); }
+  });
+  app.post('/api/reports/improvements/refresh', async (_req, res) => {
+    try { const r = await activityIntelligence.refresh('local'); res.json({ ok: true, created: r.created.length, open: r.open }); }
+    catch (err) { console.error('Diagnostic local :', err.message); res.status(500).json({ error: 'Diagnostic indisponible.' }); }
+  });
+  app.post('/api/reports/improvements/:id/apply', async (req, res) => {
+    try { const r = await activityIntelligence.apply('local', req.params.id, { approvedByOwner: req.body && req.body.approve === true, authorized: false }); res.status(r.ok ? 200 : 400).json(r); }
+    catch (err) { res.status(500).json({ error: 'Application impossible.' }); }
+  });
+  app.post('/api/reports/improvements/:id/measure', async (req, res) => {
+    try { const r = await activityIntelligence.measure('local', req.params.id); res.status(r.ok ? 200 : 404).json(r); }
+    catch (err) { res.status(500).json({ error: 'Mesure impossible.' }); }
+  });
+  app.post('/api/reports/analysis', async (req, res) => {
+    try { res.json(await activityIntelligence.analyzeWithAgents('local', req.body || {}, require('./ai-engine/authz').issuePrincipal({ tenant: 'local', role: 'OWNER', source: 'local-reports' }))); }
+    catch (err) { console.error('Analyse locale :', err.message); res.status(500).json({ error: 'Analyse indisponible.' }); }
+  });
+
+  // ---------- Services Métiers (parité API avec le VPS, tenant local) ----------
+  app.get('/api/business-services', async (_req, res) => {
+    try { res.json({ services: await businessServices.list('local') }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/business-services', async (req, res) => {
+    try { res.status(201).json({ service: await businessServices.create('local', req.body || {}) }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.get('/api/business-services/context', async (_req, res) => {
+    try { res.json({ context: await businessServices.getEngineContext('local') }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.get('/api/business-services/:id', async (req, res) => {
+    const service = await businessServices.get('local', req.params.id);
+    if (!service) return res.status(404).json({ error: 'Service introuvable.' });
+    res.json({ service, summary: businessServices.summary(service) });
+  });
+  app.put('/api/business-services/:id', async (req, res) => {
+    const service = await businessServices.update('local', req.params.id, req.body || {});
+    if (!service) return res.status(404).json({ error: 'Service introuvable.' });
+    res.json({ service });
+  });
+  app.delete('/api/business-services/:id', async (req, res) => {
+    res.json(await businessServices.remove('local', req.params.id));
+  });
+  app.post('/api/business-services/:id/connect', async (req, res) => {
+    try { res.json(await businessServices.connectApi('local', req.params.id, req.body || {})); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/business-services/:id/test', async (req, res) => {
+    try { res.json(await businessServices.testConnection('local', req.params.id)); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/business-services/:id/permissions', async (req, res) => {
+    const service = await businessServices.setPermissions('local', req.params.id, (req.body || {}).scopes || []);
+    if (!service) return res.status(404).json({ error: 'Service introuvable.' });
+    res.json({ service });
+  });
+
+  // ---------- Répondeur automatique et politique de conversation ----------
+  const conversationPolicy = require('./ai-engine/conversationPolicy');
+  app.get('/api/auto-responder', async (_req, res) => {
+    try { res.json({ ok: true, settings: await autoResponder.getSettings('local') }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/auto-responder', async (req, res) => {
+    try {
+      const b = req.body || {}; const patch = {};
+      for (const key of ['whatsapp', 'telegram', 'alwaysOn', 'paused', 'groupReplies']) if (typeof b[key] === 'boolean') patch[key] = b[key];
+      res.json({ ok: true, settings: await autoResponder.setSettings('local', patch) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.get('/api/conversation-policy', async (_req, res) => {
+    try { const policy = await conversationPolicy.get('local'); res.json({ ok: true, policy, resume: conversationPolicy.describe(policy) }); }
+    catch (err) { res.status(500).json({ error: 'Indisponible.' }); }
+  });
+  app.post('/api/conversation-policy', async (req, res) => {
+    try {
+      const b = req.body || {}; const patch = {};
+      if (conversationPolicy.PRIVATE_MODES.includes(b.private)) patch.private = b.private;
+      if (conversationPolicy.GROUP_MODES.includes(b.group)) patch.group = b.group;
+      if (conversationPolicy.PRESENT_MODES.includes(b.presentServices)) patch.presentServices = b.presentServices;
+      if (b.windowDays !== undefined) patch.windowDays = b.windowDays;
+      if (b.groupMaxRepliesPer10Min !== undefined) patch.groupMaxRepliesPer10Min = b.groupMaxRepliesPer10Min;
+      if (typeof b.aiJudgment === 'boolean') patch.aiJudgment = b.aiJudgment;
+      const policy = await conversationPolicy.set('local', patch);
+      res.json({ ok: true, policy, resume: conversationPolicy.describe(policy) });
+    } catch (_) { res.status(500).json({ error: 'Enregistrement impossible.' }); }
+  });
+  app.get('/api/auto-responder/status', async (_req, res) => {
+    try {
+      const settings = await autoResponder.getSettings('local');
+      res.json({ ok: true, settings, alwaysOn: !!settings.alwaysOn, sessions: { whatsapp: { connected: whatsapp.isConnected() }, telegram: { connected: telegram.isConnected() } } });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ---------- Communautés : parité locale WhatsApp / Telegram ----------
+  const communityService = require('./ai-engine/communityService');
+  const communityDiscovery = require('./ai-engine/communityDiscovery');
+  const cmChannel = (req) => String((req.body && req.body.channel) || req.query.channel || 'WHATSAPP').toUpperCase();
+  const cmLocation = (req) => {
+    const b = req.body || {};
+    const country = String(b.country || '').trim();
+    const city = String(b.city || '').trim();
+    const department = String(b.department || '').trim();
+    return country || city || department ? { country, city, department } : undefined;
+  };
+  const cmRoute = (fn) => async (req, res) => {
+    const channel = cmChannel(req);
+    if (!['WHATSAPP', 'TELEGRAM'].includes(channel)) return res.status(400).json({ ok: false, error: 'Canal inconnu.', code: 'INVALID_CHANNEL' });
+    try { res.json(await fn(req, 'local')); }
+    catch (err) {
+      const http = { RECIPIENTS_NOT_FOUND: 404, NOT_FOUND: 404, JOB_ALREADY_RUNNING: 409, INVALID_STATE: 409 }[err.code] || (err.code ? 400 : 500);
+      if (http === 500) console.error('communautés :', err.message);
+      res.status(http).json({ ok: false, error: http === 500 ? 'Erreur interne.' : err.message, code: err.code || 'INTERNAL' });
+    }
+  };
+  app.post('/api/communities/groups', cmRoute(async (req, tenant) => {
+    const b = req.body || {};
+    const input = { channel: cmChannel(req), title: b.title, description: b.description, inviteMessage: b.inviteMessage, text: b.text, recipients: b.recipients, defaultCountryCode: b.defaultCountryCode, timing: b.timing };
+    if (b.file && b.file.base64) input.file = { buffer: Buffer.from(b.file.base64, 'base64'), name: b.file.name || 'contacts.csv', type: b.file.type || 'text/csv' };
+    if (b.image && b.image.base64) input.image = Buffer.from(b.image.base64, 'base64');
+    return { ok: true, group: await communityService.startGroup(tenant, input) };
+  }));
+  app.get('/api/communities/timing-bounds', (_req, res) => res.json({ ok: true, bounds: communityService.TIMING_BOUNDS }));
+  app.post('/api/communities/groups/:id/timing', cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.setTiming(tenant, req.params.id, req.body || {}) })));
+  app.get('/api/communities/groups', cmRoute(async (_req, tenant) => ({ ok: true, groups: await communityService.listJobs(tenant) })));
+  app.get('/api/communities/groups/:id', cmRoute(async (req, tenant) => {
+    const group = await communityService.getJob(tenant, req.params.id);
+    if (!group) throw Object.assign(new Error('Groupe introuvable.'), { code: 'NOT_FOUND' });
+    return { ok: true, group };
+  }));
+  app.post('/api/communities/groups/:id/pause', cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.pauseJob(tenant, req.params.id) })));
+  app.post('/api/communities/groups/:id/cancel', cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.cancelJob(tenant, req.params.id) })));
+  app.post('/api/communities/groups/:id/resume', cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.resumeJob(tenant, req.params.id) })));
+  app.post('/api/communities/discover', cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discover(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true, location: cmLocation(req) })) })));
+  app.get('/api/communities/my-groups', cmRoute(async (req, tenant) => {
+    const result = await chatOrchestrator.searchMyGroups(cmChannel(req), { adminOnly: req.query.adminOnly === 'true', subject: req.query.subject }, tenant, { runtime: localRuntime });
+    if (!result.ok) throw Object.assign(new Error(result.error || 'GROUP_SEARCH_FAILED'), { code: result.error });
+    return result;
+  }));
+  app.get('/api/communities/directory', cmRoute(async (req, tenant) => ({ ok: true, communities: await contactCrm.listCommunities(tenant, { channel: req.query.channel, keyword: req.query.keyword }) })));
+  app.post('/api/communities/sync', cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.syncToCrm(tenant, Array.isArray(req.body && req.body.communities) ? req.body.communities.slice(0, 100) : [])) })));
+  app.post('/api/communities/discover-people', cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.discoverPeople(tenant, { channel: cmChannel(req), keywords: req.body && req.body.keywords, limit: req.body && req.body.limit, sync: req.body && req.body.sync === true, location: cmLocation(req) })) })));
+  app.post('/api/communities/join', cmRoute(async (req, tenant) => ({ ok: true, community: await communityDiscovery.joinCommunity(tenant, { channel: cmChannel(req), ref: req.body && req.body.ref }) })));
+  app.post('/api/communities/extract-members', cmRoute(async (req, tenant) => ({ ok: true, ...(await communityDiscovery.extractMembers(tenant, { channel: cmChannel(req), ref: req.body && req.body.ref })) })));
 
   app.get('/api/status', async (req, res) => {
     try {
@@ -535,11 +748,11 @@ async function main() {
   });
 
   // ---------- Campagnes locales (voir lib/campaigns.js) ----------
-  app.get('/api/campaigns', (req, res) => {
+  app.get('/api/legacy-campaigns', (req, res) => {
     res.json(campaigns.listCampaigns());
   });
 
-  app.post('/api/campaigns', (req, res) => {
+  app.post('/api/legacy-campaigns', (req, res) => {
     try {
       const { name, recipients, text, delayMinMs, delayMaxMs, channel, media, batchSize, batchPauseMs } = req.body || {};
       const campaign = campaigns.createCampaign(name, recipients, { text, delayMinMs, delayMaxMs, channel, media, batchSize, batchPauseMs });
@@ -549,13 +762,13 @@ async function main() {
     }
   });
 
-  app.get('/api/campaigns/:id', (req, res) => {
+  app.get('/api/legacy-campaigns/:id', (req, res) => {
     const campaign = campaigns.getCampaign(req.params.id);
     if (!campaign) return res.status(404).json({ error: 'Campagne introuvable.' });
     res.json(campaign);
   });
 
-  app.post('/api/campaigns/:id/start', (req, res) => {
+  app.post('/api/legacy-campaigns/:id/start', (req, res) => {
     try {
       campaigns.startCampaign(req.params.id);
       res.json({ ok: true });
@@ -564,7 +777,7 @@ async function main() {
     }
   });
 
-  app.post('/api/campaigns/:id/pause', (req, res) => {
+  app.post('/api/legacy-campaigns/:id/pause', (req, res) => {
     try {
       campaigns.pauseCampaign(req.params.id);
       res.json({ ok: true });
@@ -573,7 +786,7 @@ async function main() {
     }
   });
 
-  app.post('/api/campaigns/:id/cancel', (req, res) => {
+  app.post('/api/legacy-campaigns/:id/cancel', (req, res) => {
     try {
       campaigns.cancelCampaign(req.params.id);
       res.json({ ok: true });
@@ -585,7 +798,7 @@ async function main() {
   // Relance Manuelle Express (voir public/relance.js) : trace un envoi
   // déclenché manuellement via deep link, sans passer par la boucle
   // automatique de lib/campaigns.js#runLoop.
-  app.post('/api/campaigns/:id/mark-sent', (req, res) => {
+  app.post('/api/legacy-campaigns/:id/mark-sent', (req, res) => {
     try {
       campaigns.markManualSent(req.params.id, String(req.body?.to || ''));
       res.json({ ok: true });

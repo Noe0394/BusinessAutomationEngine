@@ -11,6 +11,12 @@ function showTab(name) {
   document.querySelectorAll('nav button').forEach((el) => el.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   document.getElementById('nav-' + name).classList.add('active');
+  if (name === 'services-metiers') svcMetiersInit();
+  if (name === 'campagnes' && window.cmpInit) cmpInit();
+  if (name === 'aide') aideInit();
+  if (name === 'reports') reportsInit();
+  if (name === 'prospects') adContactsInit();
+  if (name === 'communities' && window.__cmReattach) { window.__cmReattach.wa && window.__cmReattach.wa(); window.__cmReattach.tg && window.__cmReattach.tg(); }
 }
 
 async function refreshStatus() {
@@ -320,7 +326,7 @@ async function createCampaign() {
     media = { base64: await readFileAsBase64(mediaFile), mimetype: mediaFile.type, filename: mediaFile.name };
   }
 
-  const res = await fetch('/api/campaigns', {
+  const res = await fetch('/api/legacy-campaigns', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, recipients, text, delayMinMs, delayMaxMs, channel, media, batchSize, batchPauseMs }),
@@ -337,14 +343,14 @@ async function createCampaign() {
 }
 
 async function campaignAction(id, action) {
-  await fetch(`/api/campaigns/${id}/${action}`, { method: 'POST' });
+  await fetch(`/api/legacy-campaigns/${id}/${action}`, { method: 'POST' });
   refreshCampaigns();
 }
 
 let lastCampaignsList = [];
 
 async function refreshCampaigns() {
-  const res = await fetch('/api/campaigns');
+  const res = await fetch('/api/legacy-campaigns');
   const list = await res.json();
   lastCampaignsList = list;
   const el = document.getElementById('campaignsList');

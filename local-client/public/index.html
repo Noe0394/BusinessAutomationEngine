@@ -83,10 +83,16 @@
     <button id="nav-telegram" onclick="showTab('telegram')">Telegram</button>
     <button id="nav-contacts" onclick="showTab('contacts')">Contacts</button>
     <button id="nav-campagnes" onclick="showTab('campagnes')">Campagnes</button>
+    <button id="nav-services-metiers" onclick="showTab('services-metiers')">🏢 Services Métiers</button>
+    <button id="nav-communities" onclick="showTab('communities')">👥 Communautés</button>
     <button id="nav-relance" onclick="showTab('relance')">Relance Manuelle</button>
     <button id="nav-connexions" onclick="showTab('connexions')">Connexions</button>
     <button id="nav-ia" onclick="showTab('ia')">🎨 Studio IA</button>
     <button id="nav-media" onclick="showTab('media')">🖼️ Studio Média</button>
+    <button id="nav-aide" onclick="showTab('aide')">📚 Centre d'aide</button>
+    <button id="nav-reports" onclick="showTab('reports')">📊 Rapports & Activités</button>
+    <button id="nav-facebook-share" onclick="showTab('facebook-share')">📣 Groupes / Diffusion Facebook</button>
+    <button id="nav-prospects" onclick="showTab('prospects')">🎯 Prospects publicitaires</button>
   </nav>
 
   <section id="tab-statut" class="tab active">
@@ -101,11 +107,398 @@
     <div id="sendResult"></div>
   </section>
 
+  <section class="tab" id="tab-aide">
+      <style>
+        #tab-aide .aide-search{width:100%;max-width:520px;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.25);color:inherit;font:inherit;margin:8px 0 16px}
+        #tab-aide .aide-cat{margin:18px 0 6px;font-weight:700;opacity:.9}
+        #tab-aide details{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px 12px;margin:8px 0;background:rgba(255,255,255,.03)}
+        #tab-aide summary{cursor:pointer;font-weight:600}
+        #tab-aide .aide-steps{margin:8px 0 0 18px}
+        #tab-aide .aide-faq{margin-top:24px}
+        #tab-aide .aide-faq-item{border-bottom:1px solid rgba(255,255,255,.08);padding:10px 0}
+        #tab-aide .aide-faq-q{font-weight:600}
+      </style>
+      <h2>📚 Centre d'aide</h2>
+      <p class="empty">Toute la documentation de CYRUS : tutoriels pas-à-pas et FAQ. Tu peux aussi poser tes questions « comment… ? » directement au Chat Intelligent — il puise dans cette même documentation.</p>
+      <input type="search" id="aide-search" class="aide-search" placeholder="Rechercher (ex. « configurer service métier », « importer contacts »)…" />
+      <div id="aide-content"><p style="opacity:.6">Chargement de la documentation…</p></div>
+    </section>
+  <section class="tab" id="tab-reports">
+      <style>
+        #tab-reports .rep-kpis{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
+        #tab-reports .rep-kpi{flex:1 1 140px;min-width:130px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px}
+        #tab-reports .rep-kpi .v{font-size:1.5rem;font-weight:700}
+        #tab-reports .rep-kpi .l{opacity:.7;font-size:.82rem;margin-top:2px}
+        #tab-reports .rep-section{margin-top:22px}
+        #tab-reports .rep-bar-row{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:.85rem}
+        #tab-reports .rep-bar-label{width:120px;flex:0 0 auto;opacity:.8;text-align:right}
+        #tab-reports .rep-bar-track{flex:1;background:rgba(255,255,255,.06);border-radius:6px;height:16px;overflow:hidden}
+        #tab-reports .rep-bar-fill{height:100%;background:#6c4fd6;border-radius:6px}
+        #tab-reports .rep-feed{margin-top:8px;border:1px solid rgba(255,255,255,.08);border-radius:12px;overflow:hidden}
+        #tab-reports .rep-evt{display:flex;gap:8px;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.06);font-size:.88rem}
+        #tab-reports .rep-evt:last-child{border-bottom:none}
+        #tab-reports .rep-evt .rep-when{opacity:.55;font-size:.78rem;flex:0 0 auto}
+        #tab-reports .rep-evt .rep-what{flex:1}
+        #tab-reports .rep-ok{color:#34d399}
+        #tab-reports .rep-err{color:#f87171}
+        #tab-reports .rep-warn{color:#fbbf24}
+      </style>
+      <h2>📊 Rapports, Activités &amp; Amélioration <button type="button" id="reports-refresh" style="float:right;font-size:.8rem;padding:5px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit;cursor:pointer">🔄 Rafraîchir</button></h2>
+      <p class="empty">Supervision en temps réel : coûts IA et activités réelles (messages, réponses automatiques, actions/outils, erreurs). Données déterministes — cette page n'utilise aucune IA.</p>
+      <div id="reports-content"><p style="opacity:.6">Chargement…</p></div>
+    </section>
+
+    <!-- ================= SERVICES MÉTIERS ================= -->
+    <section class="tab" id="tab-services-metiers">
+      <style>
+        #tab-services-metiers .svc-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+        #tab-services-metiers .svc-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+        #tab-services-metiers .svc-badge{font-size:.75rem;padding:3px 8px;border-radius:20px;border:1px solid rgba(255,255,255,.15)}
+        #tab-services-metiers .svc-ok{color:#34d399;border-color:rgba(52,211,153,.4)}
+        #tab-services-metiers .svc-err{color:#f87171;border-color:rgba(248,113,113,.4)}
+        #tab-services-metiers .svc-warn{color:#fbbf24;border-color:rgba(251,191,36,.4)}
+        #tab-services-metiers .svc-form{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:16px;margin-bottom:16px}
+        #tab-services-metiers .svc-form label{display:block;font-size:.85rem;margin:10px 0 4px;opacity:.85}
+        #tab-services-metiers .svc-form input,#tab-services-metiers .svc-form select,#tab-services-metiers .svc-form textarea{width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.25);color:inherit;font:inherit}
+        #tab-services-metiers .svc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+        #tab-services-metiers .svc-hint{font-size:.78rem;opacity:.6;margin-top:3px}
+        #tab-services-metiers details{margin:12px 0;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px 12px}
+        #tab-services-metiers summary{cursor:pointer;font-weight:600}
+        @media(max-width:640px){#tab-services-metiers .svc-grid{grid-template-columns:1fr}}
+      </style>
+      <h2>🏢 Services Métiers</h2>
+      <p style="opacity:.8;max-width:720px">Configure ici <strong>tout ce que Cyrus doit connaître et utiliser pour ton activité</strong> : tes projets, produits, prix, règles commerciales, plateformes, comptes et APIs, avec les permissions que tu accordes. Les clés API sont <strong>chiffrées</strong> et ne sont jamais affichées. (La mémoire sélective de Cyrus reste séparée.)</p>
+      <div style="margin:14px 0"><button type="button" id="svc-add-btn" class="btn-primary">+ Ajouter un Service Métier</button></div>
+      <div id="svc-feedback" hidden></div>
+
+      <!-- Formulaire création / édition -->
+      <div class="svc-form" id="svc-form" hidden>
+        <input type="hidden" id="svc-id" />
+        <h3 id="svc-form-title">Nouveau Service Métier</h3>
+        <div class="svc-grid">
+          <div><label>Nom du service / projet</label><input id="svc-name" placeholder="ex : Plateforme de Formation" /></div>
+          <div><label>Type d'activité</label>
+            <select id="svc-type"><option value="formation">Formation</option><option value="ecommerce">E-commerce</option><option value="produit">Produit</option><option value="service">Service</option><option value="importation">Importation / Revente</option><option value="paiement">Paiement</option><option value="crm">CRM</option><option value="autre">Autre</option></select>
+          </div>
+        </div>
+        <label>Projet associé (facultatif)</label><input id="svc-project" placeholder="ex : Formation en ligne" />
+
+        <label style="font-weight:600;">📝 Mémoire de votre activité (recommandé — écrivez tout ici)</label>
+        <textarea id="svc-memo" rows="6" placeholder="Écrivez ou collez tout ce qui concerne votre activité : produits, prix, promotions et dates, horaires, règles, livraison, FAQ, moyens de paiement (numéro, opérateur, titulaire)...&#10;&#10;Ex. : « Je propose une formation Épicerie et Bouillon à 8 000 FCFA. Elle commence le 19 septembre sur WhatsApp et Telegram. Promotion à 5 000 FCFA jusqu'au 25 septembre. Paiement Wave au XX XX XX XX au nom de X et Orange Money au XX XX XX XX au nom de Y. »"></textarea>
+        <div class="svc-hint">Cyrus lit ce texte et en comprend automatiquement le prix, les promotions, les moyens de paiement, etc. — les champs ci-dessous restent disponibles en complément/correction, mais ne sont plus obligatoires.</div>
+
+        <label>Description (facultatif si déjà dans la mémoire ci-dessus)</label><textarea id="svc-desc" rows="2" placeholder="Ce que tu proposes"></textarea>
+
+        <details><summary>💰 Informations commerciales (facultatif si déjà dans la mémoire ci-dessus)</summary>
+          <div class="svc-grid">
+            <div><label>Prix</label><input id="svc-price" type="number" placeholder="15000" /></div>
+            <div><label>Devise</label><input id="svc-currency" value="FCFA" /></div>
+            <div><label>Prix promo (facultatif)</label><input id="svc-promo" type="number" /></div>
+            <div><label>Cible</label><input id="svc-target" placeholder="ex : restaurateurs" /></div>
+          </div>
+          <label>Avantages / arguments</label><textarea id="svc-advantages" rows="2"></textarea>
+          <label>Objections fréquentes → réponses</label><textarea id="svc-objections" rows="2"></textarea>
+          <label>Conditions de paiement</label><input id="svc-payterms" />
+          <label>Conditions d'accès / livraison</label><input id="svc-accessterms" />
+        </details>
+
+        <details><summary>📦 Produits (un par ligne : nom | prix)</summary>
+          <textarea id="svc-products" rows="3" placeholder="Formation Cuisine | 15000&#10;Formation Épicerie | 20000"></textarea>
+        </details>
+
+        <details><summary>🔌 Connexion (API / compte)</summary>
+          <label>Type de connexion</label>
+          <select id="svc-conn-kind"><option value="none">Aucune (interne)</option><option value="api">API</option><option value="account">Compte / session</option></select>
+          <div id="svc-api-fields" hidden>
+            <label>Type de connecteur</label>
+            <select id="svc-connector"><option value="generic">API générique</option><option value="platform_gateway">Plateforme (passerelle X-API-Key)</option><option value="systemio">System.io</option></select>
+            <label>URL de base</label><input id="svc-baseurl" placeholder="https://ta-plateforme.com" />
+            <div class="svc-hint">Ex. RIEA : https://riea-afrique-web.web.app</div>
+            <label>En-tête d'authentification</label><input id="svc-authheader" value="X-API-Key" />
+            <label>Clé API / token <span style="opacity:.6">(chiffrée, jamais réaffichée)</span></label><input id="svc-apikey" type="password" placeholder="sk_live_..." autocomplete="off" />
+            <div class="svc-hint">La clé part directement dans le coffre chiffré. Elle n'apparaît jamais dans les logs ni les réponses.</div>
+          </div>
+          <div id="svc-noapi-hint" hidden class="svc-hint">Sans API : Cyrus pourra exploiter les informations métier (prix, règles, produits) que tu renseignes ici. Les actions automatisées sur ce service nécessiteront une API ou un connecteur compatible.</div>
+        </details>
+
+        <details><summary>🛡️ Permissions accordées à Cyrus</summary>
+          <div id="svc-perms">
+            <label><input type="checkbox" class="svc-perm" value="students:create" style="width:auto"> Créer un compte élève</label>
+            <label><input type="checkbox" class="svc-perm" value="students:suspend" style="width:auto"> Suspendre un accès</label>
+            <label><input type="checkbox" class="svc-perm" value="courses:enroll" style="width:auto"> Inscrire / débloquer une formation</label>
+            <label><input type="checkbox" class="svc-perm" value="contacts:write" style="width:auto"> Ajouter un contact (CRM)</label>
+            <label><input type="checkbox" class="svc-perm" value="tags:write" style="width:auto"> Attribuer un tag (CRM)</label>
+            <label><input type="checkbox" class="svc-perm" value="accounting:write" style="width:auto"> Enregistrer une vente / facture</label>
+          </div>
+          <div class="svc-hint">Ne coche que ce que tu autorises. Cyrus ne pourra rien faire d'autre sur ce service.</div>
+        </details>
+
+        <details><summary>📏 Règles commerciales (une par ligne)</summary>
+          <textarea id="svc-rules" rows="3" placeholder="Ne jamais accorder plus de 10% de remise.&#10;Après paiement confirmé, débloquer automatiquement la formation.&#10;Pour tout remboursement, demander mon autorisation."></textarea>
+        </details>
+
+        <details><summary>🎯 Objectifs de ce service (un par ligne)</summary>
+          <textarea id="svc-objectives" rows="2" placeholder="Vendre 10 formations par semaine&#10;Relancer les prospects sous 24h"></textarea>
+        </details>
+
+        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+          <button type="button" id="svc-save-btn" class="btn-primary">💾 Enregistrer</button>
+          <button type="button" id="svc-test-btn">🔎 Enregistrer &amp; tester la connexion</button>
+          <button type="button" id="svc-cancel-btn">Annuler</button>
+        </div>
+      </div>
+
+      <div id="svc-list"><p style="opacity:.6">Chargement…</p></div>
+    </section>
+
+
+    <!-- Onglet : Communautés — création de groupes et découverte de groupes/canaux (WhatsApp + Telegram), sections déplacées ici pour être visibles. -->
+    <section class="tab" id="tab-communities">
+      <style>
+        #tab-communities .cm-timing { margin: .6rem 0; border: 1px solid rgba(0,0,0,.12); border-radius: 10px; padding: .1rem .8rem .8rem; }
+        #tab-communities .cm-timing summary { cursor: pointer; padding: .6rem 0; font-weight: 600; }
+        #tab-communities .cm-timing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .6rem .8rem; }
+        #tab-communities .cm-timing .field { margin: 0; }
+      </style>
+      <h2>👥 Communautés</h2>
+      <div class="subsection" id="cm-wa-section">
+        <h3>👥 Communautés — créer un groupe et découvrir des groupes/canaux (WhatsApp)</h3>
+        <p class="empty">Créez un groupe à partir d'une liste de contacts validés : les participants sont ajoutés dans le respect de leurs paramètres de confidentialité ; ceux qui ont restreint l'ajout direct reçoivent automatiquement le lien d'invitation officiel en message privé. Vous pouvez aussi le demander directement dans le Chat Intelligent.</p>
+
+        <div class="field">
+          <label for="cm-wa-title">Nom du groupe</label>
+          <input type="text" id="cm-wa-title" maxlength="100" placeholder="Ex. Formation Marketing — Promo 1" />
+        </div>
+        <div class="field">
+          <label for="cm-wa-text">Contacts (un par ligne : numéro, éventuellement avec le nom)</label>
+          <textarea id="cm-wa-text" rows="4" placeholder="+22670123456 Awa&#10;+22675000111 Issa"></textarea>
+        </div>
+        <div class="field">
+          <label for="cm-wa-file">…ou un fichier (Excel, CSV, texte, vCard, ou image d'une liste — OCR)</label>
+          <input type="file" id="cm-wa-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" />
+        </div>
+        <div class="field">
+          <label for="cm-wa-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
+          <input type="text" id="cm-wa-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
+        </div>
+        <details class="cm-timing" id="cm-wa-timing-box">
+          <summary>⚙️ Temporisation avancée (facultatif — sinon des valeurs prudentes par défaut sont utilisées)</summary>
+          <div class="cm-timing-grid">
+            <div class="field"><label for="cm-wa-timing-batch">Taille des lots</label><input type="number" id="cm-wa-timing-batch" min="1" max="20" placeholder="ex. 2" /></div>
+            <div class="field"><label for="cm-wa-timing-items">Délai entre 2 personnes (s)</label><input type="number" id="cm-wa-timing-items" min="1" max="300" placeholder="ex. 10" /></div>
+            <div class="field"><label for="cm-wa-timing-batches">Délai entre 2 lots (s)</label><input type="number" id="cm-wa-timing-batches" min="0" max="1800" placeholder="ex. 120" /></div>
+            <div class="field"><label for="cm-wa-timing-pause-every">Pause toutes les N lots</label><input type="number" id="cm-wa-timing-pause-every" min="0" max="50" placeholder="ex. 5" /></div>
+            <div class="field"><label for="cm-wa-timing-pause-min">Durée de cette pause (min)</label><input type="number" id="cm-wa-timing-pause-min" min="0" max="60" placeholder="ex. 15" /></div>
+            <div class="field"><label for="cm-wa-timing-initial">Délai avant de démarrer (s)</label><input type="number" id="cm-wa-timing-initial" min="0" max="300" placeholder="ex. 0" /></div>
+            <div class="field"><label for="cm-wa-timing-max">Maximum par exécution</label><input type="number" id="cm-wa-timing-max" min="1" max="5000" placeholder="illimité" /></div>
+          </div>
+        </details>
+        <button type="button" id="cm-wa-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
+        <button type="button" id="cm-wa-pause-btn" hidden>⏸ Pause</button>
+        <button type="button" id="cm-wa-resume-btn" hidden>▶️ Reprendre</button>
+        <button type="button" id="cm-wa-stop-btn" hidden style="background:#c0392b;color:#fff">⏹ Arrêter la création</button>
+        <button type="button" id="cm-wa-timing-edit-btn" hidden>🎚 Ajuster la temporisation</button>
+        <p id="cm-wa-create-feedback" hidden></p>
+        <div id="cm-wa-progress" hidden></div>
+        <details class="cm-timing" id="cm-wa-timing-edit-box" hidden>
+          <summary>🎚 Nouvelle temporisation (le groupe doit être en pause — s'appliquera à la reprise)</summary>
+          <div class="cm-timing-grid">
+            <div class="field"><label for="cm-wa-etiming-batch">Taille des lots</label><input type="number" id="cm-wa-etiming-batch" min="1" max="20" /></div>
+            <div class="field"><label for="cm-wa-etiming-items">Délai entre 2 personnes (s)</label><input type="number" id="cm-wa-etiming-items" min="1" max="300" /></div>
+            <div class="field"><label for="cm-wa-etiming-batches">Délai entre 2 lots (s)</label><input type="number" id="cm-wa-etiming-batches" min="0" max="1800" /></div>
+            <div class="field"><label for="cm-wa-etiming-pause-every">Pause toutes les N lots</label><input type="number" id="cm-wa-etiming-pause-every" min="0" max="50" /></div>
+            <div class="field"><label for="cm-wa-etiming-pause-min">Durée de cette pause (min)</label><input type="number" id="cm-wa-etiming-pause-min" min="0" max="60" /></div>
+            <div class="field"><label for="cm-wa-etiming-initial">Délai avant de démarrer (s)</label><input type="number" id="cm-wa-etiming-initial" min="0" max="300" /></div>
+            <div class="field"><label for="cm-wa-etiming-max">Maximum par exécution</label><input type="number" id="cm-wa-etiming-max" min="1" max="5000" /></div>
+          </div>
+          <button type="button" id="cm-wa-etiming-apply-btn">✔ Appliquer</button>
+          <p id="cm-wa-etiming-feedback" hidden></p>
+        </details>
+
+        <h3 style="margin-top:1.5rem;">🔎 Rechercher parmi mes groupes</h3>
+        <p class="empty">Cherche parmi les groupes que vous avez déjà rejoints (par nom/thème, ou ceux où vous êtes admin) — distinct de la découverte de nouveaux groupes publics ci-dessous. Fonctionne aussi en le demandant directement dans le Chat Intelligent.</p>
+        <div class="field">
+          <label for="cm-wa-mine-kw">Nom ou thème (facultatif)</label>
+          <input type="text" id="cm-wa-mine-kw" placeholder="Ex. marketing, épicerie…" />
+        </div>
+        <label style="display:flex;align-items:center;gap:.4rem;font-weight:400;margin:.3rem 0;"><input type="checkbox" id="cm-wa-mine-admin" style="width:auto;" /> Seulement où je suis admin</label>
+        <button type="button" id="cm-wa-mine-search-btn">🔎 Rechercher parmi mes groupes</button>
+        <p id="cm-wa-mine-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Admin</th><th>Membres</th><th>Lien</th></tr></thead>
+            <tbody id="cm-wa-mine-results"><tr><td colspan="4" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
+        <div class="field">
+          <label for="cm-wa-kw">Mots-clés sectoriels (séparés par des virgules)</label>
+          <input type="text" id="cm-wa-kw" placeholder="Ex. marketing digital, immobilier" />
+        </div>
+        <div class="row">
+          <div class="field"><label for="cm-wa-country">Pays (facultatif)</label><input type="text" id="cm-wa-country" placeholder="Ex. Sénégal" /></div>
+          <div class="field"><label for="cm-wa-city">Ville (facultatif)</label><input type="text" id="cm-wa-city" placeholder="Ex. Dakar" /></div>
+          <div class="field"><label for="cm-wa-department">Département (facultatif)</label><input type="text" id="cm-wa-department" placeholder="Ex. Littoral" /></div>
+        </div>
+        <button type="button" id="cm-wa-search-btn">🔎 Rechercher</button>
+        <button type="button" id="cm-wa-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
+        <p id="cm-wa-search-feedback" hidden></p>
+        <p class="empty">Pour trouver des PERSONNES par thématique : WhatsApp n'a aucun annuaire public de personnes. Rejoignez un groupe ci-dessous (« Rejoindre ») puis « Extraire les membres » pour les ajouter au CRM comme prospects à valider — rien n'est envoyé automatiquement.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th><th>Actions</th></tr></thead>
+            <tbody id="cm-wa-results"><tr><td colspan="6" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="subsection" id="cm-tg-section">
+        <h3>👥 Communautés — créer un groupe et découvrir des groupes/canaux (Telegram)</h3>
+        <p class="empty">Créez un groupe à partir d'une liste de contacts validés : les participants sont ajoutés dans le respect de leurs paramètres de confidentialité ; ceux qui ont restreint l'ajout direct reçoivent automatiquement le lien d'invitation officiel en message privé. Vous pouvez aussi le demander directement dans le Chat Intelligent.</p>
+
+        <div class="field">
+          <label for="cm-tg-title">Nom du groupe</label>
+          <input type="text" id="cm-tg-title" maxlength="100" placeholder="Ex. Formation Marketing — Promo 1" />
+        </div>
+        <div class="field">
+          <label for="cm-tg-text">Contacts (un par ligne : numéro ou @username, éventuellement avec le nom)</label>
+          <textarea id="cm-tg-text" rows="4" placeholder="+22670123456 Awa&#10;+22675000111 Issa"></textarea>
+        </div>
+        <div class="field">
+          <label for="cm-tg-file">…ou un fichier (Excel, CSV, texte, vCard, ou image d'une liste — OCR)</label>
+          <input type="file" id="cm-tg-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" />
+        </div>
+        <div class="field">
+          <label for="cm-tg-invite">Message d'invitation (facultatif — variables {nom} {groupe} {lien})</label>
+          <input type="text" id="cm-tg-invite" maxlength="300" placeholder="Bonjour {nom}, rejoignez « {groupe} » : {lien}" />
+        </div>
+        <details class="cm-timing" id="cm-tg-timing-box">
+          <summary>⚙️ Temporisation avancée (facultatif — sinon des valeurs prudentes par défaut sont utilisées)</summary>
+          <div class="cm-timing-grid">
+            <div class="field"><label for="cm-tg-timing-batch">Taille des lots</label><input type="number" id="cm-tg-timing-batch" min="1" max="20" placeholder="ex. 2" /></div>
+            <div class="field"><label for="cm-tg-timing-items">Délai entre 2 personnes (s)</label><input type="number" id="cm-tg-timing-items" min="1" max="300" placeholder="ex. 10" /></div>
+            <div class="field"><label for="cm-tg-timing-batches">Délai entre 2 lots (s)</label><input type="number" id="cm-tg-timing-batches" min="0" max="1800" placeholder="ex. 120" /></div>
+            <div class="field"><label for="cm-tg-timing-pause-every">Pause toutes les N lots</label><input type="number" id="cm-tg-timing-pause-every" min="0" max="50" placeholder="ex. 5" /></div>
+            <div class="field"><label for="cm-tg-timing-pause-min">Durée de cette pause (min)</label><input type="number" id="cm-tg-timing-pause-min" min="0" max="60" placeholder="ex. 15" /></div>
+            <div class="field"><label for="cm-tg-timing-initial">Délai avant de démarrer (s)</label><input type="number" id="cm-tg-timing-initial" min="0" max="300" placeholder="ex. 0" /></div>
+            <div class="field"><label for="cm-tg-timing-max">Maximum par exécution</label><input type="number" id="cm-tg-timing-max" min="1" max="5000" placeholder="illimité" /></div>
+          </div>
+        </details>
+        <button type="button" id="cm-tg-create-btn" class="send-button" style="width:auto;">➕ Créer le groupe et inviter</button>
+        <button type="button" id="cm-tg-pause-btn" hidden>⏸ Pause</button>
+        <button type="button" id="cm-tg-resume-btn" hidden>▶️ Reprendre</button>
+        <button type="button" id="cm-tg-stop-btn" hidden style="background:#c0392b;color:#fff">⏹ Arrêter la création</button>
+        <button type="button" id="cm-tg-timing-edit-btn" hidden>🎚 Ajuster la temporisation</button>
+        <p id="cm-tg-create-feedback" hidden></p>
+        <div id="cm-tg-progress" hidden></div>
+        <details class="cm-timing" id="cm-tg-timing-edit-box" hidden>
+          <summary>🎚 Nouvelle temporisation (le groupe doit être en pause — s'appliquera à la reprise)</summary>
+          <div class="cm-timing-grid">
+            <div class="field"><label for="cm-tg-etiming-batch">Taille des lots</label><input type="number" id="cm-tg-etiming-batch" min="1" max="20" /></div>
+            <div class="field"><label for="cm-tg-etiming-items">Délai entre 2 personnes (s)</label><input type="number" id="cm-tg-etiming-items" min="1" max="300" /></div>
+            <div class="field"><label for="cm-tg-etiming-batches">Délai entre 2 lots (s)</label><input type="number" id="cm-tg-etiming-batches" min="0" max="1800" /></div>
+            <div class="field"><label for="cm-tg-etiming-pause-every">Pause toutes les N lots</label><input type="number" id="cm-tg-etiming-pause-every" min="0" max="50" /></div>
+            <div class="field"><label for="cm-tg-etiming-pause-min">Durée de cette pause (min)</label><input type="number" id="cm-tg-etiming-pause-min" min="0" max="60" /></div>
+            <div class="field"><label for="cm-tg-etiming-initial">Délai avant de démarrer (s)</label><input type="number" id="cm-tg-etiming-initial" min="0" max="300" /></div>
+            <div class="field"><label for="cm-tg-etiming-max">Maximum par exécution</label><input type="number" id="cm-tg-etiming-max" min="1" max="5000" /></div>
+          </div>
+          <button type="button" id="cm-tg-etiming-apply-btn">✔ Appliquer</button>
+          <p id="cm-tg-etiming-feedback" hidden></p>
+        </details>
+
+        <h3 style="margin-top:1.5rem;">🔎 Rechercher parmi mes groupes</h3>
+        <p class="empty">Cherche parmi les groupes que vous avez déjà rejoints (par nom/thème, ou ceux où vous êtes admin) — distinct de la découverte de nouveaux groupes publics ci-dessous. Fonctionne aussi en le demandant directement dans le Chat Intelligent.</p>
+        <div class="field">
+          <label for="cm-tg-mine-kw">Nom ou thème (facultatif)</label>
+          <input type="text" id="cm-tg-mine-kw" placeholder="Ex. marketing, épicerie…" />
+        </div>
+        <label style="display:flex;align-items:center;gap:.4rem;font-weight:400;margin:.3rem 0;"><input type="checkbox" id="cm-tg-mine-admin" style="width:auto;" /> Seulement où je suis admin</label>
+        <button type="button" id="cm-tg-mine-search-btn">🔎 Rechercher parmi mes groupes</button>
+        <p id="cm-tg-mine-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Admin</th><th>Membres</th><th>Lien</th></tr></thead>
+            <tbody id="cm-tg-mine-results"><tr><td colspan="4" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
+        <div class="field">
+          <label for="cm-tg-kw">Mots-clés sectoriels (séparés par des virgules)</label>
+          <input type="text" id="cm-tg-kw" placeholder="Ex. marketing digital, immobilier" />
+        </div>
+        <div class="row">
+          <div class="field"><label for="cm-tg-country">Pays (facultatif)</label><input type="text" id="cm-tg-country" placeholder="Ex. Sénégal" /></div>
+          <div class="field"><label for="cm-tg-city">Ville (facultatif)</label><input type="text" id="cm-tg-city" placeholder="Ex. Dakar" /></div>
+          <div class="field"><label for="cm-tg-department">Département (facultatif)</label><input type="text" id="cm-tg-department" placeholder="Ex. Littoral" /></div>
+        </div>
+        <button type="button" id="cm-tg-search-btn">🔎 Rechercher</button>
+        <button type="button" id="cm-tg-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
+        <p id="cm-tg-search-feedback" hidden></p>
+        <p class="empty">Un groupe/canal public se lit sans y adhérer : « Extraire les membres » les ajoute directement au CRM comme prospects à valider — rien n'est envoyé automatiquement.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Type</th><th>Membres</th><th>Lien</th><th>Statut</th><th>Actions</th></tr></thead>
+            <tbody id="cm-tg-results"><tr><td colspan="6" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top:1.5rem;">🔎 Rechercher des personnes par thématique</h3>
+        <p class="empty">Correspondance sur le NOM/PSEUDO public d'un compte (ex. « immobilier » trouve un compte nommé « ImmobilierParis ») — Telegram n'expose aucun centre d'intérêt réel sur un profil, ce n'est donc qu'une approximation. Non disponible sur WhatsApp, qui n'a aucun annuaire public de personnes.</p>
+        <div class="field">
+          <label for="cm-tg-people-kw">Mots-clés (séparés par des virgules)</label>
+          <input type="text" id="cm-tg-people-kw" placeholder="Ex. immobilier, formation" />
+        </div>
+        <div class="row">
+          <div class="field"><label for="cm-tg-people-country">Pays (facultatif)</label><input type="text" id="cm-tg-people-country" placeholder="Ex. Sénégal" /></div>
+          <div class="field"><label for="cm-tg-people-city">Ville (facultatif)</label><input type="text" id="cm-tg-people-city" placeholder="Ex. Dakar" /></div>
+          <div class="field"><label for="cm-tg-people-department">Département (facultatif)</label><input type="text" id="cm-tg-people-department" placeholder="Ex. Littoral" /></div>
+        </div>
+        <button type="button" id="cm-tg-people-search-btn">🔎 Rechercher</button>
+        <button type="button" id="cm-tg-people-sync-btn" hidden>💾 Synchroniser vers le CRM</button>
+        <p id="cm-tg-people-feedback" hidden></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Pseudo</th><th>Lien</th></tr></thead>
+            <tbody id="cm-tg-people-results"><tr><td colspan="3" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+
   <!-- Chat Intelligent (Goal Chat) : même moteur que le mode VPS
        (lib/intelligence/goal-chat.js, orchestre task-parser +
        human-context-engine) — voir public/intelligence.js. -->
   <section id="tab-intelligence" class="tab">
     <h2>💬 Chat Intelligent — Objectif du jour</h2>
+    <button type="button" id="goalchat-auto-btn" class="secondary" title="Réponse automatique">🤖 Réponse automatique</button>
+    <style>
+      #tab-intelligence #gc-autopanel { background:#faf9ff; border:1px solid #e0e0e0; border-radius:10px; padding:14px; margin:12px 0; }
+      #tab-intelligence .gc-auto-title { font-weight:700; margin:8px 0; }
+      #tab-intelligence .gc-auto-desc { font-size:.85rem; color:#666; margin:4px 0 8px; }
+      #tab-intelligence .gc-switch { display:block; margin:6px 0; }
+      #tab-intelligence .gc-switch input[type=checkbox] { width:auto; min-height:0; margin-right:6px; }
+      #tab-intelligence .gc-auto-status { color:#6c4fd6; font-size:.85rem; }
+    </style>      <div id="gc-autopanel" class="gc-autopanel" hidden>
+        <div class="gc-auto-title">🤖 Réponse automatique</div>
+        <div class="gc-auto-desc">Quand c'est activé, CYRUS répond seul aux messages entrants (mémoire + IA + envoi vérifié), sans que tu rouvres ce chat.</div>
+        <label class="gc-switch"><input type="checkbox" id="autoreply-wa"> WhatsApp</label>
+        <label class="gc-switch"><input type="checkbox" id="autoreply-tg"> Telegram</label>
+        <span id="autoreply-status" class="gc-auto-status"></span>
+        <div class="gc-auto-title" style="margin-top:10px">🎛️ Comportement du répondeur</div>
+        <div class="gc-auto-desc">Réglez quand je parle business, quand je présente vos services et quand je réponds dans les groupes. Je m'appuie sur la mémoire des 7 derniers jours de chaque discussion.</div>
+        <label class="gc-switch" style="display:block;margin:4px 0">Discussions privées
+          <select id="cp-private"><option value="auto">Automatique (business quand le sujet s'y prête)</option><option value="natural">Toujours naturel (jamais de vente)</option><option value="business">Toujours orienté activité</option></select></label>
+        <label class="gc-switch" style="display:block;margin:4px 0">Groupes
+          <select id="cp-group"><option value="topic">Si on s'adresse à moi, ou question sur le thème d'un groupe métier</option><option value="addressed">Seulement si on me mentionne / me répond / m'appelle</option><option value="off">Silence dans les groupes</option></select></label>
+        <label class="gc-switch" style="display:block;margin:4px 0">Présenter mes services
+          <select id="cp-present"><option value="when-relevant">Quand le sujet s'y prête</option><option value="on-request">Seulement si on me le demande</option><option value="never">Jamais</option></select></label>
+        <label class="gc-switch" style="display:block;margin:4px 0"><input type="checkbox" id="cp-ai"> L'IA tranche les cas ambigus (recommandé)</label>
+        <div id="cp-resume" class="gc-auto-desc" style="margin-top:6px"></div>
+        <span id="cp-status" class="gc-auto-status"></span>
+      </div>
+
     <small>Exprime ton objectif en langage naturel — le système pose les questions nécessaires (cible, canaux) et construit un plan réel.</small>
     <div id="goalchat-messages"></div>
     <div class="row" style="margin-top:8px;">
@@ -154,6 +547,26 @@
   </section>
 
   <section id="tab-campagnes" class="tab">
+    <div id="cmp-shell">
+      <style>
+        #cmp-shell .cmp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}#cmp-shell .cmp-box{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:12px;margin:8px 0}#cmp-shell label{display:block;margin:8px 0 4px}#cmp-shell input,#cmp-shell select,#cmp-shell textarea{width:100%;box-sizing:border-box}#cmp-shell textarea{min-height:90px}#cmp-shell .cmp-counts{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}#cmp-shell .cmp-chip{padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.07)}#cmp-shell table{width:100%;border-collapse:collapse}#cmp-shell th,#cmp-shell td{text-align:left;padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.08)}#cmp-shell .cmp-bar{height:8px;background:rgba(255,255,255,.1);border-radius:6px;overflow:hidden}#cmp-shell .cmp-bar>div{height:100%;background:#22c55e}#cmp-shell .cmp-badge{padding:2px 8px;border-radius:6px;background:rgba(255,255,255,.1)}#cmp-shell .cmp-scroll{max-height:320px;overflow:auto}#cmp-shell .cmp-actions button{margin:2px 4px 2px 0}
+      </style>
+      <h2>Campagnes — préparation, lancement et suivi</h2>
+      <div class="cmp-grid"><div class="cmp-box">
+        <label>Nom de la campagne</label><input id="cmp-name" placeholder="Promo septembre">
+        <label>Canal</label><select id="cmp-channel"><option value="WHATSAPP">WhatsApp</option><option value="TELEGRAM">Telegram</option></select>
+        <label>Destinataires (numéro ou numéro,nom par ligne; Telegram accepte @username)</label><textarea id="cmp-recipients" placeholder="225070000001,Awa"></textarea>
+        <label>Ou importer un fichier / une image à reconnaître</label><input id="cmp-recipients-file" type="file" accept=".xlsx,.xls,.csv,.txt,.vcf,.json,image/*">
+        <button id="cmp-prepare" type="button">Analyser la liste</button><div id="cmp-recipient-preview"></div>
+        <label>Message (variables : {nom}, {prenom})</label><textarea id="cmp-text"></textarea>
+        <label>Image / média WhatsApp (facultatif)</label><input id="cmp-media" type="file" accept="image/*,video/*,application/pdf">
+        <label>Programmer (facultatif)</label><input id="cmp-when" type="datetime-local">
+        <div class="cmp-actions"><button id="cmp-create" type="button">Créer le brouillon</button><button id="cmp-schedule" type="button">Programmer</button><button id="cmp-launch" type="button">Lancer maintenant</button></div>
+        <div id="cmp-feedback" role="status"></div>
+      </div></div>
+      <h3>Mes campagnes</h3><div id="cmp-list"></div><div id="cmp-detail" class="cmp-box" hidden></div>
+    </div>
+
     <h2>Nouvelle campagne</h2>
     <small>Canal</small>
     <select id="campChannel">
@@ -426,8 +839,46 @@
     </div>
   </section>
 
+  <section class="tab" id="tab-facebook-share">
+    <h2>Groupes / Diffusion</h2>
+    <p>Le partage s’ouvre dans Facebook pour un choix manuel du groupe. Facebook ne permet pas à l’application de présélectionner le groupe ni de confirmer que la publication a été validée.</p>
+    <div class="card">
+      <h3>1. Importer ou gérer les groupes</h3>
+      <p>Importez un fichier Excel/CSV avec les colonnes « Nom du Groupe » et « Lien du Groupe » (ou ID), ou ajoutez un groupe manuellement.</p>
+      <input type="file" id="fb-share-import" accept=".csv,.xlsx,.xls">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input id="fb-share-group-name" placeholder="Nom du groupe"><input id="fb-share-group-link" placeholder="Lien ou ID Facebook"><button type="button" id="fb-share-add-group">Ajouter</button></div>
+      <p id="fb-share-import-feedback" role="status"></p>
+      <div style="overflow:auto"><table><thead><tr><th><input type="checkbox" id="fb-share-select-all"></th><th>Nom</th><th>Identifiant / lien</th><th>Dernière action</th><th></th></tr></thead><tbody id="fb-share-groups-body"><tr><td colspan="5">Aucun groupe enregistré.</td></tr></tbody></table></div>
+    </div>
+    <div class="card">
+      <h3>2. Préparer le partage</h3>
+      <label for="fb-share-post-url">Lien d’une publication Facebook à partager</label>
+      <input id="fb-share-post-url" type="url" placeholder="https://www.facebook.com/...">
+      <label for="fb-share-message">Message à copier dans Facebook</label>
+      <textarea id="fb-share-message" placeholder="Votre commentaire d’accompagnement"></textarea>
+      <p>Facebook n’accepte pas le préremplissage du commentaire dans la fenêtre de partage. Copiez le texte, puis collez-le dans Facebook.</p>
+      <button type="button" id="fb-share-copy-message">Copier le message</button>
+      <button type="button" id="fb-share-open-selected">Ouvrir le partage pour les groupes sélectionnés</button>
+      <p id="fb-share-feedback" role="status"></p>
+    </div>
+</section>
+  <section class="tab" id="tab-prospects">
+    <h2>🎯 Nouveaux contacts publicitaires</h2>
+    <p>Contacts enregistrés lorsqu’une campagne d’entrée configurée reconnaît un nouveau contact. La source vérifiée est distinguée d’une source déduite du message.</p>
+    <button id="ad-contacts-refresh" type="button">🔄 Actualiser</button>
+    <button id="ad-contacts-export" type="button">📊 Exporter en Excel</button>
+    <p id="ad-contacts-feedback" role="status"></p>
+    <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Téléphone</th><th>Canal</th><th>Campagne</th><th>Plateforme</th><th>Source</th><th>Premier contact</th></tr></thead><tbody id="ad-contacts-body"><tr><td colspan="7">Cliquez sur Actualiser.</td></tr></tbody></table></div>
+  </section>
 <script src="/lib/xlsx.full.min.js"></script>
 <script src="/lib/smartTextGenerator.js"></script>
+<script src="/business-services.js"></script>
+<script src="/community.js"></script>
+<script src="/auto-responder.js"></script>
+<script src="/reports-help.js"></script>
+<script src="/ad-contacts.js"></script>
+<script src="/facebook-share.js"></script>
+<script src="/campaign-manager.js"></script>
 <script src="/app.js"></script>
 <script src="/relance.js"></script>
 <script src="/intelligence.js"></script>

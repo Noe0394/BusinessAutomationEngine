@@ -135,7 +135,7 @@
     state.channel = document.getElementById('relChannel').value;
     feedback('', false);
     try {
-      const res = await fetch('/api/campaigns');
+      const res = await fetch('/api/legacy-campaigns');
       const campaigns = await res.json();
       const candidates = campaigns.filter((c) => (c.config.channel || 'whatsapp') === state.channel);
       const latest = candidates.reduce((best, c) => (!best || c.updatedAt > best.updatedAt ? c : best), null);
@@ -194,7 +194,7 @@
     }
 
     if (state.campaignId) {
-      fetch(`/api/campaigns/${state.campaignId}/mark-sent`, {
+      fetch(`/api/legacy-campaigns/${state.campaignId}/mark-sent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: item.to }),
       }).catch(() => { feedback('Le lien a été ouvert, mais le statut n\'a pas pu être enregistré.', true); });
     }

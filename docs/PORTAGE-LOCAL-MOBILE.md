@@ -289,3 +289,155 @@ dépendance `adapters/`, confirmé identiques au VPS avant copie). **Vérifié e
 `/api/ad-campaigns/new-contacts(+/export-excel)` dans `local-client/index.js` et la section correspondante dans
 `local-client/public/` (aucune UI Service Métier/campagnes publicitaires n'existe encore côté PC, voir item #11/#10
 du tableau plus haut — blocage UI plus large, pas spécifique à cette livraison). Téléphone : NON PORTÉ.
+
+## Chantier EN COURS 2026-09-23 (soir) — Licence hybride offline (Ed25519) + Cloudflare en secours
+
+**Déclenché par** : consigne explicite de l'utilisateur (après l'incident VM) demandant une réadaptation vers
+l'autonomie 100% locale. Audit livré en conversation (résumé : sessions WhatsApp/Telegram, base de données, IA et
+paiements sont DÉJÀ 100% locaux/manuels ; seule la vérification de licence dépend encore d'un appel réseau, vers le
+Worker Cloudflare `cyrus-license.ezechielatannidje.workers.dev` — gratuit, déjà indépendant du VM supprimé, mais pas
+« zéro réseau »). Deux décisions utilisateur actées :
+1. **Licence** : approche hybride retenue (PAS un simple remplacement) — validation OFFLINE par défaut (jeton signé
+   Ed25519, vérifié localement avec une clé publique embarquée, aucun appel réseau requis pour fonctionner au
+   quotidien), avec une vérification Cloudflare en arrière-plan pour détecter une révocation et rafraîchir le jeton.
+2. **Déploiement Vercel** (`vercel --prod`) demandé dans la consigne d'origine : **écarté** — confirmé sans objet,
+   Vercel sert exclusivement le mode VPS (mémoire épinglée `cyrus-single-vercel-webapp-architecture`), pas le
+   chantier zéro-VPS local en cours.
+
+**Conception retenue pour le jeton offline** (pas encore implémentée) :
+- Format compact maison (PAS un JWT standard, pour éviter toute confusion d'algorithme) :
+  `base64url(JSON des revendications) + '.' + base64url(signature Ed25519)`.
+- Revendications : `{ key, deviceId, allowedModules, licenseExpiresAt, offlineGraceUntil, issuedAt }` —
+  `offlineGraceUntil` (ex. +14 jours) est une fenêtre de tolérance hors-ligne, RE-signée/étendue à chaque
+  vérification en ligne réussie ; distincte de `licenseExpiresAt` (l'expiration réelle de la licence).
+- Vérification locale : signature valide (clé publique embarquée) + `key`/`deviceId` correspondent + horodatage
+  actuel < `offlineGraceUntil` ET (`licenseExpiresAt` nul OU non dépassé).
+- Rafraîchissement : au démarrage + périodiquement, tentative de vérification EN LIGNE (non bloquante) ; succès ->
+  jeton mis à jour en cache local ; réseau injoignable -> on continue avec le jeton en cache tant qu'il est valide ;
+  réponse EN LIGNE explicitement négative (révoqué/inactif/expiré/appareil différent) -> jeton local supprimé,
+  licence invalidée pour de bon (une négation explicite du serveur prime toujours sur le cache).
+
+**Fait jusqu'ici** :
+- Confirmé que `crypto.webcrypto.subtle` (Web Crypto, Ed25519) fonctionne nativement sur ce Node.js (v24) — même
+  API que le runtime Cloudflare Workers, donc utilisable des DEUX côtés (signature côté Worker, vérification côté
+  `local-client`) sans dépendance npm supplémentaire. Testé par une génération de paire de clés Ed25519 factice
+  (UNIQUEMENT pour valider la compatibilité de plateforme — **cette paire de test a été affichée en clair dans un
+  terminal et ne doit JAMAIS servir en production** ; une vraie paire sera regénérée proprement, écrite directement
+  dans un fichier hors du code/jamais loguée, avant tout usage réel).
+
+**PAS ENCORE FAIT** (reste à faire, dans cet ordre) :
+1. Générer la VRAIE paire de clés Ed25519 de production (proprement, sans l'afficher en clair) ; la clé PRIVÉE va
+   UNIQUEMENT dans un secret Wrangler (`wrangler secret put LICENSE_SIGNING_PRIVATE_KEY` sur
+   `cloudflare/license-worker/`, jamais commitée) ; la clé PUBLIQUE est intégrée telle quelle dans le code de
+   `local-client/lib/license.js` (elle est publique par nature, aucun risque à la committer).
+2. Modifier `cloudflare/license-worker/src/index.js#verify()` : après une vérification réussie, signer un jeton
+   offline avec la clé privée et le renvoyer dans la réponse (`offlineToken`).
+3. Modifier `local-client/lib/license.js` : vérification offline en PREMIER (jeton en cache + clé publique
+   embarquée), rafraîchissement en ligne non bloquant en arrière-plan, gestion du cache local (fichier), gestion de
+   la révocation explicite.
+4. Déployer le Worker Cloudflare mis à jour (`wrangler deploy`, action utilisateur ou à faire ensemble — jamais
+   effectué sans confirmation, cette infrastructure est actuellement le SEUL système qui a survécu à l'incident VM,
+   voir la règle `preserve-existing-infrastructure`).
+5. Tests réels (licence valide hors-ligne après un premier appairage en ligne, comportement si Cloudflare injoignable,
+   comportement si la licence est révoquée pendant que l'app tourne hors-ligne puis se reconnecte).
+6. Documenter le résultat final ici, avec le statut FAIT et les tests réellement passés (pas seulement écrits).
+7. `mobile/webapp/` (Web Crypto disponible aussi en navigateur) : NON COMMENCÉ, à traiter après le PC.
+
+## Reprise prioritaire — Parité intégrale VPS / PC local / téléphone (2026-09-23)
+
+**Exigence utilisateur réaffirmée** : porter sur local-client/ et mobile/webapp/ toutes les fonctionnalités du VPS et rendre leurs interfaces identiques à l'interface de référence public/dashboard.html (mêmes onglets, libellés, formulaires, actions et retours visuels ; adaptation responsive seulement pour la taille d'écran). La simple reprise de la palette graphique ne satisfait pas cette exigence.
+
+**Etat du releve** : le dashboard VPS comporte 14 controles d?onglet (11 visibles par defaut). Le PC en expose desormais 13 controles ; le telephone avait initialement 8 ecrans.
+
+**Livraison en cours — Services Métiers PC** : ajout des routes locales /api/business-services (liste, création, contexte, lecture, mise à jour, suppression, connexion API, test et permissions) utilisant le registre mono-compte local. Le formulaire du panneau VPS a été repris dans local-client/public/index.html, et son comportement dans local-client/public/business-services.js. La vérification syntaxique Node des scripts PC a réussi. Téléphone : pas encore porté ; cette fonctionnalité n'est donc pas déclarée complète.
+
+**Critère d'achèvement** : chaque onglet et fonction VPS a une correspondance PC et téléphone ; chaque interface reprend la même structure et les mêmes contrôles ; les différences nécessaires au matériel (par exemple appairage WhatsApp mobile) sont notées explicitement et ne suppriment aucune capacité métier. La feuille de route ligne par ligne ci-dessus doit être mise à jour au fil des livraisons et les tests rapportés uniquement après exécution réelle.
+
+
+## Suite de portage 2026-09-23 - Aide, rapports et groupes mobile
+
+PC local : routes locales de documentation, couts IA, journal d?activite, rapport d?intelligence, diagnostic, application et mesure des ameliorations. Les onglets Centre d?aide et Rapports utilisent les composants et gestionnaires repris du VPS.
+
+Telephone : ecrans Centre d?aide hors ligne, rapports depuis IndexedDB, liste des groupes WhatsApp/Telegram via les ponts existants et extraction locale des membres. Les membres extraits sont ajoutes aux contacts de l?appareil. Les resultats ne sont pas synchronises avec le VPS.
+
+Verifications executees : node --check sur les scripts serveur et JavaScript PC/mobile, git diff --check et test de fumee des modules locaux d?aide/rapport. Aucun compte reel ni appareil mobile n?a ete utilise pour valider les sessions reseau.
+
+Ecart restant : portage mobile des Services Metiers connectes, creation/invitation et decouverte de communautes, reponse automatique, rapports complets avec ameliorations et APIs serveur. Le mobile conserve les integrations natives; ses ecrans ne sont donc pas encore identiques a 100% au VPS. Aucune livraison ni commit n?est declare complet tant que ces fonctions restent manquantes.
+
+
+## Suite de portage - gestionnaire de campagnes PC et fiches m?tier mobile
+
+PC : le gestionnaire de campagnes VPS est maintenant raccord? au runtime PC pour pr?parer les destinataires, analyser CSV/Excel/image, cr?er/lancer/programmer, piloter pause/reprise/annulation, suivre l??tat r?el, g?rer les m?dias et produire les rapports. L?ancienne API de campagne reste sous `/api/legacy-campaigns` pour les ?crans et la relance qui l?utilisent. La file persistante traite les lancements programm?s.
+
+T?l?phone : ajout des fiches Services M?tiers sans secrets API, persist?es dans IndexedDB; l?utilisateur peut cocher explicitement l?inclusion du contexte avant de l?envoyer au fournisseur IA. La programmation existante d?une campagne est d?sormais sauvegard?e avec horaire, message et m?dia et reprise au red?marrage; elle s?ex?cute uniquement si CYRUS mobile est ouvert/actif. Les ponts mobile restent requis pour le transport WhatsApp/Telegram.
+
+V?rifications de cette tranche : analyse syntaxique des fichiers modifi?s; test de fum?e r?el du module campaignService isol? (liste pr?par?e, brouillon cr??, lancement par runtime simul?, lecture du gestionnaire). Les fonctions connect?es ? un vrai compte et le build Android restent ? v?rifier.
+
+
+Verification Android (2026-09-23): `npm run sync` succeeded. SHA-256 checks confirm `index.html`, `app.js`, `campaign.js`, `lib/db.js`, `business-services-mobile.js` and `parity-local.js` match Capacitor's Android public assets. `gradlew.bat assembleDebug` could not finish because this machine has JDK 17.0.20 while Capacitor Android requests Java source release 21 (`invalid source release: 21`). Install/select JDK 21, then rerun the Android build.
+
+Mobile follow-up: the Services screen now has an explicit per-service WhatsApp FAQ auto-reply switch. It only answers exact private-chat question matches from `question => answer` lines, skips groups, self messages, unsubscribe/stop text, and blocked contacts, and sends no customer text to an AI provider. The Telegram web bridge still has no incoming-message event, so automatic Telegram replies are not exposed. A simulated bridge smoke test verified one exact DM response and skipped a group.
+# Complément — prospects publicitaires et vue mobile
+
+- PC local : ajout de `GET /api/ad-campaigns/new-contacts`, d'une vue dédiée et d'un export Excel du registre alimenté par `ai-engine/adCampaigns`. Le statut CRM et la distinction entre source vérifiée et origine déduite restent fournis par le moteur existant.
+- Téléphone : ajout d'une vue Prospects & contacts locaux et export Excel. Elle montre les contacts importés, leur canal et les envois liés aux campagnes lorsque l'historique en garde l'identifiant. Les envois mobiles mémorisent désormais cet identifiant.
+- Limite réelle : le mobile ne reçoit pas le signal d'origine publicitaire vérifié du pont Meta/VPS; la vue mobile n'étiquette donc pas ses contacts comme prospects publicitaires. Il reste aussi à porter le moteur VPS d'attribution et la prise en charge Messenger qui dépend d'un backend dédié.
+
+### Complément — contrôle et rapport des campagnes mobiles
+
+- Ajout d'une commande Annuler distincte de Pause : elle annule une programmation persistée ou arrête une campagne après l'envoi en cours, conserve les envois déjà journalisés et marque l'état `cancelled`.
+- Le rapport de la dernière campagne affiche maintenant l'état et l'heure de programmation; la liste d'échecs peut être exportée en Excel.
+- L'écran mobile expose désormais l'historique complet des campagnes par canal, avec compteurs d'envois/échecs/en attente, date de mise à jour et export Excel.
+- Chaque nouvelle campagne conserve maintenant son instantané des destinataires; une reprise n'est plus affectée par un nouvel import. L'historique peut afficher chaque destinataire et son état, avec un plafond visuel de 500 lignes par campagne.
+- La Relance Manuelle Express reprend désormais le même instantané des destinataires que la campagne sélectionnée; les campagnes anciennes sans instantané gardent le repli vers le carnet courant. Un envoi validé en relance est rattaché à l'identifiant de sa campagne dans le journal.
+
+### Complément — fiches commerciales sur mobile
+
+- Les fiches mobiles reprennent maintenant les champs structurés disponibles sur PC (type, projet, mémo, description, cible, prix promotionnel/devise, avantages, objections, paiement, accès/livraison, produits et objectifs), en plus des règles et FAQ déjà présentes.
+- Le contexte envoyé au fournisseur IA reprend ces champs seulement si l'option « Inclure mes Services Métiers » est activée. Les anciennes fiches simples continuent de s'afficher et restent modifiables.
+
+### Complément — rapports locaux sur mobile
+
+- Ajout de filtres de dates, indicateurs par canal et campagne, journal des envois, comptage des échecs et export Excel multi-feuilles (synthèse, envois, campagnes, contacts). Ces chiffres sont dérivés exclusivement de l'historique local et ne sont pas synchronisés au VPS.
+
+### Complément — historique d'extraction des communautés
+
+- La base IndexedDB v5 conserve les membres extraits par canal et groupe, remplace la précédente extraction du même groupe, conserve nom/rôle/date et continue d'ajouter les identifiants au carnet de contacts local.
+- L'écran Communautés affiche les extractions conservées et exporte WhatsApp + Telegram en Excel. Les nouvelles installations et les bases v4 passent par la migration IndexedDB existante.
+
+### Complément — Groupes / Diffusion Facebook assisté
+
+- PC et téléphone ont maintenant le même écran pour importer/gérer une liste de groupes Excel/CSV, coller le lien d'une publication, copier un commentaire et lancer le partage officiel Facebook.
+- Le navigateur PC ouvre les fenêtres de partage pour les groupes cochés; le mobile ouvre sa feuille native un groupe à la fois. Facebook ne préselectionne pas le groupe cible et ne fournit pas de confirmation : l'interface enregistre uniquement l'ouverture du partage, jamais un succès fictif.
+
+## Bilan de l'etat enregistre - 2026-09-23
+
+Cette section consolide l'avancement actuel et remplace les anciens statuts provisoires ci-dessus lorsqu'ils se contredisent. Le portage VPS -> PC local + telephone est encore en cours : la parite des interfaces et des fonctions n'est pas complete.
+
+### Fait et verifie
+
+- PC local : gestionnaire de campagnes branche aux routes et au runtime local (preparation/import des destinataires, lancement, programmation, pause/reprise/annulation, suivi, medias et rapports); ancienne API conservee sous `/api/legacy-campaigns`.
+- PC local : Services Metiers, communautes, reponse automatique/conversation, Centre d'aide, Rapports et prospects disposent maintenant de routes ou d'ecrans locaux.
+- Telephone : campagnes avec programmation locale, instantane de destinataires, controle et historique; relance manuelle rattachee a la campagne; fiches Services Metiers et contexte soumis sur opt-in; aide, rapports locaux, communautes/extractions et prospects/contacts locaux.
+- PC et telephone : ecran d'assistance au partage Facebook, import CSV/XLSX et partage manuel via les mecanismes officiels. Le statut indique l'ouverture du partage, jamais une publication confirmee.
+- Telephone : stockage IndexedDB v5 pour fiches metier et extractions; les rapports et contacts restent locaux, sans synchronisation VPS. La reponse automatique mobile ne repond qu'aux correspondances FAQ exactes en message prive; le pont Telegram ne fournit pas d'evenement entrant exploitable.
+- L'adaptateur Facebook API et sa configuration locale (`local-client/lib/facebook.js`, `local-client/lib/oauthConfig.js`) ont ete amorces, mais ne sont raccordes ni aux routes ni a l'interface : ils ne constituent pas une integration operationnelle.
+
+### Verifications executees
+
+- Suite Node: 51 tests reussis pour communautes, Services Metiers, campagnes, reponse automatique et contexte metier.
+- Plusieurs controles `node --check` et tests de fumee isoles PC/mobile reussis (campagne, partage Facebook, rapports, fiches metier, extraction communautaire, relance).
+- `npm run sync` reussi pour Capacitor; les ressources Android synchronisees ont ete comparees aux sources web.
+- Build Android non valide: l'environnement utilise JDK 17.0.20 alors que la compilation requiert Java 21 (`invalid source release: 21`). A relancer avec JDK 21.
+- Aucun compte Meta, WhatsApp ou Telegram reel n'a ete utilise pour valider les flux reseau; aucun appareil mobile reel n'a ete valide.
+
+### Reste a faire
+
+1. Faire l'inventaire exhaustif des 14 onglets et de chaque action VPS, puis completer les correspondances PC et mobile. Les interfaces ne sont pas encore identiques a 100%; certains ecrans mobiles restent simplifiees ou adaptes aux ponts natifs.
+2. Finir et securiser Facebook/Messenger: OAuth, routes et UI PC, stockage/permissions des jetons, appels Graph API autorises, et solution mobile equivalente. Valider les exigences et limites actuelles de Meta avant d'activer une action distante. L'adaptateur PC commence est actuellement inutilise.
+3. Completer les fonctions communautaires du VPS qui ne sont pas encore disponibles localement, notamment decouverte, creation et invitation de membres selon les capacites reelles de chaque plateforme.
+4. Porter sur telephone les integrations Services Metiers connectees et les capacites VPS de rapports/analyse IA et mesure des ameliorations; aujourd'hui ses rapports ne couvrent que les donnees IndexedDB locales.
+5. Ajouter ou documenter une passerelle entrante Telegram pour rendre possible une reponse automatique Telegram; aujourd'hui le pont web mobile n'expose pas les messages entrants.
+6. Porter l'attribution publicitaire verifiee et la prise en charge Messenger sur le mobile; la vue prospects mobile n'infere pas une provenance publicitaire.
+7. Reprendre le build Android avec JDK 21, puis effectuer une recette manuelle sur PC et appareil Android avec les comptes de test et transports concernes.
+8. Reprendre la parite et les tests de bout en bout jusqu'a ce que chaque ecart restant soit implemente ou explicitement bloque par une limite documentee de plateforme/API.

@@ -112,6 +112,12 @@
       <button data-screen="connexions">🔌 Connexions</button>
       <button data-screen="intelligence">🧠 Commandes</button>
       <button data-screen="media">🖼️ Studio Média</button>
+      <button data-screen="help">📚 Centre d'aide</button>
+      <button data-screen="reports">📊 Rapports & Activités</button>
+      <button data-screen="facebook-share">📣 Groupes / Diffusion</button>
+      <button data-screen="prospects">🎯 Prospects</button>
+      <button data-screen="communities">👥 Communautés</button>
+      <button data-screen="services">🏢 Services Métiers</button>
     </div>
   </div>
 
@@ -154,7 +160,8 @@
       </div>
       <div id="ai-generate-card" class="card" style="display:none">
         <label>Prompt</label>
-        <textarea id="ai-prompt" placeholder="Décris ce que tu veux générer..."></textarea>
+      <textarea id="ai-prompt" placeholder="Décris ce que tu veux générer..."></textarea>
+        <label style="display:flex;align-items:center;gap:8px"><input id="ai-business-context" type="checkbox" style="width:auto;min-height:auto">Inclure mes Services Métiers dans le prompt envoyé au fournisseur IA</label>
         <div style="display:flex; gap:10px; margin-top:12px;">
           <button class="primary" id="ai-text-btn" style="margin-top:0">Texte</button>
           <button class="primary" id="ai-image-btn" style="margin-top:0">Image</button>
@@ -246,6 +253,7 @@
         <div style="display:flex; gap:10px;">
           <button class="primary" id="camp-start-btn" style="margin-top:0">Démarrer</button>
           <button class="primary" id="camp-pause-btn" style="margin-top:0; background:#fff; color:#6c4fd6; border:1px solid #6c4fd6;">Pause</button>
+          <button class="primary" id="camp-cancel-btn" style="margin-top:0; background:#fff; color:#c0392b; border:1px solid #c0392b;">Annuler</button>
         </div>
         <p id="camp-status" style="margin-top:10px; font-size:13px; color:#777;">Aucune campagne en cours.</p>
         <div id="camp-progress-bar" style="height:6px; background:#e0e0e0; border-radius:3px; margin-top:8px; overflow:hidden;">
@@ -253,6 +261,12 @@
         </div>
         <button class="secondary" id="camp-report-btn" style="margin-top:10px;">📊 Rapport de la dernière campagne</button>
         <div id="camp-report" style="display:none; margin-top:8px; font-size:13px;"></div>
+      </div>
+      <div class="card">
+        <h3>Historique des campagnes</h3>
+        <button class="secondary" id="camp-history-refresh">🔄 Actualiser l’historique</button>
+        <button class="secondary" id="camp-history-export">📥 Exporter les campagnes (Excel)</button>
+        <div id="camp-history-content"></div>
       </div>
     </div>
   </section>
@@ -515,12 +529,95 @@
       </div>
     </div>
   </section>
+
+  <section id="screen-help" class="screen">
+    <h2>📚 Centre d'aide</h2>
+    <p>Guides et repères rapides utilisables hors ligne sur le téléphone.</p>
+    <input id="mobile-help-search" type="search" placeholder="Rechercher dans l'aide…">
+    <div id="mobile-help-content"></div>
+  </section>
+  <section id="screen-reports" class="screen">
+    <h2>📊 Rapports & Activités</h2>
+    <p>Activité enregistrée sur cet appareil. Les données ne sont pas synchronisées avec le VPS.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><label>Du <input id="mobile-report-from" type="date"></label><label>Au <input id="mobile-report-to" type="date"></label></div>
+    <button id="mobile-report-refresh">🔄 Rafraîchir</button>
+    <button id="mobile-report-export">📊 Exporter Excel</button>
+    <p id="mobile-report-feedback" role="status"></p>
+    <div id="mobile-report-content"></div>
+  </section>
+  <section id="screen-facebook-share" class="screen">
+    <h2>Groupes / Diffusion</h2>
+    <p>Le partage s’ouvre dans Facebook pour un choix manuel du groupe. Facebook ne permet pas à l’application de présélectionner le groupe ni de confirmer que la publication a été validée.</p>
+    <div class="card">
+      <h3>1. Importer ou gérer les groupes</h3>
+      <p>Importez un fichier Excel/CSV avec les colonnes « Nom du Groupe » et « Lien du Groupe » (ou ID), ou ajoutez un groupe manuellement.</p>
+      <input type="file" id="fb-share-import" accept=".csv,.xlsx,.xls">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input id="fb-share-group-name" placeholder="Nom du groupe"><input id="fb-share-group-link" placeholder="Lien ou ID Facebook"><button type="button" id="fb-share-add-group">Ajouter</button></div>
+      <p id="fb-share-import-feedback" role="status"></p>
+      <div style="overflow:auto"><table><thead><tr><th><input type="checkbox" id="fb-share-select-all"></th><th>Nom</th><th>Identifiant / lien</th><th>Dernière action</th><th></th></tr></thead><tbody id="fb-share-groups-body"><tr><td colspan="5">Aucun groupe enregistré.</td></tr></tbody></table></div>
+    </div>
+    <div class="card">
+      <h3>2. Préparer le partage</h3>
+      <label for="fb-share-post-url">Lien d’une publication Facebook à partager</label>
+      <input id="fb-share-post-url" type="url" placeholder="https://www.facebook.com/...">
+      <label for="fb-share-message">Message à copier dans Facebook</label>
+      <textarea id="fb-share-message" placeholder="Votre commentaire d’accompagnement"></textarea>
+      <p>Facebook n’accepte pas le préremplissage du commentaire dans la fenêtre de partage. Copiez le texte, puis collez-le dans Facebook.</p>
+      <button type="button" id="fb-share-copy-message">Copier le message</button>
+      <button type="button" id="fb-share-open-selected">Ouvrir le partage pour les groupes sélectionnés</button>
+      <p id="fb-share-feedback" role="status"></p>
+    </div>
+</section>
+  <section id="screen-prospects" class="screen">
+    <h2>🎯 Prospects & contacts locaux</h2>
+    <p>Contacts importés et activité de campagne sur cet appareil. La provenance publicitaire n'est pas disponible dans les données mobiles.</p>
+    <button id="mobile-prospects-refresh">🔄 Actualiser</button>
+    <button id="mobile-prospects-export">📊 Exporter en Excel</button>
+    <p id="mobile-prospects-feedback" role="status"></p>
+    <div id="mobile-prospects-content"></div>
+  </section>
+  <section id="screen-communities" class="screen">
+    <h2>👥 Communautés</h2>
+    <p>Groupes déjà accessibles dans les sessions WhatsApp et Telegram de cet appareil.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="mobile-groups-wa">Lister WhatsApp</button><button id="mobile-groups-tg">Lister Telegram</button></div>
+    <p id="mobile-groups-feedback" role="status"></p>
+    <button id="mobile-members-export" disabled>📥 Exporter les membres extraits (Excel)</button>
+    <div id="mobile-members-content"></div>
+    <div id="mobile-groups-content"><p>Ouvre une session connectée puis lance l’extraction.</p></div>
+  </section>
+  <section id="screen-services" class="screen">
+    <h2>🏢 Services Métiers</h2>
+    <p>Configure tes offres pour personnaliser les contenus IA. Ces fiches sont stockées localement sur cet appareil; elles ne contiennent ni clé API ni identifiants externes.</p>
+    <div class="card">
+      <input id="svc-name" placeholder="Nom du service / entreprise">
+      <select id="svc-type"><option value="formation">Formation</option><option value="commerce">Commerce</option><option value="service">Service</option><option value="other">Autre</option></select>
+      <input id="svc-project" placeholder="Projet / marque">      <input id="svc-offer" placeholder="Offres et produits">
+      <input id="svc-price" placeholder="Prix et devise">
+      <textarea id="svc-memo" placeholder="Mémo commercial général"></textarea>
+      <textarea id="svc-description" placeholder="Description de l'offre"></textarea>
+      <div style="display:flex;gap:8px"><input id="svc-currency" placeholder="Devise (ex. FCFA)" value="FCFA"><input id="svc-promo" placeholder="Prix promotionnel"></div>
+      <textarea id="svc-target" placeholder="Clientèle cible"></textarea>
+      <textarea id="svc-advantages" placeholder="Avantages et preuves réelles"></textarea>
+      <textarea id="svc-objections" placeholder="Objections fréquentes et réponses"></textarea>
+      <textarea id="svc-payment-terms" placeholder="Conditions de paiement"></textarea>
+      <textarea id="svc-access-terms" placeholder="Conditions d'accès / livraison"></textarea>
+      <textarea id="svc-products" placeholder="Produits, un par ligne : Nom | Prix"></textarea>
+      <textarea id="svc-objectives" placeholder="Objectifs, un par ligne"></textarea>      <textarea id="svc-faq" placeholder="FAQ, une paire par ligne : Question => réponse"></textarea>
+      <textarea id="svc-rules" placeholder="Règles, promesses et consignes commerciales"></textarea>
+      <label style="display:flex;align-items:center;gap:8px"><input id="svc-wa-autoreply" type="checkbox" style="width:auto;min-height:auto">Répondre automatiquement sur WhatsApp aux questions correspondant exactement à cette FAQ</label>
+      <small>Réponse locale déterministe; groupes, messages flous, refus et questions sans correspondance ignorés. Telegram n’émet pas les événements entrants dans son pont mobile.</small>
+      <button class="primary" id="svc-save">Enregistrer le service</button>
+      <p id="svc-feedback" role="status"></p>
+    </div>
+    <div id="svc-list"></div>
+  </section>
 </div>
 <script src="lib/xlsx.full.min.js"></script>
 <script src="lib/spintax.js"></script>
 <script src="lib/personalization.js"></script>
 <script src="lib/smartTextGenerator.js"></script>
 <script src="lib/db.js"></script>
+<script src="business-services-mobile.js"></script>
 <script src="lib/offline-license.js"></script>
 <script src="lib/contactsImport.js"></script>
 <script src="lib/fileExport.js"></script>
@@ -538,6 +635,8 @@
 <script src="relance.js"></script>
 <script src="connexions.js"></script>
 <script src="chat-core.js"></script>
+<script src="parity-local.js"></script>
+<script src="facebook-share.js"></script>
 <script src="media-studio.js"></script>
 </body>
 </html>

@@ -4,11 +4,11 @@
 // appareils, coherent avec le principe "zero serveur" de ce projet).
 (function () {
   const DB_NAME = 'cyrus_campaigns';
-  // v3 ajoute le store 'blocklist' (voir onupgradeneeded) - incremente pour
+  // v5 ajoute les stores 'businessServices' et 'groupMembers' (voir onupgradeneeded) - incremente pour
   // que les installations existantes (DB deja creee en v1/v2 sur l'appareil
   // de test) declenchent bien onupgradeneeded au lieu de rester bloquees sans
   // ce store.
-  const DB_VERSION = 3;
+  const DB_VERSION = 5;
   let dbPromise = null;
 
   function open() {
@@ -42,6 +42,12 @@
           // exclu de TOUT import/campagne/relance jusqu'a retrait explicite.
           const store = db.createObjectStore('blocklist', { keyPath: ['channel', 'identifier'] });
           store.createIndex('channel', 'channel', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('businessServices')) db.createObjectStore('businessServices', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('groupMembers')) {
+          const members = db.createObjectStore('groupMembers', { keyPath: ['channel', 'groupId', 'identifier'] });
+          members.createIndex('channel', 'channel', { unique: false });
+          members.createIndex('channelGroup', ['channel', 'groupId'], { unique: false });
         }
       };
       req.onsuccess = function () { resolve(req.result); };
@@ -129,10 +135,10 @@
   // campagne (chaque envoi automatique) ET par la Relance Manuelle Express
   // (chaque "Envoyer & Suivant"), quelle que soit la source. `source` vaut
   // 'campaign' ou 'manual'.
-  function recordSent(channel, identifier, source) {
+  function recordSent(channel, identifier, source, campaignId) {
     return tx('sentLog', 'readwrite').then(function (store) {
       return new Promise(function (resolve, reject) {
-        const req = store.add({ channel: channel, identifier: identifier, source: source || 'manual', sentAt: Date.now() });
+        const req = store.add({ channel: channel, identifier: identifier, source: source || 'manual', campaignId: campaignId || null, sentAt: Date.now() });
         req.onsuccess = function () { resolve(); };
         req.onerror = function () { reject(req.error); };
       });
@@ -215,6 +221,49 @@
     });
   }
 
+  function getBusinessServices() {
+    return tx('businessServices', 'readonly').then(function (store) { return new Promise(function (resolve, reject) { const req = store.getAll(); req.onsuccess = function () { resolve(req.result || []); }; req.onerror = function () { reject(req.error); }; }); });
+  }
+  function saveBusinessService(service) {
+    const row = Object.assign({}, service, { id: service.id || ('svc_' + Date.now().toString(36)), updatedAt: Date.now() });
+    return tx('businessServices', 'readwrite').then(function (store) { return new Promise(function (resolve, reject) { const req = store.put(row); req.onsuccess = function () { resolve(row); }; req.onerror = function () { reject(req.error); }; }); });
+  }
+  function deleteBusinessService(id) {
+    return tx('businessServices', 'readwrite').then(function (store) { return new Promise(function (resolve, reject) { const req = store.delete(id); req.onsuccess = function () { resolve(); }; req.onerror = function () { reject(req.error); }; }); });
+  }
+
+  function saveGroupMembers(channel, groupId, groupName, members) {
+    return tx('groupMembers', 'readwrite').then(function (store) {
+      return new Promise(function (resolve, reject) {
+        const transaction = store.transaction;
+        transaction.oncomplete = function () { resolve(); };
+        transaction.onerror = function () { reject(transaction.error); };
+        transaction.onabort = function () { reject(transaction.error || new Error('Enregistrement des membres annulé.')); };
+        const request = store.index('channelGroup').getAllKeys(IDBKeyRange.only([channel, String(groupId)]));
+        request.onerror = function () { reject(request.error); };
+        request.onsuccess = function () {
+          request.result.forEach(key => store.delete(key));
+          const extractedAt = Date.now();
+          (members || []).forEach(member => {
+            const identifier = String(member.id || member.identifier || '').trim();
+            if (!identifier) return;
+            store.put({ channel, groupId: String(groupId), groupName: groupName || String(groupId), identifier,
+              name: String(member.name || ''), isAdmin: !!member.isAdmin, extractedAt });
+          });
+        };
+      });
+    });
+  }
+  function getGroupMembers(channel) {
+    return tx('groupMembers', 'readonly').then(function (store) {
+      return new Promise(function (resolve, reject) {
+        const req = store.index('channel').getAll(IDBKeyRange.only(channel));
+        req.onsuccess = function () { resolve(req.result || []); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+
   window.Cyrus = window.Cyrus || {};
   window.Cyrus.db = {
     putAllContacts: putAllContacts,
@@ -230,5 +279,10 @@
     removeFromBlocklist: removeFromBlocklist,
     getBlocklist: getBlocklist,
     filterBlocked: filterBlocked,
+    getBusinessServices: getBusinessServices,
+    saveBusinessService: saveBusinessService,
+    deleteBusinessService: deleteBusinessService,
+    saveGroupMembers: saveGroupMembers,
+    getGroupMembers: getGroupMembers,
   };
 })();
