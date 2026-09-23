@@ -231,15 +231,36 @@ local sur 3 messages différents (« bonjour » → repli conversation courante 
 intention CRM exécutée avec une vraie réponse ; « quelle est mon activité ? » → boucle Agent à outils exécutée,
 dégradation propre sur l'échec réseau du LLM en environnement hors-ligne) — aucun crash, le principal/tenant passe
 la vérification d'autorisation à chaque appel.
-**Reste à faire, découvert pendant ce déblocage** : `local-client/ai-engine/assistantLayer.js` (le canal self-chat
-WhatsApp/Telegram, déjà porté) attend CE MÊME contrat (`principal`/`tenantId`) depuis le début — il était donc déjà
-écrit pour la version débloquée, mais **`assistantLayer.js` n'est PAS ENCORE instancié/branché dans `local-client/
-index.js`** (aucune référence trouvée) : les messages entrants WhatsApp/Telegram locaux n'appellent pas encore
-`assistantLayer.route()`/`.handleOwnerMessage()`. C'est le prochain chantier logique — débloque en cascade : self-chat
-propriétaire réel, routage privé/métier, canal d'alertes, et tout ce qui dépendait de l'item #10 du tableau
-(notification "question commerciale sans service", groupCampaigns/adCampaigns via le chat, etc.). Téléphone : sans
-objet directement (pas de backend Node), mais bénéficiera du même contrat une fois `cloudflare/license-worker/`
-étendu pour servir d'équivalent chatOrchestrator côté navigateur.
+**Reste à faire, découvert pendant ce déblocage — PROCHAIN CHANTIER, le plus gros restant** : `local-client/
+ai-engine/assistantLayer.js` (le canal self-chat WhatsApp/Telegram, déjà porté tel quel depuis le VPS) attend CE MÊME
+contrat (`principal`/`tenantId`) depuis le début — il était donc déjà écrit pour la version débloquée, mais
+**`assistantLayer.js` n'est PAS ENCORE instancié/branché dans `local-client/index.js`** (aucune référence trouvée).
+`local-client/index.js` gère encore les messages entrants WhatsApp/Telegram via son ANCIEN pipeline simplifié
+(`handleIncomingCustomerMessage`, ~ligne 680 : `messageTriage.classify` + `emotionalCloser` directement), qui
+contourne tout ce qui a été porté cette session (autoResponder/Jarvis, conversationRouter, adCampaigns, groupCampaigns,
+ownerChannel). Étudié en détail l'équivalent VPS réel (`index.js:5524`, fonction `handleIncomingCustomerMessage`)
+pour établir l'ordre correct à reproduire côté PC :
+1. Résoudre l'identité (`assistant.resolveIdentity`).
+2. Numéro propriétaire configuré OU **self-chat** → `assistant.handleOwnerMessage()` puis RETURN.
+3. Campagnes de groupes (membre intéressé / preuve) → `assistant.groupEntry()`/`leadDm()`, RETURN si géré.
+4. Historique (`conversationHistory.record`, déjà fait dans le pipeline actuel).
+5. Preuve de paiement (`manualPaymentValidator`, déjà fait dans le pipeline actuel), RETURN si géré.
+6. Campagne d'entrée publicitaire → `assistant.adEntry()`, RETURN si géré.
+7. Routage privé/métier → `assistant.route()`, RETURN si géré.
+8. Sinon : `autoResponder.handleIncoming()` (remplace l'appel direct à `emotionalCloser` actuel).
+
+**Obstacle réel identifié, PAS encore résolu** : `assistantLayer.js` attend `d.whatsappManager`/`d.telegramManager`
+au patron multi-tenant VPS (`.peek(tenant)`, `.setOwnerMessageHandler(cb)`) — à ADAPTER en mono-compte (stubs locaux),
+comme les autres fichiers déjà adaptés. Le point dur spécifique : **détecter un message self-chat** (l'owner
+s'écrivant à lui-même depuis son téléphone, observé par ce PC) n'est PAS encore possible avec `lib/whatsapp.js`
+actuel — celui-ci n'écoute que `client.on('message', ...)` (whatsapp-web.js, ne capte que `fromMe:false`). Un
+self-chat envoyé depuis le téléphone de l'owner arrive avec `fromMe:true` côté whatsapp-web.js (le compte EST
+l'expéditeur) : il faut AJOUTER une écoute sur l'évènement `message_create` filtrée sur `msg.fromMe === true &&
+msg.to === <mon propre ID, via client.info.wid._serialized>` — mécanisme différent du self-chat Baileys/VPS
+(architecture WhatsApp différente), donc une vraie adaptation à écrire, pas une simple copie. Non tenté ce jour
+(nécessite un vrai test avec un compte WhatsApp connecté pour valider `message_create`/`fromMe`, indisponible en
+session non interactive). Téléphone : sans objet directement (pas de backend Node), mais bénéficiera du même
+contrat une fois `cloudflare/license-worker/` étendu pour servir d'équivalent chatOrchestrator côté navigateur.
 
 ## Livraison 2026-09-23 (suite VM) — Registre des nouveaux contacts publicitaires (relance, export Excel)
 `ai-engine/adCampaigns.js` (registre `listNewAdContacts`), routes `/api/ad-campaigns/new-contacts` + `/export-excel`,
