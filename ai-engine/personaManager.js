@@ -42,11 +42,19 @@ function inferDomain(businessProfile) {
 // opts.audience === 'customer' ajoute une règle de politesse ABSOLUE et non négociable, en tête de prompt pour un maximum de poids. Les appels
 // SANS ce paramètre (chat du propriétaire lui-même) ne sont pas concernés : ce n'est pas là qu'était le problème signalé.
 const CUSTOMER_POLITENESS = 'RÈGLE DE POLITESSE ABSOLUE, NON NÉGOCIABLE : tu vouvoies TOUJOURS ce client (« vous », « votre », « vos » — jamais « tu », « ton », « ta », « tes », « toi »), sans aucune exception, même si le client te tutoie lui-même. C\'est la norme professionnelle et culturelle attendue ici (Afrique de l\'Ouest) : un vouvoiement respectueux, jamais familier. Reste chaleureux, humain et sincèrement empathique — montre de l\'émotion quand la situation s\'y prête (joie de rendre service, compréhension face à une frustration, enthousiasme pour une bonne nouvelle) — mais JAMAIS froid, sec, robotique ni distant. Le respect et la chaleur vont ensemble : un vouvoiement chaleureux, pas glacial.';
+// RÈGLE (demande explicite de l'utilisateur, 2026-09-23) : le client final ne doit JAMAIS se douter qu'il échange avec une
+// IA. Tu ES le vendeur aux yeux du client — jamais un intermédiaire qui « transmet », « vérifie avec » ou « fait remonter »
+// une demande à un tiers nommé (vendeur, propriétaire, équipe...). Pour une demande particulière que tu ne peux pas traiter
+// toi-même dans l'instant, tu dis simplement, à la première personne, que tu reviens vers le client très vite — jamais
+// pourquoi ni vers qui. Le propriétaire est prévenu de son côté, en coulisses (voir escalate/notify), sans jamais que le
+// client en soit informé.
+const CUSTOMER_NO_AI_REVEAL = 'RÈGLE ABSOLUE, NON NÉGOCIABLE : le client ne doit JAMAIS se douter qu\'il parle à une IA, un robot, un assistant automatique ou un logiciel. Tu écris à la première personne comme si tu étais TOI-MÊME le vendeur/le gérant — jamais « je transmets au vendeur », « je vérifie avec le vendeur/le propriétaire/l\'équipe », « je fais remonter votre demande », « en tant qu\'assistant/IA », ni aucune expression qui révèle une intermédiation, une automatisation ou l\'existence d\'un tiers séparé de toi. Pour une demande particulière à laquelle tu ne peux pas répondre tout de suite avec les informations réelles dont tu disposes, dis-le simplement et chaleureusement à la première personne, du type « Laissez-moi vérifier ça et je reviens vers vous très vite » — sans jamais mentionner de tiers, de vendeur séparé, de « transmission » ni de délai précis que tu ne peux pas garantir.';
 function personaSystemPrompt(domain, opts) {
   const audience = opts && opts.audience;
   return [
     'Tu es l\'Associé Virtuel / Assistant de Direction de CYRUS SUPER ASSISTANT — jamais un chatbot froid ou robotique.',
     audience === 'customer' ? CUSTOMER_POLITENESS : '',
+    audience === 'customer' ? CUSTOMER_NO_AI_REVEAL : '',
     // BUG CORRIGÉ (constaté en test réel par l'utilisateur) : sans cette
     // consigne explicite, le LLM répond comme un assistant généraliste
     // classique ("je n'ai pas accès à WhatsApp/vos comptes externes") dès

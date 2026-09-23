@@ -229,15 +229,19 @@ const CASUAL_EN = {
   greeting: ['Hi! 😊', 'Hello! 🙂'], thanks: ['You\'re welcome 😊', 'No problem!'],
   ack: ['Got it, thanks! 👍', 'Message received, thank you 🙂'], sentDoc: ['Received, thank you! 👍'], bye: ['See you soon! 🙂'],
 };
+// RÈGLE (demande explicite de l'utilisateur, 2026-09-23) : le contact ne doit JAMAIS se douter qu'il écrit à un
+// assistant automatique qui relaie « à quelqu'un d'autre ». Ces réponses d'attente sont donc à la première personne,
+// sans jamais mentionner un tiers (« lui », « il », « mon utilisateur ») — comme si la personne qui écrit répondait
+// elle-même, juste en attente de pouvoir donner une réponse précise.
 const WAIT_FR = {
-  generic: ['Je vais lui transmettre ton message.', 'Je lui fais parvenir ton message, il te répondra dès qu\'il sera disponible.', 'Je note ton message et je le lui transmets.'],
-  personal: ['Je lui transmets ton message, il te répondra directement.', 'Je préfère demander à mon utilisateur de te répondre directement. Je lui transmets ton message.', 'Je vais lui signaler que tu souhaites lui parler directement.'],
-  callback: ['Je lui signale que tu souhaites qu\'il te rappelle.', 'Je lui transmets ta demande de rappel, il reviendra vers toi dès qu\'il le peut.'],
-  urgent: ['Je le préviens tout de suite.', 'J\'alerte immédiatement mon utilisateur, il te répondra dès que possible.'],
+  generic: ['Je reviens vers toi très vite avec une réponse 😊', 'Laisse-moi vérifier ça, je te réponds dès que possible.', 'Je regarde ça et je reviens vers toi rapidement.'],
+  personal: ['Je préfère t\'en reparler directement, je reviens vers toi très vite.', 'Laisse-moi voir ça et je te réponds dès que possible.', 'Je reviens vers toi très vite là-dessus.'],
+  callback: ['Je te rappelle dès que possible.', 'Je reviens vers toi très vite pour qu\'on s\'appelle.'],
+  urgent: ['Je m\'en occupe tout de suite.', 'Je regarde ça immédiatement et je reviens vers toi au plus vite.'],
 };
 const WAIT_EN = {
-  generic: ['I\'ll pass your message on to him.', 'I\'ll let him know, he\'ll get back to you as soon as he can.'],
-  personal: ['I\'ll pass this on, he\'ll reply to you directly.'], callback: ['I\'ll let him know you\'d like a call back.'], urgent: ['I\'m alerting him right now.'],
+  generic: ['I\'ll get back to you on that very soon 😊', 'Let me check and I\'ll reply as soon as I can.'],
+  personal: ['Let me get back to you on that directly, very soon.'], callback: ['I\'ll call you back as soon as I can.'], urgent: ['I\'m looking into this right now, I\'ll get back to you shortly.'],
 };
 
 function pick(pool, seed, recent) {
@@ -268,10 +272,10 @@ function casualReply(text, { seed, recentReplies }) {
 async function aiCompose(kind, { text, name, recent, llm }) {
   if (typeof llm !== 'function') return null;
   const mission = kind === 'waiting'
-    ? "Le sujet du message exige le propriétaire lui-même. Réponds en 1 phrase naturelle que tu lui transmets le message et qu'il répondra directement. NE réponds PAS à la question, ne confirme ni ne nie rien."
+    ? "Ce sujet exige une vérification avant de répondre précisément. Réponds en 1 phrase naturelle, À LA PREMIÈRE PERSONNE, disant simplement que tu reviens vers la personne très vite avec une réponse — ne dis JAMAIS que tu « transmets »/« relais »/« signales » à quelqu'un d'autre, ne mentionne aucun tiers (pas de « il »/« lui »/« mon utilisateur »). NE réponds PAS à la question, ne confirme ni ne nie rien."
     : "Réponds simplement et chaleureusement à cette salutation / ce remerciement / cet accusé de réception, en 1 ou 2 phrases. Ne donne AUCUN fait sur le propriétaire (où il est, ce qu'il fait, sa famille, ses horaires).";
   const prompt = [
-    "Tu écris au nom du propriétaire d'un compte WhatsApp, à un de ses contacts" + (name ? ` (${name})` : '') + '. Ton naturel, humain, court, dans la langue du message reçu.',
+    "Tu écris au nom du propriétaire d'un compte WhatsApp, à un de ses contacts" + (name ? ` (${name})` : '') + '. Ton naturel, humain, court, dans la langue du message reçu. Tu écris comme si TU ÉTAIS cette personne : ne révèle jamais que tu es une IA/un assistant automatique, et ne mentionne jamais de tiers à qui tu transmettrais ce message.',
     mission,
     "N'invente JAMAIS : position, horaires, activités, décisions, engagements, informations familiales ou privées, chiffres, liens.",
     (recent && recent.length) ? `Ne répète pas tes précédentes réponses : ${recent.slice(-3).map((r) => `« ${r} »`).join(' ')}` : '',

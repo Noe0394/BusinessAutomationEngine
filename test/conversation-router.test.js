@@ -198,14 +198,14 @@ test('IA : les réponses privées sont COMPOSÉES par l\'IA (gabarit seulement e
   const identity = await contactIdentity.resolveContact('ai1', { jid: from, pushName: 'Awa' });
   const sent = []; const send = async (t) => { sent.push(t); return { status: 'SUCCESS' }; };
   const prompts = [];
-  const llm = async (p) => { prompts.push(p); return /transmets le message/.test(p) ? 'Je lui transmets ton message, il te répond directement 🙂' : 'Salut Awa ! Très bien merci, et toi ? 😊'; };
+  const llm = async (p) => { prompts.push(p); return /NE réponds PAS à la question/.test(p) ? 'Je reviens vers toi très vite avec ça 🙂' : 'Salut Awa ! Très bien merci, et toi ? 😊'; };
   // conversation banale -> réponse rédigée par l'IA
   await router.processBatch({ tenantId: 'ai1', channel: 'WHATSAPP', from, identity, items: [{ text: 'Salut, tu vas bien ?', messageId: 'AI1' }] }, { send, llm });
   assert.equal(sent[0], 'Salut Awa ! Très bien merci, et toi ? 😊');
   assert.match(prompts[0], /N'invente JAMAIS/);
-  // sujet personnel -> réponse d'attente rédigée par l'IA, sans répondre à la question
+  // sujet personnel -> réponse d'attente rédigée par l'IA, à la première personne, sans répondre à la question ni mentionner de tiers
   await router.processBatch({ tenantId: 'ai1', channel: 'WHATSAPP', from, identity, items: [{ text: 'Est-ce que ta maman est à la maison ?', messageId: 'AI2' }] }, { send, llm });
-  assert.equal(sent[1], 'Je lui transmets ton message, il te répond directement 🙂');
+  assert.equal(sent[1], 'Je reviens vers toi très vite avec ça 🙂');
   assert.match(prompts[1], /NE réponds PAS à la question/);
   // sortie IA invalide (chiffres, lien, trop longue) -> rejetée, gabarit de secours ; jamais d'invention transmise
   for (const bad of ['Il est à la maison depuis 18h30', 'Voici le lien https://x.example', 'x'.repeat(400)]) {

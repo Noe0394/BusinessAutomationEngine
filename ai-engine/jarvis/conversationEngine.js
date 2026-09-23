@@ -17,7 +17,7 @@ const TEMPLATES = {
   REFUSAL_APOLOGY: 'Toutes mes excuses, j\'ai bien compris votre décision 🙏 Je ne vous relance plus. Belle journée !',
   STOP: 'C\'est noté, je ne vous contacterai plus. Merci et bonne continuation !',
   WAIT: 'Aucun souci, prenez votre temps 😊 Je reste disponible si vous avez la moindre question.',
-  REPEAT_QUESTION: 'Je vous ai déjà donné cette information juste au-dessus 😊 Je peux la reformuler autrement, ou demander au vendeur de vous contacter directement si vous préférez.',
+  REPEAT_QUESTION: 'Je vous ai déjà donné cette information juste au-dessus 😊 Je peux la reformuler autrement si besoin.',
   AMOUNT_UNVERIFIED: 'Je préfère vérifier le montant exact avant de vous répondre pour ne pas me tromper — je reviens vers vous très vite.',
   COURTESY: 'Bonjour ! 😊 Comment puis-je vous aider ?',
   HOLD: 'Merci pour votre message 🙏 Je reviens vers vous très vite avec une réponse précise.',
@@ -186,10 +186,10 @@ function decideCore(state, cls, ctx) {
     });
   }
   if (intent === 'CANCELLATION') {
-    return res({ action: 'REPLY', kind: 'SUPPORT', escalate: true, reason: 'CANCELLATION', directives: base.concat(['Le client parle d\'annulation/remboursement: reste factuel et calme, dis que tu transmets sa demande au vendeur; ne promets aucun remboursement.']) });
+    return res({ action: 'REPLY', kind: 'SUPPORT', escalate: true, reason: 'CANCELLATION', directives: base.concat(['Le client parle d\'annulation/remboursement: reste factuel et calme, dis-lui simplement que tu reviens vers lui très vite avec la marche à suivre; ne promets aucun remboursement.']) });
   }
   if (intent === 'COMPLAINT' || intent === 'SUPPORT') {
-    return res({ action: 'REPLY', kind: 'SUPPORT', escalate: intent === 'COMPLAINT', reason: intent, directives: base.concat(['Montre de l\'empathie en une phrase, traite le problème avec les seules informations réelles; sinon dis que tu transmets au vendeur. Aucune relance commerciale.']) });
+    return res({ action: 'REPLY', kind: 'SUPPORT', escalate: intent === 'COMPLAINT', reason: intent, directives: base.concat(['Montre de l\'empathie en une phrase, traite le problème avec les seules informations réelles; sinon dis simplement que tu reviens vers lui très vite avec une réponse. Aucune relance commerciale.']) });
   }
   if (['HESITATION', 'LATER', 'REQUEST_TIME'].includes(intent) || ((intent === 'PURCHASE_INTENT' || intent === 'PAYMENT_INTENT') && flags.deferral)) {
     const purchase = intent === 'PURCHASE_INTENT' || intent === 'PAYMENT_INTENT';
@@ -221,7 +221,7 @@ function decideCore(state, cls, ctx) {
     return res({ action: 'REPLY', kind: 'ANSWER', escalate: !!repeatedTopic || noServiceForBusinessQuestion, businessRequestNoService: noServiceForBusinessQuestion, reason: 'QUESTION', directives: dirs });
   }
   if (intent === 'PURCHASE_INTENT' || intent === 'PAYMENT_INTENT') {
-    return res({ action: 'REPLY', kind: 'ANSWER', reason: intent, directives: base.concat(['Le client veut acheter/payer: indique la prochaine étape en t\'appuyant UNIQUEMENT sur les modalités réellement configurées. Sans elles, dis que le vendeur confirme les modalités. Ne déclare JAMAIS un paiement reçu ni un accès accordé.']) });
+    return res({ action: 'REPLY', kind: 'ANSWER', reason: intent, directives: base.concat(['Le client veut acheter/payer: indique la prochaine étape en t\'appuyant UNIQUEMENT sur les modalités réellement configurées. Sans elles, dis simplement que tu reviens vers lui très vite avec les modalités exactes. Ne déclare JAMAIS un paiement reçu ni un accès accordé.']) });
   }
   if (intent === 'INTEREST') {
     return res({ action: 'REPLY', kind: 'ANSWER', reason: 'INTEREST', directives: base.concat(['Le client est intéressé: réponds naturellement, propose les informations utiles, sans pression.']) });
@@ -268,7 +268,7 @@ async function guard(text, decision, ctx) {
       REPEAT_QUESTION: 'Ne repose PAS une question déjà posée au client.',
       UNSOLICITED_PROMO: 'Ta réponse précédente contenait une promotion/un prix/une offre NON sollicités : reformule en répondant uniquement à ce que dit le client, sans aucun contenu commercial.',
       PRIVATE_DATA: 'Ta réponse précédente contenait des coordonnées (numéro/e-mail) absentes des données réelles : retire-les.',
-      ACTION_CLAIM_UNVERIFIED: "Ta réponse affirmait qu'une action était faite (enregistré, validé, envoyé, réservé…) alors que RIEN n'a été exécuté : reformule sans rien affirmer d'accompli ; dis ce que le client peut faire ou que tu transmets sa demande au vendeur.",
+      ACTION_CLAIM_UNVERIFIED: "Ta réponse affirmait qu'une action était faite (enregistré, validé, envoyé, réservé…) alors que RIEN n'a été exécuté : reformule sans rien affirmer d'accompli ; dis ce que le client peut faire, ou simplement que tu reviens vers lui très vite avec la confirmation.",
       AMOUNT_UNVERIFIED: 'Ta réponse citait un montant absent des données réelles: retire tout montant non présent dans les informations configurées.',
       COURSE_CLAIM_UNSUPPORTED: 'Ta réponse prétendait venir du cours alors qu\'aucun extrait n\'a été retrouvé : reformule en disant clairement que cette précision n\'est pas dans le contenu de la formation, puis, si pertinent, donne un complément clairement marqué « connaissance générale ».',
     }[issue];
