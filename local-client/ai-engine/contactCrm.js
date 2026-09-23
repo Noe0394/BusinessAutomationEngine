@@ -39,10 +39,16 @@ function save(tenantId, doc) {
 }
 
 function ensureContact(doc, channel, from) {
-  const key = contactKey(channel, from);
+  // BUG CORRIGÉ (2026-09-23) : normalise TOUJOURS via identityOf(), comme getContact()/markOptOut()/clearOptOut() le font déjà,
+  // pour que toute écriture (recordSeen, addTags, setStage, markPurchase) retombe sur EXACTEMENT la même clé que toute lecture —
+  // avant ce correctif, setStage()/markPurchase() indexaient sous la clé BRUTE (JID complet) tandis que getContact() cherchait
+  // sous la clé normalisée (numéro seul), rendant p. ex. un achat confirmé invisible à toute vérification "stage === 'client'".
+  // identityOf() est idempotente sur une valeur déjà normalisée : aucun risque pour les appelants qui pré-normalisaient déjà.
+  const norm = identityOf(from);
+  const key = contactKey(channel, norm);
   if (!doc.contacts[key]) {
     doc.contacts[key] = {
-      key, channel: String(channel || '').toUpperCase(), from: String(from || ''),
+      key, channel: String(channel || '').toUpperCase(), from: String(norm || ''),
       name: null, tags: [], stage: 'new', purchases: [],
       firstSeen: new Date().toISOString(), lastSeen: null, messageCount: 0,
     };
@@ -63,7 +69,9 @@ function addTagsTo(contact, tags) {
 async function recordSeen(tenantId, { channel, from, name }) {
   if (!from) return { isNew: false, contact: null };
   const doc = await load(tenantId);
-  const key = contactKey(channel, from);
+  // Même clé normalisée que ensureContact() (identityOf) — sinon ce pré-contrôle rate systématiquement le contact déjà
+  // créé et le déclare "nouveau" à chaque appel (bug réel trouvé en testant le correctif d'ensureContact ci-dessus).
+  const key = contactKey(channel, identityOf(from));
   const isNew = !doc.contacts[key];
   const contact = ensureContact(doc, channel, from);
   if (name && !contact.name) contact.name = String(name).slice(0, 120);

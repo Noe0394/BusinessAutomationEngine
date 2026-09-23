@@ -51,8 +51,8 @@ erreur — `require()` réel testé sur chacun, pas seulement `node -c`) :
   conversationPolicy, engagement, claimGuard, clientLimitGuard, modelRouter, alwaysOn, responderKeeper,
   autoResponder, assistantLayer, activityStore) — copiés tels quels.
 
-**PAS FAIT, bloqué sur un vrai écart de capacité ou un risque identifié** (ne pas copier tel quel sans traiter
-ceci en premier) :
+**DÉBLOQUÉ le 2026-09-23** — voir la ligne dédiée plus bas (« Livraison — déblocage chatOrchestrator.js »). L'ancien
+piège authz/principal ci-dessous est résolu ; conservé pour mémoire :
 - **`chatOrchestrator.js`** (546 lignes locales vs 1601 VPS) — **PIÈGE TROUVÉ** : la version VPS exige désormais un
   principal d'autorisation (`authz.currentPrincipal()` + `input.tenantId` obligatoires, voir `authz.js` porté ci-
   dessus) et BLOQUE toute la conversation ("Je ne peux pas traiter cette demande") sans lui — or l'appel actuel de
@@ -87,7 +87,7 @@ point d'entrée unique IA pour le téléphone.
 
 | # | Mise à jour VPS (branche `feat/jarvis-engine`, fusionnée dans `main`) | Fichiers VPS principaux | PC | Téléphone |
 |---|---|---|---|---|
-| 1 | Moteur conversationnel Jarvis (refus respecté, anti-répétition, NO_ACTION, file/debounce, agent multi-outils, exécution directe des ordres sans contradiction) | `ai-engine/jarvis/*`, `chatOrchestrator.js`, `toolRegistry.js` | PARTIEL (jarvis/* + toolRegistry.js FAIT ; chatOrchestrator.js bloqué sur l'adaptation authz/principal, voir détail plus bas) | À FAIRE |
+| 1 | Moteur conversationnel Jarvis (refus respecté, anti-répétition, NO_ACTION, file/debounce, agent multi-outils, exécution directe des ordres sans contradiction) | `ai-engine/jarvis/*`, `chatOrchestrator.js`, `toolRegistry.js` | FAIT (jarvis/*, toolRegistry.js, chatOrchestrator.js — déblocage authz/principal le 2026-09-23, voir plus bas) | À FAIRE |
 | 2 | Mémoire 7×24 h par jour (segments par jour, verrous, historique WhatsApp à l'appairage, messages sortants, outil `queryMemory`) | `ai-engine/messageHistory.js`, `memoryQuery.js`, adapters Baileys | FAIT (fichiers copiés/resynchronisés, non testé en conditions réelles) | À FAIRE |
 | 3 | Répondeur permanent (compte « toujours actif », gardien de sessions, réglages `/api/auto-responder`) | `ai-engine/alwaysOn.js`, `responderKeeper.js`, `autoResponder.js` | PARTIEL (fichiers copiés, non branchés à un point d'entrée/route ni testés) | À FAIRE |
 | 4 | Import de numéros : coller une liste, Excel/CSV, photo OCR, normalisation, doublons, validation, compteurs et tableau des statuts, intégrés aux onglets WhatsApp et Telegram | `ai-engine/contactsPipeline.js`, `ocrProvider.js`, `public/dashboard.html` (`impBuild`) | PARTIEL (contactsPipeline.js/ocrProvider.js copiés et chargent ; UI `impBuild` du dashboard PC pas vérifiée/portée) | À FAIRE |
@@ -197,3 +197,59 @@ NON PORTÉ (même dépendance).
 général de cette session) ; `alertCenter.js`/`ownerChannel.js` (dont dépend la notification réelle) copiés aussi.
 Chaîne complète NON testée en conditions réelles (nécessite `autoResponder.js` branché + un compte WhatsApp/
 Telegram local connecté). Téléphone : NON PORTÉ.
+
+## ⚠️ Incident VPS (2026-09-23) — le VM de référence est SUPPRIMÉ (facturation GCP suspendue)
+`instance-20260909-074745` (projet `rien-afrique`) a été supprimé par Google Cloud faute de paiement. Le code est
+intact (tout est poussé sur GitHub, vérifié commit par commit contre `origin/main`) ; l'incertitude porte sur le
+`.env` réel du VM (jamais commité, jamais sauvegardé ailleurs à notre connaissance) et sur les données locales au VM
+(sessions WhatsApp, CRM, Services Métiers — `GITHUB_MIRROR_USER_DATA=false` par défaut, voir `.env.example`). Les
+licences devraient être intactes (Cloudflare Worker+D1, infrastructure séparée). **Conséquence directe pour ce
+chantier : c'est précisément la raison d'être du portage PC/téléphone — ne plus dépendre d'un VPS.** Priorité
+maximale sur ce document tant que le VPS n'est pas restauré. Nouvelle consigne utilisateur (2026-09-23, réaffirmée
+« absolument tout ») : port INTÉGRAL, sans exception, de tout ce qui a été livré sur le VPS.
+
+## Livraison 2026-09-23 (suite VM) — Déblocage `chatOrchestrator.js` (piège authz/principal résolu)
+**PC : FAIT et vérifié.** Le fichier VPS (1601 lignes) a été resynchronisé verbatim vers `local-client/ai-engine/
+chatOrchestrator.js` (remplace l'ancienne copie à 546 lignes, très en retard). Toutes ses dépendances (`actionLedger`,
+`activityIntelligence`, `adCampaignParser`, `agents/orchestrationService`, `alertCenter`, `authz`, `businessServices`,
+`connectors/connectorManager`, `contactCrm`, `contactIdentity`, `conversationRouter`, `customerLifecycle`, `cyrusSelf`,
+`groupCampaignParser`, `groupCampaigns`, `guidedSetup`, `jarvis/agentLoop`, `manualPaymentValidator`, `memoryQuery`,
+`messageHistory`, `offerClarifier`, `personaManager`, `platformOrchestrator`, `serviceCommands`, `toolAgent`,
+`toolRegistry`, `toolsLifecycle`, `untrusted`, `queues/recurringTasks`, `lib/intelligence/{goal-chat,task-parser}`,
+`lib/ai/llmFallbackEngine`) existaient déjà côté `local-client/` — confirmé une par une avant la copie. UNE seule
+adaptation réelle dans les 1601 lignes : `searchMyGroups()` (résolution du lien d'invitation d'un groupe WhatsApp)
+utilisait `adapters/whatsappManager.getOrCreate(tenantId).session` (VPS, multi-tenant) → remplacé par
+`require('../lib/whatsapp')` (même patron que `toolsExtra.js`, mono-compte local).
+Point d'entrée du tableau de bord (`local-client/index.js`, route de chat) : un principal `OWNER` fixe est désormais
+émis une seule fois au démarrage (`authz.issuePrincipal({ tenant: 'local', role: 'OWNER', ... })`, tenant `'local'`
+— même convention que `tenantId: 'local'` déjà utilisée ailleurs dans ce fichier) et transmis à chaque appel de
+`chatOrchestrator.handle()` (`tenantId: 'local', principal: LOCAL_OWNER_PRINCIPAL`) — aucun risque d'usurpation en
+mode mono-compte local (l'accès au tableau de bord EST déjà l'authentification).
+**Vérifié en réel** (pas seulement `node --check`) : `require()` du fichier resynchronisé charge sans erreur, ET un
+script de fumée a appelé `chatOrchestrator.handle()` directement avec les dépendances réelles du tableau de bord
+local sur 3 messages différents (« bonjour » → repli conversation courante correct ; « montre mes prospects » →
+intention CRM exécutée avec une vraie réponse ; « quelle est mon activité ? » → boucle Agent à outils exécutée,
+dégradation propre sur l'échec réseau du LLM en environnement hors-ligne) — aucun crash, le principal/tenant passe
+la vérification d'autorisation à chaque appel.
+**Reste à faire, découvert pendant ce déblocage** : `local-client/ai-engine/assistantLayer.js` (le canal self-chat
+WhatsApp/Telegram, déjà porté) attend CE MÊME contrat (`principal`/`tenantId`) depuis le début — il était donc déjà
+écrit pour la version débloquée, mais **`assistantLayer.js` n'est PAS ENCORE instancié/branché dans `local-client/
+index.js`** (aucune référence trouvée) : les messages entrants WhatsApp/Telegram locaux n'appellent pas encore
+`assistantLayer.route()`/`.handleOwnerMessage()`. C'est le prochain chantier logique — débloque en cascade : self-chat
+propriétaire réel, routage privé/métier, canal d'alertes, et tout ce qui dépendait de l'item #10 du tableau
+(notification "question commerciale sans service", groupCampaigns/adCampaigns via le chat, etc.). Téléphone : sans
+objet directement (pas de backend Node), mais bénéficiera du même contrat une fois `cloudflare/license-worker/`
+étendu pour servir d'équivalent chatOrchestrator côté navigateur.
+
+## Livraison 2026-09-23 (suite VM) — Registre des nouveaux contacts publicitaires (relance, export Excel)
+`ai-engine/adCampaigns.js` (registre `listNewAdContacts`), routes `/api/ad-campaigns/new-contacts` + `/export-excel`,
+section dashboard « Nouveaux contacts publicitaires » dans l'onglet Publicité ; correctif `contactCrm.js#ensureContact`/
+`recordSeen` (bug de clé non normalisée : `markPurchase`/`setStage` indexaient sous le JID brut tandis que
+`getContact` cherchait sous le numéro normalisé — un achat confirmé pouvait rester invisible).
+**PC : FAIT pour le backend** (2026-09-23) — `adCampaigns.js` et `contactCrm.js` resynchronisés verbatim (aucune
+dépendance `adapters/`, confirmé identiques au VPS avant copie). **Vérifié en réel** : script de fumée exécutant
+`recordSeen()` deux fois de suite (2e appel bien `isNew:false`, confirmant le correctif de clé) puis
+`listNewAdContacts()` sur le stockage local — aucun crash. Manque encore, PAS PORTÉ : les routes Express
+`/api/ad-campaigns/new-contacts(+/export-excel)` dans `local-client/index.js` et la section correspondante dans
+`local-client/public/` (aucune UI Service Métier/campagnes publicitaires n'existe encore côté PC, voir item #11/#10
+du tableau plus haut — blocage UI plus large, pas spécifique à cette livraison). Téléphone : NON PORTÉ.

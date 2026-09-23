@@ -26,6 +26,12 @@ const goalChat = require('./lib/intelligence/goal-chat');
 const { createLocalRuntime } = require('./lib/intelligence/runtimes/local-runtime');
 const llmFallbackEngine = require('./lib/ai/llmFallbackEngine');
 const chatOrchestrator = require('./ai-engine/chatOrchestrator');
+const authz = require('./ai-engine/authz');
+// chatOrchestrator.handle() exige désormais un principal authentifié (voir ai-engine/authz.js, resynchronisé le
+// 2026-09-23 — même exigence côté VPS). En mode local mono-compte, l'accès au tableau de bord EST déjà l'authentification
+// (pas de compte distant à usurper) : un principal OWNER fixe est émis une seule fois au démarrage, comme le fait déjà
+// ai-engine/ownerChannel.js pour le self-chat WhatsApp/Telegram (voir sa propre émission de principal, même tenant 'local').
+const LOCAL_OWNER_PRINCIPAL = authz.issuePrincipal({ tenant: 'local', role: authz.ROLES.OWNER, userId: 'local', channel: 'WEB', via: 'local_dashboard' });
 const platformOrchestrator = require('./ai-engine/platformOrchestrator');
 const messageTriage = require('./lib/intelligence/message-triage');
 const businessProfileStore = require('./ai-engine/storageAdapter');
@@ -368,7 +374,7 @@ async function main() {
     // goal-chat brut existant. Retombe proprement dessus si rien n'est détecté.
     const lastAssistantMessage = lastAssistantBySession.get(state.sessionId) || null;
     const orchestrated = await chatOrchestrator.handle(
-      { text: message, history: await getChatHistory(state.sessionId), sessionId: state.sessionId, lastAssistantMessage },
+      { text: message, history: await getChatHistory(state.sessionId), sessionId: state.sessionId, lastAssistantMessage, tenantId: 'local', principal: LOCAL_OWNER_PRINCIPAL },
       orchestratorDeps,
     ).catch((err) => {
       console.warn('Chat-Driven Agent Orchestrator (local) — échec, repli sur goal-chat brut :', err.message);

@@ -360,6 +360,23 @@ async function handleEntry(input, deps) {
       if (messageId) st.processedIds = (st.processedIds || []).concat([String(messageId)]);
       await conversationState.save(st);
     } catch (e) { /* mémoire secondaire */ }
+    // REGISTRE DES NOUVEAUX CONTACTS PUBLICITAIRES (demande explicite de l'utilisateur, 2026-09-23) : à cet instant précis,
+    // `isNewContact`/`fresh.isNew` a déjà confirmé — de façon STRICTE (voir plus haut, ligne ~318) — qu'il ne s'agit PAS d'un
+    // contact déjà connu (CRM, historique, état de conversation ou registre publicitaire), donc jamais de doublon avec un
+    // contact existant. On enrichit dir.contacts[contactKey] (déjà créé ligne ~327) avec tout ce qu'il faut pour une relance
+    // future et un export Excel — voir listNewAdContacts() / index.js#/api/ad-campaigns/new-contacts/export-excel.
+    try {
+      const dir3 = await storageAdapter.get(NS, sanitize(tenantId), dir2);
+      dir3.contacts[contactKey] = Object.assign({}, dir3.contacts[contactKey], {
+        channel, from: String(from), name: (identity && identity.displayName) || null,
+        phoneDisplay: (identity && identity.phoneDisplay) || null, username: (identity && identity.username) || null,
+        label: (identity && identity.labelWithPhone) || (identity && identity.label) || null,
+        campaignId: camp.id, campaignName: camp.name, serviceId: camp.serviceId, productName: camp.productName,
+        platform: origin.platform || (w.verified ? 'facebook' : null), sourceVerified: !!w.verified, how: w.how,
+        entryText: String(text || '').slice(0, 300), contactedAt: e2.sentAt,
+      });
+      await storageAdapter.set(NS, sanitize(tenantId), dir3);
+    } catch (e) { /* le registre d'export ne bloque jamais l'envoi, déjà fait */ }
     await alertCenter.raise(tenantId, {
       type: 'NEW_PROSPECT', title: `Nouveau contact ${w.verified ? 'Facebook Ads' : '(message d\'entrée reconnu)'} : ${identity ? identity.label : 'contact'}`,
       body: `Campagne « ${camp.name} ». Message d'accueil envoyé.${w.verified ? '' : ' Origine Facebook non vérifiée par WhatsApp (reconnu par le texte configuré).'}`,
@@ -367,6 +384,28 @@ async function handleEntry(input, deps) {
     }).catch(() => {});
     return { handled: true, reason: 'INITIAL_MESSAGE_SENT', campaignId: camp.id, verified: !!w.verified, how: w.how, tags, confirmationId: e2.confirmationId };
   });
+}
+
+// --------------------------------------------------------------------------------------------- registre export (relance)
+// Liste tous les nouveaux contacts publicitaires enregistrés (voir handleEntry ci-dessus), avec un statut de relance
+// calculé EN DIRECT depuis le CRM à chaque appel (jamais figé au moment de l'enregistrement) pour rester exact même
+// longtemps après. Source de vérité UNIQUE : dir.contacts (aucun registre parallèle).
+async function listNewAdContacts(tenant) {
+  const dir = await storageAdapter.get(NS, sanitize(tenant), { tenant: sanitize(tenant), entries: {}, contacts: {} });
+  const out = [];
+  for (const [contactKey, c] of Object.entries(dir.contacts || {})) {
+    if (!c.campaignId) continue; // entrée minimale antérieure à cette fonctionnalité (firstSeenAt/firstMessageId seuls) : rien à exporter
+    let statusLabel = 'En attente';
+    try {
+      const crm = await contactCrm.getContact(tenant, c.channel, c.from);
+      if (crm) {
+        if (crm.stage === 'client') statusLabel = 'Converti';
+        else if (crm.stage === 'refused' || (crm.tags || []).includes(contactCrm.TAG_OPTOUT)) statusLabel = 'Sans suite (refus/désinscription)';
+      }
+    } catch (e) { /* statut inconnu : reste "En attente" */ }
+    out.push(Object.assign({ contactKey }, c, { statusLabel }));
+  }
+  return out.sort((a, b) => (b.firstSeenAt || 0) - (a.firstSeenAt || 0));
 }
 
 // Contexte de continuation à injecter dans le prompt du Chat Intelligent pour un contact issu d'une campagne.
@@ -384,5 +423,5 @@ async function continuationContext(tenant, channel, from) {
 
 module.exports = {
   SOURCE, NS, TAG_VERIFIED, TAG_DECLARED, extractAdOrigin, matchesEntryMessage, canonTokens, normalizeCampaign, listAll, statusOf, isWithinPeriod,
-  configure, setStatus, isNewContact, evaluate, handleEntry, continuationContext, resolveService,
+  configure, setStatus, isNewContact, evaluate, handleEntry, continuationContext, resolveService, listNewAdContacts,
 };
