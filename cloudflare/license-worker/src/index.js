@@ -97,6 +97,24 @@ async function getLicense(env, key) {
   return env.DB.prepare('SELECT * FROM licenses WHERE key = ?').bind(key).first();
 }
 
+async function createOfflineToken(env, { key, deviceId, allowedModules, expiresAt }) {
+  if (!env.LICENSE_SIGNING_PRIVATE_KEY) return null;
+  const claims = {
+    key, deviceId, allowedModules,
+    licenseExpiresAt: expiresAt ? new Date(expiresAt).getTime() : null,
+    issuedAt: Date.now(),
+    offlineGraceUntil: Date.now() + 14 * 24 * 60 * 60 * 1000,
+  };
+  const payload = btoa(unescape(encodeURIComponent(JSON.stringify(claims))))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const privateKeyBytes = Uint8Array.from(atob(env.LICENSE_SIGNING_PRIVATE_KEY), (c) => c.charCodeAt(0));
+  const privateKey = await crypto.subtle.importKey('pkcs8', privateKeyBytes, { name: 'Ed25519' }, false, ['sign']);
+  const signature = new Uint8Array(await crypto.subtle.sign('Ed25519', privateKey, new TextEncoder().encode(payload)));
+  let binary = '';
+  for (const byte of signature) binary += String.fromCharCode(byte);
+  return `${payload}.${btoa(binary).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')}`;
+}
+
 async function verify(request, env) {
   const { key, deviceId } = await request.json().catch(() => ({}));
   if (!key) return json({ valid: false, reason: 'MISSING_KEY' }, 400);
@@ -114,7 +132,9 @@ async function verify(request, env) {
     row = await getLicense(env, k);
   }
   if (row.bound_device_id !== deviceId) return json({ valid: false, reason: 'DEVICE_MISMATCH' }, 403);
-  return json({ valid: true, degraded: true, expiresAt: row.expires_at || null, allowedModules: JSON.parse(row.allowed_modules || '[]') });
+  const allowedModules = JSON.parse(row.allowed_modules || '[]');
+  const offlineToken = await createOfflineToken(env, { key: k, deviceId, allowedModules, expiresAt: row.expires_at || null });
+  return json({ valid: true, degraded: true, expiresAt: row.expires_at || null, allowedModules, ...(offlineToken ? { offlineToken } : {}) });
 }
 
 async function admin(action, request, env) {

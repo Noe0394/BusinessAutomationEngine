@@ -6,6 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 process.env.CLOUDFLARE_LICENSE_URL = 'https://worker.test';
@@ -27,6 +28,7 @@ function makeD1() {
 }
 
 let worker; let env; let writes; let ipSeq = 0;
+let signingKeys;
 const call = async (method, p, body, admin) => {
   const headers = { 'content-type': 'application/json', 'cf-connecting-ip': `ip-${++ipSeq}` };
   if (admin !== false) headers['x-admin-secret'] = admin || 'secret-test';
@@ -36,7 +38,11 @@ const call = async (method, p, body, admin) => {
 
 test('setup', async () => {
   worker = (await import('../cloudflare/license-worker/src/index.js')).default;
-  env = { DB: makeD1(), ADMIN_SECRET: 'secret-test' };
+  signingKeys = crypto.generateKeyPairSync('ed25519');
+  env = {
+    DB: makeD1(), ADMIN_SECRET: 'secret-test',
+    LICENSE_SIGNING_PRIVATE_KEY: signingKeys.privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),
+  };
 });
 
 test('génération : clé au format KEY-XXXXXXXX-AAAA, modules par défaut', async () => {
@@ -58,6 +64,13 @@ test('vérification : liaison au 1er appareil, refus du second', async () => {
   const ok = await call('POST', '/verify', { key: env.key.toLowerCase(), deviceId: 'dev-1' }, false);
   assert.equal(ok.status, 200);
   assert.equal(ok.body.valid, true);
+  assert.equal(typeof ok.body.offlineToken, 'string');
+  const [payload, signature] = ok.body.offlineToken.split('.');
+  assert.equal(crypto.verify(null, Buffer.from(payload, 'ascii'), signingKeys.publicKey, Buffer.from(signature, 'base64url')), true);
+  const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  assert.equal(claims.key, env.key);
+  assert.equal(claims.deviceId, 'dev-1');
+  assert.deepEqual(claims.allowedModules, ok.body.allowedModules);
   const same = await call('POST', '/verifyLicenseOffline', { key: env.key, deviceId: 'dev-1' }, false);
   assert.equal(same.body.valid, true);
   const other = await call('POST', '/verify', { key: env.key, deviceId: 'dev-2' }, false);

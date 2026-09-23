@@ -24,4 +24,5 @@ module.exports = {
   WHATSAPP_AUTH_DIR: path.join(DATA_DIR, 'whatsapp_auth'),
   TELEGRAM_SESSION_PATH: path.join(DATA_DIR, 'telegram_session.txt'),
   DEVICE_ID_PATH: path.join(DATA_DIR, 'device-id.txt'),
+  LICENSE_TOKEN_PATH: path.join(DATA_DIR, 'license-token.json'),
 };

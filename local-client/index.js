@@ -5,6 +5,10 @@ const express = require('express');
 const open = require('open');
 
 const { verifyLicense } = require('./lib/license');
+process.on('cyrus-license-revoked', (reason) => {
+  console.error(`Licence révoquée lors du contrôle en ligne (${reason || 'REFUSED'}). Arrêt du client.`);
+  process.exit(1);
+});
 const { checkAndSelfUpdate } = require('./lib/selfUpdate');
 const axios = require('axios');
 const whatsapp = require('./lib/whatsapp');
@@ -66,7 +70,7 @@ async function main() {
   await checkAndSelfUpdate();
 
   console.log(`Données locales : ${DATA_DIR}`);
-  console.log('Vérification de la licence auprès du VPS central...');
+  console.log('Vérification locale de la licence ou renouvellement sécurisé en ligne...');
 
   const license = await verifyLicense();
   if (!license.valid) {
@@ -74,7 +78,7 @@ async function main() {
     console.error('Accès bloqué — contactez votre administrateur pour une clé valide.\n');
     process.exit(1);
   }
-  console.log(`Licence valide (expire le ${license.expiresAt || 'jamais'}).`);
+  console.log(`Licence valide${license.offline ? ' (validation hors-ligne)' : ''} (expire le ${license.expiresAt || 'jamais'}).`);
 
   const app = express();
   app.use(express.json({ limit: '15mb' }));

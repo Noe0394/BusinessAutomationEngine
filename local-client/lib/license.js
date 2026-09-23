@@ -14,6 +14,7 @@
 const axios = require('axios');
 const { client, LICENSE_KEY } = require('./vpsClient');
 const { getDeviceId } = require('./deviceId');
+const offlineLicense = require('./offlineLicense');
 
 const FIREBASE_LICENSE_URL = process.env.FIREBASE_LICENSE_URL || '';
 // Cloudflare (Worker + D1, gratuit) : voie principale quand configurée. Même
@@ -37,6 +38,7 @@ async function verifyViaUrl(url) {
   if (!data.valid) {
     return { valid: false, reason: data.reason };
   }
+  if (data.offlineToken) offlineLicense.writeToken(data.offlineToken);
   return { valid: true, degraded: true, expiresAt: data.expiresAt, allowedModules: data.allowedModules };
 }
 
@@ -56,6 +58,15 @@ const REFUSALS = {
 };
 
 async function verifyLicense() {
+  const deviceId = getDeviceId();
+  const cachedClaims = await offlineLicense.verifyToken(offlineLicense.readToken(), { key: LICENSE_KEY, deviceId });
+  if (cachedClaims) {
+    // Le cache signé suffit à démarrer hors-ligne. La révocation est vérifiée
+    // ensuite en arrière-plan ; une réponse métier négative efface le cache.
+    refreshOnlineLicense().catch((err) => console.warn('Rafraîchissement de licence indisponible :', err.message));
+    return { valid: true, offline: true, expiresAt: cachedClaims.licenseExpiresAt ? new Date(cachedClaims.licenseExpiresAt).toISOString() : null, allowedModules: cachedClaims.allowedModules };
+  }
+
   const providers = [];
   if (CLOUDFLARE_LICENSE_URL) providers.push(['Cloudflare', verifyViaCloudflare]);
   if (FIREBASE_LICENSE_URL) providers.push(['Firebase', verifyViaFirebase]);
@@ -64,7 +75,10 @@ async function verifyLicense() {
     try {
       const result = await verify();
       // Un refus MÉTIER vient d'une base à jour : inutile de retenter ailleurs.
-      if (!result.valid) return { valid: false, error: REFUSALS[result.reason] || 'Clé de licence invalide.' };
+      if (!result.valid) {
+        offlineLicense.clearToken();
+        return { valid: false, error: REFUSALS[result.reason] || 'Clé de licence invalide.' };
+      }
       return result;
     } catch (err) {
       console.warn(`${name} injoignable pour la vérification de licence — repli suivant :`, err.message);
@@ -79,4 +93,33 @@ async function verifyLicense() {
   }
 }
 
-module.exports = { verifyLicense };
+let refreshInFlight = null;
+async function refreshOnlineLicense() {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    const providers = [];
+    if (CLOUDFLARE_LICENSE_URL) providers.push(['Cloudflare', verifyViaCloudflare]);
+    if (FIREBASE_LICENSE_URL) providers.push(['Firebase', verifyViaFirebase]);
+    for (const [name, verify] of providers) {
+      try {
+        const result = await verify();
+        if (!result.valid) {
+          offlineLicense.clearToken();
+          process.emit('cyrus-license-revoked', result.reason);
+          return;
+        }
+        return result;
+      } catch (err) {
+        console.warn(`${name} indisponible pour le renouvellement de licence :`, err.message);
+      }
+    }
+  })().finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
+}
+
+const refreshTimer = setInterval(() => {
+  refreshOnlineLicense().catch((err) => console.warn('Rafraîchissement périodique indisponible :', err.message));
+}, 6 * 60 * 60 * 1000);
+refreshTimer.unref?.();
+
+module.exports = { verifyLicense, refreshOnlineLicense };

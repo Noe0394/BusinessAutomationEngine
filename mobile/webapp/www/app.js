@@ -314,12 +314,37 @@
   }
 
   async function verifyLicense(key) {
+    const deviceId = getDeviceId();
+    const claims = await window.CyrusOfflineLicense.verify(window.CyrusOfflineLicense.getToken(), key, deviceId);
+    if (claims) {
+      refreshLicenseOnline(key).catch(() => {});
+      return { valid: true, offline: true, expiresAt: claims.licenseExpiresAt ? new Date(claims.licenseExpiresAt).toISOString() : null, allowedModules: claims.allowedModules };
+    }
+    const result = await verifyLicenseOnline(key);
+    if (result.valid && result.offlineToken) window.CyrusOfflineLicense.setToken(result.offlineToken);
+    else if (!result.valid) window.CyrusOfflineLicense.clearToken();
+    return result;
+  }
+
+  async function verifyLicenseOnline(key) {
     const res = await fetch(FIREBASE_BASE + '/verifyLicenseOffline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: key, deviceId: getDeviceId() }),
     });
     return res.json();
+  }
+
+  async function refreshLicenseOnline(key) {
+    try {
+      const result = await verifyLicenseOnline(key);
+      if (!result.valid) {
+        window.CyrusOfflineLicense.clearToken();
+        window.location.reload();
+      } else if (result.offlineToken) {
+        window.CyrusOfflineLicense.setToken(result.offlineToken);
+      }
+    } catch (_) { /* réseau indisponible : le jeton local reste valide jusqu'à sa grâce */ }
   }
 
   function showAiGenerateCard() {
@@ -333,6 +358,7 @@
     if (existing) {
       const result = await verifyLicense(existing).catch(() => ({ valid: false }));
       if (result.valid) showAiGenerateCard();
+      setInterval(() => refreshLicenseOnline(existing), 6 * 60 * 60 * 1000);
     }
   })();
 
