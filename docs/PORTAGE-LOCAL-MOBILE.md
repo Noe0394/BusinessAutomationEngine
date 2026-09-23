@@ -132,12 +132,17 @@ branchement dans `autoResponder.composeReply`/`chatOrchestrator.handleInner` en 
 
 ## Livraison 2026-09-21 (nuit) — Communautés : création/invitation de groupes + découverte (WhatsApp/Telegram)
 À porter vers local-client/ et mobile/webapp/ : ai-engine/communityService.js, communityDiscovery.js, contactCrm (communities), outils createCommunityGroup/getCommunityGroupStatus/discoverCommunities/listCommunities (toolsExtra), intention community (chatOrchestrator), primitives moteurs (adapters/whatsappEngineBaileys.js : checkNumbersOnWhatsApp/createGroup/addGroupParticipants/getGroupInviteLink/getInviteInfo ; adapters/telegram.js : createCommunityGroup/inviteUserToGroup/exportGroupInviteLink/searchPublicCommunities), routes /api/communities/*, sections UI cm-wa/cm-tg. Variables : COMMUNITY_MAX_MEMBERS, COMMUNITY_WA_BATCH, COMMUNITY_DELAY_MIN_MS/MAX_MS, WHATSAPP_DIRECTORY_SEARCH_URL.
-**PC : BLOQUÉ (2026-09-22)** — `communityDiscovery.js`/`communityService.js` nécessitent des méthodes que
-`local-client/lib/whatsapp.js`/`lib/telegram.js` n'exposent pas encore (createGroup, addGroupParticipants,
-checkNumbersOnWhatsApp, getInviteInfo, joinGroupByInvite côté WhatsApp ; createCommunityGroup, getGroupEntity,
-resolveRecipient, exportGroupInviteLink, searchPublicCommunities/People côté Telegram) — à étendre en premier
-(whatsapp-web.js et GramJS supportent ces opérations nativement, capacité à vérifier/câbler méthode par méthode).
-`contactCrm.js` (communities) déjà resynchronisé (fait partie du portage général). Téléphone : NON PORTÉ.
+**PC : PARTIEL (2026-09-23)** — Débloqué : `lib/whatsapp.js` étendu (checkNumbersOnWhatsApp, createGroup,
+setGroupDescription, addGroupParticipants, getGroupInviteLink, getInviteInfo, joinGroupByInvite — signatures
+vérifiées en lisant le code source réel de whatsapp-web.js installé, pas une supposition) et `lib/telegram.js`
+étendu (createCommunityGroup, getGroupEntity, inviteUserToGroup, exportGroupInviteLink, searchPublicCommunities,
+searchPublicPeople, resolveRecipient désormais exporté — copiés quasi à l'identique du VPS car GramJS est LA
+MÊME bibliothèque des deux côtés, contrairement à WhatsApp). `communityDiscovery.js`/`communityService.js`
+copiés et adaptés (même substitution `adapters/{whatsapp,telegram}Manager` → `lib/{whatsapp,telegram}` que les
+autres fichiers), chargent sans erreur. **NON TESTÉ en conditions réelles** (nécessite un compte WhatsApp/
+Telegram local réellement connecté pour vérifier créer un groupe, rejoindre par lien, etc. — à faire avant un
+premier usage réel). Reste : brancher les routes `/api/communities/*` + section UI dans `local-client/index.js`/
+`public/`. Téléphone : NON PORTÉ.
 
 ## Livraison 2026-09-21 (nuit 2) — Accompagnement des apprenants (base pédagogique, recherche ciblée, groupes de formation)
 Voir docs/ACCOMPAGNEMENT-APPRENANTS.md. À porter vers local-client/ et mobile/webapp/ : ai-engine/courseKnowledge.js, learnerSupport.js, mediaPipeline.extractFullText, autoResponder.composeLearning, conversationEngine (décision LEARNING), assistantLayer.route, outils ingestCourse/listCourses/searchCourse/linkCourse/listFaqCandidates/promoteFaq, isSearchAvailable du gateway. Variables : LEARNER_WEB_SEARCH.

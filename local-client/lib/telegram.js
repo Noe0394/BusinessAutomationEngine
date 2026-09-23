@@ -360,6 +360,61 @@ async function sendMedia(to, { buffer, filename, caption }) {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// GESTION DE GROUPES / DÉCOUVERTE — ajouté le 2026-09-22 pour porter ai-engine/communityService.js et
+// communityDiscovery.js (VPS) vers le PC. Contrairement à WhatsApp (Baileys sur le VPS, whatsapp-web.js sur le
+// PC — deux bibliothèques différentes), Telegram utilise GramJS DES DEUX CÔTÉS : ces fonctions sont donc copiées
+// QUASIMENT À L'IDENTIQUE de adapters/telegram.js (VPS), sans changement de logique. NON TESTÉ en conditions
+// réelles (nécessite un compte Telegram local réellement connecté).
+async function createCommunityGroup({ title, about }) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const res = await client.invoke(new Api.channels.CreateChannel({ title: String(title).slice(0, 128), about: String(about || '').slice(0, 255), megagroup: true }));
+  const chat = (res.chats || [])[0];
+  if (!chat) throw new Error('GROUP_CREATION_FAILED');
+  return { id: chat.id.toString(), entity: chat };
+}
+async function getGroupEntity(id) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  return client.getEntity(Number(String(id).trim()));
+}
+// Invite UN utilisateur ; les restrictions de confidentialité remontent via missingInvitees — l'appelant bascule
+// alors sur le lien d'invitation en message privé.
+async function inviteUserToGroup(groupEntity, userEntity) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const r = await client.invoke(new Api.channels.InviteToChannel({ channel: groupEntity, users: [userEntity] }));
+  const missing = (r && r.missingInvitees) || [];
+  return { added: missing.length === 0, privacyRestricted: missing.length > 0 };
+}
+async function exportGroupInviteLink(groupEntity) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const r = await client.invoke(new Api.messages.ExportChatInvite({ peer: groupEntity }));
+  return r && r.link ? r.link : null;
+}
+// Recherche GLOBALE Telegram (API contacts.Search) : canaux/groupes PUBLICS correspondant à un mot-clé.
+async function searchPublicCommunities(query, limit) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const r = await client.invoke(new Api.contacts.Search({ q: String(query).slice(0, 100), limit: Math.min(50, Number(limit) || 20) }));
+  return (r.chats || []).map((c) => ({
+    id: c.id != null ? c.id.toString() : null,
+    title: c.title || '', username: c.username || null,
+    isChannel: !!c.broadcast, isGroup: !!c.megagroup || (!c.broadcast && !!c.title),
+    participants: c.participantsCount != null ? Number(c.participantsCount) : null,
+  })).filter((c) => c.id && c.username);
+}
+// Même API contacts.Search, volet r.users : PERSONNES publiques (avec @username) — correspondance texte sur
+// nom/pseudo, jamais un vrai ciblage par centre d'intérêt (Telegram n'expose aucune donnée de ce type).
+async function searchPublicPeople(query, limit) {
+  if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
+  const r = await client.invoke(new Api.contacts.Search({ q: String(query).slice(0, 100), limit: Math.min(50, Number(limit) || 20) }));
+  return (r.users || []).map((u) => ({
+    id: u.id != null ? u.id.toString() : null,
+    username: u.username || null,
+    firstName: u.firstName || '', lastName: u.lastName || '',
+    name: [u.firstName, u.lastName].filter(Boolean).join(' ') || u.username || '',
+    phone: u.phone || null,
+  })).filter((u) => u.id && u.username);
+}
+
 module.exports = {
   isConfigured,
   isConnected,
@@ -378,4 +433,11 @@ module.exports = {
   isPaired,
   sendMessage,
   sendMedia,
+  resolveRecipient,
+  createCommunityGroup,
+  getGroupEntity,
+  inviteUserToGroup,
+  exportGroupInviteLink,
+  searchPublicCommunities,
+  searchPublicPeople,
 };

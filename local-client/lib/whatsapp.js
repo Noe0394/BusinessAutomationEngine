@@ -289,7 +289,99 @@ async function logout() {
   notifyState();
 }
 
+// ---------------------------------------------------------------------------
+// GESTION DE GROUPES — ajouté le 2026-09-22 pour porter ai-engine/communityService.js et communityDiscovery.js
+// (VPS, Baileys) vers le PC. whatsapp-web.js expose les mêmes opérations mais avec une forme de retour différente
+// (voir node_modules/whatsapp-web.js/src/Client.js et src/structures/GroupChat.js, lus directement pour ces
+// signatures — pas une supposition) : adapté ici pour renvoyer la MÊME FORME que adapters/whatsappEngineBaileys.js
+// (VPS), afin que communityService.js/communityDiscovery.js copiés sans changement de logique métier.
+// NON TESTÉ en conditions réelles (nécessite un compte WhatsApp local réellement connecté) — à vérifier avant un
+// premier usage réel, contrairement au reste du portage de cette session qui a été vérifié par exécution directe.
+
+// Baileys renvoie [{number, exists}, ...] pour un lot de numéros (checkNumbersOnWhatsApp côté VPS) ;
+// whatsapp-web.js n'a que getNumberId(number) un par un (pas de lot natif) — boucle séquentielle ici.
+async function checkNumbersOnWhatsApp(numbers) {
+  if (!client || !connected) throw new Error('Session WhatsApp non connectée.');
+  const out = [];
+  for (const raw of (Array.isArray(numbers) ? numbers : [])) {
+    const number = String(raw).replace(/\D/g, '');
+    let exists = false;
+    try { exists = !!(await client.getNumberId(number)); } catch (err) { exists = false; }
+    out.push({ number: raw, exists });
+  }
+  return out;
+}
+
+// Baileys : createGroup(title, numbers) -> { id, subject }. whatsapp-web.js : createGroup(title, participants,
+// options) -> { title, gid: {_serialized}, participants: {...} } ou une CHAÎNE d'erreur (pas d'exception) — les
+// deux cas sont normalisés ici en une exception, jamais un objet ambigu remonté à l'appelant.
+async function createGroup(title, participants) {
+  if (!client || !connected) throw new Error('Session WhatsApp non connectée.');
+  const ids = (Array.isArray(participants) ? participants : []).map((p) => (String(p).includes('@') ? p : `${String(p).replace(/\D/g, '')}@c.us`));
+  const res = await client.createGroup(title, ids);
+  if (typeof res === 'string') throw new Error(`Création de groupe WhatsApp refusée : ${res}`);
+  return { id: res.gid._serialized, subject: title };
+}
+
+async function setGroupDescription(groupId, text) {
+  if (!client || !connected) throw new Error('Session WhatsApp non connectée.');
+  const chat = await client.getChatById(groupId);
+  if (!chat || !chat.isGroup) throw new Error('Groupe introuvable.');
+  await chat.setDescription(String(text || '').slice(0, 2000));
+}
+
+// Baileys : addGroupParticipants(groupJid, numbers) -> [{number, status}] (codes '200'/'403'/'408'/'409'...).
+// whatsapp-web.js : GroupChat#addParticipants(ids) -> { [id]: { code, message, isInviteV4Sent } } — mêmes codes
+// numériques (200/403/404/408/409...), juste reformatés ici en la MÊME liste que Baileys, `status` en chaîne pour
+// rester comparable telle quelle par communityService.js (`r.status === '200'`).
+async function addGroupParticipants(groupId, numbers) {
+  if (!client || !connected) throw new Error('Session WhatsApp non connectée.');
+  const chat = await client.getChatById(groupId);
+  if (!chat || !chat.isGroup) throw new Error('Groupe introuvable.');
+  const ids = (Array.isArray(numbers) ? numbers : []).map((n) => (String(n).includes('@') ? n : `${String(n).replace(/\D/g, '')}@c.us`));
+  const res = await chat.addParticipants(ids);
+  if (typeof res === 'string') throw new Error(`Ajout de participants refusé : ${res}`);
+  return ids.map((id, i) => {
+    const r = res[id];
+    return { number: String(numbers[i]), status: r ? String(r.code) : 'unknown' };
+  });
+}
+
+async function getGroupInviteLink(groupId) {
+  if (!client || !connected) throw new Error('Session WhatsApp non connectée.');
+  const chat = await client.getChatById(groupId);
+  if (!chat || !chat.isGroup) throw new Error('Groupe introuvable.');
+  const code = await chat.getInviteCode();
+  return code ? `https://chat.whatsapp.com/${code}` : null;
+}
+
+// Baileys : getInviteInfo(code) -> { id, subject, description, size, createdAt } (sans rejoindre). whatsapp-web.js :
+// Client#getInviteInfo(code) renvoie l'objet brut WAWebGroupQueryJob.queryGroupInvite — champs jamais garantis
+// documentés côté whatsapp-web.js (pas de typedef officiel) : lecture DÉFENSIVE avec plusieurs noms de champs
+// possibles plutôt qu'un accès direct qui casserait si le nom réel diffère légèrement.
+async function getInviteInfo(code) {
+  if (!client || !connected) throw new Error('Session WhatsApp non connectée.');
+  const i = await client.getInviteInfo(String(code));
+  if (!i) throw new Error('Lien d\'invitation invalide ou expiré.');
+  const id = (i.id && i.id._serialized) || i.id || null;
+  return {
+    id,
+    subject: i.subject || i.name || '',
+    description: i.desc || i.description || '',
+    size: i.size != null ? i.size : (Array.isArray(i.participants) ? i.participants.length : 0),
+    createdAt: i.creation || i.createdAt || null,
+  };
+}
+
+// Baileys : joinGroupByInvite(code) -> { id }. whatsapp-web.js : Client#acceptInvite(code) -> chatId (chaîne).
+async function joinGroupByInvite(code) {
+  if (!client || !connected) throw new Error('Session WhatsApp non connectée.');
+  const id = await client.acceptInvite(String(code));
+  return { id };
+}
+
 module.exports = {
   connect, sendMessage, sendMedia, getQRCode, getQRCodeImage, isConnected, onStateChange, onIncomingMessage, logout, getGroups, getGroupMembers,
   getRecentMessages, getGroupsSummary, getConnectedNumber, isPaired,
+  checkNumbersOnWhatsApp, createGroup, setGroupDescription, addGroupParticipants, getGroupInviteLink, getInviteInfo, joinGroupByInvite,
 };
