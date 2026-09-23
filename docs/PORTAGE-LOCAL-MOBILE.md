@@ -168,9 +168,25 @@ Correctif de fiabilité, pas une fonctionnalité visible : `adapters/whatsappMan
 
 ## Livraison 2026-09-22 — Découverte de personnes par thématique, adhésion/extraction de membres, moteurs de recherche combinés + filtres géo
 À porter vers local-client/ et mobile/webapp/ : `ai-engine/communityDiscovery.js` (discoverPeople, extractMembers, joinCommunity, syncPeopleToCrm, recherche multi-moteurs DuckDuckGo+Bing+Startpage, paramètre `location`), `ai-engine/contactCrm.js` (getCommunity, markCommunityJoined, champ `location`), `adapters/telegram.js` (getGroupMembers résolution par @username, searchPublicPeople), `adapters/whatsappEngineBaileys.js` (joinGroupByInvite), routes `/api/communities/discover-people|join|extract-members` (index.js), sections UI (cm-wa/cm-tg/cm-tg-people, champs pays/ville/département). Variable : `WHATSAPP_DIRECTORY_SEARCH_URL` (fournisseur personnalisé, prioritaire sur les 3 moteurs par défaut).
-**PC : BLOQUÉ**, même cause que la livraison "Communautés" du 2026-09-21 ci-dessus (écart de capacité `lib/
-whatsapp.js`/`lib/telegram.js`) — `contactCrm.js` (getCommunity/markCommunityJoined/location) déjà resynchronisé.
-Téléphone : NON PORTÉ.
+**PC : PARTIEL (2026-09-23)** — Débloqué en même temps que la livraison "Communautés" du 2026-09-21 ci-dessus (même
+correctif : `lib/whatsapp.js`/`lib/telegram.js` étendus). `communityDiscovery.js` (discoverPeople, extractMembers,
+joinCommunity, syncPeopleToCrm, recherche multi-moteurs, `location`) copié et adapté, charge sans erreur ;
+`contactCrm.js` (getCommunity/markCommunityJoined/location) déjà resynchronisé. NON TESTÉ en conditions réelles.
+Manque : routes `/api/communities/*` + UI (pays/ville/département) dans local-client/. Téléphone : NON PORTÉ.
+
+## Livraison 2026-09-23 — Refonte Service Métier : mémoire libre, zéro lien de paiement, sélection multi-services
+À porter vers local-client/ et mobile/webapp/ : `ai-engine/businessServices.js` (champ `commercial.memo` + extraction
+IA best-effort non bloquante), `toolRegistry.js` (configureBusinessService : memo), `toolsServices.js`
+(updateBusinessService : memo/memoAppend), `autoResponder.js` (correctif sélection multi-services, hint réel au
+lieu de toujours vide), `index.js` (3 messages "lien de paiement" corrigés — Studio de contenu),
+`lib/intelligence/action-executor.js` (GENERATE_PAYMENT_LINK : suppression du "Bénéficiaire" générique),
+`public/dashboard.html` (nouveau champ "Mémoire de l'activité").
+**PC : PARTIEL (2026-09-23)** — `businessServices.js`, `toolRegistry.js`, `toolsServices.js`, `autoResponder.js`
+resynchronisés (copie conforme, aucun des quatre ne dépend de `adapters/`) et chargent tous sans erreur. Manque :
+`lib/intelligence/action-executor.js` local-client (si utilisé côté PC, à vérifier) et surtout **l'interface** —
+`local-client/public/` n'a AUCUN formulaire Service Métier aujourd'hui (jamais porté, voir ligne 10 du tableau) :
+le champ mémo backend est prêt mais rien ne l'expose encore côté PC tant que cette UI n'existe pas. Téléphone :
+NON PORTÉ (même dépendance).
 
 ## Livraison 2026-09-22 — Partage de contenu (texte/image/vidéo/document) dans des groupes WhatsApp
 À porter vers local-client/ (WhatsApp local uniquement — sans objet pour mobile/webapp, qui n'a pas de moteur WhatsApp serveur) : `queues/campaignEngine.js` (`recipientType: 'groups'`, même patron que `queues/telegramCampaignEngine.js` déjà utilisé côté Telegram), route `POST /api/groups/broadcast` (index.js), section « 📣 Partager du contenu dans des groupes » de l'onglet WhatsApp (dashboard.html). Statut : NON PORTÉ (pas commencé cette session — `local-client/queues/` à auditer séparément).

@@ -281,8 +281,9 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
   const judgeLlm = d.engagementLlm || (d.llm ? null : ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'engagement_judgment', tenant: tenantId, tier: 'standard', maxTokens: 120 }).then((r) => r.text)));
   // ACCOMPAGNEMENT D'APPRENANT (privé ou groupe de formation lié) : recherche ciblée dans la base de connaissances de CE compte.
   let learn = null;
+  let st = null; // état de conversation déjà chargé ici pour learnerSupport — réutilisé plus bas pour la sélection du service pertinent (priorityService).
   try {
-    const st = await require('./jarvis/conversationState').get(tenantId, channel, from);
+    st = await require('./jarvis/conversationState').get(tenantId, channel, from);
     learn = await require('./learnerSupport').prepare({ tenant: tenantId, channel, from, senderId: (items[items.length - 1] || {}).senderId, text: items.map((i) => i.text).join('\n'), isGroup: isGroupChat(channel, from), state: st, settings });
     if (learn) learn.verify = require('./learnerSupport').verify(learn);
   } catch (e) { learn = null; }
@@ -291,7 +292,11 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
     learning: learn || undefined,
     groupReplies: settings.groupReplies === true,
     productNames,
-    priorityService: (await businessServices.getPrioritizedContext(tenantId, { hint: '' }).catch(() => ({}))).priority || null,
+    // Sélection du service pertinent guidée par le CONTEXTE déjà engagé (service qui a suscité l'intérêt du
+    // client, sinon sujet courant de la conversation — voir jarvis/conversationEngine.js#applyState) plutôt que
+    // toujours le service le plus récent : un `hint` vide ici faisait retomber getPrioritizedContext sur son seul
+    // repli "le plus récent" à CHAQUE message, y compris en pleine conversation sur un autre service.
+    priorityService: (await businessServices.getPrioritizedContext(tenantId, { hint: (st && st.memory && (st.memory.interestService || st.memory.subject)) || '' }).catch(() => ({}))).priority || null,
     // Politique du propriétaire + mémoire 7 jours de CETTE discussion → décision d'engagement (répondre ? registre ? présenter un service ?). Sans réseau ni IA.
     engagementFn: async ({ cls, state, text: batchText, items: batchItems }) => {
       const group = isGroupChat(channel, from);

@@ -90,9 +90,9 @@ const TOOLS = {
     async verify(res, a, ctx) { const s = (await businessServices.list(ctx.tenant)).find((x) => x.id === res.serviceId); return { verified: !!s && (s.lifecycle || 'active') === res.status }; },
   },
   updateBusinessService: {
-    description: 'MODIFIE un Service métier existant (sans le recréer) : name (renommer), price, currency, description, advantages, paymentTerms, supportRules, target, addProducts / removeProducts (« Nom|Prix » séparés par « ; »), rules, objectives. Par nom ou identifiant.',
+    description: 'MODIFIE un Service métier existant (sans le recréer) : memo (remplace toute la mémoire libre par ce texte — relis d\'abord la mémoire actuelle si tu ne fais que corriger un détail, pour ne rien perdre), memoAppend (ajoute une note à la mémoire libre SANS toucher au reste — préférable pour un simple ajout du type "ajoute une promo…"/"change mon numéro Wave…"), name (renommer), price, currency, description, advantages, paymentTerms, supportRules, target, addProducts / removeProducts (« Nom|Prix » séparés par « ; »), rules, objectives. Chaque champ fourni REMPLACE l\'ancien ; les champs omis restent inchangés — rien n\'est jamais effacé sans le dire explicitement. Par nom ou identifiant.',
     permission: null, risk: 'LOW_WRITE',
-    inputSchema: { service: { type: 'string', required: true }, name: { type: 'string' }, price: { type: 'number' }, currency: { type: 'string' }, description: { type: 'string' }, advantages: { type: 'string' }, paymentTerms: { type: 'string' }, supportRules: { type: 'string' }, target: { type: 'string' }, addProducts: { type: 'string' }, removeProducts: { type: 'string', description: 'Noms des produits à retirer, séparés par « ; ».' }, rules: { type: 'string' }, objectives: { type: 'string' } },
+    inputSchema: { service: { type: 'string', required: true }, memo: { type: 'string', description: 'Remplace toute la mémoire libre de l\'activité par ce texte.' }, memoAppend: { type: 'string', description: 'Ajoute une note à la mémoire libre existante, sans rien effacer.' }, name: { type: 'string' }, price: { type: 'number' }, currency: { type: 'string' }, description: { type: 'string' }, advantages: { type: 'string' }, paymentTerms: { type: 'string' }, supportRules: { type: 'string' }, target: { type: 'string' }, addProducts: { type: 'string' }, removeProducts: { type: 'string', description: 'Noms des produits à retirer, séparés par « ; ».' }, rules: { type: 'string' }, objectives: { type: 'string' } },
     async execute(a, ctx) {
       const r = await resolve(ctx.tenant, a.service); if (r.err) return r.err;
       const s = r.service; const split = (v) => String(v || '').split(/[\n;]+/).map((x) => x.trim()).filter(Boolean);
@@ -100,6 +100,8 @@ const TOOLS = {
       if (a.name) { patch.name = String(a.name).slice(0, 120); changed.push('name'); }
       const commercial = Object.assign({}, s.commercial);
       for (const k of ['price', 'currency', 'description', 'advantages', 'paymentTerms', 'supportRules', 'target']) if (a[k] !== undefined && a[k] !== null && a[k] !== '') { commercial[k] = k === 'price' ? Number(a[k]) : String(a[k]); changed.push(k); }
+      if (a.memo !== undefined && a.memo !== null) { commercial.memo = String(a.memo).slice(0, 8000); changed.push('memo'); }
+      else if (a.memoAppend) { commercial.memo = String(commercial.memo || '').trim().concat(commercial.memo ? '\n' : '', String(a.memoAppend)).slice(0, 8000); changed.push('memo'); }
       if (changed.some((k) => k !== 'name')) patch.commercial = commercial;
       let products = (s.products || []).slice();
       if (a.addProducts) { for (const line of split(a.addProducts)) { const [n, p] = line.split('|').map((x) => x.trim()); const item = { name: n || line, price: p ? Number(p) : null }; const i = products.findIndex((x) => norm(x.name) === norm(item.name)); if (i >= 0) products[i] = item; else products.push(item); } changed.push('addProducts'); }

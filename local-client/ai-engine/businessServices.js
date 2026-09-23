@@ -78,6 +78,13 @@ function normalizeService(data) {
     },
     scopes: Array.isArray(d.scopes) ? d.scopes : [],
     commercial: Object.assign({
+      // MÉMOIRE MÉTIER EN TEXTE LIBRE (refonte 2026-09-23, demande utilisateur) : source PRINCIPALE côté
+      // utilisateur — il peut coller ici tout ce qui concerne son activité (nom, produits, prix, promos,
+      // horaires, dates, règles, livraison, FAQ, moyens de paiement...) sans jamais avoir à remplir les champs
+      // structurés un par un. Conservée VERBATIM (jamais perdue, même si l'extraction automatique ci-dessous
+      // rate une nuance) et injectée telle quelle dans le contexte IA (voir renderService) — les champs structurés
+      // ci-dessous restent une INDEXATION dérivée pour la recherche rapide, pas la seule source de vérité.
+      memo: '',
       price: null, promoPrice: null, currency: 'FCFA', description: '', advantages: '',
       objections: '', responses: '', paymentTerms: '', accessTerms: '', target: '',
       // Champs de pilotage de la conversation commerciale (tous facultatifs, jamais inventés) :
@@ -108,9 +115,52 @@ function addHistory(service, event) {
   service.history = service.history.slice(-100);
 }
 
+// Champs structurés qu'on tente de déduire automatiquement du mémo libre — UNIQUEMENT ceux encore VIDES
+// (jamais une valeur déjà renseignée explicitement n'est écrasée par cette extraction, quel que soit ce que dit
+// le mémo : en cas de désaccord, le champ structuré explicite prime, le mémo reste consultable tel quel).
+const MEMO_EXTRACT_FIELDS = ['price', 'promoPrice', 'currency', 'description', 'advantages', 'paymentTerms', 'target', 'period', 'accessTerms'];
+
+// Extraction LLM best-effort du mémo libre vers les champs structurés encore vides (voir MEMO_EXTRACT_FIELDS) —
+// point de passage UNIQUE pour "comprendre" un mémo, appelé par create()/update() ci-dessous. JAMAIS bloquant :
+// une extraction ratée/partielle/indisponible (pas de clé IA configurée...) n'empêche jamais la création/mise à
+// jour du service — le mémo brut reste de toute façon injecté verbatim dans le contexte IA (voir renderService),
+// donc rien n'est perdu même si cette extraction ne trouve rien. JAMAIS d'invention : seuls les champs que le
+// modèle retrouve EXPLICITEMENT dans le texte sont retenus (consigne dans le prompt + validation programmatique
+// du type de chaque champ ci-dessous).
+async function extractFromMemo(memo, currentCommercial) {
+  const text = String(memo || '').trim();
+  if (!text) return {};
+  const missing = MEMO_EXTRACT_FIELDS.filter((k) => currentCommercial[k] == null || currentCommercial[k] === '');
+  if (!missing.length) return {};
+  try {
+    const llmFallbackEngine = require('../lib/ai/llmFallbackEngine');
+    const prompt = [
+      'Tu extrais des informations commerciales STRUCTURÉES à partir d\'un texte libre décrivant une activité (mémoire métier écrite par le vendeur lui-même).',
+      `Champs à extraire, UNIQUEMENT s'ils sont EXPLICITEMENT présents dans le texte (sinon null — n'invente RIEN, ne déduis rien qui ne soit pas écrit) : ${missing.join(', ')}.`,
+      'price/promoPrice : nombre seul, sans devise ni texte. currency : code ou nom court de la devise (ex: FCFA, XOF, EUR). period : dates/durée/validité en texte libre tel qu\'écrit. paymentTerms : reprends TEXTUELLEMENT les moyens/numéros/titulaires de paiement mentionnés, sans reformuler ni compléter.',
+      `Réponds UNIQUEMENT avec un objet JSON strict, exactement ces clés (valeur null si absente du texte) : ${JSON.stringify(missing)}.`,
+      `Texte à analyser :\n${text.slice(0, 4000)}`,
+    ].join('\n');
+    const res = await llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'business_memo_extraction', tier: 'standard', maxTokens: 500, jsonOutput: true });
+    const raw = String((res && res.text) || '{}').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+    const parsed = JSON.parse(raw);
+    const out = {};
+    for (const k of missing) {
+      const v = parsed[k];
+      if (v === null || v === undefined || v === '') continue;
+      if (k === 'price' || k === 'promoPrice') { const n = Number(v); if (Number.isFinite(n)) out[k] = n; }
+      else out[k] = String(v).slice(0, 600);
+    }
+    return out;
+  } catch (e) {
+    return {}; // extraction indisponible/échouée : jamais bloquant, le mémo brut reste consultable tel quel
+  }
+}
+
 async function create(tenant, data) {
   const doc = await load(tenant);
   const service = normalizeService(data);
+  if (service.commercial.memo) Object.assign(service.commercial, await extractFromMemo(service.commercial.memo, service.commercial));
   addHistory(service, 'Service créé');
   doc.services = Array.isArray(doc.services) ? doc.services : [];
   doc.services.push(service);
@@ -125,6 +175,13 @@ async function update(tenant, id, patch) {
   if (i < 0) return null;
   const before = doc.services[i];
   const merged = normalizeService(Object.assign({}, before, patch, { id, createdAt: before.createdAt, history: before.history, connection: Object.assign({}, before.connection, patch.connection || {}) }));
+  // Mémo modifié dans ce patch : tente de remplir les champs structurés encore vides à partir du texte à jour
+  // (jamais ceux déjà renseignés — voir extractFromMemo). Le mémo précédent n'est jamais "réextrait" à chaque
+  // update() : seulement quand CE patch touche réellement le mémo, pour ne pas refaire un appel IA à chaque
+  // modification d'un champ sans rapport (ex: changer juste le prix).
+  if (patch.commercial && patch.commercial.memo !== undefined && merged.commercial.memo) {
+    Object.assign(merged.commercial, await extractFromMemo(merged.commercial.memo, merged.commercial));
+  }
   addHistory(merged, 'Service modifié');
   doc.services[i] = merged;
   save(tenant, doc);
@@ -279,6 +336,10 @@ function renderService(s) {
     const c = s.commercial || {};
     const cur = c.currency || '';
     const lines = [`• Service « ${s.name} » (${s.type}${s.project ? `, projet : ${s.project}` : ''})${s.connected ? ' — plateforme connectée' : ''}`];
+    // Mémoire métier en texte libre : SOURCE BRUTE écrite par le vendeur — à consulter pour tout détail non
+    // repris explicitement dans les champs structurés ci-dessous (une extraction automatique imparfaite ne fait
+    // jamais perdre une information, elle reste lisible ici telle quelle).
+    if (c.memo) lines.push(`  Mémoire de l'activité (texte du vendeur, source complète) : ${c.memo}`);
     if (c.description) lines.push(`  Description : ${c.description}`);
     if (c.price != null) lines.push(`  Prix : ${c.price} ${cur}`.trim() + (c.promoPrice != null ? ` (promo : ${c.promoPrice} ${cur})`.replace(/\s+\)/, ')') : ''));
     if (c.target) lines.push(`  Cible : ${c.target}`);
