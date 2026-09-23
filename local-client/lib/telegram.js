@@ -58,6 +58,27 @@ function onIncomingMessage(callback) {
   incomingMessageListeners.push(callback);
 }
 
+// --- Canal propriétaire (self-chat = « Messages sauvegardés ») : l'utilisateur s'écrit à lui-même depuis son
+// téléphone -> Chat Intelligent. Même logique que lib/whatsapp.js#onOwnerMessage (voir son commentaire pour le
+// principe général) : GramJS marque TOUT message envoyé par ce compte (event.message.out=true), y compris ceux
+// tapés depuis une AUTRE session (le téléphone) dans les Messages sauvegardés — filtré ici sur chatId = mon propre
+// id, avec un registre "sentByMe" + court délai pour ignorer l'écho d'un message que CE client vient lui-même
+// d'envoyer (ex: une alerte livrée par ownerChannel.js).
+const ownerMessageListeners = [];
+function onOwnerMessage(callback) { ownerMessageListeners.push(callback); }
+const sentByMe = new Set();
+function rememberSent(id) {
+  if (id == null) return;
+  sentByMe.add(String(id));
+  if (sentByMe.size > 500) sentByMe.delete(sentByMe.values().next().value);
+}
+let myId = null;
+async function resolveMyId() {
+  if (myId || !client) return myId;
+  try { const me = await client.getMe(); myId = me && me.id != null ? String(me.id) : null; } catch (err) { myId = null; }
+  return myId;
+}
+
 // Tampon glissant des derniers messages reçus — parité avec le VPS/PC WhatsApp.
 const RECENT_MESSAGES_MAX = 50;
 const recentMessages = [];
@@ -103,7 +124,20 @@ function saveSessionString(value) {
 
 function registerIncomingHandler() {
   client.addEventHandler((event) => {
-    if (!event.message || event.message.out) return;
+    if (!event.message) return;
+    if (event.message.out) {
+      // Messages sauvegardés (self-chat) : la conversation EST mon propre id, que le message vienne de ce client
+      // ou du téléphone. Tout autre message sortant (vers un vrai contact) reste hors périmètre ici.
+      if (myId && String(event.message.chatId) === myId) {
+        setTimeout(() => {
+          if (sentByMe.has(String(event.message.id))) return; // message envoyé par CE client lui-même : jamais retraité
+          ownerMessageListeners.forEach((cb) => {
+            try { cb(event.message); } catch (err) { console.error('Erreur dans un écouteur de message propriétaire Telegram :', err.message); }
+          });
+        }, 700);
+      }
+      return;
+    }
     try {
       const jid = String(event.message.senderId || event.message.chatId || '');
       upsertContact({ jid: `tg:${jid}` });
@@ -129,7 +163,7 @@ async function connect() {
   await client.connect();
   connected = await client.checkAuthorization();
   notifyState();
-  if (connected) console.log('Telegram (local-client) : session restaurée, connecté.');
+  if (connected) { console.log('Telegram (local-client) : session restaurée, connecté.'); resolveMyId().catch(() => {}); }
 }
 
 function currentStep() {
@@ -174,6 +208,7 @@ async function startLogin(phoneNumber) {
     saveSessionString(client.session.save());
     connected = true;
     notifyState();
+    resolveMyId().catch(() => {});
     console.log('Telegram (local-client) : connexion établie et session sauvegardée.');
   }).catch((err) => {
     loginError = err;
@@ -338,9 +373,13 @@ async function resolveRecipient(identifier) {
 
 async function sendMessage(to, text) {
   if (!connected) throw new Error('TELEGRAM_NOT_CONNECTED');
-  const entity = await resolveRecipient(to);
+  // Destination = mon propre id (self-chat, ex. une réponse du canal propriétaire) : resolveRecipient() ne sait
+  // résoudre qu'un @username, un id de groupe/canal négatif ou un numéro de téléphone — un id utilisateur positif
+  // tenterait à tort une résolution par numéro. GramJS résout nativement 'me' vers les Messages sauvegardés.
+  const entity = (myId && String(to) === myId) ? 'me' : await resolveRecipient(to);
   const result = await client.sendMessage(entity, { message: text });
   recordMessage({ jid: `tg:${to}`, direction: 'out', body: text });
+  rememberSent(result && result.id); // évite que le canal propriétaire retraite son propre envoi (self-chat)
   return result;
 }
 
@@ -357,6 +396,7 @@ async function sendMedia(to, { buffer, filename, caption }) {
     attributes: filename ? [new Api.DocumentAttributeFilename({ fileName: filename })] : undefined,
   });
   recordMessage({ jid: `tg:${to}`, direction: 'out', body: caption || `[média: ${filename || 'fichier'}]` });
+  rememberSent(result && result.id);
   return result;
 }
 
@@ -420,6 +460,7 @@ module.exports = {
   isConnected,
   onStateChange,
   onIncomingMessage,
+  onOwnerMessage,
   connect,
   startLogin,
   submitCode,

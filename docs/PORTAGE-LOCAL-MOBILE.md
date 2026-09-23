@@ -98,7 +98,7 @@ point d'entrée unique IA pour le téléphone.
 | 9 | CORS : origine identique au Host acceptée (domaine DuckDNS) | `index.js` | Sans objet (pas de CORS local) | Sans objet |
 | 12 | Campagnes de groupes administrés (ciblage, scheduler, intérêt, preuve, objectif) | `ai-engine/groupCampaigns.js`, `groupCampaignParser.js`, `toolsExtra.js`, `chatOrchestrator.js`, `assistantLayer.js`, `index.js` | PARTIEL (groupCampaigns.js/Parser + toolsExtra.js FAIT et adapté ; chatOrchestrator.js/routes index.js pas encore branchés) | À FAIRE |
 | 11 | Campagnes Facebook Ads (Service Métier : configuration Chat, origine, message initial exact) | `ai-engine/adCampaigns.js`, `adCampaignParser.js`, `businessServices.js`, `toolsExtra.js`, `chatOrchestrator.js` | PARTIEL (fichiers copiés ; chatOrchestrator.js pas encore branché) | À FAIRE |
-| 10 | Couche d'assistance générale : identité des contacts (JID/LID ≠ numéro), routage privé/métier, centre d'alertes, canal propriétaire (self-chat → Chat Intelligent), actions en attente `PA-XXXX` + OUI/NON, vérification API, import de listes appliqué à la source d'envoi | `ai-engine/{contactIdentity,alertCenter,conversationRouter,ownerChannel,pendingActions,assistantLayer,manualPaymentValidator}.js`, `adapters/whatsappEngineBaileys.js` (indices d'identité, self-chat), `lib/whatsappRecipients.js` (déjà copié dans `local-client/lib`), `public/dashboard.html` (`impBuild`) | PARTIEL (tous les fichiers `ai-engine/*.js` copiés/resynchronisés et chargent sans erreur ; `impBuild` du dashboard PC pas vérifié, self-chat propriétaire pas testé en réel) | À FAIRE |
+| 10 | Couche d'assistance générale : identité des contacts (JID/LID ≠ numéro), routage privé/métier, centre d'alertes, canal propriétaire (self-chat → Chat Intelligent), actions en attente `PA-XXXX` + OUI/NON, vérification API, import de listes appliqué à la source d'envoi | `ai-engine/{contactIdentity,alertCenter,conversationRouter,ownerChannel,pendingActions,assistantLayer,manualPaymentValidator}.js`, `adapters/whatsappEngineBaileys.js` (indices d'identité, self-chat), `lib/whatsappRecipients.js` (déjà copié dans `local-client/lib`), `public/dashboard.html` (`impBuild`) | FAIT côté branchement (2026-09-23) — `assistantLayer.js` instancié et branché dans `index.js`, self-chat détecté sur les deux canaux (capacité ajoutée dans `lib/whatsapp.js`/`lib/telegram.js`, voir section dédiée plus bas), vérifié par scripts de fumée (pas encore par un compte réel connecté). Reste : `impBuild` du dashboard PC pas vérifié | À FAIRE |
 
 ## Règles de portage à respecter
 - Reprendre le comportement, pas le code VPS tel quel : le PC et le téléphone restent locaux (WhatsApp local, SQLite/IndexedDB).
@@ -231,36 +231,51 @@ local sur 3 messages différents (« bonjour » → repli conversation courante 
 intention CRM exécutée avec une vraie réponse ; « quelle est mon activité ? » → boucle Agent à outils exécutée,
 dégradation propre sur l'échec réseau du LLM en environnement hors-ligne) — aucun crash, le principal/tenant passe
 la vérification d'autorisation à chaque appel.
-**Reste à faire, découvert pendant ce déblocage — PROCHAIN CHANTIER, le plus gros restant** : `local-client/
-ai-engine/assistantLayer.js` (le canal self-chat WhatsApp/Telegram, déjà porté tel quel depuis le VPS) attend CE MÊME
-contrat (`principal`/`tenantId`) depuis le début — il était donc déjà écrit pour la version débloquée, mais
-**`assistantLayer.js` n'est PAS ENCORE instancié/branché dans `local-client/index.js`** (aucune référence trouvée).
-`local-client/index.js` gère encore les messages entrants WhatsApp/Telegram via son ANCIEN pipeline simplifié
-(`handleIncomingCustomerMessage`, ~ligne 680 : `messageTriage.classify` + `emotionalCloser` directement), qui
-contourne tout ce qui a été porté cette session (autoResponder/Jarvis, conversationRouter, adCampaigns, groupCampaigns,
-ownerChannel). Étudié en détail l'équivalent VPS réel (`index.js:5524`, fonction `handleIncomingCustomerMessage`)
-pour établir l'ordre correct à reproduire côté PC :
-1. Résoudre l'identité (`assistant.resolveIdentity`).
-2. Numéro propriétaire configuré OU **self-chat** → `assistant.handleOwnerMessage()` puis RETURN.
-3. Campagnes de groupes (membre intéressé / preuve) → `assistant.groupEntry()`/`leadDm()`, RETURN si géré.
-4. Historique (`conversationHistory.record`, déjà fait dans le pipeline actuel).
-5. Preuve de paiement (`manualPaymentValidator`, déjà fait dans le pipeline actuel), RETURN si géré.
-6. Campagne d'entrée publicitaire → `assistant.adEntry()`, RETURN si géré.
-7. Routage privé/métier → `assistant.route()`, RETURN si géré.
-8. Sinon : `autoResponder.handleIncoming()` (remplace l'appel direct à `emotionalCloser` actuel).
+**DÉBLOQUÉ le 2026-09-23 (suite immédiate, sur demande explicite de l'utilisateur de continuer « minutieusement »)** :
+`assistantLayer.js` est maintenant instancié et branché dans `local-client/index.js` (`assistant = assistantLayer.create({...})`
++ `assistant.start()`), et `handleIncomingCustomerMessage` reproduit l'ordre exact du VPS (`index.js:5524`) :
+résolution d'identité → campagnes de groupes (`groupEntry`/`leadDm`) → historique → preuve de paiement → campagne
+d'entrée publicitaire (`adEntry`) → routage privé/métier (`route`) → `autoResponder.handleIncoming()` — avec repli
+sur l'ANCIEN pipeline (`messageTriage`+`emotionalCloser`) uniquement si l'auto-réponse est explicitement désactivée
+pour ce compte/canal (`autoOut.skipped === 'DISABLED'`), exactement comme le VPS le fait déjà lui-même.
 
-**Obstacle réel identifié, PAS encore résolu** : `assistantLayer.js` attend `d.whatsappManager`/`d.telegramManager`
-au patron multi-tenant VPS (`.peek(tenant)`, `.setOwnerMessageHandler(cb)`) — à ADAPTER en mono-compte (stubs locaux),
-comme les autres fichiers déjà adaptés. Le point dur spécifique : **détecter un message self-chat** (l'owner
-s'écrivant à lui-même depuis son téléphone, observé par ce PC) n'est PAS encore possible avec `lib/whatsapp.js`
-actuel — celui-ci n'écoute que `client.on('message', ...)` (whatsapp-web.js, ne capte que `fromMe:false`). Un
-self-chat envoyé depuis le téléphone de l'owner arrive avec `fromMe:true` côté whatsapp-web.js (le compte EST
-l'expéditeur) : il faut AJOUTER une écoute sur l'évènement `message_create` filtrée sur `msg.fromMe === true &&
-msg.to === <mon propre ID, via client.info.wid._serialized>` — mécanisme différent du self-chat Baileys/VPS
-(architecture WhatsApp différente), donc une vraie adaptation à écrire, pas une simple copie. Non tenté ce jour
-(nécessite un vrai test avec un compte WhatsApp connecté pour valider `message_create`/`fromMe`, indisponible en
-session non interactive). Téléphone : sans objet directement (pas de backend Node), mais bénéficiera du même
-contrat une fois `cloudflare/license-worker/` étendu pour servir d'équivalent chatOrchestrator côté navigateur.
+**Détection du self-chat — capacité RÉELLEMENT AJOUTÉE (pas une simple copie)**, différente entre les deux canaux :
+- `lib/whatsapp.js` : nouvel évènement `message_create` (en plus de `'message'`, qui ne capte que `fromMe:false`),
+  filtré sur `msg.fromMe === true && msg.to === <mon JID, via client.info.wid._serialized>` (= self-chat), avec un
+  registre `sentByMe` + délai de 700 ms pour ignorer l'écho d'un message que CE client vient lui-même d'envoyer
+  (`rememberSent()`, hooké dans `sendMessage`/`sendMedia`) — même principe que
+  `adapters/whatsappEngineBaileys.js#checkOwnerMessage`/`isSelfChatJid` côté VPS (Baileys), mais un mécanisme
+  différent car whatsapp-web.js n'expose pas la même forme d'évènement.
+- `lib/telegram.js` : l'écouteur existant ignorait TOUT message `out:true` (donc aussi les Messages sauvegardés
+  tapés depuis le téléphone) — ajout d'un embranchement dédié quand `chatId === mon id` (résolu une fois via
+  `client.getMe()`), avec le même registre `sentByMe`. Bug corrigé au passage dans `sendMessage()` : une destination
+  = mon propre id (self-chat) passait par la résolution "numéro de téléphone" de `resolveRecipient` (fausse route) ;
+  utilise maintenant `'me'`, l'idiome natif GramJS pour les Messages sauvegardés.
+- `local-client/ai-engine/ownerChannel.js`/`assistantLayer.js` restent **INCHANGÉS** (toujours resynchronisables tel
+  quel depuis le VPS) : l'adaptation vit entièrement à la frontière, dans `local-client/index.js` — `localWhatsappSession`/
+  `localTelegramSession` (objets « session » exposant `sendMessage`/`isConnected`/`getSelfIds`/`isSelfChatJid`/
+  `isSavedMessages`/`getIdentityHints`) et `shimBaileysMessage()` (construit l'enveloppe `{key:{remoteJid,id,fromMe},
+  message:{conversation}}` que `ownerChannel.js#WHATSAPP` attend, à partir d'un message whatsapp-web.js natif).
+
+**Vérifié en réel** (scripts de fumée, sans compte WhatsApp/Telegram connecté — voir limite ci-dessous) :
+`assistant.resolveIdentity`/`route`/`adEntry`/`groupEntry`/`leadDm` appelés avec des messages WhatsApp de forme
+whatsapp-web.js réelle (`msg.from`/`msg.body`/`msg._data.notifyName`) : aucun crash, réponses cohérentes (aucune
+campagne configurée → `NO_CAMPAIGN_CONFIGURED`/`NOT_A_CAMPAIGN_GROUP`/`NOT_A_LEAD`, routage → `DISABLED` faute de
+réglage). `ownerChannel.handleOwnerMessage()` appelé DIRECTEMENT avec un message self-chat WhatsApp shimmé ET un
+message self-chat Telegram (GramJS natif) : les deux reconnaissent correctement le self-chat (`isSelfChatJid`/
+`isSavedMessages`), extraient le texte, appellent `chat()` et renvoient la réponse à la BONNE destination avec la
+signature anti-boucle. Câblage complet `assistant.start()` → gestionnaire enregistré → `handleOwnerMessage` →
+réponse envoyée, revérifié avec un `chatOrchestrator` stubbé (élimine tout appel réseau réel du test).
+
+**Limite connue, non résolue** : les pièces jointes (image/document/note vocale) envoyées dans le self-chat WhatsApp
+ne sont PAS traitées (`localWhatsappSession.downloadIncomingMedia` lève une erreur volontaire) — dégrade proprement
+(`ownerChannel.js` capture déjà cet échec et répond un message d'erreur clair au lieu de planter), mais ce n'est pas
+une vraie fonctionnalité. À faire si besoin : construire un shim média complet (whatsapp-web.js expose `msg.downloadMedia()`
+nativement sur le message ORIGINAL, à conserver en plus du shim Baileys-shaped). **Jamais testé avec un vrai compte
+WhatsApp/Telegram connecté** (self-chat réel depuis un téléphone) — seulement des scripts de fumée avec des messages
+simulés fidèles à la forme réelle des deux bibliothèques ; c'est la prochaine étape de validation, à faire par
+l'utilisateur avec un compte réel. Téléphone : sans objet directement (pas de backend Node), mais bénéficiera du
+même contrat une fois `cloudflare/license-worker/` étendu pour servir d'équivalent chatOrchestrator côté navigateur.
 
 ## Livraison 2026-09-23 (suite VM) — Registre des nouveaux contacts publicitaires (relance, export Excel)
 `ai-engine/adCampaigns.js` (registre `listNewAdContacts`), routes `/api/ad-campaigns/new-contacts` + `/export-excel`,

@@ -94,6 +94,21 @@ function onIncomingMessage(callback) {
   incomingMessageListeners.push(callback);
 }
 
+// --- Canal propriétaire (self-chat) : l'utilisateur s'écrit à lui-même depuis son téléphone -> Chat Intelligent.
+// Même logique que adapters/whatsappEngineBaileys.js#checkOwnerMessage/isSelfChatJid (VPS, Baileys) — adaptée à
+// whatsapp-web.js : l'évènement 'message' ci-dessus ne fournit QUE les messages reçus d'un tiers (fromMe toujours
+// false) ; 'message_create' (enregistré dans connect() ci-dessous) fournit TOUS les messages, y compris envoyés —
+// filtré ici sur fromMe=true ET chat = moi-même (self-chat), avec un registre "sentByMe" + court délai pour ignorer
+// l'écho d'un message que CE client vient lui-même d'envoyer (ex: une alerte livrée dans le self-chat).
+const ownerMessageListeners = [];
+function onOwnerMessage(callback) { ownerMessageListeners.push(callback); }
+const sentByMe = new Set();
+function rememberSent(id) {
+  if (!id) return;
+  sentByMe.add(String(id));
+  if (sentByMe.size > 500) sentByMe.delete(sentByMe.values().next().value);
+}
+
 // Tampon glissant des derniers messages reçus — parité avec
 // adapters/whatsappEngineBaileys.js#getRecentMessages (VPS). Permet à la couche
 // intelligence de répondre à "quel est le dernier message reçu ?". En mémoire,
@@ -185,6 +200,18 @@ function connect() {
       try { cb(msg); } catch (err) { console.error('Erreur dans un écouteur de message entrant WhatsApp :', err.message); }
     });
   });
+  client.on('message_create', (msg) => {
+    if (!msg.fromMe) return; // déjà géré par 'message' ci-dessus (fromMe toujours false sur cet évènement)
+    const meId = (client.info && client.info.wid && client.info.wid._serialized) || null;
+    if (!meId || msg.to !== meId) return; // pas un self-chat (message envoyé à un vrai contact) : hors périmètre du canal propriétaire
+    // Court délai : l'écho d'un message envoyé par CE client peut arriver avant que rememberSent() ne l'ait mémorisé.
+    setTimeout(() => {
+      if (sentByMe.has(String(msg.id && msg.id._serialized))) return; // message généré par ce client lui-même : jamais retraité
+      ownerMessageListeners.forEach((cb) => {
+        try { cb(msg); } catch (err) { console.error('Erreur dans un écouteur de message propriétaire WhatsApp :', err.message); }
+      });
+    }, 700);
+  });
 
   return client.initialize().catch((err) => {
     console.error('Erreur d\'initialisation whatsapp-web.js (local-client) :', err.message);
@@ -202,6 +229,7 @@ async function sendMessage(to, text) {
   const target = jidToWwebjs(to);
   const result = await client.sendMessage(target, text);
   recordMessage({ jid: target, direction: 'out', body: text });
+  rememberSent(result && result.id && result.id._serialized); // évite que le canal propriétaire retraite son propre envoi (self-chat)
   return result;
 }
 
@@ -211,6 +239,7 @@ async function sendMedia(to, { buffer, mimetype, filename, caption }) {
   const media = new MessageMedia(mimetype || 'application/octet-stream', buffer.toString('base64'), filename || 'fichier');
   const result = await client.sendMessage(target, media, { caption });
   recordMessage({ jid: target, direction: 'out', body: caption || `[média: ${filename || mimetype}]` });
+  rememberSent(result && result.id && result.id._serialized);
   return result;
 }
 
@@ -381,7 +410,7 @@ async function joinGroupByInvite(code) {
 }
 
 module.exports = {
-  connect, sendMessage, sendMedia, getQRCode, getQRCodeImage, isConnected, onStateChange, onIncomingMessage, logout, getGroups, getGroupMembers,
+  connect, sendMessage, sendMedia, getQRCode, getQRCodeImage, isConnected, onStateChange, onIncomingMessage, onOwnerMessage, logout, getGroups, getGroupMembers,
   getRecentMessages, getGroupsSummary, getConnectedNumber, isPaired,
   checkNumbersOnWhatsApp, createGroup, setGroupDescription, addGroupParticipants, getGroupInviteLink, getInviteInfo, joinGroupByInvite,
 };

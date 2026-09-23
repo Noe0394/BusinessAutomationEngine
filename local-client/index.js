@@ -37,6 +37,11 @@ const messageTriage = require('./lib/intelligence/message-triage');
 const businessProfileStore = require('./ai-engine/storageAdapter');
 const emotionalCloser = require('./ai-engine/emotionalCloser');
 const voiceProcessor = require('./ai-engine/voiceProcessor');
+// Couche d'assistance générale (self-chat propriétaire, routage privé/métier, campagnes d'entrée) + répondeur
+// automatique Jarvis — débloqués le 2026-09-23 (voir docs/PORTAGE-LOCAL-MOBILE.md). Jusqu'ici branchés nulle part
+// dans ce fichier : les messages entrants ne passaient que par l'ancien repli (messageTriage + emotionalCloser).
+const assistantLayer = require('./ai-engine/assistantLayer');
+const autoResponder = require('./ai-engine/autoResponder');
 const AUTO_CLOSE_PROSPECTS = process.env.AUTO_CLOSE_PROSPECTS === 'true';
 const AUTO_ENGAGE_NEW_CONTACTS = process.env.AUTO_ENGAGE_NEW_CONTACTS === 'true';
 const AUTO_PAYMENT_VALIDATION = process.env.AUTO_PAYMENT_VALIDATION === 'true';
@@ -342,6 +347,89 @@ async function main() {
     else if (whatsapp.isConnected()) await whatsapp.sendMessage(from, text);
   }
 
+  // Dépendances du Chat-Driven Agent Orchestrator — hissées ici (au lieu d'être redéfinies dans la route du
+  // tableau de bord plus bas) pour être réutilisables aussi par le canal propriétaire self-chat (ownerDeps.chat,
+  // voir ai-engine/assistantLayer.js/ownerChannel.js), qui appelle le MÊME chatOrchestrator.handle().
+  const orchestratorDeps = {
+    runtime: localRuntime,
+    humanContext,
+    generateImage: generateImageBuffer,
+    deliverToClient: deliverToClientLocal,
+    executeOptions: { env: process.env },
+  };
+
+  // --- Couche d'assistance générale (self-chat, routage privé/métier, campagnes d'entrée/de groupes) -------------
+  // ADAPTATEUR local-client : ai-engine/assistantLayer.js est copié tel quel depuis le VPS (jamais modifié) — il
+  // attend des dépendances façon gestionnaire multi-tenant (adapters/whatsappManager.js/telegramManager.js,
+  // ai-engine/aiStudioStore.js) qui n'existent pas en mode local mono-compte : adaptées ci-dessous, à la frontière,
+  // sans toucher au fichier partagé (voir docs/PORTAGE-LOCAL-MOBILE.md pour le détail de cette investigation).
+  const OWNER_CHANNEL_NAMESPACE = 'owner_channel_sessions';
+  const OWNER_SESSION_ID = 'local-owner';
+  const ownerChannelRef = require('./ai-engine/ownerChannel');
+  // aiStudioStore façon VPS (listSessions/getSession/createSession/appendMessages) : ici un seul document fixe,
+  // toujours "trouvé" par son titre (mono-compte, pas besoin de vraiment chercher parmi plusieurs sessions).
+  const aiStudioStoreLocal = {
+    listSessions: async () => [{ id: OWNER_SESSION_ID, title: ownerChannelRef.SESSION_TITLE }],
+    getSession: async (t, id) => businessProfileStore.get(OWNER_CHANNEL_NAMESPACE, id, { messages: [] }),
+    createSession: async () => ({ id: OWNER_SESSION_ID }),
+    appendMessages: async (t, id, msgs) => {
+      const doc = await businessProfileStore.get(OWNER_CHANNEL_NAMESPACE, id, { messages: [] });
+      doc.messages = (doc.messages || []).concat(msgs).slice(-40);
+      businessProfileStore.set(OWNER_CHANNEL_NAMESPACE, id, doc);
+    },
+  };
+  // « Session » au sens attendu par ownerChannel.js (peek().session, getIdentityHints, self-chat...) : whatsapp-web.js
+  // n'a pas de LID séparé du numéro (contrairement à Baileys) — getSelfIds() ne renvoie donc que `pn`. Un message de
+  // groupe distingue le CHAT (msg.from = le groupe) de l'EXPÉDITEUR réel (msg.author) — jamais confondus ci-dessous.
+  const localWhatsappSession = {
+    sendMessage: (to, text) => whatsapp.sendMessage(to, text),
+    isConnected: () => whatsapp.isConnected(),
+    getSelfIds: () => { const n = whatsapp.getConnectedNumber(); return n ? { pn: `${n}@c.us` } : {}; },
+    isSelfChatJid: (jid) => { const n = whatsapp.getConnectedNumber(); return !!n && jid === `${n}@c.us`; },
+    getIdentityHints: (msg) => ({
+      jid: msg.from, senderJid: msg.author || msg.from, altJids: [],
+      pushName: (msg._data && msg._data.notifyName) || null, savedName: null, knownName: null,
+    }),
+    // Pièces jointes en self-chat : non supporté pour l'instant (voir docs/PORTAGE-LOCAL-MOBILE.md) — dégrade
+    // proprement, ownerChannel.js capture déjà l'échec de téléchargement (voir son commentaire "0) MÉDIA").
+    downloadIncomingMedia: async () => { throw new Error('MEDIA_SELF_CHAT_NOT_SUPPORTED'); },
+  };
+  const localTelegramSession = {
+    sendMessage: (to, text) => telegram.sendMessage(to, text),
+    isConnected: () => telegram.isConnected(),
+    isSavedMessages: () => true, // déjà filtré en amont par lib/telegram.js#onOwnerMessage (chatId === mon id)
+  };
+  // Baileys adresse un message par `msg.key.{remoteJid,id,fromMe}` + `msg.message.conversation` (voir
+  // ownerChannel.js#WHATSAPP, jamais modifié ici pour rester resynchronisable tel quel) — whatsapp-web.js expose
+  // directement `msg.from`/`msg.id`/`msg.body`. Construit l'enveloppe attendue à la frontière, sans toucher au
+  // fichier partagé (même principe que les autres adaptations de ce dossier).
+  function shimBaileysMessage(msg) {
+    return { key: { remoteJid: msg.from, id: msg.id && msg.id._serialized, fromMe: !!msg.fromMe }, message: { conversation: msg.body || '' } };
+  }
+  const whatsappManagerStub = {
+    peek: () => ({ session: localWhatsappSession }),
+    setOwnerMessageHandler: (cb) => {
+      whatsapp.onOwnerMessage((msg) => cb({ tenantId: 'local', session: localWhatsappSession, msg: shimBaileysMessage(msg) }));
+    },
+  };
+  const telegramManagerStub = {
+    setOwnerMessageHandler: (cb) => {
+      telegram.onOwnerMessage((msg) => cb({ tenantId: 'local', session: localTelegramSession, msg }));
+    },
+  };
+  const assistant = assistantLayer.create({
+    whatsappManager: whatsappManagerStub,
+    telegramManager: telegramManagerStub,
+    autoResponder,
+    getRuntime: () => localRuntime,
+    chatOrchestrator,
+    aiStudioStore: aiStudioStoreLocal,
+    llmFallbackEngine,
+    platformOrchestrator,
+    chatDeps: () => orchestratorDeps,
+  });
+  assistant.start();
+
   app.post('/api/intelligence/goal-chat', async (req, res) => {
     const { message, sessionId, action } = req.body || {};
     let state = sessionId ? goalChatSessions.get(sessionId) : null;
@@ -360,14 +448,6 @@ async function main() {
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Le champ "message" est requis (ou action:"restart").' });
     }
-
-    const orchestratorDeps = {
-      runtime: localRuntime,
-      humanContext,
-      generateImage: generateImageBuffer,
-      deliverToClient: deliverToClientLocal,
-      executeOptions: { env: process.env },
-    };
 
     // Chat-Driven Agent Orchestrator — consulté EN PREMIER (offre/rapport/
     // paiement/compte/campagne/inbox/groupes/récurrence/CRM), avant le pipeline
@@ -688,6 +768,9 @@ async function main() {
     let text = channel === 'WHATSAPP' ? String(msg.body || '') : String(msg.message || '');
     const isVoice = channel === 'WHATSAPP' ? msg.type === 'ptt' : !!msg.voice;
     const from = channel === 'WHATSAPP' ? msg.from : String(msg.chatId || msg.senderId || '');
+    const messageId = channel === 'WHATSAPP' ? (msg.id && msg.id._serialized) || null : (msg.id != null ? String(msg.id) : null);
+    const hasAttachment = channel === 'WHATSAPP' ? !!msg.hasMedia : !!(msg.media || msg.photo || msg.document);
+    const isGroupMsg = channel === 'WHATSAPP' && /@g\.us$/i.test(String(from || ''));
 
     if (!text.trim() && isVoice) {
       try {
@@ -707,27 +790,73 @@ async function main() {
     }
     if (!text.trim() || !from) return;
 
+    // IDENTITÉ RÉELLE du contact (nom -> vrai numéro -> « non identifié ») : utilisée par les campagnes ci-dessous,
+    // la mémoire et le routage. Le self-chat propriétaire est déjà géré séparément (voir whatsapp.onOwnerMessage/
+    // telegram.onOwnerMessage plus haut) : ce chemin-ci ne reçoit jamais de message du propriétaire lui-même.
+    const identity = await assistant.resolveIdentity({ channel, tenantId: 'local', session: channel === 'WHATSAPP' ? localWhatsappSession : null, msg }).catch((err) => {
+      console.error(`contactIdentity (local, ${channel}) :`, err.message);
+      return null;
+    });
+
+    // CAMPAGNES DE GROUPES (WhatsApp uniquement) : intérêt d'un membre / preuve de paiement d'un prospect
+    // (expéditeur RÉEL, jamais l'identifiant du groupe).
+    if (channel === 'WHATSAPP') {
+      try {
+        const gc = isGroupMsg
+          ? await assistant.groupEntry({ tenantId: 'local', session: localWhatsappSession, msg, text, from, messageId, hasAttachment })
+          : await assistant.leadDm({ tenantId: 'local', jid: from, identity, text, hasAttachment, messageId });
+        if (gc && gc.handled) return;
+      } catch (err) { console.error(`groupCampaigns (local) :`, err.message); }
+    }
+
     // Historique PERSISTANT (>= 7 jours) — enregistre chaque message entrant
     // pour la mémoire opérationnelle + la réponse au dernier message.
-    const senderNameHist = channel === 'WHATSAPP'
+    const senderNameHist = (identity && identity.displayName) || (channel === 'WHATSAPP'
       ? (msg._data && msg._data.notifyName) || null
-      : (msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
+      : (msg.sender && (msg.sender.firstName || msg.sender.username)) || null);
     conversationHistory.record('local', {
       channel, direction: 'in', party: from, name: senderNameHist, text,
       ts: channel === 'WHATSAPP' ? (msg.timestamp || Math.floor(Date.now() / 1000)) : (Number(msg.date) > 0 ? Number(msg.date) : Math.floor(Date.now() / 1000)),
-      chatId: from, hasMedia: channel === 'WHATSAPP' ? !!msg.hasMedia : !!(msg.media || msg.photo),
+      chatId: from, hasMedia: hasAttachment,
     });
 
     // Preuve de paiement manuel entrante (Human-in-the-Loop) — priorité sur le
     // closing. handleClientProof n'accorde jamais d'accès (enregistre + fiche
     // admin) ; l'accusé auto au client n'est envoyé que si AUTO_PAYMENT_VALIDATION.
-    const hasAttachment = channel === 'WHATSAPP' ? !!msg.hasMedia : !!(msg.media || msg.photo || msg.document);
-    if (manualPaymentValidator.looksLikePaymentProof(text, hasAttachment)) {
-      const ack = await manualPaymentValidator.handleClientProof({ tenantId: 'local', channel, from, text, hasAttachment })
+    if (!isGroupMsg && manualPaymentValidator.looksLikePaymentProof(text, hasAttachment)) {
+      const ack = await manualPaymentValidator.handleClientProof({ tenantId: 'local', channel, from, text, hasAttachment, identity })
         .catch((err) => { console.error('manualPaymentValidator (local) :', err.message); return null; });
       if (ack && AUTO_PAYMENT_VALIDATION) await sendCustomerReply(channel, ack, from).catch(() => {});
       return;
     }
+
+    // CAMPAGNE D'ENTRÉE PUBLICITAIRE (WhatsApp uniquement) : nouveau contact reconnu -> message initial EXACT du
+    // propriétaire (idempotent, voir ai-engine/adCampaigns.js).
+    if (channel === 'WHATSAPP') {
+      try {
+        const ad = await assistant.adEntry({ tenantId: 'local', channel, msg, text, from, messageId, identity });
+        if (ad && ad.handled) return;
+      } catch (err) { console.error(`adCampaigns (local) :`, err.message); }
+    }
+
+    // COUCHE D'ASSISTANCE GÉNÉRALE : conversations privées/quotidiennes (réponse sûre, alerte du propriétaire,
+    // handoff) avant le moteur commercial. Les conversations métier retombent sur autoResponder/Jarvis ci-dessous.
+    try {
+      const routed = await assistant.route({ tenantId: 'local', channel, session: channel === 'WHATSAPP' ? localWhatsappSession : null, msg, text, from, messageId, hasAttachment, identity });
+      if (routed && routed.handled) return;
+    } catch (err) { console.error(`assistantLayer.route (local) :`, err.message); }
+
+    // AUTONOMIE CONVERSATIONNELLE (priorité, si activée pour ce compte+canal) : CYRUS tient la conversation tout
+    // seul — mémoire du contact -> IA ancrée sur les Services Métiers réels -> envoi vérifié -> sauvegarde. On ne
+    // retombe sur le repli historique ci-dessous QUE si l'auto-réponse est explicitement désactivée (DISABLED).
+    const autoOut = await autoResponder.handleIncoming(
+      { tenantId: 'local', channel, from, name: senderNameHist, text, messageId },
+      { runtime: localRuntime, identity },
+    ).catch((err) => {
+      console.error(`autoResponder (local, ${channel}) :`, err.message);
+      return { skipped: 'ERROR' };
+    });
+    if (!autoOut || autoOut.skipped !== 'DISABLED') return;
 
     const classification = messageTriage.classify(text);
     if (classification.category === 'business') {
