@@ -5249,6 +5249,54 @@ app.get('/api/auto-responder/status', requireAccess, async (req, res) => {
     res.json({ ok: true, settings, alwaysOn: !!settings.alwaysOn, sessions: { whatsapp: live(whatsappManager), telegram: live(telegramManager) }, keeper: responderKeeper.status(tenant) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ---------- Nouveaux contacts publicitaires (Facebook Ads / Google Ads / etc. — voir ai-engine/adCampaigns.js) ----------
+// Enregistrement automatique de CHAQUE nouveau contact CONFIRMÉ (jamais un contact déjà connu — voir
+// adCampaigns.js#isNewContact, vérification stricte CRM + historique + état de conversation + registre) qui a écrit
+// suite à une publicité, pour permettre une relance manuelle ultérieure des prospects/clients restés sans suite.
+app.get('/api/ad-campaigns/new-contacts', requireAccess, async (req, res) => {
+  try {
+    const tenant = resolveTenantId(req);
+    const contacts = await require('./ai-engine/adCampaigns').listNewAdContacts(tenant);
+    res.json({ ok: true, contacts });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/ad-campaigns/new-contacts/export-excel', requireAccess, async (req, res) => {
+  try {
+    const tenant = resolveTenantId(req);
+    const contacts = await require('./ai-engine/adCampaigns').listNewAdContacts(tenant);
+    const sheet = XLSX.utils.json_to_sheet(contacts.map((c) => ({
+      Nom: c.name || '',
+      Téléphone: c.phoneDisplay || '',
+      "Nom d'utilisateur": c.username || '',
+      Canal: c.channel || '',
+      Campagne: c.campaignName || '',
+      'Produit/Service': c.productName || '',
+      Plateforme: c.platform || '',
+      'Origine vérifiée': c.sourceVerified ? 'Oui' : 'Non (déclarée par le message reçu)',
+      'Message reçu': c.entryText || '',
+      Statut: c.statusLabel || '',
+      'Premier contact': c.firstSeenAt ? new Date(c.firstSeenAt).toLocaleString('fr-FR') : '',
+    })));
+    // Colonne Téléphone (B) forcée en texte : évite qu'Excel réinterprète un long numéro en notation scientifique
+    // (même piège déjà rencontré et corrigé sur /api/groups/export-members ci-dessus).
+    if (sheet['!ref']) {
+      const range = XLSX.utils.decode_range(sheet['!ref']);
+      for (let r = range.s.r + 1; r <= range.e.r; r += 1) {
+        const cellRef = XLSX.utils.encode_cell({ r, c: 1 });
+        const cell = sheet[cellRef];
+        if (cell) { cell.t = 's'; cell.z = '@'; cell.v = String(cell.v); }
+      }
+    }
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Nouveaux contacts');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="nouveaux_contacts_publicite.xlsx"');
+    res.status(200).send(buffer);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 // DIAG (admin) : injecte un message entrant SYNTHÉTIQUE dans la VRAIE chaîne
 // d'auto-réponse (compose avec l'IA réelle + envoi VÉRIFIÉ réel + sauvegarde)
 // pour un tenant/canal/contact donnés — sert à vérifier l'autonomie de bout en

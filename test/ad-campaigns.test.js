@@ -260,3 +260,40 @@ test('aucune campagne configurée : aucun effet sur les contacts', async () => {
   assert.equal(r.out.reason, 'NO_CAMPAIGN_CONFIGURED');
   assert.equal(r.s.sent.length, 0);
 });
+
+// ---- Registre des nouveaux contacts publicitaires (relance) : demande explicite de l'utilisateur, 2026-09-23 ----
+test('REGISTRE : un nouveau contact publicitaire est enregistré avec toutes les infos utiles à une relance ; jamais un contact déjà connu', async () => {
+  const t = 'ad13'; await setup(t, { productName: 'Formation Pro' });
+  const { from } = await entry(t, ENTRY);
+  const list = await ads.listNewAdContacts(t);
+  assert.equal(list.length, 1);
+  const row = list[0];
+  assert.equal(row.channel, 'WHATSAPP');
+  assert.equal(row.name, 'Awa');
+  assert.equal(row.campaignName, 'Camp A');
+  assert.equal(row.productName, 'Formation Pro');
+  assert.equal(row.sourceVerified, false);
+  assert.equal(row.entryText, ENTRY);
+  assert.equal(row.statusLabel, 'En attente', 'aucune action du contact pour l\'instant');
+  assert.ok(row.firstSeenAt > 0);
+
+  // Ancien contact (bloqué par isNewContact, voir test ci-dessus) : JAMAIS ajouté au registre.
+  const oldFrom = jid();
+  await contactCrm.recordSeen(t, { channel: 'WHATSAPP', from: contactCrm.identityOf(oldFrom), name: 'Vieux client' });
+  const blocked = await entry(t, ENTRY, { from: oldFrom });
+  assert.equal(blocked.out.reason, 'EXISTING_CONTACT');
+  assert.equal((await ads.listNewAdContacts(t)).length, 1, 'le contact déjà connu ne doit jamais apparaître dans le registre des nouveaux contacts');
+});
+
+test('REGISTRE : le statut de relance reflète en direct le CRM (converti / sans suite) sans jamais être figé', async () => {
+  const t = 'ad14'; await setup(t);
+  const { from } = await entry(t, ENTRY);
+  assert.equal((await ads.listNewAdContacts(t))[0].statusLabel, 'En attente');
+  await contactCrm.setStage(t, 'WHATSAPP', from, 'client');
+  assert.equal((await ads.listNewAdContacts(t))[0].statusLabel, 'Converti', 'le client a fini par acheter : reflété immédiatement, sans étape supplémentaire');
+
+  const t2 = 'ad15'; await setup(t2);
+  const r2 = await entry(t2, ENTRY);
+  await contactCrm.markOptOut(t2, 'WHATSAPP', r2.from, 'STOP');
+  assert.equal((await ads.listNewAdContacts(t2))[0].statusLabel, 'Sans suite (refus/désinscription)', 'un prospect qui s\'est désinscrit ne doit pas être relancé comme un prospect ordinaire');
+});

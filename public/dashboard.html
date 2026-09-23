@@ -1434,6 +1434,27 @@
           </table>
         </div>
       </div>
+
+      <div class="subsection" id="ad-new-contacts-section">
+        <h3>Nouveaux contacts publicitaires (WhatsApp/Telegram)</h3>
+        <p class="hint">Chaque nouveau contact (jamais un contact déjà connu) qui vous écrit suite à une campagne d'entrée
+          configurée (Facebook Ads, Google Ads ou toute autre publicité menant à un message d'entrée reconnu — voir Chat
+          Intelligent pour configurer ces campagnes) est enregistré automatiquement ici, pour pouvoir relancer plus tard
+          les prospects/clients restés sans suite.</p>
+
+        <button type="button" id="ad-new-contacts-refresh-btn">🔄 Actualiser</button>
+        <button type="button" id="ad-new-contacts-export-btn">📊 Exporter la liste (Excel)</button>
+        <div id="ad-new-contacts-feedback" hidden></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nom</th><th>Téléphone</th><th>Canal</th><th>Campagne</th><th>Plateforme</th><th>Statut</th><th>Premier contact</th></tr></thead>
+            <tbody id="ad-new-contacts-body">
+              <tr><td colspan="7" class="empty">Aucun nouveau contact publicitaire pour l'instant.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- Onglet Groupes / Partage (partage assisté) -->
@@ -3112,7 +3133,7 @@
         if (btn.dataset.tab === 'telegram') tgRefreshStatus();
         if (btn.dataset.tab === 'facebook') fbRefreshStatus();
         if (btn.dataset.tab === 'scheduler') { schedInit(); schedRefreshList(); }
-        if (btn.dataset.tab === 'prospects') { prospectsLoadRules(); prospectsRefreshList(); }
+        if (btn.dataset.tab === 'prospects') { prospectsLoadRules(); prospectsRefreshList(); adContactsRefreshList(); }
         if (btn.dataset.tab === 'share') { shareLoadGroups(); }
         if (btn.dataset.tab === 'relance') { relanceLoadQueue(); }
         if (btn.dataset.tab === 'studio') { studioLoadSessionsList(); }
@@ -6833,6 +6854,43 @@
       if (keyword) params.set('keyword', keyword);
       if (source) params.set('source', source);
       window.location.href = '/api/facebook/prospects/export-excel?' + params.toString();
+    });
+
+    // ---------- Nouveaux contacts publicitaires (WhatsApp/Telegram, campagnes d'entrée — ai-engine/adCampaigns.js) ----------
+    function adContactsShowFeedback(message, isError) {
+      const el = document.getElementById('ad-new-contacts-feedback');
+      if (!el) return;
+      el.textContent = message; el.hidden = false;
+      el.className = isError ? 'error' : 'success';
+    }
+    async function adContactsRefreshList() {
+      const tbody = document.getElementById('ad-new-contacts-body');
+      try {
+        const res = await apiFetch('/api/ad-campaigns/new-contacts');
+        const data = await res.json();
+        if (!res.ok || !data.ok) { adContactsShowFeedback((data && data.error) || 'Erreur lors du chargement.', true); return; }
+        const contacts = data.contacts || [];
+        tbody.innerHTML = '';
+        if (!contacts.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">Aucun nouveau contact publicitaire pour l\'instant.</td></tr>'; return; }
+        contacts.forEach((c) => {
+          const tr = document.createElement('tr');
+          const cells = [
+            c.name || c.username || '-',
+            c.phoneDisplay || '-',
+            c.channel || '-',
+            c.campaignName || '-',
+            c.platform || '-',
+            c.statusLabel || '-',
+            c.firstSeenAt ? new Date(c.firstSeenAt).toLocaleString() : '-',
+          ];
+          cells.forEach((v) => { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+          tbody.appendChild(tr);
+        });
+      } catch (err) { adContactsShowFeedback('Erreur réseau lors du chargement.', true); }
+    }
+    document.getElementById('ad-new-contacts-refresh-btn').addEventListener('click', adContactsRefreshList);
+    document.getElementById('ad-new-contacts-export-btn').addEventListener('click', () => {
+      window.location.href = buildAuthedUrl('/api/ad-campaigns/new-contacts/export-excel');
     });
 
     // ---------- Groupes / Diffusion (import Excel + partage assisté) ----------
