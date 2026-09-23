@@ -434,7 +434,7 @@ Cette section consolide l'avancement actuel et remplace les anciens statuts prov
 ### Reste a faire
 
 1. Faire l'inventaire exhaustif des 14 onglets et de chaque action VPS, puis completer les correspondances PC et mobile. Les interfaces ne sont pas encore identiques a 100%; certains ecrans mobiles restent simplifiees ou adaptes aux ponts natifs.
-2. Completer Facebook/Messenger sur PC et telephone: la connexion OAuth, la Page et les conversations principales fonctionnent maintenant uniquement sur le PC local; capture de prospects, regles, imports, file d'envoi, planificateur commun et passerelle mobile securisee restent a porter.
+2. Completer Facebook/Messenger sur PC et telephone: la connexion OAuth, la Page, les conversations, la correspondance de contacts et la file d'envoi sont maintenant implementees sur le PC, mais leur recette Meta reste a faire; capture de prospects/webhooks, regles de mots-cles, planificateur commun et passerelle mobile securisee restent a porter.
 3. Completer les fonctions communautaires du VPS qui ne sont pas encore disponibles localement, notamment decouverte, creation et invitation de membres selon les capacites reelles de chaque plateforme.
 4. Porter sur telephone les integrations Services Metiers connectees et les capacites VPS de rapports/analyse IA et mesure des ameliorations; aujourd'hui ses rapports ne couvrent que les donnees IndexedDB locales.
 5. Ajouter ou documenter une passerelle entrante Telegram pour rendre possible une reponse automatique Telegram; aujourd'hui le pont web mobile n'expose pas les messages entrants.
@@ -455,7 +455,7 @@ Le releve du tableau VPS (`public/dashboard.html`) a confirme un onglet Facebook
 
 ### Limites et suite obligatoire
 
-- Fonctions Facebook VPS encore absentes du PC: capture de prospects via webhooks/commentaires, regles de mots-cles, import/mise en correspondance des contacts, file d'envoi Messenger et publication planifiee via le planificateur commun. Le registre de groupes PC est maintenant synchronise avec l'ecran de partage; le mobile conserve son registre local.
+- Fonctions Facebook VPS encore absentes du PC: capture de prospects via webhooks/commentaires, regles de mots-cles et publication Facebook Page via le planificateur commun. Les imports sont rapproches des conversations existantes et la file Messenger est disponible; registre de groupes PC synchronise avec le partage, registre mobile local.
 - `mobile/webapp` ne conserve aucun secret Meta et n'a pas de serveur local; il garde le partage Facebook manuel. Pour porter publication Page et Messenger sans exposer le secret dans l'application, il faut une passerelle serveur autorisee et une authentification mobile appropriee, puis les memes commandes/retours d'etat dans l'interface telephone.
 - Le rapprochement integral des 14 onglets/actions VPS avec les interfaces PC et mobile reste requis. Aucun commit ne doit figer un portage partiel tant que ce chantier continue.
 - Verification executee pour cette tranche : controles `node --check` sur serveur et UI Facebook PC; `git diff --check`; les 51 tests cibles passent; un test de fumee avec Axios simule valide les operations adapter (statut, Page, conversations, publication, envoi Messenger, commentaires et moderation). La synchronisation Capacitor passe aussi. La connexion Meta et l'URI OAuth exigent encore une recette avec une application de developpement Meta autorisee.
