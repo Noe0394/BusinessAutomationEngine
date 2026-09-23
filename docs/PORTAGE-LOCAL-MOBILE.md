@@ -446,7 +446,7 @@ Cette section consolide l'avancement actuel et remplace les anciens statuts prov
 
 Le releve du tableau VPS (`public/dashboard.html`) a confirme un onglet Facebook distinct comprenant connexion Meta, publications de Page, conversations Messenger, commentaires et groupes geres. Le partage assiste livre precedemment ne couvre pas ces fonctions.
 
-### PC local ajoute dans cette tranche (en cours, non commitee)
+### PC local ajoute dans cette tranche (sauvegarde dans Git)
 
 - Onglet Facebook/Messenger raccorde au client local.
 - OAuth Meta avec etat aleatoire a usage unique, expiration de 10 minutes et rappel local; App ID/Secret saisis dans l'interface et conserves dans le dossier de donnees local, hors du navigateur.
@@ -457,7 +457,7 @@ Le releve du tableau VPS (`public/dashboard.html`) a confirme un onglet Facebook
 
 - Fonctions Facebook VPS encore absentes du PC: capture de prospects via webhooks/commentaires, regles de mots-cles et publication Facebook Page via le planificateur commun. Les imports sont rapproches des conversations existantes et la file Messenger est disponible; registre de groupes PC synchronise avec le partage, registre mobile local.
 - `mobile/webapp` ne conserve aucun secret Meta et n'a pas de serveur local; il garde le partage Facebook manuel. Pour porter publication Page et Messenger sans exposer le secret dans l'application, il faut une passerelle serveur autorisee et une authentification mobile appropriee, puis les memes commandes/retours d'etat dans l'interface telephone.
-- Le rapprochement integral des 14 onglets/actions VPS avec les interfaces PC et mobile reste requis. Aucun commit ne doit figer un portage partiel tant que ce chantier continue.
+- Le rapprochement integral des 14 onglets/actions VPS avec les interfaces PC et mobile reste requis. Cette tranche est sauvegardee dans les commits `4375fa4` et `93da9db`; cette sauvegarde ne signifie pas que la parite est terminee.
 - Verification executee pour cette tranche : controles `node --check` sur serveur et UI Facebook PC; `git diff --check`; les 51 tests cibles passent; un test de fumee avec Axios simule valide les operations adapter (statut, Page, conversations, publication, envoi Messenger, commentaires et moderation). La synchronisation Capacitor passe aussi. La connexion Meta et l'URI OAuth exigent encore une recette avec une application de developpement Meta autorisee.
 
 ### Harmonisation supplementaire Facebook (PC + telephone)
@@ -472,3 +472,10 @@ Le releve du tableau VPS (`public/dashboard.html`) a confirme un onglet Facebook
 - Envoi texte ou media image/video en file, progression consultable, lot de 25 et temporisation aleatoire de 10 a 15 secondes. Le serveur revalide lui-meme chaque destinataire contre les conversations de la Page avant de lancer; liste plafonnee a 500 et media a 10 Mo.
 - Les erreurs Meta restent affichees par destinataire dans le resultat; cette protection n'etend pas la fenetre de messagerie Meta et l'application ne pretend pas que l'API a accepte les messages sans retour confirme.
 - La file locale et sa progression sont en memoire et disparaissent si le processus s'arrete; la durabilite apres redemarrage et le bouton d'arret de file restent a implementer si requis par le VPS.
+
+### Sauvegarde et diagnostic de la passerelle mobile (2026-09-23)
+
+- Le portage PC/mobile et ses mises a jour de statut sont enregistres dans `4375fa4` (portage principal), `93da9db` (flux Facebook/Messenger PC et harmonisation) et `b2a7233` (bilan de portage). Ces commits sont locaux; ils ne constituent pas une publication distante.
+- Le Worker `cloudflare/license-worker` expose actuellement les routes de licence, IA et medias, mais aucune route Facebook/Messenger. Son authentification accepte une licence active liee au bon appareil, et aussi une licence encore non liee; une future connexion Facebook devra exiger une liaison deja etablie.
+- `cloudflare/license-worker/wrangler.toml` contient encore un identifiant D1 fictif et `docs/AUTONOMIE-SANS-VPS.md` indique que le Worker local n'est pas deploye. La passerelle mobile reste donc a concevoir et implementer, puis a configurer avec une migration D1, les secrets cote Worker, une URI OAuth Meta autorisee et une recette de bout en bout. Aucun jeton Meta ni secret d'application ne doit etre expose dans le client mobile.
+- Aucun changement de Worker ni de passerelle mobile n'est inclus dans cette sauvegarde. Les ecarts et verifications restants sont listes dans « Reste a faire » ci-dessus; la parite complete des interfaces et fonctionnalites VPS n'est pas encore atteinte.
