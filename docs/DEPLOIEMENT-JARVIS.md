@@ -1,48 +1,54 @@
-# Déploiement de la branche `feat/jarvis-engine` sur la VM (à lancer depuis Google Cloud Shell)
+# Déploiement du backend sur Render
 
-Pourquoi Cloud Shell : depuis le PC, SSH vers la VM est refusé (la clé `vps_34_135_20_27` n'existe plus).
-La branche est déjà poussée sur GitHub (`origin/feat/jarvis-engine`). Aucun secret n'est dans le dépôt (public).
+Le service de production est `business-automation-engine` :
+<https://business-automation-engine.onrender.com>. Render construit le
+`Dockerfile` racine depuis la branche GitHub `main` et déploie les commits
+publiés sur cette branche.
 
-## 1. Connexion
-```
-gcloud compute ssh deploy@instance-20260909-074745 --project=rien-afrique --zone=us-central1-a
-```
+## Configuration Render
 
-## 2. Point de retour (noter le résultat)
-```
-cd /home/cyrus2026/BusinessAutomationEngine
-sudo -u cyrus2026 git rev-parse --short HEAD ; sudo -u cyrus2026 git branch --show-current
-```
+Configurer les variables dans les paramètres du service Render; ne jamais les
+committer dans Git. Les valeurs secrètes proviennent du coffre local indiqué
+par `.env.SECRETS-INDEX.md`. Garder les identifiants déjà présents dans Render
+pour Facebook, Google, TikTok et le stockage GitHub.
 
-## 3. Récupérer la branche
-```
-sudo chown -R cyrus2026:cyrus2026 /home/cyrus2026/BusinessAutomationEngine
-sudo -u cyrus2026 git fetch origin feat/jarvis-engine
-sudo -u cyrus2026 git checkout feat/jarvis-engine
-```
+Variables nécessaires au backend et à ses fonctions activées :
 
-## 4. Variables d'environnement (fichier `.env` du checkout ; valeurs à copier depuis le `.env` du PC)
-```
-AUTO_REPLY_DEBOUNCE_MS=1500
-JARVIS_CONFIRM_FROM=WRITE
-CLOUDFLARE_LICENSE_URL=<voir .env du PC>
-CLOUDFLARE_ADMIN_SECRET=<voir .env du PC>
-```
-(les deux dernières activent la réplication des licences VPS -> Cloudflare ; facultatif pour tester Jarvis)
+- `PUBLIC_BASE_URL=https://business-automation-engine.onrender.com`
+- `DASHBOARD_ORIGIN` avec les origines de production Vercel
+- Fournisseurs IA configurés : `GROQ_API_KEY`, `GEMINI_API_KEY`,
+  `OPENROUTER_API_KEY`, `HUGGINGFACE_API_KEY`
+- Génération d'images/vidéos : `FAL_KEY` et `REPLICATE_API_TOKEN`
+- Persistance externe : `GITHUB_TOKEN` et `GITHUB_DATA_REPO` (préserver le dépôt
+  de données déjà configuré sur Render)
+- Réplication des licences : `CLOUDFLARE_LICENSE_URL` et
+  `CLOUDFLARE_ADMIN_SECRET`
+- Réglages Jarvis du déploiement : `AUTO_REPLY_DEBOUNCE_MS=1500` et
+  `JARVIS_CONFIRM_FROM=WRITE`
 
-## 5. Reconstruire (procédure habituelle, nettoie le disque)
-```
-sudo ./deploy.sh
-sudo docker ps -a | grep cyrus
-curl -s https://34-135-20-27.sslip.io/health
-sudo docker logs cyrus-super-assistant-backend --tail 50   # chercher "Server listening", pas de MODULE_NOT_FOUND
-```
+Ne pas recopier `RENDER_API_KEY`, `VERCEL_TOKEN` ou les clés de déploiement
+Cloudflare dans l'environnement d'exécution du backend. Ne pas remplacer le
+dépôt de données Render par le dépôt de code.
 
-## 6. Tests réels (compte de la clé de test) : voir `docs/TESTS-REELS.md`
+## Publier et contrôler
 
-## Retour arrière immédiat
-```
-cd /home/cyrus2026/BusinessAutomationEngine
-sudo -u cyrus2026 git checkout main && sudo ./deploy.sh
-```
-Le retour n'efface aucune donnée : les nouveaux états (`conversation_state`) restent sur le volume et sont ignorés par l'ancien code.
+1. Publier le commit voulu sur `main`; le déploiement Render se déclenche
+   automatiquement.
+2. Dans Render → Deploys, vérifier que le commit attendu atteint l'état `Live`.
+3. Vérifier `https://business-automation-engine.onrender.com/health` et que le
+   dashboard Vercel appelle bien l'URL Render configurée dans
+   `public/config.js`.
+4. Contrôler les statuts de sauvegarde GitHub et de synchronisation des licences
+   depuis les fonctions d'administration.
+
+Le plan Render gratuit a un disque éphémère. Un redémarrage ou un nouveau
+déploiement peut effacer les fichiers locaux qui ne sont pas sauvegardés par
+leur module dans le stockage externe. La VM Google Cloud était inaccessible au
+moment de la migration : toute donnée qui n'a pas été répliquée hors VM ne peut
+pas être récupérée depuis ce dépôt.
+
+## Retour arrière
+
+Dans Render → Deploys, redéployer le dernier commit connu comme fonctionnel.
+La VM Google Cloud et son ancien script `deploy.sh` ne sont plus le chemin de
+déploiement de production.
