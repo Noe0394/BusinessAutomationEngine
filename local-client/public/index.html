@@ -863,6 +863,24 @@
       <div id="fb-page-comments"></div>
     </div>
     <div class="card">
+      <h3>Capturer les prospects et règles de mots-clés</h3>
+      <p>Le PC vérifie les commentaires des 20 publications récentes toutes les 5 minutes pendant la capture. Les contacts et règles restent dans la base SQLite locale. La réponse privée automatique est désactivée par défaut pour chaque règle; Meta limite les réponses par commentaire.</p>
+      <button id="fb-capture-start" type="button">Démarrer la capture</button>
+      <button id="fb-capture-stop" type="button">Arrêter la capture</button>
+      <button id="fb-capture-sync" type="button">Synchroniser maintenant</button>
+      <p id="fb-capture-status" role="status">Capture arrêtée.</p>
+      <h4>Ajouter une règle</h4>
+      <label for="fb-keyword-value">Mot ou expression</label><input id="fb-keyword-value" maxlength="100" placeholder="ex. TARIF">
+      <label for="fb-keyword-reply">Réponse privée sur le commentaire</label><textarea id="fb-keyword-reply" maxlength="2000" placeholder="Réponse envoyée au maximum une fois pour un commentaire correspondant"></textarea>
+      <label><input id="fb-keyword-auto-reply" type="checkbox" style="width:auto"> Activer la réponse privée automatique pour cette règle</label>
+      <button id="fb-keyword-add" type="button">Enregistrer la règle</button>
+      <div id="fb-keyword-rules"></div>
+      <h4>Prospects Facebook capturés</h4>
+      <button id="fb-prospects-refresh" type="button">Actualiser la liste</button>
+      <button id="fb-prospects-export" type="button">Exporter en Excel</button>
+      <div style="overflow:auto"><table><thead><tr><th>Nom</th><th>PSID</th><th>Source</th><th>Mot-clé</th><th>Dernier commentaire</th><th>Réponse</th><th>Mis à jour</th></tr></thead><tbody id="fb-prospects-body"><tr><td colspan="7">Aucun prospect capturé.</td></tr></tbody></table></div>
+    </div>
+    <div class="card">
       <h3>Conversations Messenger de la Page</h3>
       <button id="fb-messenger-refresh">Charger les conversations</button><p id="fb-messenger-feedback" role="status"></p>
       <div class="row"><select id="fb-messenger-conversation"><option value="">Choisir une conversation</option></select><input id="fb-messenger-message" placeholder="Réponse Messenger"></div>

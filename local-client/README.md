@@ -42,8 +42,12 @@ de connexion.
 - Studio média, génération d’ebooks PDF, prospects, rapports et partage
   Facebook assisté.
 - Interface Facebook/Messenger PC avec OAuth Meta, appels Page autorisés,
-  conversations, commentaires et file de relance. Cette partie exige une
-  application Meta correctement configurée et des permissions approuvées.
+  conversations, commentaires, file de relance, capture locale des commentaires
+  des 20 publications récentes et règles de mots-clés. La capture doit être
+  activée dans l'écran Facebook; elle vérifie les commentaires toutes les
+  5 minutes et conserve les prospects dans SQLite. Les réponses privées par
+  règle restent désactivées jusqu'à activation explicite. Cette partie exige
+  une application Meta correctement configurée et des permissions approuvées.
 - Licence Cloudflare avec jeton signé pour un démarrage hors ligne temporaire.
 
 Les sessions de messagerie et les données ne sont pas transférées au VPS. Les

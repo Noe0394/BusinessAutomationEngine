@@ -552,18 +552,29 @@ class FacebookMessengerAdapter {
   }
 
   // ---------- Gestion des commentaires (modération) ----------
-  async getPostComments(postId, { limit = 50 } = {}) {
+  async getPostComments(postId, { limit = 50, since } = {}) {
     if (!this.isConfigured()) {
       throw new Error('FB_NOT_CONFIGURED');
     }
-    const res = await axios.get(`${this.baseUrl}/${postId}/comments`, {
-      params: {
-        fields: 'id,message,from,created_time,like_count,is_hidden',
-        limit,
-        access_token: this.getPageAccessToken(),
-      },
-    });
-    return res.data.data || [];
+    const comments = [];
+    let after = null;
+    const maxPages = Number(limit) >= 100 ? 10 : 1;
+    for (let page = 0; page < maxPages; page += 1) {
+      const res = await axios.get(`${this.baseUrl}/${postId}/comments`, {
+        params: {
+          fields: 'id,message,from,created_time,like_count,is_hidden',
+          limit,
+          ...(Number.isFinite(Number(since)) ? { since: Number(since) } : {}),
+          ...(after ? { after } : {}),
+          access_token: this.getPageAccessToken(),
+        },
+      });
+      const rows = res.data.data || [];
+      comments.push(...rows);
+      after = res.data.paging?.cursors?.after || null;
+      if (!after || !rows.length) break;
+    }
+    return comments;
   }
 
   async replyToComment(commentId, message) {

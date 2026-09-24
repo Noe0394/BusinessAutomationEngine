@@ -73,6 +73,29 @@ db.exec(`
     error TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_facebook_queue_jobs_created ON facebook_queue_jobs(created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS facebook_keyword_rules (
+    id TEXT PRIMARY KEY, keyword TEXT NOT NULL, reply_message TEXT NOT NULL DEFAULT '',
+    auto_reply INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_facebook_keyword_rules_created ON facebook_keyword_rules(created_at);
+
+  CREATE TABLE IF NOT EXISTS facebook_leads (
+    id TEXT PRIMARY KEY, psid TEXT NOT NULL UNIQUE, first_name TEXT, last_name TEXT, name TEXT,
+    source TEXT NOT NULL, last_text TEXT NOT NULL DEFAULT '', post_id TEXT, keyword TEXT,
+    auto_replied INTEGER NOT NULL DEFAULT 0, reply_status TEXT NOT NULL DEFAULT 'not_sent', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_facebook_leads_updated ON facebook_leads(updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS facebook_seen_comments (
+    comment_id TEXT PRIMARY KEY, post_id TEXT, psid TEXT, lead_id TEXT, comment_text TEXT,
+    keyword TEXT, status TEXT NOT NULL, reply_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS facebook_capture_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1), enabled INTEGER NOT NULL DEFAULT 0,
+    last_scan_at TEXT, last_error TEXT
+  );
+  INSERT OR IGNORE INTO facebook_capture_settings (id, enabled) VALUES (1, 0);
 `);
 
 function upsertContact({ jid, nom, telephone }) {
@@ -227,6 +250,94 @@ function interruptRunningFacebookQueueJobs() {
   }
 }
 
+function normalizeFacebookKeyword(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('fr').trim();
+}
+
+function listFacebookKeywordRules() {
+  return db.prepare('SELECT id, keyword, reply_message AS replyMessage, auto_reply AS autoReply, created_at AS createdAt FROM facebook_keyword_rules ORDER BY created_at, id').all()
+    .map((row) => ({ ...row, autoReply: Boolean(row.autoReply) }));
+}
+
+function createFacebookKeywordRule({ keyword, replyMessage, autoReply }) {
+  const rule = { id: `fbr_${require('crypto').randomUUID()}`, keyword: String(keyword).trim(), replyMessage: String(replyMessage || '').trim(), autoReply: Boolean(autoReply), createdAt: new Date().toISOString() };
+  db.prepare('INSERT INTO facebook_keyword_rules (id, keyword, reply_message, auto_reply, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(rule.id, rule.keyword, rule.replyMessage, rule.autoReply ? 1 : 0, rule.createdAt);
+  return rule;
+}
+
+function removeFacebookKeywordRule(id) {
+  db.prepare('DELETE FROM facebook_keyword_rules WHERE id = ?').run(String(id));
+  return listFacebookKeywordRules();
+}
+
+function findFacebookKeywordRule(text) {
+  const normalizedText = normalizeFacebookKeyword(text);
+  if (!normalizedText) return null;
+  return listFacebookKeywordRules().find((rule) => normalizedText.includes(normalizeFacebookKeyword(rule.keyword))) || null;
+}
+
+function upsertFacebookLead({ psid, name, source, sourceText, postId, keyword }) {
+  const id = `fbl_${require('crypto').createHash('sha256').update(String(psid)).digest('hex').slice(0, 32)}`;
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO facebook_leads (id, psid, name, source, last_text, post_id, keyword, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(psid) DO UPDATE SET
+    name = COALESCE(excluded.name, facebook_leads.name), source = excluded.source,
+    last_text = COALESCE(excluded.last_text, facebook_leads.last_text), post_id = COALESCE(excluded.post_id, facebook_leads.post_id),
+    keyword = COALESCE(excluded.keyword, facebook_leads.keyword), reply_status = 'not_sent', updated_at = excluded.updated_at`)
+    .run(id, String(psid).slice(0, 80), name ? String(name).slice(0, 300) : null, source, String(sourceText || '').slice(0, 8000), postId || null, keyword ? String(keyword).slice(0, 100) : null, now, now);
+  return db.prepare('SELECT * FROM facebook_leads WHERE psid = ?').get(String(psid));
+}
+
+function listFacebookLeads({ keyword, source } = {}) {
+  const clauses = []; const params = [];
+  if (keyword) { clauses.push('keyword = ?'); params.push(String(keyword)); }
+  if (source) { clauses.push('source = ?'); params.push(String(source)); }
+  return db.prepare(`SELECT * FROM facebook_leads ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''} ORDER BY updated_at DESC LIMIT 1000`).all(...params);
+}
+
+function claimFacebookComment({ commentId, postId, psid, leadId, commentText, keyword }) {
+  const now = new Date().toISOString();
+  const result = db.prepare(`INSERT OR IGNORE INTO facebook_seen_comments
+    (comment_id, post_id, psid, lead_id, comment_text, keyword, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'captured', ?, ?)`)
+    .run(String(commentId), postId || null, psid || null, leadId || null, commentText || '', keyword || null, now, now);
+  return Number(result.changes) === 1;
+}
+
+function hasFacebookComment(commentId) {
+  return Boolean(db.prepare('SELECT 1 FROM facebook_seen_comments WHERE comment_id = ?').get(String(commentId)));
+}
+
+function updateFacebookComment(commentId, status, replyError = null) {
+  db.prepare('UPDATE facebook_seen_comments SET status = ?, reply_error = ?, updated_at = ? WHERE comment_id = ?')
+    .run(String(status), replyError ? String(replyError).slice(0, 500) : null, new Date().toISOString(), String(commentId));
+}
+
+function markFacebookLeadReplied(psid) {
+  db.prepare("UPDATE facebook_leads SET auto_replied = 1, reply_status = 'sent', updated_at = ? WHERE psid = ?").run(new Date().toISOString(), String(psid));
+}
+
+function setFacebookLeadReplyStatus(psid, status) {
+  db.prepare('UPDATE facebook_leads SET reply_status = ?, updated_at = ? WHERE psid = ?').run(String(status), new Date().toISOString(), String(psid));
+}
+
+function recoverFacebookCaptureReplies() {
+  const now = new Date().toISOString();
+  db.prepare("UPDATE facebook_seen_comments SET status = 'reply_unknown', reply_error = 'Client arrêté pendant la transmission; aucune nouvelle tentative automatique.', updated_at = ? WHERE status = 'reply_sending'").run(now);
+  db.prepare("UPDATE facebook_leads SET reply_status = 'reply_unknown', updated_at = ? WHERE reply_status = 'sending'").run(now);
+}
+
+function getFacebookCaptureSettings() {
+  return db.prepare('SELECT enabled, last_scan_at AS lastScanAt, last_error AS lastError FROM facebook_capture_settings WHERE id = 1').get();
+}
+
+function saveFacebookCaptureSettings({ enabled, lastScanAt, lastError }) {
+  db.prepare(`UPDATE facebook_capture_settings SET enabled = ?, last_scan_at = COALESCE(?, last_scan_at), last_error = ? WHERE id = 1`)
+    .run(enabled ? 1 : 0, lastScanAt || null, lastError ? String(lastError).slice(0, 500) : null);
+  return getFacebookCaptureSettings();
+}
+
 module.exports = {
   db,
   upsertContact,
@@ -244,4 +355,18 @@ module.exports = {
   listFacebookQueueJobs,
   pruneFacebookQueueJobs,
   interruptRunningFacebookQueueJobs,
+  listFacebookKeywordRules,
+  createFacebookKeywordRule,
+  removeFacebookKeywordRule,
+  findFacebookKeywordRule,
+  upsertFacebookLead,
+  listFacebookLeads,
+  claimFacebookComment,
+  hasFacebookComment,
+  updateFacebookComment,
+  markFacebookLeadReplied,
+  setFacebookLeadReplyStatus,
+  recoverFacebookCaptureReplies,
+  getFacebookCaptureSettings,
+  saveFacebookCaptureSettings,
 };

@@ -94,7 +94,10 @@ async function main() {
   const crypto = require('crypto');
   const facebookOAuthStates = new Map();
   const facebookQueueControllers = new Map();
+  let facebookCaptureTimer = null;
+  let facebookCaptureRunning = false;
   db.interruptRunningFacebookQueueJobs();
+  db.recoverFacebookCaptureReplies();
   const facebookRedirectUri = process.env.LOCAL_FB_REDIRECT_URI || `http://localhost:${PORT}/api/facebook/callback`;
   app.get('/api/facebook/status', async (_req, res) => {
     try { res.json({ configured: facebook.isConfigured(), connectAvailable: facebook.isConnectAvailable(), redirectUri: facebookRedirectUri, ...(await facebook.checkConnection()) }); }
@@ -270,6 +273,108 @@ async function main() {
   app.delete('/api/facebook/comments/:commentId', async (req, res) => {
     try { res.json(await facebook.deleteComment(String(req.params.commentId))); }
     catch (err) { res.status(502).json({ error: err.response?.data?.error?.message || err.message }); }
+  });
+
+  async function scanFacebookComments() {
+    if (facebookCaptureRunning) return { skipped: true, reason: 'scan_in_progress' };
+    if (!facebook.isConfigured()) throw Object.assign(new Error('Connectez une Page Facebook.'), { status: 409 });
+    facebookCaptureRunning = true;
+    const settings = db.getFacebookCaptureSettings();
+    const scanStartedAt = new Date();
+    const since = settings.lastScanAt
+      ? Math.floor(new Date(settings.lastScanAt).getTime() / 1000) - 120
+      : Math.floor(scanStartedAt.getTime() / 1000) - 7 * 24 * 60 * 60;
+    let captured = 0;
+    let replied = 0;
+    let incompleteScan = false;
+    let stoppedByUser = false;
+    try {
+      const posts = await facebook.getPagePosts({ limit: 20 });
+      for (const post of posts) {
+        if (settings.enabled && !db.getFacebookCaptureSettings()?.enabled) { stoppedByUser = true; break; }
+        let comments;
+        try { comments = await facebook.getPostComments(post.id, { limit: 100, since }); }
+        catch (error) {
+          incompleteScan = true;
+          console.warn(`Capture Facebook: commentaires indisponibles pour la publication ${post.id}:`, error.response?.data?.error?.message || error.message);
+          continue;
+        }
+        for (const comment of comments) {
+          if (settings.enabled && !db.getFacebookCaptureSettings()?.enabled) { stoppedByUser = true; break; }
+          const psid = String(comment.from?.id || '').trim();
+          const commentId = String(comment.id || '').trim();
+          const text = String(comment.message || '').trim();
+          if (!/^\d{1,80}$/.test(psid) || !commentId || commentId.length > 160 || !text || psid === String(facebook.pageId)) continue;
+          if (db.hasFacebookComment(commentId)) continue;
+          const rule = db.findFacebookKeywordRule(text);
+          const lead = db.upsertFacebookLead({ psid, name: comment.from?.name, source: 'comment', sourceText: text, postId: post.id, keyword: rule?.keyword });
+          if (!db.claimFacebookComment({ commentId, postId: post.id, psid, leadId: lead.id, commentText: text, keyword: rule?.keyword })) continue;
+          captured += 1;
+          if (!rule?.autoReply || !rule.replyMessage || !settings.enabled || !db.getFacebookCaptureSettings()?.enabled) continue;
+
+          db.updateFacebookComment(commentId, 'reply_sending');
+          db.setFacebookLeadReplyStatus(psid, 'sending');
+          try {
+            await facebook.sendPrivateReply(commentId, rule.replyMessage);
+            db.updateFacebookComment(commentId, 'reply_sent');
+            db.markFacebookLeadReplied(psid);
+            replied += 1;
+          } catch (error) {
+            const message = error.response?.data?.error?.message || error.message || 'Erreur Meta';
+            db.updateFacebookComment(commentId, 'reply_unknown', message);
+            db.setFacebookLeadReplyStatus(psid, 'reply_unknown');
+            console.warn(`Capture Facebook: reponse privee non confirmee pour ${commentId}; aucun nouvel essai automatique.`, message);
+          }
+        }
+        if (stoppedByUser) break;
+      }
+      const warning = incompleteScan ? 'Certains commentaires Meta sont inaccessibles; la prochaine synchronisation reprendra depuis le dernier point complet.'
+        : stoppedByUser ? 'Capture arrêtée; la prochaine synchronisation reprendra depuis le dernier point complet.' : null;
+      const currentSettings = db.getFacebookCaptureSettings();
+      db.saveFacebookCaptureSettings({ enabled: currentSettings?.enabled ?? settings.enabled, lastScanAt: incompleteScan || stoppedByUser ? null : scanStartedAt.toISOString(), lastError: warning });
+      return { captured, replied, scannedAt: scanStartedAt.toISOString(), warning };
+    } catch (error) {
+      const currentSettings = db.getFacebookCaptureSettings();
+      db.saveFacebookCaptureSettings({ enabled: currentSettings?.enabled ?? settings.enabled, lastError: error.response?.data?.error?.message || error.message });
+      throw error;
+    } finally { facebookCaptureRunning = false; }
+  }
+
+  function startFacebookCapture() {
+    if (facebookCaptureTimer) return;
+    scanFacebookComments().catch((error) => console.warn('Capture Facebook:', error.message));
+    facebookCaptureTimer = setInterval(() => {
+      scanFacebookComments().catch((error) => console.warn('Capture Facebook:', error.message));
+    }, 5 * 60 * 1000);
+    if (facebookCaptureTimer.unref) facebookCaptureTimer.unref();
+  }
+
+  app.get('/api/facebook/keyword-rules', (_req, res) => res.json({ rules: db.listFacebookKeywordRules() }));
+  app.post('/api/facebook/keyword-rules', (req, res) => {
+    const keyword = String(req.body?.keyword || '').trim();
+    const replyMessage = String(req.body?.replyMessage || '').trim();
+    const autoReply = req.body?.autoReply === true;
+    if (keyword.length < 2 || keyword.length > 100) return res.status(400).json({ error: 'Le mot-clé doit contenir de 2 à 100 caractères.' });
+    if (replyMessage.length > 2000) return res.status(400).json({ error: 'La réponse ne peut pas dépasser 2000 caractères.' });
+    if (autoReply && !replyMessage) return res.status(400).json({ error: 'Ajoutez une réponse texte avant d’activer la réponse automatique.' });
+    if (db.listFacebookKeywordRules().length >= 100) return res.status(409).json({ error: 'La limite locale est de 100 règles.' });
+    try { res.status(201).json({ rule: db.createFacebookKeywordRule({ keyword, replyMessage, autoReply }) }); }
+    catch (error) { res.status(500).json({ error: error.message }); }
+  });
+  app.delete('/api/facebook/keyword-rules/:id', (req, res) => res.json({ rules: db.removeFacebookKeywordRule(req.params.id) }));
+  app.get('/api/facebook/prospects', (_req, res) => res.json({ contacts: db.listFacebookLeads() }));
+  app.get('/api/facebook/prospects/capture', (_req, res) => res.json(db.getFacebookCaptureSettings()));
+  app.post('/api/facebook/prospects/capture', (req, res) => {
+    const enabled = req.body?.enabled === true;
+    if (enabled && !facebook.isConfigured()) return res.status(409).json({ error: 'Connectez une Page Facebook avant de démarrer la capture.' });
+    const settings = db.saveFacebookCaptureSettings({ enabled });
+    if (enabled) startFacebookCapture();
+    else if (facebookCaptureTimer) { clearInterval(facebookCaptureTimer); facebookCaptureTimer = null; }
+    res.json(settings);
+  });
+  app.post('/api/facebook/prospects/sync', async (_req, res) => {
+    try { res.json(await scanFacebookComments()); }
+    catch (error) { res.status(error.status || 502).json({ error: error.response?.data?.error?.message || error.message }); }
   });
 
   // Gestionnaire de campagnes unifié porté du VPS; l'ancien moteur mono-PC
@@ -1141,6 +1246,7 @@ async function main() {
     }
   });
 
+  if (db.getFacebookCaptureSettings()?.enabled) startFacebookCapture();
   app.listen(PORT, '127.0.0.1', () => {
     console.log(`Interface locale disponible sur http://localhost:${PORT}`);
     open(`http://localhost:${PORT}`).catch(() => {

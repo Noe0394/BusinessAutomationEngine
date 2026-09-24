@@ -4,6 +4,7 @@
   let initialized = false;
   let conversations = [];
   let resolvedContacts = [];
+  let facebookProspects = [];
   let activeQueueTimer = null;
   let activeQueueId = null;
   async function api(url, options) {
@@ -61,6 +62,45 @@
     const select = $('fb-messenger-conversation'); select.replaceChildren(new Option('Choisir une conversation', ''));
     for (const c of conversations.filter(x => x.recipientId)) select.add(new Option(`${c.name} · ${c.snippet || ''}`.slice(0, 160), c.recipientId));
     $('fb-messenger-feedback').textContent = `${conversations.length} conversation(s) chargée(s).`;
+  }
+  async function loadProspectsCaptureState() {
+    const state = await api('/api/facebook/prospects/capture');
+    const status = $('fb-capture-status');
+    status.textContent = `${state.enabled ? 'Capture active' : 'Capture arrêtée'}${state.lastScanAt ? ` · dernière vérification ${new Date(state.lastScanAt).toLocaleString()}` : ''}${state.lastError ? ` · erreur : ${state.lastError}` : ''}`;
+    $('fb-capture-start').disabled = Boolean(state.enabled);
+    $('fb-capture-stop').disabled = !state.enabled;
+  }
+  async function loadKeywordRules() {
+    const { rules = [] } = await api('/api/facebook/keyword-rules');
+    const host = $('fb-keyword-rules'); host.replaceChildren();
+    for (const rule of rules) {
+      const row = document.createElement('div'); row.className = 'card';
+      const description = document.createElement('p');
+      description.textContent = `${rule.keyword} · ${rule.autoReply ? 'réponse privée automatique active' : 'capture seule'}${rule.replyMessage ? ` · « ${rule.replyMessage} »` : ''}`;
+      const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Supprimer';
+      remove.addEventListener('click', async () => { try { await api('/api/facebook/keyword-rules/' + encodeURIComponent(rule.id), { method: 'DELETE' }); await loadKeywordRules(); } catch (error) { feedback(error.message, true); } });
+      row.append(description, remove); host.append(row);
+    }
+    if (!rules.length) host.textContent = 'Aucune règle configurée.';
+  }
+  async function loadFacebookProspects() {
+    const { contacts = [] } = await api('/api/facebook/prospects');
+    facebookProspects = contacts;
+    const body = $('fb-prospects-body'); body.replaceChildren();
+    for (const contact of contacts) {
+      const row = document.createElement('tr');
+      const replyState = { sent: 'Confirmée', sending: 'Transmission', reply_unknown: 'Incertaine · vérifier Facebook', not_sent: 'Non envoyée' }[contact.reply_status] || 'Non envoyée';
+      for (const value of [contact.name || '—', contact.psid, contact.source === 'comment' ? 'Commentaire' : contact.source, contact.keyword || '—', contact.last_text || '', replyState, new Date(contact.updated_at).toLocaleString()]) {
+        const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+      }
+      body.append(row);
+    }
+    if (!contacts.length) body.innerHTML = '<tr><td colspan="7">Aucun prospect capturé. Activez la capture ou synchronisez les commentaires.</td></tr>';
+  }
+  async function loadProspectsPanel() {
+    const results = await Promise.allSettled([loadProspectsCaptureState(), loadKeywordRules(), loadFacebookProspects()]);
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed) $('fb-capture-status').textContent = failed.reason?.message || 'Impossible de charger la capture locale.';
   }
   async function loadManagedGroups() {
     const result = await api('/api/facebook/groups'); const host = $('fb-managed-groups'); host.replaceChildren();
@@ -172,6 +212,33 @@
         } catch (err) { feedback(err.message, true); }
       });
       $('fb-page-refresh').addEventListener('click', () => loadPosts().catch(e => feedback(e.message, true)));
+      $('fb-capture-start').addEventListener('click', async () => {
+        try { await api('/api/facebook/prospects/capture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }) }); await loadProspectsPanel(); }
+        catch (error) { $('fb-capture-status').textContent = error.message; }
+      });
+      $('fb-capture-stop').addEventListener('click', async () => {
+        try { await api('/api/facebook/prospects/capture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) }); await loadProspectsPanel(); }
+        catch (error) { $('fb-capture-status').textContent = error.message; }
+      });
+      $('fb-capture-sync').addEventListener('click', async () => {
+        const button = $('fb-capture-sync'); button.disabled = true; $('fb-capture-status').textContent = 'Lecture des commentaires récents…';
+        try { const result = await api('/api/facebook/prospects/sync', { method: 'POST' }); await loadProspectsPanel(); $('fb-capture-status').textContent = `${result.captured || 0} nouveau(x) prospect(s), ${result.replied || 0} réponse(s) privée(s) confirmée(s).${result.warning ? ' ' + result.warning : ''}`; }
+        catch (error) { $('fb-capture-status').textContent = error.message; }
+        finally { button.disabled = false; }
+      });
+      $('fb-keyword-add').addEventListener('click', async () => {
+        try {
+          await api('/api/facebook/keyword-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keyword: $('fb-keyword-value').value, replyMessage: $('fb-keyword-reply').value, autoReply: $('fb-keyword-auto-reply').checked }) });
+          $('fb-keyword-value').value = ''; $('fb-keyword-reply').value = ''; $('fb-keyword-auto-reply').checked = false; await loadKeywordRules();
+        } catch (error) { feedback(error.message, true); }
+      });
+      $('fb-prospects-refresh').addEventListener('click', () => loadFacebookProspects().catch(error => $('fb-capture-status').textContent = error.message));
+      $('fb-prospects-export').addEventListener('click', () => {
+        if (!facebookProspects.length) { $('fb-capture-status').textContent = 'Aucun prospect à exporter.'; return; }
+        const rows = [['Nom', 'PSID', 'Source', 'Mot-clé', 'Dernier commentaire', 'État de la réponse privée', 'Créé le', 'Mis à jour le'], ...facebookProspects.map(item => [item.name || '', item.psid, item.source, item.keyword || '', item.last_text || '', item.reply_status, item.created_at, item.updated_at])];
+        const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Prospects Facebook');
+        XLSX.writeFile(workbook, 'prospects-facebook.xlsx');
+      });
       $('fb-messenger-refresh').addEventListener('click', () => loadConversations().catch(e => { $('fb-messenger-feedback').textContent = e.message; }));
       $('fb-messenger-send').addEventListener('click', async () => {
         const to = $('fb-messenger-conversation').value; const message = $('fb-messenger-message').value.trim();
@@ -218,6 +285,7 @@
     const params = new URLSearchParams(location.search); const result = params.get('fbConnect');
     if (result) { feedback(result === 'success' ? 'Page Facebook connectée.' : 'Connexion Meta échouée ou annulée.', result !== 'success'); history.replaceState(null, '', location.pathname); }
     try { await refreshStatus(); } catch (e) { feedback(e.message, true); }
+    await loadProspectsPanel();
     try { await renderFacebookQueueHistory(); } catch (e) { $('fb-queue-history').textContent = e.message; }
     try {
       const { jobs = [] } = await api('/api/facebook/queue');
