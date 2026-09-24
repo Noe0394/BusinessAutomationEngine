@@ -56,3 +56,22 @@ CREATE TABLE IF NOT EXISTS admin_attempts (
   fails    INTEGER NOT NULL,
   first_at INTEGER NOT NULL
 );
+
+-- Jetons Facebook chiffres cote Worker; la cle AES-256 n'est qu'un secret Wrangler.
+CREATE TABLE IF NOT EXISTS facebook_accounts (
+  license_key       TEXT PRIMARY KEY,
+  device_id         TEXT NOT NULL,
+  user_token_cipher TEXT,
+  page_token_cipher TEXT,
+  page_id           TEXT,
+  page_name         TEXT,
+  connected_at      TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS facebook_oauth_states (
+  state      TEXT PRIMARY KEY,
+  license_key TEXT NOT NULL,
+  device_id   TEXT NOT NULL,
+  expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_facebook_oauth_expires ON facebook_oauth_states (expires_at);

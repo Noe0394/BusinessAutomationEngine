@@ -4,6 +4,9 @@ name = "cyrus-license"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
+[vars]
+FACEBOOK_GRAPH_API_VERSION = "v26.0"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "cyrus-licenses"

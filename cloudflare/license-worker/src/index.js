@@ -4,8 +4,9 @@
 import { runTextCascade } from './textCascade.js';
 import { ADMIN_PAGE } from './adminPage.js';
 import { generateImage, startVideo, pollVideo } from './media.js';
+import { handleFacebookRequest } from './facebookGateway.js';
 
-const ALL_MODULES = ['whatsapp', 'telegram', 'studio_video'];
+const ALL_MODULES = ['whatsapp', 'telegram', 'studio_video', 'facebook'];
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'content-type, x-admin-secret, x-license-key, x-device-id',
@@ -319,6 +320,7 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     if (url.pathname === '/health') return json({ ok: true });
+    if (url.pathname.startsWith('/facebook/')) return handleFacebookRequest(request, env);
     if (PUBLIC[url.pathname]) return request.method === 'POST' ? verify(request, env) : json({ error: 'POST requis.' }, 405);
     if (AI_ROUTES[url.pathname]) return request.method === 'POST' ? AI_ROUTES[url.pathname](request, env) : json({ error: 'POST requis.' }, 405);
     if (url.pathname === '/checkUpdateOffline') return checkUpdate(env);

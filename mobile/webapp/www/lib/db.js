@@ -4,13 +4,14 @@
 // appareils, coherent avec le principe "zero serveur" de ce projet).
 (function () {
   const DB_NAME = 'cyrus_campaigns';
+  // v12 ajoute l'historique local des files Messenger.
   // v11 ajoute les réglages locaux du répondeur; les données précédentes sont conservées.
   // v10 ajoute le planning de messages locaux; les jobs communautaires et autres
   // registres locaux sont conserves lors de la mise a niveau.
   // que les installations existantes (DB deja creee en v1/v2 sur l'appareil
   // de test) declenchent bien onupgradeneeded au lieu de rester bloquees sans
   // ce store.
-  const DB_VERSION = 11;
+  const DB_VERSION = 12;
   let dbPromise = null;
 
   function open() {
@@ -69,6 +70,11 @@
           scheduled.createIndex('channel', 'channel', { unique: false });
         }
         if (!db.objectStoreNames.contains('autoResponderSettings')) db.createObjectStore('autoResponderSettings', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('facebookQueueJobs')) {
+          const queue = db.createObjectStore('facebookQueueJobs', { keyPath: 'id' });
+          queue.createIndex('createdAt', 'createdAt', { unique: false });
+          queue.createIndex('status', 'status', { unique: false });
+        }
       };
       req.onsuccess = function () { resolve(req.result); };
       req.onerror = function () { reject(req.error); };
@@ -422,6 +428,19 @@
       const req = store.put(row); req.onsuccess = function () { resolve(row); }; req.onerror = function () { reject(req.error); };
     }); });
   }
+  function saveFacebookQueueJob(job) {
+    const row = Object.assign({}, job, { updatedAt: Date.now() });
+    return tx('facebookQueueJobs', 'readwrite').then(function (store) { return new Promise(function (resolve, reject) {
+      const req = store.put(row); req.onsuccess = function () { resolve(row); }; req.onerror = function () { reject(req.error); };
+    }); });
+  }
+  function getFacebookQueueJobs() {
+    return tx('facebookQueueJobs', 'readonly').then(function (store) { return new Promise(function (resolve, reject) {
+      const req = store.getAll();
+      req.onsuccess = function () { resolve((req.result || []).sort(function (a, b) { return Number(b.createdAt || 0) - Number(a.createdAt || 0); })); };
+      req.onerror = function () { reject(req.error); };
+    }); });
+  }
 
   window.Cyrus = window.Cyrus || {};
   window.Cyrus.db = {
@@ -458,5 +477,7 @@
     saveInvoice: saveInvoice,
     getAutoResponderSettings: getAutoResponderSettings,
     saveAutoResponderSettings: saveAutoResponderSettings,
+    saveFacebookQueueJob: saveFacebookQueueJob,
+    getFacebookQueueJobs: getFacebookQueueJobs,
   };
 })();

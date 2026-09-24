@@ -119,6 +119,7 @@
       <button data-screen="prospects">🎯 Prospects</button>
       <button data-screen="communities">👥 Communautés</button>
       <button data-screen="services">🏢 Services Métiers</button>
+      <button data-screen="facebook">📘 Facebook / Messenger</button>
     </div>
   </div>
 
@@ -739,6 +740,49 @@
     </div>
     <div id="svc-list"></div>
   </section>
+  <section id="screen-facebook" class="screen">
+    <h2>Facebook / Messenger</h2>
+    <p>Les jetons et le secret Meta restent dans la passerelle Cloudflare. La licence doit d'abord être liée à cet appareil et autoriser le module Facebook.</p>
+    <div class="card">
+      <h3>Connexion de Page</h3>
+      <p id="mobile-facebook-status" role="status">Non connecté</p>
+      <button id="mobile-facebook-connect" type="button">Connecter Facebook</button>
+      <button id="mobile-facebook-refresh" type="button">Actualiser / choisir une Page</button>
+      <select id="mobile-facebook-pages"><option value="">Choisir une Page autorisée</option></select>
+      <button id="mobile-facebook-select-page" type="button">Connecter la Page choisie</button>
+      <button id="mobile-facebook-disconnect" type="button">Déconnecter</button>
+      <p id="mobile-facebook-feedback" role="status"></p>
+    </div>
+    <div class="card">
+      <h3>Publication sur la Page</h3>
+      <textarea id="mobile-facebook-post-message" maxlength="5000" placeholder="Texte de la publication"></textarea>
+      <input id="mobile-facebook-post-link" type="url" placeholder="Lien facultatif (https://...)" />
+      <label>Média image/vidéo (10 Mo max)<input id="mobile-facebook-post-media" type="file" accept="image/*,video/*" /></label>
+      <label>Programmer (facultatif)<input id="mobile-facebook-post-time" type="datetime-local" /></label>
+      <button id="mobile-facebook-publish" type="button">Publier / programmer</button>
+      <button id="mobile-facebook-posts-refresh" type="button">Actualiser les publications</button>
+      <div id="mobile-facebook-posts"></div>
+      <div id="mobile-facebook-comments"></div>
+    </div>
+    <div class="card">
+      <h3>Conversations Messenger</h3>
+      <p>Meta applique ses fenêtres et autorisations de messagerie. Seuls les contacts PSID associés à une conversation existante peuvent être relancés.</p>
+      <button id="mobile-facebook-conversations-refresh" type="button">Charger les conversations</button>
+      <select id="mobile-facebook-conversation"><option value="">Choisir une conversation</option></select>
+      <textarea id="mobile-facebook-reply" maxlength="2000" placeholder="Réponse à la Page"></textarea>
+      <label>Média facultatif<input id="mobile-facebook-reply-media" type="file" accept="image/*,video/*" /></label>
+      <button id="mobile-facebook-reply-send" type="button">Envoyer la réponse</button>
+      <label>Importer des contacts CSV/Excel<input id="mobile-facebook-contacts-file" type="file" accept=".csv,.xlsx,.xls" /></label>
+      <p id="mobile-facebook-contacts-feedback" role="status"></p>
+      <label>PSID à relancer, un par ligne<textarea id="mobile-facebook-psids" rows="4" placeholder="Identifiant Page-scoped autorisé"></textarea></label>
+      <textarea id="mobile-facebook-queue-message" maxlength="2000" placeholder="Message de relance"></textarea>
+      <label>Média facultatif (10 Mo max)<input id="mobile-facebook-queue-media" type="file" accept="image/*,video/*" /></label>
+      <button id="mobile-facebook-queue-start" type="button">Démarrer la file</button>
+      <button id="mobile-facebook-queue-stop" type="button" disabled>Arrêter la file</button>
+      <p id="mobile-facebook-queue-status" role="status"></p>
+      <div id="mobile-facebook-queue-history"></div>
+    </div>
+  </section>
 </div>
 <script src="lib/xlsx.full.min.js"></script>
 <script src="lib/spintax.js"></script>
@@ -765,6 +809,7 @@
 <script src="chat-core.js"></script>
 <script src="parity-local.js"></script>
 <script src="facebook-share.js"></script>
+<script src="facebook-mobile.js"></script>
 <script src="media-studio.js"></script>
 </body>
 </html>

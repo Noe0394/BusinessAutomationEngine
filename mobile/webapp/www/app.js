@@ -469,6 +469,12 @@
       return { text: data.text, provider: data.provider || 'Cloudflare' };
     },
   };
+  window.Cyrus.cloudflareRequest = async function (route, body) {
+    const res = await fetch(CLOUDFLARE_BASE + route, { method: 'POST', headers: aiHeaders(), body: JSON.stringify(body || {}) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(data.error || ('HTTP ' + res.status)), { status: res.status });
+    return data;
+  };
 
   document.getElementById('ai-text-btn').addEventListener('click', async () => {
     const rawPrompt = document.getElementById('ai-prompt').value.trim();
