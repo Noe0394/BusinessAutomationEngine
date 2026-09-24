@@ -5,6 +5,7 @@ import { runTextCascade } from './textCascade.js';
 import { ADMIN_PAGE } from './adminPage.js';
 import { generateImage, startVideo, pollVideo } from './media.js';
 import { handleFacebookRequest } from './facebookGateway.js';
+import { transcribeAudio } from './voice.js';
 
 const ALL_MODULES = ['whatsapp', 'telegram', 'studio_video', 'facebook'];
 const CORS = {
@@ -301,6 +302,7 @@ async function grantModuleAccess(request, env) {
 const PUBLIC = { '/verify': 'verify', '/verifyLicenseOffline': 'verify' };
 const AI_ROUTES = {
   '/ai/text': aiText, '/generateTextFallback': aiText,
+  '/ai/transcribe': transcribeAudio,
   '/ai/image': aiImage, '/generateImageFallback': aiImage,
   '/ai/video/start': videoStart, '/startVideoFallback': videoStart,
   '/ai/video/poll': videoPoll, '/pollVideoFallback': videoPoll,

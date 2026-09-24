@@ -527,3 +527,11 @@ Le Worker Cloudflare contient une passerelle OAuth/Graph pour Facebook et Messen
 Le code et le schema sont implementes, mais non deployee : wrangler.toml garde l'identifiant D1 fictif et il faut configurer l'App Meta, ses permissions/revue, l'URI callback HTTPS et les secrets Worker. La licence doit accorder facebook. Aucun appel Graph ni parcours OAuth reel n'a ete execute.
 
 Controles de ce checkpoint : node --check sur le Worker, app mobile, ponts et UI Facebook; git diff --check; npm run sync reussi. Les SHA-256 de index.html, app.js, lib/db.js, business-services-mobile.js et facebook-mobile.js correspondent aux ressources Android synchronisees. Aucun appel Graph ni parcours OAuth reel n'a ete execute.
+
+## Transcription audio mobile - 2026-09-24
+
+L'ecran Chat Intelligent accepte maintenant un fichier audio local de 10 Mo maximum. Apres action explicite, le telephone transmet le fichier au Worker Cloudflare; celui-ci exige une licence liee exactement a l'appareil, puis appelle Groq Whisper avec une cle cote serveur. Le texte et la langue detectee reviennent dans une zone de relecture; l'utilisateur peut traduire vers le francais si necessaire et doit ensuite choisir explicitement de placer le texte dans le chat puis de l'envoyer.
+
+Cette tranche ne telecharge pas et ne transcrit pas automatiquement les notes vocales recues dans WhatsApp ou Telegram; l'import du fichier audio depuis l'appareil reste manuel. Il faut configurer GROQ_API_KEY dans Wrangler. Aucun audio reel n'a ete envoye au fournisseur. Les prochains travaux telephone restent la transcription des medias entrants dans les limites des ponts disponibles, la parite complete de l'assistant et des 14 onglets VPS, ainsi que la validation sur appareil.
+
+Verification locale : analyses syntaxiques Node du Worker et des scripts modifies, git diff --check et synchronisation Capacitor; empreintes SHA-256 des sources HTML/JS synchronisees vers Android concordantes. Le Worker n'est pas deploye, l'identifiant D1 reste a configurer et aucune compilation Android ni recette de compte reel n'a ete executee.

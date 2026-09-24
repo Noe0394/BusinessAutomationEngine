@@ -211,6 +211,7 @@ async function handleOperation(path, request, auth, env) {
     const recipientId = String(body.recipientId || '').trim();
     const message = String(body.message || '').trim();
     if (!/^\d{1,40}$/.test(recipientId) || (!message && !body.media)) return json({ error: 'Destinataire PSID et message ou media requis.' }, 400);
+    if (message.length > 2000) return json({ error: 'Le message Messenger depasse 2000 caracteres.' }, 400);
     let result;
     const media = await decodeMedia(body.media);
     if (media) {
@@ -221,7 +222,10 @@ async function handleOperation(path, request, auth, env) {
       form.append('messaging_type', 'RESPONSE');
       form.append('filedata', new Blob([media.bytes], { type: media.type }), media.name);
       result = await graph(env, 'me/messages', { method: 'POST', params: { access_token: token }, body: form });
-      if (message) result.textResult = await graph(env, 'me/messages', { method: 'POST', params: { access_token: token }, body: { recipient: { id: recipientId }, message: { text: message }, messaging_type: 'RESPONSE' } });
+      if (message) {
+        try { result.textResult = await graph(env, 'me/messages', { method: 'POST', params: { access_token: token }, body: { recipient: { id: recipientId }, message: { text: message }, messaging_type: 'RESPONSE' } }); }
+        catch (error) { throw Object.assign(new Error('Le media a ete transmis; la reponse texte n’a pas ete confirmee. ' + error.message), { status: 502 }); }
+      }
     } else {
       result = await graph(env, 'me/messages', { method: 'POST', params: { access_token: token }, body: { recipient: { id: recipientId }, message: { text: message }, messaging_type: 'RESPONSE' } });
     }
@@ -229,7 +233,7 @@ async function handleOperation(path, request, auth, env) {
   }
   if (path === '/facebook/contacts/resolve') {
     const contacts = Array.isArray(body.contacts) ? body.contacts.slice(0, 2000) : [];
-    if (!contacts.length) return json({ error: 'Importe au moins un contact.' }, 400);
+    if (!contacts.length || (Array.isArray(body.contacts) && body.contacts.length > 2000)) return json({ error: 'Importe entre 1 et 2000 contacts.' }, 400);
     const data = await graph(env, 'me/conversations', { token, params: { fields: 'id,snippet,participants', limit: '100' } });
     const conversations = (data.data || []).map((c) => {
       const other = (c.participants?.data || []).find((p) => String(p.id) !== String(account.page_id));
@@ -251,6 +255,11 @@ async function handleOperation(path, request, auth, env) {
   if (path === '/facebook/posts' && body.action === 'publish') {
     const message = String(body.message || '').trim();
     const link = String(body.link || '').trim();
+    if (message.length > 5000) return json({ error: 'Le texte de publication depasse 5000 caracteres.' }, 400);
+    if (link) {
+      try { const parsed = new URL(link); if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error(); }
+      catch { return json({ error: 'Le lien de publication doit etre une URL HTTPS valide.' }, 400); }
+    }
     const scheduled = body.scheduledPublishTime ? new Date(body.scheduledPublishTime) : null;
     const scheduledUnix = scheduled ? Math.floor(scheduled.getTime() / 1000) : null;
     if (scheduled && (!Number.isFinite(scheduledUnix) || scheduledUnix < Date.now() / 1000 + 600 || scheduledUnix > Date.now() / 1000 + 75 * 86400)) return json({ error: 'La programmation Meta doit etre entre 10 minutes et 75 jours.' }, 400);
@@ -274,7 +283,7 @@ async function handleOperation(path, request, auth, env) {
   }
   if (path === '/facebook/comments' && body.action === 'reply') {
     const commentId = String(body.commentId || '').trim(); const message = String(body.message || '').trim();
-    if (!commentId || !message) return json({ error: 'Commentaire et reponse requis.' }, 400);
+    if (!commentId || !message || message.length > 2000) return json({ error: 'Identifiant requis et reponse de 1 a 2000 caracteres.' }, 400);
     return json(await graph(env, `${encodeURIComponent(commentId)}/comments`, { method: 'POST', token, body: { message } }));
   }
   if (path === '/facebook/comments' && body.action === 'moderate') {

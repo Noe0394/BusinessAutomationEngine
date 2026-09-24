@@ -66,6 +66,11 @@
           try { await api('/comments', { action: 'moderate', commentId: comment.id, hide: !comment.is_hidden }); await loadComments(postId); }
           catch (error) { feedback(error.message, true); }
         }); card.append(hide);
+        const remove = document.createElement('button'); remove.textContent = 'Supprimer'; remove.addEventListener('click', async () => {
+          if (!window.confirm('Supprimer définitivement ce commentaire ?')) return;
+          try { await api('/comments', { action: 'delete', commentId: comment.id }); await loadComments(postId); }
+          catch (error) { feedback(error.message, true); }
+        }); card.append(remove);
         host.append(card);
       }
       if (!result.comments?.length) host.textContent = 'Aucun commentaire accessible.';

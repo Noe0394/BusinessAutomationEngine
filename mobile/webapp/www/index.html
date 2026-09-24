@@ -436,6 +436,14 @@
         <button class="secondary" id="intel-analyze-btn" style="margin-top:10px;">Analyser &amp; choisir une stratégie</button>
         <div id="intel-analysis" style="margin-top:10px;"></div>
       </div>
+      <div class="card">
+        <label for="mobile-voice-file">Transcrire une note vocale locale (10 Mo maximum)</label>
+        <input id="mobile-voice-file" type="file" accept="audio/*" />
+        <button id="mobile-voice-transcribe" type="button">Transcrire avec Whisper</button>
+        <textarea id="mobile-voice-transcript" rows="5" placeholder="La transcription apparaitra ici"></textarea>
+        <button id="mobile-voice-use" type="button" disabled>Utiliser dans Chat Intelligent</button>
+        <p id="mobile-voice-feedback" role="status">Après clic, le fichier choisi est transmis au Worker Cloudflare puis au fournisseur Groq Whisper pour transcription.</p>
+      </div>
     </div>
   </section>
 
@@ -810,6 +818,7 @@
 <script src="parity-local.js"></script>
 <script src="facebook-share.js"></script>
 <script src="facebook-mobile.js"></script>
+<script src="voice-transcription-mobile.js"></script>
 <script src="media-studio.js"></script>
 </body>
 </html>

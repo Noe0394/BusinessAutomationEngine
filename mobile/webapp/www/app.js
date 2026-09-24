@@ -468,6 +468,17 @@
       if (!data.text || typeof data.text !== 'string') throw new Error('Le fournisseur IA n’a renvoyé aucun texte.');
       return { text: data.text, provider: data.provider || 'Cloudflare' };
     },
+    async transcribeAudio(file) {
+      if (!file || !file.size || file.size > 10 * 1024 * 1024) throw new Error('Choisis un fichier audio de 10 Mo maximum.');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      const res = await fetch(CLOUDFLARE_BASE + '/ai/transcribe', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ base64: btoa(binary), mimeType: file.type || 'audio/ogg', filename: file.name || 'voice-note.ogg' }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw Object.assign(new Error(data.error || ('HTTP ' + res.status)), { status: res.status });
+      if (!data.text) throw new Error('Le fournisseur vocal n’a renvoyé aucun texte.');
+      return { text: data.text, language: data.language || null, provider: data.provider || 'Cloudflare' };
+    },
   };
   window.Cyrus.cloudflareRequest = async function (route, body) {
     const res = await fetch(CLOUDFLARE_BASE + route, { method: 'POST', headers: aiHeaders(), body: JSON.stringify(body || {}) });
