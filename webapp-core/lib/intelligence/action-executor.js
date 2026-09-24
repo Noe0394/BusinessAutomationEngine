@@ -10,8 +10,8 @@
 // contexte d'exécution — jamais duquel on suppose quoi que ce soit ici).
 //
 // Pour l'achat -> création de compte étudiant + clé d'accès (Test 5 du cahier),
-// CREATE_USER_ACCOUNT appelle la Cloud Function `grantAccessOnPurchase`
-// (firebase-functions/index.js, collections cyrus_students / cyrus_access_keys)
+// CREATE_USER_ACCOUNT appelle la route Cloudflare `grantAccessOnPurchase`
+// (tables D1 cyrus_students / cyrus_access_keys).
 // via HTTP. Le secret d'admin est lu depuis `env` injecté — JAMAIS écrit en dur.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -22,7 +22,7 @@
   const ACTIONS = ['EXTRACT_MEMBERS', 'SEND_CAMPAIGN', 'FOLLOW_UP', 'ANALYZE_HUMAN_CONTEXT',
     'ANALYZE_RESPONSES', 'REPLY_COMMENT', 'GENERATE_VIDEO', 'PAUSE_CAMPAIGN',
     'RESUME_CAMPAIGN', 'GENERATE_REPORT', 'CREATE_USER_ACCOUNT', 'GENERATE_ACCESS_KEY'];
-  const DEFAULT_FIREBASE_BASE = (typeof process !== 'undefined' && process.env && (process.env.CLOUD_FUNCTIONS_BASE || process.env.CLOUDFLARE_LICENSE_URL)) || 'https://cyrus-license.ezechielatannidje.workers.dev'; // Cloudflare (Firebase n'est plus utilisé)
+  const DEFAULT_CLOUDFLARE_BASE = (typeof process !== 'undefined' && process.env && process.env.CLOUDFLARE_LICENSE_URL) || 'https://cyrus-license.ezechielatannidje.workers.dev';
 
   function uuid(prefix) {
     const rnd = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -47,7 +47,7 @@
   // Émetteur HTTP minimal (Node via fetch, navigateur via fetch) — jamais de
   // secret dans le corps : le secret passe en en-tête x-admin-secret.
   // ---------------------------------------------------------------------------
-  async function postCloudFunction(url, body, headers, deps) {
+  async function postCloudflareWorker(url, body, headers, deps) {
     const http = (deps && deps.http) || (typeof fetch === 'function' ? fetch : null);
     if (!http) return { ok: false, error: 'NO_HTTP_TRANSPORT' };
     const res = await http(url, {
@@ -81,7 +81,7 @@
     const humanContext = d.humanContext || null; // moteur de contexte humain
     const env = d.env || null;              // accès aux clés (jamais lues ici en dur)
     const store = d.store || null;          // persistance facultative (contacts, rapports)
-    const cloudBase = d.firebaseBase || DEFAULT_FIREBASE_BASE;
+    const cloudBase = d.cloudflareBase || DEFAULT_CLOUDFLARE_BASE;
 
     const registry = {};
 
@@ -243,7 +243,7 @@
       const transactionId = payload.transactionId || payload.reference || null;
       const tenantId = payload.tenantId || (meta && meta.tenantId) || 'default';
 
-      // Corps complet côté Cloud Function `grantAccessOnPurchase`.
+      // Le Worker admin reçoit l'action après validation du flux commercial.
       const body = {
         student: { fullName, email, phone },
         purchase: { sku, amount, currency, transactionId, paidAt: payload.paidAt || new Date().toISOString() },
@@ -252,9 +252,10 @@
         accessKey: { generate: true },
       };
 
-      const secret = envSecret(env, 'CLOUDFLARE_ADMIN_SECRET') || envSecret(env, 'FIREBASE_ADMIN_SECRET') || envSecret(env, 'ADMIN_SECRET');
-      const res = await postCloudFunction(cloudBase + '/grantAccessOnPurchase', body, { 'x-admin-secret': secret || '' }, d)
-        .catch((e) => ({ ok: false, error: String(e && e.message || e), transportError: true }));
+      const secret = envSecret(env, 'CLOUDFLARE_ADMIN_SECRET');
+      const res = secret
+        ? await postCloudflareWorker(cloudBase + '/grantAccessOnPurchase', body, { 'x-admin-secret': secret }, d).catch((e) => ({ ok: false, error: String(e && e.message || e), transportError: true }))
+        : { ok: false, error: 'CLOUDFLARE_ADMIN_SECRET_NOT_CONFIGURED' };
 
       if (!res.ok) {
         // Repli local : ne JAMAIS échouer l'acte de création d'un étudiant qui
@@ -282,7 +283,7 @@
           accessKey: data.accessKey || (data.account && data.account.accessKey) || null,
           cfnId: data.id || data.accountId || null,
           status: data.status || 'CREATED',
-          provider: 'cloud-function:grantAccessOnPurchase',
+          provider: 'cloudflare-worker:grantAccessOnPurchase',
         },
       };
     };
@@ -311,5 +312,5 @@
     return { execute, registry, listActions, ACTIONS, generateAccessKey };
   }
 
-  return { createActionExecutor, ACTIONS, generateAccessKey, DEFAULT_FIREBASE_BASE };
+  return { createActionExecutor, ACTIONS, generateAccessKey, DEFAULT_CLOUDFLARE_BASE };
 });

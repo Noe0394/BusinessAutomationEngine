@@ -3,14 +3,11 @@
 // exige un vrai runtime Node (net/os/path), voir CLAUDE.md pour l'historique
 // du crash GramJS sur le runtime Node embarque du 2026-09-10.
 //
-// STATUT : premiere version basee sur une exploration en direct de l'API
-// interne de web.telegram.org/k/ (window.rootScope.managers.*, voir
-// CLAUDE.md) - la connexion/lecture d'etat a ete confirmee reelle (compte
-// deja connecte observe), mais l'envoi (sendText) et le format exact de
-// l'evenement de reception (history_multiappend) n'ont PAS encore ete
-// exerces de bout en bout sur un vrai envoi/reception (contrairement au
-// pont WhatsApp, entierement valide). A traiter comme un premier jet a
-// tester, pas comme une integration prouvee.
+// STATUT : base sur une exploration live de l'API interne de web.telegram.org/k/
+// (window.rootScope.managers.*, voir CLAUDE.md). Le format de history_multiappend
+// suit la source Telegram Web K : handleNewMessage emet directement le modele
+// message. La reception et le repondeur restent a valider avec un compte et
+// un appareil reels.
 (function () {
   function post(type, payload) {
     if (window.Cyrus) {
@@ -49,12 +46,26 @@
       });
       reportAuth();
 
-      // Format exact non confirme (premiere version, voir statut en tete de
-      // fichier) - transmis brut cote app, a affiner une fois observe en
-      // conditions reelles avec un vrai message entrant.
-      rootScope.addEventListener('history_multiappend', function (data) {
+      // Le WebK courant emet directement le modele message a cet evenement.
+      // Les discussions privees et groupes texte peuvent alimenter le
+      // repondeur mobile; les messages sortants et publications de canal sont ignores.
+      rootScope.addEventListener('history_multiappend', function (message) {
         try {
-          post('history-event', { raw: safeStringify(data) });
+          if (!message || message._ !== 'message' || !message.pFlags || message.pFlags.out) return;
+          const peerId = String(message.peerId == null ? '' : message.peerId);
+          if (!/^-?\d{1,12}$/.test(peerId) || Number(peerId) === 0 || message.pFlags.post) return;
+          const body = String(message.message || '').trim();
+          if (!body) return;
+          const mid = String(message.mid != null ? message.mid : (message.id != null ? message.id : ''));
+          if (!mid) return;
+          post('message', {
+            id: 'tg:' + peerId + ':' + mid,
+            from: peerId,
+            body: body.slice(0, 4000),
+            date: Number(message.date) || Math.floor(Date.now() / 1000),
+            fromMe: false,
+            isGroup: Number(peerId) < 0,
+          });
         } catch (e) {
           post('bridge-error', { where: 'history_multiappend', message: String(e) });
         }
@@ -66,7 +77,7 @@
           const resolved = await managers.appUsersManager.resolveUsername(trimmed.slice(1));
           return resolved && (resolved.id !== undefined ? resolved.id : resolved);
         }
-        if (/^\d+$/.test(trimmed) && trimmed.length < 12) {
+        if (/^-?\d+$/.test(trimmed) && trimmed.length < 13 && Number(trimmed) !== 0) {
           // Deja un peerId Telegram numerique (pas un numero de telephone).
           return Number(trimmed);
         }
@@ -89,8 +100,10 @@
           await managers.appMessagesManager.sendText({ peerId: peerId, text: text });
 
           post('send-result', { ok: true, chatId: identifier });
+          return { ok: true };
         } catch (e) {
           post('send-result', { ok: false, chatId: identifier, error: '[' + stage + '] ' + String(e) });
+          return { ok: false, error: '[' + stage + '] ' + String(e) };
         }
       };
 
@@ -117,8 +130,10 @@
           await managers.appMessagesManager.sendFile({ peerId: peerId, file: file, caption: caption || '' });
 
           post('send-result', { ok: true, chatId: identifier });
+          return { ok: true };
         } catch (e) {
           post('send-result', { ok: false, chatId: identifier, error: '[' + stage + '] ' + String(e) });
+          return { ok: false, error: '[' + stage + '] ' + String(e) };
         }
       };
 
@@ -162,6 +177,180 @@
           post('group-members', { groupId: groupId, members: members });
         } catch (e) {
           post('bridge-error', { where: 'tg-getGroupMembers:' + stage, message: String(e) });
+        }
+      };
+
+      // Recherche globale officielle Telegram Web K. requestHistory passe par
+      // appMessagesManager puis messages.searchGlobal avec groups_only /
+      // broadcasts_only; les entites sont enregistrees par le manager avant
+      // d'etre retournees a l'annuaire local.
+      window.__cyrusTgDiscoverCommunities = async function (rawKeywords, requestedLimit) {
+        let stage = 'validate';
+        try {
+          const keywords = [...new Set(String(rawKeywords || '').split(/[,;\n]/).map(x => x.trim()).filter(x => x.length >= 2))].slice(0, 5);
+          if (!keywords.length) throw new Error('Indique au moins un mot-clé de 2 caractères.');
+          const limit = Math.max(1, Math.min(30, Number(requestedLimit) || 15));
+          const found = new Map();
+          for (const keyword of keywords) {
+            for (const chatType of ['groups', 'channels']) {
+              stage = 'searchGlobal:' + chatType;
+              const result = await managers.appMessagesManager.requestHistory({
+                peerId: 0,
+                query: keyword,
+                inputFilter: { _: 'inputMessagesFilterEmpty' },
+                limit,
+                chatType,
+              });
+              for (const chat of (result && result.chats) || []) {
+                const username = String(chat.username || '').replace(/^@/, '');
+                if (!/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(username)) continue;
+                const peerId = await managers.appPeersManager.getPeerId(chat);
+                if (peerId == null || !Number.isFinite(Number(peerId))) continue;
+                const item = {
+                  channel: 'TELEGRAM', ref: String(peerId), id: String(peerId),
+                  name: String(chat.title || ('@' + username)), username,
+                  link: 'https://t.me/' + username,
+                  kind: chatType === 'channels' ? 'channel' : 'group',
+                  members: chat.participants_count == null ? null : Number(chat.participants_count),
+                  description: '', verified: true, keywords: [keyword],
+                };
+                const key = item.ref;
+                if (found.has(key)) found.get(key).keywords.push(keyword); else found.set(key, item);
+              }
+              await new Promise(resolve => setTimeout(resolve, 800));
+            }
+          }
+          post('community-search-results', { channel: 'TELEGRAM', results: [...found.values()].slice(0, 60) });
+        } catch (e) {
+          post('bridge-error', { where: 'discoverCommunities:' + stage, message: String(e && (e.errorMessage || e.message) || e) });
+        }
+      };
+
+      window.__cyrusTgDiscoverPeople = async function (rawKeywords, requestedLimit) {
+        let stage = 'validate';
+        try {
+          const keywords = [...new Set(String(rawKeywords || '').split(/[,;\n]/).map(x => x.trim().replace(/^@/, '')).filter(x => x.length >= 2))].slice(0, 5);
+          if (!keywords.length) throw new Error('Indique au moins un mot-clé de 2 caractères.');
+          const limit = Math.max(1, Math.min(30, Number(requestedLimit) || 15));
+          const found = new Map();
+          for (const keyword of keywords) {
+            stage = 'searchGlobal:users';
+            const result = await managers.appMessagesManager.requestHistory({
+              peerId: 0,
+              query: keyword,
+              inputFilter: { _: 'inputMessagesFilterEmpty' },
+              limit,
+              chatType: 'users',
+            });
+            for (const user of (result && result.users) || []) {
+              const username = String(user.username || '').replace(/^@/, '');
+              const id = String(user.id == null ? '' : user.id);
+              if (!/^\d{1,11}$/.test(id) || Number(id) <= 0 || !/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(username)) continue;
+              const name = [user.first_name || user.firstName, user.last_name || user.lastName].filter(Boolean).join(' ') || ('@' + username);
+              if (found.has(id)) found.get(id).keywords.push(keyword);
+              else found.set(id, { channel: 'TELEGRAM', id, identifier: id, username, name, link: 'https://t.me/' + username, keywords: [keyword] });
+            }
+            await new Promise(resolve => setTimeout(resolve, 800));
+          }
+          post('community-people-results', { channel: 'TELEGRAM', results: [...found.values()].slice(0, 60) });
+        } catch (e) {
+          post('bridge-error', { where: 'discoverPeople:' + stage, message: String(e && (e.errorMessage || e.message) || e) });
+        }
+      };
+
+      // Création d'un supergroupe puis invitations unitaires. Les méthodes
+      // createChannel/inviteToChannel et AppChatInvitesManager.exportChatInvite
+      // sont les méthodes publiques de Telegram Web K; chaque action reste
+      // déclenchée par le formulaire et la confirmation explicite de Cyrus.
+      window.__cyrusTgCommunityCreate = async function (payload) {
+        const jobId = String(payload && payload.jobId || '');
+        let stage = 'validate';
+        try {
+          const title = String(payload && payload.title || '').trim().slice(0, 128);
+          const about = String(payload && payload.about || '').trim().slice(0, 255);
+          if (!jobId || title.length < 2) throw new Error('Nom de groupe invalide.');
+          if (!rootScope.myId) throw new Error('Connecte-toi à Telegram avant de créer un groupe.');
+          if (!managers.appChatsManager || typeof managers.appChatsManager.createChannel !== 'function') throw new Error('Création de groupe indisponible dans cette version Telegram.');
+          stage = 'createChannel';
+          const created = await managers.appChatsManager.createChannel({ broadcast: false, megagroup: true, title: title, about: about });
+          const rawGroupId = created && typeof created === 'object'
+            ? (created.id !== undefined ? created.id : created.chatId !== undefined ? created.chatId : created.peerId)
+            : created;
+          const groupId = Number(rawGroupId);
+          if (!Number.isSafeInteger(groupId) || groupId === 0) {
+            const error = new Error('Telegram a répondu sans identifiant de groupe exploitable. Vérifie la liste des groupes avant toute nouvelle création.');
+            error.ambiguous = true;
+            throw error;
+          }
+          let inviteLink = '';
+          let linkError = '';
+          try {
+            stage = 'exportInvite';
+            if (!managers.appChatInvitesManager || typeof managers.appChatInvitesManager.exportChatInvite !== 'function') throw new Error('Export de lien d’invitation indisponible.');
+            const invite = await managers.appChatInvitesManager.exportChatInvite({ chatId: groupId });
+            inviteLink = String(invite && invite.link || '');
+            if (!/^https:\/\/t\.me\//i.test(inviteLink)) throw new Error('Telegram n’a pas retourné de lien t.me valide.');
+          } catch (e) { linkError = String(e && (e.errorMessage || e.message) || e); }
+          post('community-operation-result', { jobId: jobId, action: 'create', ok: true, groupId: String(groupId), title: title, inviteLink: inviteLink, linkError: linkError });
+        } catch (e) {
+          post('community-operation-result', { jobId: jobId, action: 'create', ok: false, ambiguous: !!(e && e.ambiguous) || stage === 'createChannel', stage: stage, error: String(e && (e.errorMessage || e.message) || e) });
+        }
+      };
+
+      window.__cyrusTgCommunityInvite = async function (payload) {
+        const jobId = String(payload && payload.jobId || '');
+        const identifier = String(payload && payload.identifier || '').trim();
+        const groupId = Number(payload && payload.groupId);
+        let stage = 'resolveRecipient';
+        try {
+          if (!jobId || !identifier || !Number.isSafeInteger(groupId) || groupId === 0) throw new Error('Données d’invitation invalides.');
+          if (!rootScope.myId) throw new Error('La session Telegram est déconnectée.');
+          let userId;
+          if (identifier.startsWith('@')) {
+            const user = await managers.appUsersManager.resolveUsername(identifier.slice(1));
+            userId = user && user.id !== undefined ? user.id : user;
+          } else if (/^\d{1,11}$/.test(identifier) && Number(identifier) > 0) {
+            userId = Number(identifier);
+          } else {
+            throw new Error('Utilise un @username ou un identifiant utilisateur Telegram numérique.');
+          }
+          if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) throw new Error('Utilisateur Telegram introuvable.');
+          userId = Number(userId);
+          const user = managers.appUsersManager.getUser(userId) || {};
+          const name = [user.first_name || user.firstName, user.last_name || user.lastName].filter(Boolean).join(' ') || identifier;
+          stage = 'inviteToChannel';
+          const missing = await managers.appChatsManager.inviteToChannel(groupId, [userId]);
+          if (!missing || !missing.length) {
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'INVITED', name: name });
+            return;
+          }
+          const inviteLink = String(payload.inviteLink || '');
+          if (payload.sendFallback === true && inviteLink && managers.appMessagesManager && typeof managers.appMessagesManager.sendText === 'function') {
+            stage = 'sendInviteLink';
+            const template = String(payload.inviteMessage || 'Bonjour {nom}, tu es invité(e) à rejoindre le groupe « {groupe} » : {lien}').slice(0, 600);
+            const message = (template.replace(/\{nom\}/g, name).replace(/\{groupe\}/g, String(payload.title || 'groupe')).replace(/\{lien\}/g, inviteLink).slice(0, 600).includes(inviteLink))
+              ? template.replace(/\{nom\}/g, name).replace(/\{groupe\}/g, String(payload.title || 'groupe')).replace(/\{lien\}/g, inviteLink).slice(0, 600)
+              : (template.replace(/\{nom\}/g, name).replace(/\{groupe\}/g, String(payload.title || 'groupe')).slice(0, 500) + ' ' + inviteLink);
+            await managers.appMessagesManager.sendText({ peerId: userId, text: message });
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'LINK_SENT', name: name });
+          } else {
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'NEEDS_LINK', name: name, inviteLink: inviteLink, error: 'Telegram a refusé l’ajout direct pour ce compte.' });
+          }
+        } catch (e) {
+          const error = String(e && (e.errorMessage || e.message || e.type) || e);
+          const type = String(e && (e.type || e.errorMessage) || error).toUpperCase();
+          post('community-operation-result', { jobId: jobId, action: 'invite', ok: false, identifier: identifier, outcome: /FLOOD_WAIT|SLOWMODE_WAIT|RATE_LIMIT/.test(type + ' ' + error.toUpperCase()) ? 'RATE_LIMIT' : 'FAILED', stage: stage, error: error });
+        }
+      };
+
+      window.__cyrusTgScheduledSend = async function (payload) {
+        try {
+          const result = payload && payload.media
+            ? await window.__cyrusTgSendMedia(payload.identifier, payload.media.data, payload.media.mimetype, payload.media.filename, payload.text || '')
+            : await window.__cyrusTgSend(payload.identifier, String(payload && payload.text || ''));
+          post('scheduled-send-result', { id: String(payload && payload.id || ''), ok: !!(result && result.ok), error: result && result.error || '' });
+        } catch (error) {
+          post('scheduled-send-result', { id: String(payload && payload.id || ''), ok: false, error: String(error && error.message || error) });
         }
       };
 

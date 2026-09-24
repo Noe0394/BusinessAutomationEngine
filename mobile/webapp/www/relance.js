@@ -6,7 +6,7 @@
 // d'aperçu (Image-to-Link) - cette fonctionnalite hebergeait l'image sur le
 // serveur pour generer un lien public consultable par WhatsApp/Telegram,
 // incompatible avec le principe "zero serveur" tel quel (a reprendre plus
-// tard via Firebase Storage + Hosting si besoin).
+// tard via un stockage objet Cloudflare public si besoin).
 (function () {
   const relance = window.Cyrus.manualRelance;
 

@@ -9,6 +9,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(EmbeddedWebViewPlugin.class);
+        registerPlugin(CyrusSecureStorePlugin.class);
+        registerPlugin(CyrusNativeHttpPlugin.class);
+        registerPlugin(CyrusOpenUrlPlugin.class);
         super.onCreate(savedInstanceState);
 
         // Demarre le service de premier plan des le lancement, sans

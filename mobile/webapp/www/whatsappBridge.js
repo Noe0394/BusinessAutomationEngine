@@ -44,6 +44,7 @@
             from: m.from && m.from._serialized,
             to: m.to && m.to._serialized,
             fromMe: !!(m.id && m.id.fromMe),
+            isGroup: /@g\.us$/.test(String(m.to && m.to._serialized || m.from && m.from._serialized || '')),
             body: body,
             t: m.t,
           });
@@ -145,8 +146,10 @@
           await result[0];
 
           post('send-result', { ok: true, chatId: chatId });
+          return { ok: true };
         } catch (e) {
           post('send-result', { ok: false, chatId: chatId, error: '[' + stage + '] ' + String(e) });
+          return { ok: false, error: '[' + stage + '] ' + String(e) };
         }
       };
 
@@ -249,8 +252,10 @@
           await result[0];
 
           post('send-result', { ok: true, chatId: chatId });
+          return { ok: true };
         } catch (e) {
           post('send-result', { ok: false, chatId: chatId, error: '[' + stage + '] ' + String(e) });
+          return { ok: false, error: '[' + stage + '] ' + String(e) };
         }
       };
 
@@ -299,6 +304,168 @@
           post('group-members', { groupId: groupId, members: members });
         } catch (e) {
           post('bridge-error', { where: 'getGroupMembers', message: String(e) });
+        }
+      };
+
+      // Création/invitation de groupes. La création WhatsApp exige au moins
+      // un participant; le premier contact validé sert donc de membre initial.
+      // Les autres ajouts sont déclenchés un par un par l'interface, avec un
+      // délai entre deux appels et une confirmation explicite côté Cyrus.
+      window.__cyrusWaCommunityCreate = async function (payload) {
+        const jobId = String(payload && payload.jobId || '');
+        let stage = 'validate';
+        try {
+          const title = String(payload && payload.title || '').trim().slice(0, 100);
+          const about = String(payload && payload.about || '').trim().slice(0, 255);
+          const identifier = String(payload && payload.firstIdentifier || '').replace(/\D/g, '');
+          if (!jobId || title.length < 2 || !/^\d{8,15}$/.test(identifier)) throw new Error('Nom du groupe ou premier numéro invalide.');
+          stage = 'verifyFirstMember';
+          const WidFactory = window.require('WAWebWidFactory');
+          const firstWid = WidFactory.createWid(identifier);
+          const exists = await window.require('WAWebQueryExistsJob').queryWidExists(firstWid);
+          if (!exists || !exists.wid) throw new Error('Le premier contact ne possède pas de compte WhatsApp actif.');
+
+          stage = 'createGroup';
+          const created = await window.require('WAWebGroupCreateJob').createGroup({
+            addressingModeOverride: 'lid', memberAddMode: false, membershipApprovalMode: false,
+            announce: false, restrict: false, ephemeralDuration: 0, title: title,
+          }, [{ phoneNumber: firstWid }]);
+          if (!created || !created.wid || !created.wid._serialized) throw new Error(typeof created === 'string' ? created : 'WhatsApp n’a pas confirmé la création du groupe.');
+          const groupId = created.wid._serialized;
+          let inviteLink = '';
+          let linkError = '';
+          try {
+            stage = 'exportInvite';
+            const result = await window.require('WAWebMexFetchGroupInviteCodeJob').fetchMexGroupInviteCode(groupId);
+            const code = String(result && result.code || result || '');
+            if (!/^[A-Za-z0-9_-]{8,}$/.test(code)) throw new Error('Code de lien officiel indisponible.');
+            inviteLink = 'https://chat.whatsapp.com/' + code;
+          } catch (error) { linkError = String(error && error.message || error); }
+          const first = (created.participants || []).find(function (item) {
+            const wid = item && item.wid;
+            return wid && (wid._serialized === firstWid._serialized || wid.user === firstWid.user);
+          }) || (created.participants || [])[0];
+          const firstCode = first && Number(first.error || 200);
+          const firstOutcome = !first ? 'UNKNOWN'
+            : firstCode === 200 ? 'INVITED'
+            : firstCode === 409 ? 'ALREADY'
+              : firstCode === 403 || firstCode === 408 ? 'NEEDS_LINK'
+                : firstCode === 404 ? 'NOT_ON_PLATFORM' : 'FAILED';
+          post('community-operation-result', {
+            jobId: jobId, action: 'create', ok: true, groupId: groupId,
+            title: String(created.subject || title), inviteLink: inviteLink, linkError: linkError,
+            firstIdentifier: identifier, firstOutcome: firstOutcome,
+            firstError: !first ? 'Le groupe est créé, mais WhatsApp n’a pas confirmé le résultat pour le premier membre. Vérifie le groupe avant une nouvelle invitation.' : first.error ? 'WhatsApp a refusé l’ajout direct (' + first.error + ').' : '',
+          });
+        } catch (error) {
+          post('community-operation-result', { jobId: jobId, action: 'create', ok: false, stage: stage, error: String(error && error.message || error) });
+        }
+      };
+
+      window.__cyrusWaCommunityInvite = async function (payload) {
+        const jobId = String(payload && payload.jobId || '');
+        const identifier = String(payload && payload.identifier || '').replace(/\D/g, '');
+        const groupId = String(payload && payload.groupId || '');
+        let stage = 'validate';
+        try {
+          if (!jobId || !/^\d{8,15}$/.test(identifier) || !/@g\.us$/.test(groupId)) throw new Error('Numéro WhatsApp ou identifiant de groupe invalide.');
+          const WidFactory = window.require('WAWebWidFactory');
+          const groupWid = WidFactory.createWid(groupId);
+          const memberWid = WidFactory.createWid(identifier);
+          stage = 'verifyContact';
+          const exists = await window.require('WAWebQueryExistsJob').queryWidExists(memberWid);
+          if (!exists || !exists.wid) {
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'NOT_ON_PLATFORM' });
+            return;
+          }
+          stage = 'loadGroup';
+          await window.require('WAWebGroupQueryJob').queryAndUpdateGroupMetadataById({ id: groupId });
+          const collections = window.require('WAWebCollections');
+          let group = collections.Chat.get(groupWid);
+          if (!group) group = await collections.Chat.find(groupWid);
+          if (!group) throw new Error('Groupe introuvable après création.');
+          if (typeof group.iAmAdmin === 'function' && !group.iAmAdmin()) throw new Error('Le compte connecté n’est pas administrateur de ce groupe.');
+
+          // WWebJS est fourni par l'adaptateur whatsapp-web.js sur PC, pas
+          // par la WebView Android. Dans ce cas mobile, le seul repli proposé
+          // est le lien officiel du groupe, avec opt-in explicite du job.
+          if (!window.WWebJS || typeof window.WWebJS.getAddParticipantsRpcResult !== 'function') {
+            stage = 'exportInvite';
+            const inviteResult = await window.require('WAWebMexFetchGroupInviteCodeJob').fetchMexGroupInviteCode(groupId);
+            const codeText = String(inviteResult && inviteResult.code || inviteResult || '');
+            if (!/^[A-Za-z0-9_-]{8,}$/.test(codeText)) throw new Error('Ajout direct indisponible dans cette WebView et lien officiel introuvable.');
+            const inviteLink = 'https://chat.whatsapp.com/' + codeText;
+            if (payload.sendFallback !== true) {
+              post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'NEEDS_LINK', inviteLink: inviteLink, error: 'Le pont mobile ne permet pas l’ajout direct; partage le lien officiel manuellement.' });
+              return;
+            }
+            stage = 'sendInviteLink';
+            const template = String(payload.inviteMessage || 'Bonjour {nom}, vous êtes invité(e) à rejoindre le groupe « {groupe} » : {lien}').slice(0, 600);
+            const text = template.replace(/\{nom\}/g, String(payload.name || '')).replace(/\{groupe\}/g, String(payload.title || 'groupe')).replace(/\{lien\}/g, inviteLink);
+            const sent = await window.__cyrusSend(identifier + '@c.us', text);
+            if (!sent || !sent.ok) throw new Error(sent && sent.error || 'WhatsApp n’a pas confirmé l’envoi du lien.');
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'LINK_SENT', inviteLink: inviteLink });
+            return;
+          }
+
+          stage = 'addParticipant';
+          const result = await window.WWebJS.getAddParticipantsRpcResult(groupWid, memberWid);
+          const code = Number(result && result.code);
+          if (code === 200) {
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'INVITED' });
+            return;
+          }
+          if (code === 409) {
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'ALREADY' });
+            return;
+          }
+          if (code === 404) {
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'NOT_ON_PLATFORM' });
+            return;
+          }
+          if (code === 419) {
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'FAILED', error: 'Le groupe a atteint sa limite de membres.' });
+            return;
+          }
+          if (code === 403 || code === 408 || code === 417) {
+            stage = 'exportInvite';
+            const inviteResult = await window.require('WAWebMexFetchGroupInviteCodeJob').fetchMexGroupInviteCode(groupId);
+            const codeText = String(inviteResult && inviteResult.code || inviteResult || '');
+            if (!/^[A-Za-z0-9_-]{8,}$/.test(codeText)) throw new Error('Ajout direct refusé et lien officiel indisponible.');
+            const inviteLink = 'https://chat.whatsapp.com/' + codeText;
+            if (payload.sendFallback !== true) {
+              post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'NEEDS_LINK', inviteLink: inviteLink });
+              return;
+            }
+            stage = 'sendInviteLink';
+            const template = String(payload.inviteMessage || 'Bonjour {nom}, vous êtes invité(e) à rejoindre le groupe « {groupe} » : {lien}').slice(0, 600);
+            const text = template.replace(/\{nom\}/g, String(payload.name || '')).replace(/\{groupe\}/g, String(payload.title || 'groupe')).replace(/\{lien\}/g, inviteLink);
+            const sent = await window.__cyrusSend(identifier + '@c.us', text);
+            if (!sent || !sent.ok) throw new Error(sent && sent.error || 'WhatsApp n’a pas confirmé l’envoi du lien.');
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'LINK_SENT', inviteLink: inviteLink });
+            return;
+          }
+          if (/429|rate|overlimit|flood/i.test(String(result && (result.message || result.code)))) {
+            post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'RATE_LIMIT', error: String(result && result.message || 'Limitation de débit WhatsApp.') });
+            return;
+          }
+          post('community-operation-result', { jobId: jobId, action: 'invite', ok: true, identifier: identifier, outcome: 'FAILED', error: String(result && result.message || ('Refus WhatsApp (' + (code || 'inconnu') + ').')) });
+        } catch (error) {
+          const message = String(error && error.message || error);
+          post('community-operation-result', { jobId: jobId, action: 'invite', ok: false, identifier: identifier, outcome: /rate|429|overlimit|flood/i.test(message) ? 'RATE_LIMIT' : 'FAILED', stage: stage, error: message });
+        }
+      };
+
+      window.__cyrusWaScheduledSend = async function (payload) {
+        try {
+          const identifier = String(payload && payload.identifier || '').replace(/\D/g, '');
+          const recipient = identifier + '@c.us';
+          const result = payload && payload.media
+            ? await window.__cyrusSendMedia(recipient, payload.media.data, payload.media.mimetype, payload.media.filename, payload.text || '')
+            : await window.__cyrusSend(recipient, String(payload && payload.text || ''));
+          post('scheduled-send-result', { id: String(payload && payload.id || ''), ok: !!(result && result.ok), error: result && result.error || '' });
+        } catch (error) {
+          post('scheduled-send-result', { id: String(payload && payload.id || ''), ok: false, error: String(error && error.message || error) });
         }
       };
 

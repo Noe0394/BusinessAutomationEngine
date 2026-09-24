@@ -108,6 +108,7 @@
       <button data-screen="telegram">✈️ Telegram</button>
       <button data-screen="ai">🤖 Génération IA</button>
       <button data-screen="campaigns">📢 Campagnes</button>
+      <button data-screen="scheduler">🗓️ Programmation / Planning</button>
       <button data-screen="relance">📇 Relance Manuelle</button>
       <button data-screen="connexions">🔌 Connexions</button>
       <button data-screen="intelligence">🧠 Commandes</button>
@@ -271,6 +272,29 @@
     </div>
   </section>
 
+  <section id="screen-scheduler" class="screen">
+    <h2>🗓️ Programmation / Planning</h2>
+    <p>Programme un message sur WhatsApp ou Telegram. Il partira à l’heure choisie si Cyrus mobile est ouvert et que l’appareil dispose d’une connexion. Les programmations restent sur cet appareil.</p>
+    <div class="card">
+      <h3>État des canaux</h3>
+      <p id="schedule-wa-status">WhatsApp : pas encore ouvert.</p>
+      <button id="schedule-open-wa" type="button">Ouvrir WhatsApp</button>
+      <p id="schedule-tg-status">Telegram : pas encore ouvert.</p>
+      <button id="schedule-open-tg" type="button">Ouvrir Telegram</button>
+      <p>Ouvre chaque canal et termine l’appairage avant l’heure prévue. Un message arrivé à échéance pendant que l’application était fermée demande une action manuelle.</p>
+    </div>
+    <div class="card">
+      <label for="schedule-channel">Canal</label><select id="schedule-channel"><option value="whatsapp">WhatsApp</option><option value="telegram">Telegram</option></select>
+      <label for="schedule-recipient">Destinataire (numéro international WhatsApp; @username ou identifiant Telegram)</label><input id="schedule-recipient" placeholder="2250700000000 ou @username">
+      <label for="schedule-at">Date et heure locale</label><input id="schedule-at" type="datetime-local">
+      <label for="schedule-message">Message</label><textarea id="schedule-message" maxlength="4000" placeholder="Message à envoyer"></textarea>
+      <label for="schedule-media">Pièce jointe (facultative, maximum 4 Mo)</label><input id="schedule-media" type="file" accept="image/*,video/*,application/pdf">
+      <p id="schedule-feedback" role="status"></p>
+      <button id="schedule-create" type="button">Programmer ce message</button>
+    </div>
+    <div class="card"><h3>Messages programmés</h3><button id="schedule-refresh" type="button">Actualiser</button><div id="schedule-list"></div></div>
+  </section>
+
   <!-- Relance Manuelle Express : port 100% local de l'onglet du meme nom de
        public/dashboard.html (voir lib/manualRelance.js) - reprend les
        contacts encore en attente/echec de la derniere campagne (ou un
@@ -369,6 +393,18 @@
       </div>
 
       <div class="card">
+        <h3>Répondeur automatique</h3>
+        <p>Les réponses FAQ/IA restent aussi désactivées par fiche métier. Le mode toujours actif ouvre les deux canaux; Pause les suspend immédiatement.</p>
+        <label><input id="auto-reply-wa" type="checkbox"> Activer sur WhatsApp</label>
+        <label><input id="auto-reply-tg" type="checkbox"> Activer sur Telegram</label>
+        <label><input id="auto-reply-always" type="checkbox"> Toujours actif sur les deux canaux</label>
+        <label><input id="auto-reply-paused" type="checkbox"> Mettre le répondeur en pause</label>
+        <label><input id="auto-reply-groups" type="checkbox"> Autoriser aussi les réponses dans les groupes (opt-in)</label>
+        <p id="auto-reply-status" role="status">Répondeur désactivé.</p>
+        <small>Le service Android de premier plan est démarré avec l’application. Le maintien des sessions dépend aussi d’Android, du réseau et de la validité des connexions.</small>
+      </div>
+
+      <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <label style="margin:0;">Historique des envois</label>
           <button id="conn-history-refresh-btn">🔄 Actualiser</button>
@@ -403,9 +439,8 @@
   </section>
 
   <!-- Studio Média Prédictif - port fidèle de public/dashboard.html
-       #studio-media-view (voir media-studio.js). Fond photoréaliste (via
-       Firebase generateImageFallback, même cascade fal.ai->Pollinations que
-       le VPS) + calques Canvas 2D natifs (texte/badges/gradient). Exclu de
+       #studio-media-view (voir media-studio.js). Fond photoréaliste via le
+       Worker Cloudflare + calques Canvas 2D natifs (texte/badges/gradient). Exclu de
        ce portage (hors périmètre local documenté) : partage par lien 1-clic
        (nécessite un hébergement serveur dédié, /v/:id, absent ici), le
        storyboard multi-scènes et le mixer vidéo perso (ffmpeg, jamais
@@ -414,7 +449,7 @@
     <div class="statusbar"><span>🖼️ Studio Média Prédictif</span></div>
     <div class="content">
       <div class="card">
-        <p class="empty" style="padding:0 0 10px;">Décrivez le visuel souhaité, choisissez le format et générez 3 propositions de styles différents. Fond généré via l'API publique et gratuite Pollinations (ou fal.ai via Firebase) — sélectionnez une proposition puis modifiez-la autant que nécessaire avant de télécharger.</p>
+        <p class="empty" style="padding:0 0 10px;">Décrivez le visuel souhaité, choisissez le format et générez 3 propositions de styles différents. Le fond passe par la passerelle IA Cloudflare — sélectionnez une proposition puis modifiez-la avant de télécharger.</p>
 
         <label>Décrivez le visuel</label>
         <textarea id="media-concept" placeholder='Ex : "Affiche promo -30% sur nos pâtisseries, livraison gratuite, contact WhatsApp 07 XX XX XX XX"'></textarea>
@@ -539,11 +574,30 @@
   <section id="screen-reports" class="screen">
     <h2>📊 Rapports & Activités</h2>
     <p>Activité enregistrée sur cet appareil. Les données ne sont pas synchronisées avec le VPS.</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><label>Du <input id="mobile-report-from" type="date"></label><label>Au <input id="mobile-report-to" type="date"></label></div>
+    <div class="card">
+      <label>Canal</label><select id="mobile-report-channel"><option value="">Tous les canaux</option><option value="whatsapp">WhatsApp</option><option value="telegram">Telegram</option></select>
+      <label>Statut de campagne</label><select id="mobile-report-status"><option value="">Tous les statuts</option><option value="done">Terminée</option><option value="running">En cours</option><option value="scheduled">Programmée</option><option value="paused">En pause</option><option value="cancelled">Annulée</option></select>
+      <label>Contact ou campagne</label><input id="mobile-report-search" type="search" placeholder="Nom, identifiant ou texte de campagne">
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><label>Du <input id="mobile-report-from" type="date"></label><label>Au <input id="mobile-report-to" type="date"></label></div>
+    </div>
     <button id="mobile-report-refresh">🔄 Rafraîchir</button>
     <button id="mobile-report-export">📊 Exporter Excel</button>
     <p id="mobile-report-feedback" role="status"></p>
     <div id="mobile-report-content"></div>
+    <div class="card">
+      <h3>🧠 Analyse des données locales</h3>
+      <p>L’analyse envoie à la cascade IA Cloudflare des indicateurs agrégés sans noms, numéros ni contenu de message.</p>
+      <button id="mobile-report-analyze">Analyser avec l’IA</button>
+      <p id="mobile-report-analysis-feedback" role="status"></p>
+      <div id="mobile-report-analysis" style="white-space:pre-wrap"></div>
+    </div>
+    <div class="card">
+      <h3>🔁 Recommandations et mesure des améliorations</h3>
+      <p>Les suggestions reposent sur les statistiques locales. Leur application est confirmée manuellement; la mesure compare les campagnes suivantes sans attribuer automatiquement un effet causal.</p>
+      <button id="mobile-report-improvements-scan">Analyser les améliorations</button>
+      <p id="mobile-report-improvements-feedback" role="status"></p>
+      <div id="mobile-report-improvements"></div>
+    </div>
   </section>
   <section id="screen-facebook-share" class="screen">
     <h2>Groupes / Diffusion</h2>
@@ -579,16 +633,62 @@
   </section>
   <section id="screen-communities" class="screen">
     <h2>👥 Communautés</h2>
-    <p>Groupes déjà accessibles dans les sessions WhatsApp et Telegram de cet appareil.</p>
+    <p>Groupes déjà accessibles dans les sessions WhatsApp et Telegram de cet appareil. La découverte publique ne rejoint aucun groupe et n’envoie aucun message.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="mobile-groups-wa">Lister WhatsApp</button><button id="mobile-groups-tg">Lister Telegram</button></div>
     <p id="mobile-groups-feedback" role="status"></p>
+    <div class="card">
+      <h3>🔎 Découvrir des communautés publiques</h3>
+      <label for="mobile-community-channel">Plateforme</label>
+      <select id="mobile-community-channel"><option value="WHATSAPP">WhatsApp</option><option value="TELEGRAM">Telegram</option></select>
+      <label for="mobile-community-keywords">Thèmes ou mots-clés (5 maximum)</label>
+      <input id="mobile-community-keywords" placeholder="formation, immobilier, Dakar">
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="mobile-community-city" placeholder="Ville (facultatif)"><input id="mobile-community-country" placeholder="Pays (facultatif)"></div>
+      <button id="mobile-community-discover">Rechercher dans les annuaires publics</button>
+      <small>WhatsApp envoie uniquement ces mots-clés et la ville/pays saisis aux moteurs publics; ses liens restent non vérifiés. Telegram utilise la recherche publique officielle de la session. Ouvre les liens toi-même; aucune adhésion ni invitation automatique.</small>
+      <p id="mobile-community-discovery-feedback" role="status"></p>
+      <div id="mobile-community-results"></div>
+    </div>
+    <div class="card">
+      <h3>➕ Créer un groupe et inviter des contacts</h3>
+      <p>Le groupe est créé sur la plateforme choisie. Les contacts déjà bloqués sont exclus. Chaque invitation est espacée; aucun lien n’est envoyé en privé sans la case ci-dessous et la confirmation finale.</p>
+      <label for="mobile-community-create-channel">Plateforme</label>
+      <select id="mobile-community-create-channel"><option value="WHATSAPP">WhatsApp</option><option value="TELEGRAM">Telegram</option></select>
+      <label for="mobile-community-title">Nom du groupe</label><input id="mobile-community-title" maxlength="128" placeholder="Nom du nouveau groupe">
+      <label for="mobile-community-about">Description (facultatif)</label><textarea id="mobile-community-about" maxlength="255" placeholder="Description du groupe"></textarea>
+      <label for="mobile-community-recipients">Membres à inviter, un par ligne (téléphone WhatsApp avec indicatif; @username ou identifiant utilisateur Telegram)</label>
+      <textarea id="mobile-community-recipients" rows="5" placeholder="2250700000000\n@username"></textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="mobile-community-load-contacts" type="button">Charger les contacts importés du canal</button><small id="mobile-community-contact-count" role="status"></small></div>
+      <label for="mobile-community-invite-message">Message privé pour les contacts auxquels la plateforme interdit l’ajout direct</label>
+      <textarea id="mobile-community-invite-message" rows="3" maxlength="600">Bonjour {nom}, vous êtes invité(e) à rejoindre le groupe « {groupe} » : {lien}</textarea>
+      <label style="display:flex;align-items:center;gap:8px"><input id="mobile-community-send-fallback" type="checkbox" style="width:auto;min-height:auto">Autoriser l’envoi privé du lien officiel si l’ajout direct est refusé</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <label>Délai min. (s)<input id="mobile-community-delay-min" type="number" min="5" max="300" value="5"></label>
+        <label>Délai max. (s)<input id="mobile-community-delay-max" type="number" min="5" max="600" value="9"></label>
+      </div>
+      <button id="mobile-community-create" type="button">Créer le groupe et démarrer les invitations</button>
+      <p id="mobile-community-job-feedback" role="status"></p>
+      <div id="mobile-community-jobs"></div>
+    </div>
+    <div class="card">
+      <h3>🧑‍🤝‍🧑 Découvrir des personnes sur Telegram</h3>
+      <p>Recherche publique Telegram par nom ou username. Seuls les profils rendus publics par Telegram sont retournés; les résultats sont des prospects à valider.</p>
+      <label for="mobile-people-keywords">Nom, activité ou username (5 mots-clés maximum)</label>
+      <input id="mobile-people-keywords" placeholder="photographe, @username, Dakar">
+      <button id="mobile-people-discover">Rechercher des profils publics</button>
+      <p id="mobile-people-feedback" role="status"></p>
+      <div id="mobile-people-results"></div>
+    </div>
+    <div class="card">
+      <h3>📚 Annuaire enregistré sur cet appareil</h3>
+      <div id="mobile-community-directory"></div>
+    </div>
     <button id="mobile-members-export" disabled>📥 Exporter les membres extraits (Excel)</button>
     <div id="mobile-members-content"></div>
     <div id="mobile-groups-content"><p>Ouvre une session connectée puis lance l’extraction.</p></div>
   </section>
   <section id="screen-services" class="screen">
     <h2>🏢 Services Métiers</h2>
-    <p>Configure tes offres pour personnaliser les contenus IA. Ces fiches sont stockées localement sur cet appareil; elles ne contiennent ni clé API ni identifiants externes.</p>
+    <p>Configure tes offres pour personnaliser les contenus IA. Les fiches restent sur cet appareil; les clés des connecteurs API compatibles sont chiffrées dans Android Keystore et ne sont pas affichées.</p>
     <div class="card">
       <input id="svc-name" placeholder="Nom du service / entreprise">
       <select id="svc-type"><option value="formation">Formation</option><option value="commerce">Commerce</option><option value="service">Service</option><option value="other">Autre</option></select>
@@ -605,9 +705,36 @@
       <textarea id="svc-products" placeholder="Produits, un par ligne : Nom | Prix"></textarea>
       <textarea id="svc-objectives" placeholder="Objectifs, un par ligne"></textarea>      <textarea id="svc-faq" placeholder="FAQ, une paire par ligne : Question => réponse"></textarea>
       <textarea id="svc-rules" placeholder="Règles, promesses et consignes commerciales"></textarea>
+      <details style="margin-top:12px"><summary>🔌 Connexion API et permissions</summary>
+        <label>Type de connexion</label><select id="svc-conn-kind"><option value="none">Aucune — informations métier uniquement</option><option value="api">API connectée</option><option value="account">Compte / session</option></select>
+        <div id="svc-api-fields" hidden>
+          <label>Connecteur</label><select id="svc-connector"><option value="generic">API générique</option><option value="platform_gateway">Passerelle de plateforme</option><option value="systemio">System.io</option><option value="accounting">Journal comptable local</option></select>
+          <label>URL de base</label><input id="svc-baseurl" type="url" placeholder="https://api.exemple.com">
+          <label>En-tête d’authentification</label><input id="svc-authheader" value="X-API-Key">
+          <label>Clé API <small>(chiffrée par Android Keystore, jamais réaffichée)</small></label><input id="svc-apikey" type="password" autocomplete="new-password" placeholder="Saisir pour remplacer la clé actuelle">
+          <div id="svc-key-status" role="status"></div>
+          <label>Chemin API création / inscription</label><input id="svc-endpoint-enroll" value="/api/v1/agent-gateway/enroll-student">
+          <label>Chemin API suspension</label><input id="svc-endpoint-suspend" value="/api/v1/agent-gateway/suspend-student">
+          <p><small>Transport HTTPS natif Android pour éviter les restrictions CORS. Les clés et réponses API ne sont pas envoyées à l’IA.</small></p>
+        </div>
+        <div id="svc-noapi-hint"><small>Sans API, Cyrus utilise uniquement les renseignements métier configurés.</small></div>
+        <fieldset><legend>Autorisations explicites</legend>
+          <label><input type="checkbox" class="svc-perm" value="students:create"> Créer un compte élève</label>
+          <label><input type="checkbox" class="svc-perm" value="students:suspend"> Suspendre un accès</label>
+          <label><input type="checkbox" class="svc-perm" value="courses:enroll"> Inscrire / débloquer une formation</label>
+          <label><input type="checkbox" class="svc-perm" value="contacts:write"> Ajouter un contact CRM</label>
+          <label><input type="checkbox" class="svc-perm" value="tags:write"> Attribuer un tag CRM</label>
+          <label><input type="checkbox" class="svc-perm" value="accounting:write"> Enregistrer une vente / facture locale</label>
+        </fieldset>
+        <small>Seules les actions cochées apparaissent dans la fiche. Les opérations externes demandent une confirmation.</small>
+      </details>
       <label style="display:flex;align-items:center;gap:8px"><input id="svc-wa-autoreply" type="checkbox" style="width:auto;min-height:auto">Répondre automatiquement sur WhatsApp aux questions correspondant exactement à cette FAQ</label>
-      <small>Réponse locale déterministe; groupes, messages flous, refus et questions sans correspondance ignorés. Telegram n’émet pas les événements entrants dans son pont mobile.</small>
+      <label style="display:flex;align-items:center;gap:8px"><input id="svc-wa-ai-autoreply" type="checkbox" style="width:auto;min-height:auto">Répondre avec l’IA sur WhatsApp aux messages privés sans réponse FAQ</label>
+      <label style="display:flex;align-items:center;gap:8px"><input id="svc-tg-autoreply" type="checkbox" style="width:auto;min-height:auto">Répondre automatiquement sur Telegram aux questions correspondant exactement à cette FAQ</label>
+      <label style="display:flex;align-items:center;gap:8px"><input id="svc-tg-ai-autoreply" type="checkbox" style="width:auto;min-height:auto">Répondre avec l’IA sur Telegram aux messages privés sans réponse FAQ</label>
+      <small>Chaque canal reste désactivé par défaut. Le mode IA envoie le message client, jusqu’aux 7 derniers messages et la fiche métier à Cloudflare. Un historique de 12 messages est conservé sur cet appareil et chaque canal est limité à 10 générations par contact et par heure. Les groupes, désinscriptions et contacts bloqués sont ignorés.</small>
       <button class="primary" id="svc-save">Enregistrer le service</button>
+      <button id="svc-test">Enregistrer et tester la connexion</button>
       <p id="svc-feedback" role="status"></p>
     </div>
     <div id="svc-list"></div>

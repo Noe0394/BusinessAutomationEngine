@@ -1,7 +1,6 @@
 // STUDIO MÉDIA PRÉDICTIF — port fidèle de public/dashboard.html
 // (#studio-media-view + le bloc JS "CYRUS Predictive Media Engine",
-// ~L7845-9095). Moteur hybride : fond photoréaliste (Pollinations direct
-// client-side, ou fal.ai/FLUX via Firebase generateImageFallback) + calques
+// ~L7845-9095). Moteur hybride : fond photoréaliste via Cloudflare + calques
 // Canvas 2D natifs (texte/badges/gradient/sous-titres) — même logique de
 // composition que le VPS, byte-for-byte pour tout ce qui est pur Canvas.
 //
@@ -11,15 +10,14 @@
 //    generateTextFallback (déjà utilisé par l'onglet Génération IA) avec un
 //    prompt demandant une réponse JSON stricte, parsée ici.
 //  - POST /api/media/generate-image (fal.ai côté serveur) -> réutilise
-//    generateImageFallback (même cascade fal.ai->Pollinations, mais côté
-//    Firebase) ; le repli Pollinations direct-client reste identique au VPS.
+//    generateImageFallback; aucun appel de fournisseur n'est fait depuis la page.
 //  - Téléchargement PNG/vidéo : jamais <a download> (WebView Capacitor sans
 //    accès direct au stockage) -> Capacitor Filesystem.writeFile + Share.share,
 //    même mécanisme que lib/fileExport.js et le bouton ebook déjà en place.
 //  - Vidéo IA (image-to-video) : le VPS uploade le CANVAS COMPOSÉ (texte
 //    inclus) via FormData vers un job serveur dédié. Ici, aucune route
-//    d'upload d'image arbitraire n'existe côté Firebase — on anime donc le
-//    fond IA seul (déjà hébergé par generateImageFallback, URL Storage
+//    d'upload d'image arbitraire n'existe côté Worker — on anime donc le
+//    fond IA seul (URL fournisseur renvoyée par generateImageFallback,
 //    réelle), sans le texte incrusté. C'est même plus cohérent pour un
 //    modèle image-to-video (il anime une vraie photo, pas un visuel avec du
 //    texte dessus). Utilise startVideoFallback/pollVideoFallback (mêmes
@@ -27,13 +25,13 @@
 // Volontairement HORS PÉRIMÈTRE (non portés) : conversion PNG/vidéo en lien
 // 1-clic partageable (nécessite un hébergement serveur dédié /v/:id, absent
 // ici), storyboard multi-scènes (lib/media/storyboardEngine.js, jamais
-// porté côté Firebase), et l'import/habillage de vidéos perso façon
+// porté côté Cloudflare), et l'import/habillage de vidéos perso façon
 // TikTok/Reels (100% ffmpeg côté VPS, hors périmètre zéro-serveur mobile,
 // déjà exclu par une décision produit antérieure).
 (function () {
   'use strict';
 
-  const FIREBASE_BASE = 'https://cyrus-license.ezechielatannidje.workers.dev'; // Worker Cloudflare (mêmes noms de routes que les anciennes fonctions Firebase)
+  const CLOUDFLARE_BASE = 'https://cyrus-license.ezechielatannidje.workers.dev';
 
   function getDeviceId() {
     let id = localStorage.getItem('cyrus_device_id');
@@ -86,7 +84,7 @@
         + '{"detectedSector": "restauration|immobilier|ecommerce|hightech|formation|"", "marketingHook": "accroche courte et percutante", '
         + '"imagePromptEnglish": "prompt de génération d\'image en anglais, détaillé, photoréaliste", "videoScript": "script de vente court pour sous-titres vidéo", '
         + '"suggestedFormats": ["9:16"|"1:1"|"16:9"|"4:5", ...]}. Demande : "' + concept + '"';
-      const res = await fetch(FIREBASE_BASE + '/generateTextFallback', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ prompt: prompt }) });
+      const res = await fetch(CLOUDFLARE_BASE + '/generateTextFallback', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ prompt: prompt }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
 
@@ -247,29 +245,20 @@
     img.src = url;
   }
 
-  function mediaFetchViaPollinations(cleanPrompt, w, h) {
-    return new Promise((resolve, reject) => {
-      const seed = Math.floor(Math.random() * 1000000);
-      const url = 'https://image.pollinations.ai/prompt/' + encodeURIComponent(cleanPrompt) + '?width=' + w + '&height=' + h + '&nologo=true&seed=' + seed + '&enhance=true&safe=true';
-      mediaLoadImageUrl(url, (err, img) => { if (err) reject(err); else resolve(img); });
-    });
-  }
-
-  // Source principale : generateImageFallback (Firebase, cascade fal.ai ->
-  // Pollinations côté serveur) — adapté de POST /api/media/generate-image.
+  // Source distante unique : generateImageFallback via le Worker Cloudflare.
   function mediaFetchBackgroundImageOnce(promptEnriched, w, h) {
     return new Promise((resolve, reject) => {
       const cleanPrompt = (promptEnriched && promptEnriched.trim()) || 'professional product banner HD, photorealistic, studio lighting';
-      fetch(FIREBASE_BASE + '/generateImageFallback', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ prompt: cleanPrompt, width: w, height: h }) })
-        .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-        .then(({ ok, data }) => {
-          if (!ok || !data.url) return mediaFetchViaPollinations(cleanPrompt, w, h).then(resolve, reject);
+      fetch(CLOUDFLARE_BASE + '/generateImageFallback', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ prompt: cleanPrompt, width: w, height: h }) })
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.url) throw new Error(data.error || 'La passerelle IA Cloudflare n’a pas renvoyé d’image.');
           mediaLoadImageUrl(data.url, (err, img) => {
             if (!err) { img.__cyrusSourceUrl = data.url; return resolve(img); }
-            mediaFetchViaPollinations(cleanPrompt, w, h).then(resolve, reject);
+            reject(err);
           });
         })
-        .catch(() => { mediaFetchViaPollinations(cleanPrompt, w, h).then(resolve, reject); });
+        .catch(reject);
     });
   }
 
@@ -762,7 +751,7 @@
   });
 
   // ---------- Vidéo IA (image-to-video, adapté : startVideoFallback/pollVideoFallback) ----------
-  // Anime le FOND seul (URL Firebase Storage réelle, voir
+  // Anime le FOND seul (URL fournisseur renvoyée par Cloudflare, voir
   // mediaFetchBackgroundImageOnce#img.__cyrusSourceUrl) plutôt que le canvas
   // composé avec le texte - voir la note d'adaptation en tête de fichier.
   const MEDIA_AI_VIDEO_POLL_MS = 4000;
@@ -772,7 +761,7 @@
     if (!mediaCurrentCreation) { mediaFeedback("Sélectionnez d'abord une création avant de générer une vidéo IA.", true); return; }
     if (mediaCurrentCreation.usedFallback) { mediaFeedback('⚠️ Cette création utilise le fond de secours local — régénérez le fond avant de générer une vidéo IA.', true); return; }
     const imageUrl = mediaCurrentCreation.img && mediaCurrentCreation.img.__cyrusSourceUrl;
-    if (!imageUrl) { mediaFeedback('Cette création n\'a pas de fond hébergé exploitable (fond Pollinations direct, non ré-hébergé) — régénérez le fond via "🎨 Régénérer le fond" pour en obtenir un.', true); return; }
+    if (!imageUrl) { mediaFeedback('Cette création n\'a pas de fond IA distant. Régénérez le fond via « Régénérer le fond » avant de créer une vidéo IA.', true); return; }
 
     const btn = document.getElementById('media-export-ai-video-btn');
     btn.disabled = true;
@@ -780,7 +769,7 @@
 
     try {
       const scriptText = document.getElementById('media-script').value.trim() || document.getElementById('media-concept').value.trim();
-      const startRes = await fetch(FIREBASE_BASE + '/startVideoFallback', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ imageUrl: imageUrl, prompt: scriptText }) });
+      const startRes = await fetch(CLOUDFLARE_BASE + '/startVideoFallback', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ imageUrl: imageUrl, prompt: scriptText }) });
       const startData = await startRes.json();
       if (!startRes.ok) throw new Error(startData.error || 'Échec du démarrage de la génération vidéo IA.');
       mediaFeedback('🤖 Génération en cours via ' + (startData.provider || 'IA') + ' — 1 à 3 minutes...', false);
@@ -788,7 +777,7 @@
       let result = null;
       for (let attempt = 0; attempt < MEDIA_AI_VIDEO_MAX_POLLS; attempt += 1) {
         await mediaSleep(MEDIA_AI_VIDEO_POLL_MS);
-        const pollRes = await fetch(FIREBASE_BASE + '/pollVideoFallback', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ jobId: startData.jobId }) });
+        const pollRes = await fetch(CLOUDFLARE_BASE + '/pollVideoFallback', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ jobId: startData.jobId }) });
         const pollData = await pollRes.json();
         if (!pollRes.ok) throw new Error(pollData.error || 'Échec de la génération vidéo IA.');
         if (pollData.done) { result = pollData; break; }

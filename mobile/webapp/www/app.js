@@ -6,7 +6,7 @@
   const EmbeddedWebView = window.Capacitor.Plugins.EmbeddedWebView;
   const DESKTOP_UA =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
-  const FIREBASE_BASE = 'https://cyrus-license.ezechielatannidje.workers.dev'; // Worker Cloudflare (mêmes noms de routes que les anciennes fonctions Firebase)
+  const CLOUDFLARE_BASE = 'https://cyrus-license.ezechielatannidje.workers.dev';
 
   // ---------- Navigation ----------
   let activeTab = 'whatsapp';
@@ -57,6 +57,13 @@
     });
   });
 
+  document.getElementById('schedule-open-wa').addEventListener('click', () => {
+    document.querySelector('.nav button[data-screen="whatsapp"]').click();
+  });
+  document.getElementById('schedule-open-tg').addEventListener('click', () => {
+    document.querySelector('.nav button[data-screen="telegram"]').click();
+  });
+
   function normalizeWid(raw) {
     return String(raw || '').split('@')[0].replace(/\D/g, '');
   }
@@ -89,6 +96,7 @@
     const connDot = document.getElementById('conn-wa-dot');
     if (connStatus) connStatus.textContent = text;
     if (connDot) connDot.classList.toggle('on', !!on);
+    refreshSchedulerReadiness();
   }
 
   // Déconnexion réelle (page Connexions) : efface cookies/stockage web de la
@@ -185,6 +193,17 @@
   let tgMessages = [];
   let tgActiveContact = '';
 
+  function refreshSchedulerReadiness() {
+    const wa = document.getElementById('schedule-wa-status');
+    const tg = document.getElementById('schedule-tg-status');
+    if (wa) wa.textContent = 'WhatsApp : ' + (!waStarted ? 'pas encore ouvert' : !waBridgeReady ? 'initialisation du pont…' : waConnected ? 'connecté et prêt' : 'ouvert, connexion à terminer');
+    if (tg) tg.textContent = 'Telegram : ' + (!tgStarted ? 'pas encore ouvert' : !tgBridgeReady ? 'initialisation du pont…' : tgConnected ? 'connecté et prêt' : 'ouvert, connexion à terminer');
+  }
+  window.CyrusMobileSessions = {
+    isReady(channel) { return channel === 'whatsapp' ? !!(waConnected && waBridgeReady) : channel === 'telegram' ? !!(tgConnected && tgBridgeReady) : false; },
+  };
+  refreshSchedulerReadiness();
+
   async function startTelegram() {
     tgStarted = true;
     await fetch('telegramBridge.js').then((r) => r.text()).then((script) => {
@@ -202,6 +221,7 @@
     const connDot = document.getElementById('conn-tg-dot');
     if (connStatus) connStatus.textContent = text;
     if (connDot) connDot.classList.toggle('on', !!on);
+    refreshSchedulerReadiness();
   }
 
   async function logoutTelegram() {
@@ -261,6 +281,7 @@
           break;
         case 'bridge-ready':
           waBridgeReady = true;
+          refreshSchedulerReadiness();
           break;
         case 'message':
           waMessages.push(data.payload);
@@ -275,6 +296,15 @@
         case 'group-members':
           if (window.CyrusParity) window.CyrusParity.renderMembers('WHATSAPP', data.payload);
           break;
+        case 'community-operation-result':
+          if (window.CyrusParity) window.CyrusParity.handleCommunityOperation(data.payload);
+          break;
+        case 'scheduled-send-result':
+          if (window.CyrusParity) window.CyrusParity.handleScheduledSendResult(data.payload).catch(err => console.warn('Planning mobile :', err.message));
+          break;
+        case 'bridge-error':
+          document.getElementById('mobile-groups-feedback').textContent = 'WhatsApp : ' + (data.payload.message || 'opération impossible');
+          break;
         case 'send-result':
           if (!data.payload.ok) alert('Echec envoi WhatsApp: ' + data.payload.error);
           break;
@@ -288,12 +318,42 @@
           break;
         case 'bridge-ready':
           tgBridgeReady = true;
+          refreshSchedulerReadiness();
           break;
         case 'groups':
           if (window.CyrusParity) window.CyrusParity.renderGroups('TELEGRAM', data.payload.groups || []);
           break;
+        case 'community-search-results':
+          if (window.CyrusParity) window.CyrusParity.handleCommunitySearch(data.payload).catch(err => { document.getElementById('mobile-community-discovery-feedback').textContent = 'Impossible d’enregistrer les résultats : ' + err.message; });
+          break;
+        case 'community-operation-result':
+          if (window.CyrusParity) window.CyrusParity.handleCommunityOperation(data.payload);
+          break;
+        case 'scheduled-send-result':
+          if (window.CyrusParity) window.CyrusParity.handleScheduledSendResult(data.payload).catch(err => console.warn('Planning mobile :', err.message));
+          break;
+        case 'community-people-results':
+          if (window.CyrusParity) window.CyrusParity.handleCommunityPeopleSearch(data.payload).catch(err => {
+            document.getElementById('mobile-people-discover').disabled = false;
+            document.getElementById('mobile-people-feedback').textContent = 'Impossible d’enregistrer les résultats : ' + err.message;
+          });
+          break;
+        case 'message':
+          tgMessages.push(data.payload);
+          if (tgMessages.length > 200) tgMessages.shift();
+          if (window.CyrusBusinessServices) window.CyrusBusinessServices.handleIncomingTG(data.payload).catch(err => console.warn('Réponse automatique Telegram mobile :', err.message));
+          break;
         case 'group-members':
           if (window.CyrusParity) window.CyrusParity.renderMembers('TELEGRAM', data.payload);
+          break;
+        case 'bridge-error':
+          if (String(data.payload.where || '').startsWith('discoverPeople')) {
+            document.getElementById('mobile-people-discover').disabled = false;
+            document.getElementById('mobile-people-feedback').textContent = 'Recherche Telegram impossible : ' + (data.payload.message || 'opération impossible');
+          } else if (String(data.payload.where || '').startsWith('discoverCommunities')) {
+            document.getElementById('mobile-community-discovery-feedback').textContent = 'Recherche Telegram impossible : ' + (data.payload.message || 'opération impossible');
+            document.getElementById('mobile-community-discover').disabled = false;
+          } else document.getElementById('mobile-groups-feedback').textContent = 'Telegram : ' + (data.payload.message || 'opération impossible');
           break;
         case 'send-result':
           if (!data.payload.ok) alert('Echec envoi Telegram: ' + data.payload.error);
@@ -340,7 +400,7 @@
   }
 
   async function verifyLicenseOnline(key) {
-    const res = await fetch(FIREBASE_BASE + '/verifyLicenseOffline', {
+    const res = await fetch(CLOUDFLARE_BASE + '/verifyLicenseOffline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: key, deviceId: getDeviceId() }),
@@ -394,6 +454,22 @@
     return { 'Content-Type': 'application/json', 'x-license-key': getLicenseKey(), 'x-device-id': getDeviceId() };
   }
 
+  // Client IA partage par les modules mobiles. Les clés fournisseur restent
+  // dans le Worker Cloudflare ; seul le jeton de licence déjà utilisé par
+  // l'écran IA est transmis depuis l'appareil.
+  window.Cyrus = window.Cyrus || {};
+  window.Cyrus.ai = {
+    async generateText(prompt) {
+      const res = await fetch(CLOUDFLARE_BASE + '/generateTextFallback', {
+        method: 'POST', headers: aiHeaders(), body: JSON.stringify({ prompt: String(prompt || '') }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      if (!data.text || typeof data.text !== 'string') throw new Error('Le fournisseur IA n’a renvoyé aucun texte.');
+      return { text: data.text, provider: data.provider || 'Cloudflare' };
+    },
+  };
+
   document.getElementById('ai-text-btn').addEventListener('click', async () => {
     const rawPrompt = document.getElementById('ai-prompt').value.trim();
     const prompt = window.CyrusBusinessServices ? await window.CyrusBusinessServices.promptContext(rawPrompt) : rawPrompt;
@@ -402,7 +478,7 @@
     if (!prompt) return;
     errorEl.textContent = '';
     try {
-      const res = await fetch(FIREBASE_BASE + '/generateTextFallback', {
+      const res = await fetch(CLOUDFLARE_BASE + '/generateTextFallback', {
         method: 'POST',
         headers: aiHeaders(),
         body: JSON.stringify({ prompt: prompt }),
@@ -424,7 +500,7 @@
     if (!prompt) return;
     errorEl.textContent = '';
     try {
-      const res = await fetch(FIREBASE_BASE + '/generateImageFallback', {
+      const res = await fetch(CLOUDFLARE_BASE + '/generateImageFallback', {
         method: 'POST',
         headers: aiHeaders(),
         body: JSON.stringify({ prompt: prompt }),
@@ -438,77 +514,147 @@
     }
   });
 
-  // ---------- Génération d'ebook (PDF) ----------
-  // Parité avec local-client/public/ai.js#ebookGenerate et
-  // public/dashboard.html (Studio IA > Générateur de Livres). pdfkit est une
-  // bibliothèque Node.js (aucun portage navigateur viable sans bundler, hors
-  // périmètre "zéro framework" de ce projet) — la génération PDF elle-même
-  // tourne donc sur la Cloud Function generateEbookFallback (mêmes secrets/
-  // cascade texte que generateTextFallback, voir firebase-functions/index.js),
-  // pas dans cet onglet. Reste 100% hors VPS : uniquement Firebase, comme le
-  // reste de la Génération IA mobile.
-  function readFileAsBase64(file) {
+  // ---------- Ebook : texte Cloudflare, PDF rendu sur l'appareil ----------
+  // Le Worker ne transporte aucun binaire ebook. Les chapitres passent par
+  // la cascade texte sous licence; canvas et un petit assembleur PDF local
+  // produisent ensuite le fichier A4 sans Firebase ni serveur PDF.
+  function loadEbookImage(file) {
+    if (!file) return Promise.resolve(null);
+    if (!file.type.startsWith('image/') || file.size > 6 * 1024 * 1024) return Promise.reject(new Error('Chaque image de couverture/logo doit être une image de 6 Mo maximum.'));
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
+      const url = URL.createObjectURL(file); const image = new Image();
+      image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+      image.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image de couverture/logo illisible.')); };
+      image.src = url;
     });
+  }
+  function ebookCanvas() {
+    const canvas = document.createElement('canvas'); canvas.width = 850; canvas.height = 1200;
+    const context = canvas.getContext('2d'); context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height);
+    return { canvas, context };
+  }
+  function ebookWrap(context, paragraph, maxWidth) {
+    const words = String(paragraph || '').split(/\s+/).filter(Boolean); const lines = []; let line = '';
+    words.forEach(word => {
+      const next = line ? line + ' ' + word : word;
+      if (line && context.measureText(next).width > maxWidth) { lines.push(line); line = word; } else line = next;
+    });
+    if (line) lines.push(line); return lines;
+  }
+  function ebookPdf(pages) {
+    const encoder = new TextEncoder();
+    const join = parts => { const size = parts.reduce((sum, part) => sum + part.length, 0); const out = new Uint8Array(size); let offset = 0; parts.forEach(part => { out.set(part, offset); offset += part.length; }); return out; };
+    const ascii = text => encoder.encode(text);
+    const objects = new Map(); const pageIds = pages.map((_, index) => 3 + index * 3);
+    objects.set(1, ascii('<< /Type /Catalog /Pages 2 0 R >>'));
+    objects.set(2, ascii('<< /Type /Pages /Kids [' + pageIds.map(id => id + ' 0 R').join(' ') + '] /Count ' + pageIds.length + ' >>'));
+    pages.forEach((page, index) => {
+      const pageId = pageIds[index]; const imageId = pageId + 1; const contentId = pageId + 2;
+      const dataUrl = page.toDataURL('image/jpeg', 0.86); const raw = atob(dataUrl.split(',')[1]);
+      const jpeg = Uint8Array.from(raw, char => char.charCodeAt(0));
+      const content = ascii('q 595 0 0 842 0 0 cm /Im0 Do Q');
+      objects.set(pageId, ascii('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << /Im0 ' + imageId + ' 0 R >> >> /Contents ' + contentId + ' 0 R >>'));
+      objects.set(imageId, join([ascii('<< /Type /XObject /Subtype /Image /Width ' + page.width + ' /Height ' + page.height + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpeg.length + ' >>\nstream\n'), jpeg, ascii('\nendstream')]));
+      objects.set(contentId, join([ascii('<< /Length ' + content.length + ' >>\nstream\n'), content, ascii('\nendstream')]));
+    });
+    const maxId = Math.max(...objects.keys()); const chunks = [ascii('%PDF-1.4\n%Cyrus local PDF\n')]; const offsets = [0]; let length = chunks[0].length;
+    for (let id = 1; id <= maxId; id++) { offsets[id] = length; const part = join([ascii(id + ' 0 obj\n'), objects.get(id), ascii('\nendobj\n')]); chunks.push(part); length += part.length; }
+    const xrefOffset = length; let xref = 'xref\n0 ' + (maxId + 1) + '\n0000000000 65535 f \n';
+    for (let id = 1; id <= maxId; id++) xref += String(offsets[id]).padStart(10, '0') + ' 00000 n \n';
+    chunks.push(ascii(xref + 'trailer\n<< /Size ' + (maxId + 1) + ' /Root 1 0 R >>\nstartxref\n' + xrefOffset + '\n%%EOF'));
+    return join(chunks);
+  }
+  function ebookPdfBase64(bytes) {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + 0x8000, bytes.length)));
+    return btoa(binary);
+  }
+  async function renderEbookPdf(book, cover, logo, statusEl) {
+    const pages = []; const W = 850; const H = 1200; const margin = 90; const watermark = book.watermarkText;
+    const addCover = () => {
+      const { canvas, context } = ebookCanvas();
+      if (cover) { const scale = Math.max(W / cover.width, H / cover.height); const width = cover.width * scale; const height = cover.height * scale; context.drawImage(cover, (W - width) / 2, (H - height) / 2, width, height); context.fillStyle = 'rgba(255,255,255,.84)'; context.fillRect(0, 0, W, H); }
+      context.fillStyle = '#15223b'; context.textAlign = 'center'; context.font = 'bold 52px Arial';
+      ebookWrap(context, book.title, W - margin * 2).slice(0, 3).forEach((line, index) => context.fillText(line, W / 2, 340 + index * 66));
+      if (book.subtitle) { context.fillStyle = '#5c6780'; context.font = '30px Arial'; ebookWrap(context, book.subtitle, W - margin * 2).slice(0, 3).forEach((line, index) => context.fillText(line, W / 2, 570 + index * 42)); }
+      context.fillStyle = '#6c4fd6'; context.fillRect(300, 720, 250, 5);
+      context.fillStyle = '#374151'; context.font = '28px Arial';
+      if (book.author) context.fillText(book.author, W / 2, 805);
+      if (book.date) context.fillText(book.date, W / 2, 855);
+      if (logo) { const scale = Math.min(150 / logo.width, 110 / logo.height); context.drawImage(logo, W / 2 - logo.width * scale / 2, 930, logo.width * scale, logo.height * scale); }
+      if (watermark) { context.save(); context.globalAlpha = .24; context.font = '20px Arial'; context.fillStyle = '#333'; context.fillText(watermark.slice(0, 100), W / 2, 1135); context.restore(); }
+      pages.push(canvas);
+    };
+    function createContentPage(heading) {
+      const { canvas, context } = ebookCanvas(); context.fillStyle = '#6c4fd6'; context.fillRect(0, 0, W, 18);
+      context.textAlign = 'left'; context.fillStyle = '#526079'; context.font = '20px Arial'; context.fillText(book.title.slice(0, 70), margin, 70);
+      context.fillStyle = '#1f2937'; context.font = 'bold 36px Arial';
+      const headingLines = ebookWrap(context, heading, W - margin * 2); let y = 145;
+      headingLines.slice(0, 3).forEach(line => { context.fillText(line, margin, y); y += 46; });
+      context.fillStyle = '#6c4fd6'; context.fillRect(margin, y + 5, 100, 4); y += 55;
+      if (watermark) { context.save(); context.globalAlpha = .14; context.fillStyle = '#444'; context.font = '18px Arial'; context.textAlign = 'right'; context.fillText(watermark.slice(0, 80), W - margin, H - 48); context.restore(); }
+      pages.push(canvas); return { canvas, context, y };
+    }
+    function addSection(heading, text) {
+      const paragraphs = String(text || '').split(/\n{2,}/).map(value => value.trim()).filter(Boolean);
+      let page = createContentPage(heading); const maxWidth = W - margin * 2;
+      paragraphs.forEach(paragraph => {
+        page.context.font = '25px Arial'; page.context.fillStyle = '#252c38'; page.context.textAlign = 'left';
+        const lines = ebookWrap(page.context, paragraph.replace(/\n/g, ' '), maxWidth);
+        lines.forEach(line => {
+          if (page.y > H - 105) page = createContentPage(heading + ' · suite');
+          page.context.font = '25px Arial'; page.context.fillStyle = '#252c38'; page.context.fillText(line, margin, page.y); page.y += 38;
+        });
+        page.y += 22;
+      });
+    }
+    addCover();
+    if (book.introduction) addSection('Introduction', book.introduction);
+    for (let index = 0; index < book.chapters.length; index++) {
+      statusEl.textContent = 'Mise en page du chapitre ' + (index + 1) + '/' + book.chapters.length + '…';
+      addSection('Chapitre ' + (index + 1) + ' · ' + book.chapters[index].topic, book.chapters[index].text);
+    }
+    if (book.conclusion) addSection('Conclusion', book.conclusion);
+    pages.forEach((canvas, index) => {
+      if (index === 0) return;
+      const context = canvas.getContext('2d'); context.textAlign = 'center'; context.fillStyle = '#64748b'; context.font = '18px Arial';
+      context.fillText(String(index), W / 2, H - 32);
+    });
+    return ebookPdf(pages);
   }
 
   document.getElementById('ebook-generate-btn').addEventListener('click', async () => {
-    const title = document.getElementById('ebook-title').value.trim();
-    const subtitle = document.getElementById('ebook-subtitle').value.trim();
-    const author = document.getElementById('ebook-author').value.trim();
-    const date = document.getElementById('ebook-date').value.trim();
-    const watermarkText = document.getElementById('ebook-watermark').value.trim();
-    const introduction = document.getElementById('ebook-intro').value.trim();
+    const title = document.getElementById('ebook-title').value.trim() || 'Livre CYRUS';
+    const subtitle = document.getElementById('ebook-subtitle').value.trim(); const author = document.getElementById('ebook-author').value.trim();
+    const date = document.getElementById('ebook-date').value.trim() || new Date().toLocaleDateString();
+    const watermarkText = document.getElementById('ebook-watermark').value.trim(); const introduction = document.getElementById('ebook-intro').value.trim();
     const conclusion = document.getElementById('ebook-conclusion').value.trim();
-    const topics = document.getElementById('ebook-topics').value.split('\n').map((s) => s.trim()).filter(Boolean);
-    const errorEl = document.getElementById('ebook-error');
-    const statusEl = document.getElementById('ebook-status');
-    errorEl.textContent = '';
-    statusEl.textContent = '';
-    if (topics.length === 0) { errorEl.textContent = 'Indique au moins un sujet de chapitre.'; return; }
-
-    const coverFile = document.getElementById('ebook-cover-file').files[0];
-    const logoFile = document.getElementById('ebook-logo-file').files[0];
-    const coverImageBase64 = coverFile ? await readFileAsBase64(coverFile) : undefined;
-    const logoImageBase64 = logoFile ? await readFileAsBase64(logoFile) : undefined;
-
-    statusEl.textContent = 'Rédaction en cours (' + topics.length + ' chapitre(s), séquentiel)...';
+    const topics = document.getElementById('ebook-topics').value.split('\n').map(value => value.trim()).filter(Boolean);
+    const errorEl = document.getElementById('ebook-error'); const statusEl = document.getElementById('ebook-status'); const button = document.getElementById('ebook-generate-btn');
+    errorEl.textContent = ''; statusEl.textContent = '';
+    if (!topics.length || topics.length > 12) { errorEl.textContent = 'Indique de 1 à 12 sujets de chapitre.'; return; }
+    if (!window.Cyrus.ai || typeof window.Cyrus.ai.generateText !== 'function') { errorEl.textContent = 'La cascade IA Cloudflare n’est pas disponible.'; return; }
+    button.disabled = true;
     try {
-      const res = await fetch(FIREBASE_BASE + '/generateEbookFallback', {
-        method: 'POST',
-        headers: aiHeaders(),
-        body: JSON.stringify({
-          title, subtitle, author, date, watermarkText, introduction, conclusion,
-          chapterTopics: topics, coverImageBase64, logoImageBase64,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || ('HTTP ' + res.status));
+      const chapters = [];
+      for (let index = 0; index < topics.length; index++) {
+        statusEl.textContent = 'Rédaction du chapitre ' + (index + 1) + '/' + topics.length + '…';
+        const rawPrompt = 'Rédige en français un chapitre pratique et structuré pour un ebook.\nTitre du livre : ' + title.slice(0, 160) + '\nSujet : ' + topics[index].slice(0, 240) + '\nAuteur : ' + author.slice(0, 100) + '\nÉcris environ 700 à 1000 mots, avec un titre, des paragraphes clairs et des conseils concrets. N’invente pas de données, de résultats garantis ni de citations. Réponds uniquement avec le texte du chapitre.';
+        const prompt = window.CyrusBusinessServices ? await window.CyrusBusinessServices.promptContext(rawPrompt) : rawPrompt;
+        const result = await window.Cyrus.ai.generateText(prompt);
+        chapters.push({ topic: topics[index], text: String(result.text || '').trim() });
+        if (!chapters[index].text) throw new Error('La cascade IA n’a pas rédigé le chapitre « ' + topics[index] + ' ».');
       }
-      // Pas de <a download> ici : une WebView Capacitor n'a pas d'accès
-      // direct au stockage utilisateur — même mécanisme que lib/fileExport.js
-      // (Filesystem.writeFile + Share.share), seul moyen réel de faire
-      // quelque chose du fichier depuis le stockage privé de l'app.
-      const buffer = await res.arrayBuffer();
-      let binary = '';
-      const bytes = new Uint8Array(buffer);
-      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      const base64 = btoa(binary);
-      const filename = (title || 'livre').replace(/[^a-z0-9]+/gi, '_').slice(0, 80) + '.pdf';
-      const Filesystem = window.Capacitor.Plugins.Filesystem;
-      const Share = window.Capacitor.Plugins.Share;
-      const written = await Filesystem.writeFile({ path: filename, data: base64, directory: 'DOCUMENTS' });
-      await Share.share({ title: filename, url: written.uri });
-      statusEl.textContent = '✅ PDF généré et prêt à partager/enregistrer.';
-    } catch (e) {
-      statusEl.textContent = '';
-      errorEl.textContent = 'Erreur : ' + e.message;
-    }
+      statusEl.textContent = 'Création des pages PDF sur cet appareil…';
+      const cover = await loadEbookImage(document.getElementById('ebook-cover-file').files[0]);
+      const logo = await loadEbookImage(document.getElementById('ebook-logo-file').files[0]);
+      const bytes = await renderEbookPdf({ title, subtitle, author, date, watermarkText, introduction, conclusion, chapters }, cover, logo, statusEl);
+      const filename = (title || 'livre').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 80) || 'livre';
+      const Filesystem = window.Capacitor.Plugins.Filesystem; const Share = window.Capacitor.Plugins.Share;
+      const written = await Filesystem.writeFile({ path: filename + '.pdf', data: ebookPdfBase64(bytes), directory: 'DOCUMENTS' });
+      await Share.share({ title: filename + '.pdf', url: written.uri }); statusEl.textContent = '✅ PDF créé localement et prêt à partager/enregistrer.';
+    } catch (error) { statusEl.textContent = ''; errorEl.textContent = 'Erreur : ' + String(error && error.message || error); }
+    finally { button.disabled = false; }
   });
 
   // Exposé pour la page Connexions unifiée (voir connexions.js) - seul point

@@ -93,7 +93,8 @@ async function main() {
   const facebook = new FacebookMessengerAdapter();
   const crypto = require('crypto');
   const facebookOAuthStates = new Map();
-  const facebookQueueJobs = new Map();
+  const facebookQueueControllers = new Map();
+  db.interruptRunningFacebookQueueJobs();
   const facebookRedirectUri = process.env.LOCAL_FB_REDIRECT_URI || `http://localhost:${PORT}/api/facebook/callback`;
   app.get('/api/facebook/status', async (_req, res) => {
     try { res.json({ configured: facebook.isConfigured(), connectAvailable: facebook.isConnectAvailable(), redirectUri: facebookRedirectUri, ...(await facebook.checkConnection()) }); }
@@ -159,26 +160,58 @@ async function main() {
     const rejectedCount = recipients.filter(recipient => !eligible.has(recipient)).length;
     if (rejectedCount) return res.status(400).json({ error: `${rejectedCount} destinataire(s) ne correspondent pas à une conversation Messenger existante de la Page; aucun envoi lancé.` });
     const id = crypto.randomUUID();
-    const job = { id, status: 'running', total: recipients.length, sent: 0, createdAt: new Date().toISOString(), results: [] };
-    facebookQueueJobs.set(id, job);
+    const createdAt = new Date().toISOString();
+    const job = { id, status: 'running', total: recipients.length, sent: 0, recipients, createdAt, updatedAt: createdAt, results: [] };
+    db.saveFacebookQueueJob(job);
+    db.pruneFacebookQueueJobs(30);
+    const controller = { cancelled: false };
+    facebookQueueControllers.set(id, controller);
     res.status(202).json({ id, status: job.status, total: job.total, minDelaySeconds: 10, maxDelaySeconds: 15 });
     facebook.sendBulk(recipients, message, {
       minDelaySeconds: 10,
       maxDelaySeconds: 15,
       batchSize: 25,
-      onProgress: (progress) => { job.sent = progress.sent; },
+      shouldStop: () => controller.cancelled,
+      onAttempt: (attempt) => {
+        const prior = job.results.filter((item) => String(item.to) !== String(attempt.to));
+        job.results = [...prior, { to: attempt.to, status: 'sending', timestamp: new Date().toISOString() }];
+        job.sent = attempt.index;
+        job.updatedAt = new Date().toISOString();
+        db.saveFacebookQueueJob(job);
+      },
+      onProgress: (progress) => {
+        job.sent = progress.sent;
+        job.results = progress.results || job.results;
+        job.updatedAt = new Date().toISOString();
+        db.saveFacebookQueueJob(job);
+      },
       media: mediaBuffer ? { buffer: mediaBuffer, mimetype: media.type, filename: media.name || 'media' } : null,
-    }).then((results) => { job.results = results; job.status = 'completed'; job.completedAt = new Date().toISOString(); })
-      .catch((err) => { job.status = 'failed'; job.error = err.response?.data?.error?.message || err.message; job.completedAt = new Date().toISOString(); });
-    if (facebookQueueJobs.size > 30) {
-      const finished = [...facebookQueueJobs.values()].filter(item => item.status !== 'running').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-      while (facebookQueueJobs.size > 30 && finished.length) facebookQueueJobs.delete(finished.shift().id);
-    }
+    }).then((results) => {
+      job.results = results;
+      job.sent = results.filter((item) => item.status !== 'not_sent').length;
+      job.status = controller.cancelled ? 'cancelled' : 'completed';
+      job.completedAt = new Date().toISOString(); job.updatedAt = job.completedAt;
+      db.saveFacebookQueueJob(job);
+    }).catch((err) => {
+      job.status = 'failed'; job.error = err.response?.data?.error?.message || err.message;
+      job.completedAt = new Date().toISOString(); job.updatedAt = job.completedAt;
+      db.saveFacebookQueueJob(job);
+    }).finally(() => facebookQueueControllers.delete(id));
   });
   app.get('/api/facebook/queue/:id', (req, res) => {
-    const job = facebookQueueJobs.get(String(req.params.id));
+    const job = db.getFacebookQueueJob(String(req.params.id));
     if (!job) return res.status(404).json({ error: 'File Messenger introuvable.' });
     res.json(job);
+  });
+  app.get('/api/facebook/queue', (_req, res) => res.json({ jobs: db.listFacebookQueueJobs(30) }));
+  app.post('/api/facebook/queue/:id/cancel', (req, res) => {
+    const id = String(req.params.id);
+    const job = db.getFacebookQueueJob(id);
+    if (!job) return res.status(404).json({ error: 'File Messenger introuvable.' });
+    const controller = facebookQueueControllers.get(id);
+    if (job.status !== 'running' || !controller) return res.status(409).json({ error: 'Cette file ne peut plus être arrêtée.', job });
+    controller.cancelled = true;
+    res.json({ id, status: 'stopping', message: 'Arrêt demandé. Un envoi déjà accepté par Meta peut encore se terminer.' });
   });
   app.post('/api/facebook/publish', async (req, res) => {
     if (!facebook.isConfigured()) return res.status(409).json({ error: 'Connectez une Page Facebook.' });
@@ -1062,7 +1095,7 @@ async function main() {
   // multi-chapitres, voir index.js racine#executeGenerateBook) : un modèle
   // gratuit à quota de sortie limité tronquerait une réponse trop longue.
   // pdfkit lui-même n'a besoin d'aucun réseau — seul aiGateway.generateText
-  // (déjà Firebase en premier) appelle l'extérieur.
+  // (via la passerelle Cloudflare) appelle l'extérieur.
   app.post('/api/ebook/generate', async (req, res) => {
     try {
       // Parité avec public/dashboard.html (Studio IA > Générateur de Livres) :

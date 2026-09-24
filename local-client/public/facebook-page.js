@@ -5,6 +5,7 @@
   let conversations = [];
   let resolvedContacts = [];
   let activeQueueTimer = null;
+  let activeQueueId = null;
   async function api(url, options) {
     const response = await fetch(url, options);
     const data = await response.json().catch(() => ({}));
@@ -99,15 +100,52 @@
   async function pollFacebookQueue(jobId) {
     try {
       const job = await api('/api/facebook/queue/' + encodeURIComponent(jobId));
+      const delivered = (job.results || []).filter(r => r.status === 'delivered').length;
+      const failed = (job.results || []).filter(r => r.status === 'failed').length;
+      const notSent = (job.results || []).filter(r => r.status === 'not_sent').length;
+      const unknown = (job.results || []).filter(r => r.status === 'unknown' || r.status === 'sending').length;
       $('fb-queue-progress').textContent = job.status === 'running'
         ? `File Messenger : ${job.sent}/${job.total} · intervalle aléatoire 10–15 s.`
         : job.status === 'completed'
-          ? `Terminé : ${(job.results || []).filter(r => r.status === 'delivered').length}/${job.total} envoi(s) confirmé(s) par l’API.`
-          : `File en échec : ${job.error || 'erreur inconnue'}`;
+          ? `Terminé : ${delivered} confirmé(s), ${failed} échec(s), ${unknown} résultat(s) incertain(s) sur ${job.total}.`
+          : job.status === 'cancelled'
+            ? `Arrêtée : ${delivered} confirmé(s), ${failed} échec(s), ${notSent} non envoyé(s).`
+            : job.status === 'interrupted'
+              ? `Interrompue par l’arrêt du client : ${delivered} confirmé(s), ${failed} échec(s), ${unknown} résultat(s) incertain(s), ${notSent} non envoyé(s). Vérifiez les conversations avant de relancer.`
+              : `File en échec : ${job.error || 'erreur inconnue'}`;
       if (job.status !== 'running' && activeQueueTimer) { clearInterval(activeQueueTimer); activeQueueTimer = null; }
-      if (job.status !== 'running') $('fb-queue-send').disabled = false;
+      if (job.status !== 'running') { $('fb-queue-send').disabled = false; $('fb-queue-stop').disabled = true; }
+      await renderFacebookQueueHistory();
       return job.status;
-    } catch (error) { $('fb-queue-progress').textContent = error.message; if (activeQueueTimer) clearInterval(activeQueueTimer); activeQueueTimer = null; $('fb-queue-send').disabled = false; return 'failed'; }
+    } catch (error) { $('fb-queue-progress').textContent = error.message; if (activeQueueTimer) clearInterval(activeQueueTimer); activeQueueTimer = null; $('fb-queue-send').disabled = false; $('fb-queue-stop').disabled = true; return 'failed'; }
+  }
+  async function renderFacebookQueueHistory() {
+    const host = $('fb-queue-history'); if (!host) return;
+    const { jobs = [] } = await api('/api/facebook/queue');
+    host.replaceChildren();
+    for (const job of jobs) {
+      const card = document.createElement('div'); card.className = 'card';
+      const delivered = (job.results || []).filter(r => r.status === 'delivered').length;
+      const failed = (job.results || []).filter(r => r.status === 'failed').length;
+      const notSent = (job.results || []).filter(r => r.status === 'not_sent').length;
+      const unknown = (job.results || []).filter(r => r.status === 'unknown' || r.status === 'sending').length;
+      const summary = document.createElement('p');
+      summary.textContent = `${new Date(job.createdAt).toLocaleString()} · ${job.status} · ${delivered} confirmé(s), ${failed} échec(s), ${unknown} incertain(s), ${notSent} non envoyé(s) / ${job.total}`;
+      card.append(summary);
+      if ((job.results || []).length) {
+        const details = document.createElement('details');
+        const heading = document.createElement('summary'); heading.textContent = 'Détail des destinataires'; details.append(heading);
+        for (const result of job.results) {
+          const row = document.createElement('p');
+          row.textContent = `${result.to} · ${result.status}${result.error ? ' · ' + result.error : ''}`;
+          details.append(row);
+        }
+        card.append(details);
+      }
+      if (job.error) { const error = document.createElement('small'); error.textContent = job.error; card.append(error); }
+      host.append(card);
+    }
+    if (!jobs.length) host.textContent = 'Aucune file Messenger enregistrée.';
   }
   async function init() {
     if (!initialized) {
@@ -161,16 +199,34 @@
         try {
           const media = file ? await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve({ base64: String(reader.result).split(',')[1], type: file.type, name: file.name }); reader.onerror = () => reject(new Error('Lecture du média impossible.')); reader.readAsDataURL(file); }) : null;
           const started = await api('/api/facebook/queue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipients: selected, message, media }) });
+          activeQueueId = started.id;
           $('fb-queue-send').disabled = true; $('fb-queue-progress').textContent = `File lancée : ${started.total} destinataire(s).`;
+          $('fb-queue-stop').disabled = false;
           if (activeQueueTimer) clearInterval(activeQueueTimer);
           const state = await pollFacebookQueue(started.id);
           if (state === 'running') activeQueueTimer = setInterval(() => pollFacebookQueue(started.id), 2000);
         } catch (error) { $('fb-queue-progress').textContent = error.message; $('fb-queue-send').disabled = false; }
       });
+      $('fb-queue-stop').addEventListener('click', async () => {
+        if (!activeQueueId || $('fb-queue-stop').disabled) return;
+        $('fb-queue-stop').disabled = true;
+        $('fb-queue-progress').textContent = 'Arrêt demandé. L’envoi actuellement transmis à Meta peut se terminer.';
+        try { await api('/api/facebook/queue/' + encodeURIComponent(activeQueueId) + '/cancel', { method: 'POST' }); }
+        catch (error) { $('fb-queue-progress').textContent = error.message; $('fb-queue-stop').disabled = false; }
+      });
     }
     const params = new URLSearchParams(location.search); const result = params.get('fbConnect');
     if (result) { feedback(result === 'success' ? 'Page Facebook connectée.' : 'Connexion Meta échouée ou annulée.', result !== 'success'); history.replaceState(null, '', location.pathname); }
     try { await refreshStatus(); } catch (e) { feedback(e.message, true); }
+    try { await renderFacebookQueueHistory(); } catch (e) { $('fb-queue-history').textContent = e.message; }
+    try {
+      const { jobs = [] } = await api('/api/facebook/queue');
+      const running = jobs.find(job => job.status === 'running');
+      if (running) {
+        activeQueueId = running.id; $('fb-queue-send').disabled = true; $('fb-queue-stop').disabled = false;
+        if (await pollFacebookQueue(running.id) === 'running') activeQueueTimer = setInterval(() => pollFacebookQueue(running.id), 2000);
+      }
+    } catch (e) { $('fb-queue-history').textContent = e.message; }
     loadManagedGroups().catch(e => feedback(e.message, true));
   }
   window.facebookLocalInit = () => init();

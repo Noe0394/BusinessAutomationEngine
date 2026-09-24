@@ -4,11 +4,13 @@
 // appareils, coherent avec le principe "zero serveur" de ce projet).
 (function () {
   const DB_NAME = 'cyrus_campaigns';
-  // v5 ajoute les stores 'businessServices' et 'groupMembers' (voir onupgradeneeded) - incremente pour
+  // v11 ajoute les réglages locaux du répondeur; les données précédentes sont conservées.
+  // v10 ajoute le planning de messages locaux; les jobs communautaires et autres
+  // registres locaux sont conserves lors de la mise a niveau.
   // que les installations existantes (DB deja creee en v1/v2 sur l'appareil
   // de test) declenchent bien onupgradeneeded au lieu de rester bloquees sans
   // ce store.
-  const DB_VERSION = 5;
+  const DB_VERSION = 11;
   let dbPromise = null;
 
   function open() {
@@ -49,6 +51,24 @@
           members.createIndex('channel', 'channel', { unique: false });
           members.createIndex('channelGroup', ['channel', 'groupId'], { unique: false });
         }
+        if (!db.objectStoreNames.contains('reportImprovements')) db.createObjectStore('reportImprovements', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('ledger')) db.createObjectStore('ledger', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('communities')) {
+          const communities = db.createObjectStore('communities', { keyPath: ['channel', 'ref'] });
+          communities.createIndex('channel', 'channel', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('communityJobs')) {
+          const jobs = db.createObjectStore('communityJobs', { keyPath: 'id' });
+          jobs.createIndex('channel', 'channel', { unique: false });
+          jobs.createIndex('status', 'status', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('scheduledMessages')) {
+          const scheduled = db.createObjectStore('scheduledMessages', { keyPath: 'id' });
+          scheduled.createIndex('status', 'status', { unique: false });
+          scheduled.createIndex('scheduledAt', 'scheduledAt', { unique: false });
+          scheduled.createIndex('channel', 'channel', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('autoResponderSettings')) db.createObjectStore('autoResponderSettings', { keyPath: 'id' });
       };
       req.onsuccess = function () { resolve(req.result); };
       req.onerror = function () { reject(req.error); };
@@ -66,7 +86,7 @@
     return tx('contacts', 'readwrite').then(function (store) {
       return Promise.all(contacts.map(function (c) {
         return new Promise(function (resolve, reject) {
-          const req = store.put({ channel: channel, identifier: c.identifier, name: c.name || '' });
+          const req = store.put(Object.assign({}, c, { channel: channel, identifier: c.identifier, name: c.name || '' }));
           req.onsuccess = function () { resolve(); };
           req.onerror = function () { reject(req.error); };
         });
@@ -102,9 +122,16 @@
   function saveCampaign(campaign) {
     return tx('campaigns', 'readwrite').then(function (store) {
       return new Promise(function (resolve, reject) {
-        const req = store.put(campaign);
-        req.onsuccess = function () { resolve(); };
-        req.onerror = function () { reject(req.error); };
+        const get = store.get(campaign.id);
+        get.onsuccess = function () {
+          const previous = get.result || null;
+          const row = Object.assign({}, previous || {}, campaign);
+          if (!previous && !row.createdAt) row.createdAt = Date.now();
+          const put = store.put(row);
+          put.onsuccess = function () { resolve(row); };
+          put.onerror = function () { reject(put.error); };
+        };
+        get.onerror = function () { reject(get.error); };
       });
     });
   }
@@ -263,6 +290,138 @@
       });
     });
   }
+  function saveCommunities(items) {
+    return tx('communities', 'readwrite').then(function (store) {
+      return Promise.all((items || []).filter(item => item && item.channel && item.ref).map(function (item) {
+        return new Promise(function (resolve, reject) {
+          const req = store.put(Object.assign({}, item, { channel: String(item.channel).toUpperCase(), ref: String(item.ref), savedAt: Date.now() }));
+          req.onsuccess = function () { resolve(); }; req.onerror = function () { reject(req.error); };
+        });
+      }));
+    });
+  }
+  function getCommunities(channel) {
+    return tx('communities', 'readonly').then(function (store) {
+      return new Promise(function (resolve, reject) {
+        const req = channel ? store.index('channel').getAll(IDBKeyRange.only(String(channel).toUpperCase())) : store.getAll();
+        req.onsuccess = function () { resolve((req.result || []).sort(function (a, b) { return (b.savedAt || 0) - (a.savedAt || 0); })); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+  function deleteCommunity(channel, ref) {
+    return tx('communities', 'readwrite').then(function (store) { return new Promise(function (resolve, reject) {
+      const req = store.delete([String(channel).toUpperCase(), String(ref)]);
+      req.onsuccess = function () { resolve(); }; req.onerror = function () { reject(req.error); };
+    }); });
+  }
+  function saveCommunityJob(job) {
+    const row = Object.assign({}, job, { updatedAt: Date.now() });
+    return tx('communityJobs', 'readwrite').then(function (store) {
+      return new Promise(function (resolve, reject) {
+        const req = store.put(row);
+        req.onsuccess = function () { resolve(row); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+  function getCommunityJobs(channel) {
+    return tx('communityJobs', 'readonly').then(function (store) {
+      return new Promise(function (resolve, reject) {
+        const req = channel ? store.index('channel').getAll(IDBKeyRange.only(String(channel).toUpperCase())) : store.getAll();
+        req.onsuccess = function () { resolve((req.result || []).sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); })); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+  function saveScheduledMessage(item) {
+    const row = Object.assign({}, item, { updatedAt: Date.now() });
+    return tx('scheduledMessages', 'readwrite').then(function (store) { return new Promise(function (resolve, reject) {
+      const req = store.put(row);
+      req.onsuccess = function () { resolve(row); };
+      req.onerror = function () { reject(req.error); };
+    }); });
+  }
+  function getScheduledMessages() {
+    return tx('scheduledMessages', 'readonly').then(function (store) { return new Promise(function (resolve, reject) {
+      const req = store.getAll();
+      req.onsuccess = function () { resolve((req.result || []).sort(function (a, b) { return Number(a.scheduledAt || 0) - Number(b.scheduledAt || 0); })); };
+      req.onerror = function () { reject(req.error); };
+    }); });
+  }
+  function deleteScheduledMessage(id) {
+    return tx('scheduledMessages', 'readwrite').then(function (store) { return new Promise(function (resolve, reject) {
+      const req = store.delete(id);
+      req.onsuccess = function () { resolve(); };
+      req.onerror = function () { reject(req.error); };
+    }); });
+  }
+  function saveReportImprovement(item) {
+    return tx('reportImprovements', 'readwrite').then(function (store) {
+      return new Promise(function (resolve, reject) {
+        const req = store.put(item);
+        req.onsuccess = function () { resolve(item); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+  function getReportImprovements() {
+    return tx('reportImprovements', 'readonly').then(function (store) {
+      return new Promise(function (resolve, reject) {
+        const req = store.getAll();
+        req.onsuccess = function () { resolve((req.result || []).sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); })); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+  function getLedgerEntries() {
+    return tx('ledger', 'readonly').then(function (store) {
+      return new Promise(function (resolve, reject) {
+        const req = store.getAll();
+        req.onsuccess = function () { resolve((req.result || []).sort(function (a, b) { return String(b.recordedAt || b.issuedAt || '').localeCompare(String(a.recordedAt || a.issuedAt || '')); })); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+  function saveSale(entry) {
+    const row = Object.assign({}, entry, { id: entry.id || ('sale_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)), kind: 'sale', recordedAt: new Date().toISOString() });
+    return tx('ledger', 'readwrite').then(function (store) { return new Promise(function (resolve, reject) {
+      const req = store.put(row); req.onsuccess = function () { resolve(row); }; req.onerror = function () { reject(req.error); };
+    }); });
+  }
+  function saveInvoice(entry) {
+    return tx('ledger', 'readwrite').then(function (store) { return new Promise(function (resolve, reject) {
+      const transaction = store.transaction; let saved = null;
+      transaction.oncomplete = function () { resolve(saved); };
+      transaction.onerror = function () { reject(transaction.error); };
+      transaction.onabort = function () { reject(transaction.error || new Error('Enregistrement de la facture annulé.')); };
+      const req = store.getAll();
+      req.onerror = function () { reject(req.error); };
+      req.onsuccess = function () {
+        const year = new Date().getFullYear();
+        const prefix = 'FCT-' + year + '-';
+        const seq = (req.result || []).reduce(function (max, row) {
+          const number = String(row.invoiceNumber || '');
+          return number.startsWith(prefix) ? Math.max(max, parseInt(number.slice(prefix.length), 10) || 0) : max;
+        }, 0) + 1;
+        saved = Object.assign({}, entry, { id: 'invoice_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), kind: 'invoice', invoiceNumber: prefix + String(seq).padStart(5, '0'), issuedAt: new Date().toISOString() });
+        store.put(saved);
+      };
+    }); });
+  }
+  function getAutoResponderSettings() {
+    return tx('autoResponderSettings', 'readonly').then(function (store) { return new Promise(function (resolve, reject) {
+      const req = store.get('global');
+      req.onsuccess = function () { resolve(Object.assign({ id: 'global', whatsapp: false, telegram: false, alwaysOn: false, paused: false, groupReplies: false }, req.result || {})); };
+      req.onerror = function () { reject(req.error); };
+    }); });
+  }
+  function saveAutoResponderSettings(settings) {
+    const row = Object.assign({ id: 'global', whatsapp: false, telegram: false, alwaysOn: false, paused: false, groupReplies: false }, settings || {}, { id: 'global', updatedAt: Date.now() });
+    return tx('autoResponderSettings', 'readwrite').then(function (store) { return new Promise(function (resolve, reject) {
+      const req = store.put(row); req.onsuccess = function () { resolve(row); }; req.onerror = function () { reject(req.error); };
+    }); });
+  }
 
   window.Cyrus = window.Cyrus || {};
   window.Cyrus.db = {
@@ -284,5 +443,20 @@
     deleteBusinessService: deleteBusinessService,
     saveGroupMembers: saveGroupMembers,
     getGroupMembers: getGroupMembers,
+    saveCommunities: saveCommunities,
+    getCommunities: getCommunities,
+    deleteCommunity: deleteCommunity,
+    saveCommunityJob: saveCommunityJob,
+    getCommunityJobs: getCommunityJobs,
+    saveScheduledMessage: saveScheduledMessage,
+    getScheduledMessages: getScheduledMessages,
+    deleteScheduledMessage: deleteScheduledMessage,
+    saveReportImprovement: saveReportImprovement,
+    getReportImprovements: getReportImprovements,
+    getLedgerEntries: getLedgerEntries,
+    saveSale: saveSale,
+    saveInvoice: saveInvoice,
+    getAutoResponderSettings: getAutoResponderSettings,
+    saveAutoResponderSettings: saveAutoResponderSettings,
   };
 })();

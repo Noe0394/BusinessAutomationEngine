@@ -59,6 +59,20 @@ db.exec(`
     added_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (channel, identifier)
   );
+
+  CREATE TABLE IF NOT EXISTS facebook_queue_jobs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    total INTEGER NOT NULL,
+    sent INTEGER NOT NULL DEFAULT 0,
+    recipients_json TEXT NOT NULL DEFAULT '[]',
+    results_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_facebook_queue_jobs_created ON facebook_queue_jobs(created_at DESC);
 `);
 
 function upsertContact({ jid, nom, telephone }) {
@@ -130,6 +144,89 @@ function listSentHistory(limit = 100) {
   }));
 }
 
+function saveFacebookQueueJob(job) {
+  db.prepare(`
+    INSERT INTO facebook_queue_jobs
+      (id, status, total, sent, recipients_json, results_json, created_at, updated_at, completed_at, error)
+    VALUES (@id, @status, @total, @sent, @recipients, @results, @createdAt, @updatedAt, @completedAt, @error)
+    ON CONFLICT(id) DO UPDATE SET
+      status = excluded.status,
+      total = excluded.total,
+      sent = excluded.sent,
+      recipients_json = excluded.recipients_json,
+      results_json = excluded.results_json,
+      updated_at = excluded.updated_at,
+      completed_at = excluded.completed_at,
+      error = excluded.error
+  `).run({
+    id: job.id,
+    status: job.status,
+    total: job.total,
+    sent: job.sent || 0,
+    recipients: JSON.stringify(job.recipients || []),
+    results: JSON.stringify(job.results || []),
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt || new Date().toISOString(),
+    completedAt: job.completedAt || null,
+    error: job.error || null,
+  });
+}
+
+function parseFacebookQueueJob(row) {
+  if (!row) return null;
+  let recipients = [];
+  let results = [];
+  try { recipients = JSON.parse(row.recipients_json || '[]'); } catch {}
+  try { results = JSON.parse(row.results_json || '[]'); } catch {}
+  return {
+    id: row.id, status: row.status, total: row.total, sent: row.sent,
+    recipients, results, createdAt: row.created_at, updatedAt: row.updated_at,
+    completedAt: row.completed_at, error: row.error,
+  };
+}
+
+function getFacebookQueueJob(id) {
+  return parseFacebookQueueJob(db.prepare('SELECT * FROM facebook_queue_jobs WHERE id = ?').get(id));
+}
+
+function listFacebookQueueJobs(limit = 30) {
+  return db.prepare('SELECT * FROM facebook_queue_jobs ORDER BY created_at DESC LIMIT ?').all(limit).map(parseFacebookQueueJob);
+}
+
+function pruneFacebookQueueJobs(limit = 30) {
+  db.prepare(`
+    DELETE FROM facebook_queue_jobs
+    WHERE status <> 'running' AND id NOT IN (
+      SELECT id FROM facebook_queue_jobs ORDER BY created_at DESC LIMIT ?
+    )
+  `).run(limit);
+}
+
+function interruptRunningFacebookQueueJobs() {
+  const rows = db.prepare("SELECT * FROM facebook_queue_jobs WHERE status = 'running'").all();
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    const job = parseFacebookQueueJob(row);
+    const attempted = new Set();
+    job.results = job.results.map((result) => {
+      if (result.status === 'sending') {
+        attempted.add(String(result.to));
+        return { ...result, status: 'unknown', error: 'Le client s’est arrêté pendant la transmission; vérifie la conversation avant tout nouvel envoi.' };
+      }
+      if (result.status !== 'not_sent') attempted.add(String(result.to));
+      return result;
+    });
+    for (const recipient of job.recipients) {
+      if (!attempted.has(String(recipient))) job.results.push({ to: String(recipient), status: 'not_sent', error: 'Le client s’est arrêté avant cet envoi.', timestamp: now });
+    }
+    job.status = 'interrupted';
+    job.error = 'Le client s’est arrêté pendant la file. Vérifie les résultats avant toute nouvelle tentative.';
+    job.completedAt = now;
+    job.updatedAt = now;
+    saveFacebookQueueJob(job);
+  }
+}
+
 module.exports = {
   db,
   upsertContact,
@@ -142,4 +239,9 @@ module.exports = {
   getBlocklist,
   isBlocked,
   listSentHistory,
+  saveFacebookQueueJob,
+  getFacebookQueueJob,
+  listFacebookQueueJobs,
+  pruneFacebookQueueJobs,
+  interruptRunningFacebookQueueJobs,
 };

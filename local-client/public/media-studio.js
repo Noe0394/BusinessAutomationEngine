@@ -2,11 +2,8 @@
 // (#studio-media-view + le bloc JS "CYRUS Predictive Media Engine") vers le
 // Mode Local (PC). Presque tout le pipeline est déjà 100% client (fond
 // généré, composition Canvas 2D, export vidéo Ken Burns) — seul le fond IA
-// passe par un appel réseau, adapté ici pour réutiliser /api/ai/image (déjà
-// branché sur lib/aiGateway.js, même cascade fal.ai->Pollinations que le VPS)
-// plutôt que POST /api/media/generate-image (route VPS absente ici) ou un
-// appel direct à un fournisseur depuis ce fichier (la clé fal.ai doit rester
-// côté serveur, jamais exposée au client).
+// passe par /api/ai/image, qui contacte le Worker Cloudflare. Les clés de
+// fournisseur ne sont jamais exposées dans cette page.
 //
 // ÉCART ASSUMÉ ET DOCUMENTÉ (pas un oubli) : la génération vidéo IA serveur
 // (LTX-Video/fal.ai/Replicate, voir mediaGenerateAiVideo côté VPS) et le
@@ -243,22 +240,8 @@
     img.src = url;
   }
 
-  // Repli gratuit direct (aucune clé) — identique au VPS, appel client-side
-  // classique vers l'API publique Pollinations, inchangé.
-  function mediaFetchViaPollinations(cleanPrompt, w, h) {
-    return new Promise((resolve, reject) => {
-      const seed = Math.floor(Math.random() * 1000000);
-      const url = 'https://image.pollinations.ai/prompt/' + encodeURIComponent(cleanPrompt) + '?width=' + w + '&height=' + h + '&nologo=true&seed=' + seed + '&enhance=true&safe=true';
-      mediaLoadImageUrl(url, (err, img) => { if (err) reject(err); else resolve(img); });
-    });
-  }
-
-  // Source principale : /api/ai/image (lib/aiGateway.js — cascade Firebase/
-  // VPS fal.ai->Pollinations déjà gérée serveur), au lieu de
-  // POST /api/media/generate-image (route VPS absente ici). Repli
-  // Pollinations direct conservé en cas d'échec réseau du serveur local
-  // lui-même (process arrêté entre-temps, etc.) — cas limite, jamais
-  // rencontré en usage normal puisque la page vient de ce même serveur.
+  // Toute génération distante passe par /api/ai/image puis le Worker
+  // Cloudflare. En cas d'échec, le studio garde son fond local en dégradé.
   function mediaFetchBackgroundImageOnce(promptEnriched, w, h) {
     return new Promise((resolve, reject) => {
       const cleanPrompt = (promptEnriched && promptEnriched.trim()) || 'professional product banner HD, photorealistic, studio lighting';
@@ -267,18 +250,15 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: cleanPrompt, width: w, height: h }),
       })
-        .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
-        .then(({ ok, data }) => {
-          if (!ok || !data.url) {
-            mediaFetchViaPollinations(cleanPrompt, w, h).then(resolve, reject);
-            return;
-          }
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.url) throw new Error(data.error || 'La passerelle Cloudflare n’a pas renvoyé d’image.');
           mediaLoadImageUrl(data.url, (err, img) => {
             if (!err) return resolve(img);
-            mediaFetchViaPollinations(cleanPrompt, w, h).then(resolve, reject);
+            reject(err);
           });
         })
-        .catch(() => { mediaFetchViaPollinations(cleanPrompt, w, h).then(resolve, reject); });
+        .catch(reject);
     });
   }
 

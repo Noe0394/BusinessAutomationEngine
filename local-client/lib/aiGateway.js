@@ -1,127 +1,56 @@
-// Passerelle IA (point 2 de la feuille de route) : ce client n'appelle
-// JAMAIS un fournisseur IA directement, uniquement des passerelles qui
-// détiennent les clés à sa place (Groq/Gemini/OpenRouter/Hugging
-// Face/fal.ai) — jamais présentes ici.
-//
-// Décision du 2026-09-09 : Firebase (firebase-functions/) est désormais la
-// voie PRINCIPALE, le VPS (POST /api/ai/generate-text,
-// POST /api/media/generate-image) devient le REPLI — inversion du modèle
-// précédent (VPS principal, Firebase secours). Raison : le VPS est
-// considéré éphémère (risque d'impayé/résiliation), Firebase (Google) ne
-// l'est pas de la même façon pour ce genre d'appel sans état.
-// Sans FIREBASE_TEXT_URL/FIREBASE_IMAGE_URL configurés, comportement
-// inchangé (VPS direct, comme avant l'introduction du failover).
+// Passerelle distante des médias et des appels texte explicites du client PC.
+// Toute requête distante passe par le Worker Cloudflare sous licence; ce
+// module ne contacte ni Firebase, ni un fournisseur IA, ni le VPS.
 const axios = require('axios');
-const { client, LICENSE_KEY } = require('./vpsClient');
+const { LICENSE_KEY } = require('./licenseConfig');
 const { getDeviceId } = require('./deviceId');
 
-const FIREBASE_TEXT_URL = process.env.FIREBASE_TEXT_URL || '';
-// Cloudflare (Worker, gratuit) : voie principale du texte quand configurée, avant Firebase puis le VPS.
-const CLOUDFLARE_TEXT_URL = process.env.CLOUDFLARE_LICENSE_URL ? `${String(process.env.CLOUDFLARE_LICENSE_URL).replace(/\/+$/, '')}/ai/text` : '';
-const FIREBASE_IMAGE_URL = process.env.FIREBASE_IMAGE_URL || '';
-// Pas d'équivalent VPS pour la vidéo (jamais exposée côté VPS à ce client) —
-// Firebase uniquement, voir firebase-functions/index.js#startVideoFallback/
-// pollVideoFallback. Job asynchrone : startVideo() soumet et renvoie un
-// jobId, pollVideo(jobId) doit être rappelé périodiquement par l'appelant
-// jusqu'à { done: true }, sur le même principe que
-// lib/media/videoAiEngine.js côté VPS/Firebase.
-const FIREBASE_VIDEO_START_URL = process.env.FIREBASE_VIDEO_START_URL || '';
-const FIREBASE_VIDEO_POLL_URL = process.env.FIREBASE_VIDEO_POLL_URL || '';
-// Cloudflare (Worker) : voie principale image/vidéo quand CLOUDFLARE_LICENSE_URL est défini.
-const CF_BASE = String(process.env.CLOUDFLARE_LICENSE_URL || '').replace(/\/+$/, '');
-const CLOUDFLARE_IMAGE_URL = CF_BASE ? `${CF_BASE}/ai/image` : '';
-const CLOUDFLARE_VIDEO_START_URL = CF_BASE ? `${CF_BASE}/ai/video/start` : '';
-const CLOUDFLARE_VIDEO_POLL_URL = CF_BASE ? `${CF_BASE}/ai/video/poll` : '';
+const CLOUDFLARE_BASE = String(process.env.CLOUDFLARE_LICENSE_URL || 'https://cyrus-license.ezechielatannidje.workers.dev').replace(/\/+$/, '');
 
-function firebaseHeaders() {
+function licenseHeaders() {
   return { 'x-license-key': LICENSE_KEY, 'x-device-id': getDeviceId() };
 }
 
-async function generateText(prompt, { history, mode, skillKey } = {}) {
-  if (CLOUDFLARE_TEXT_URL) {
-    try {
-      const { data } = await axios.post(CLOUDFLARE_TEXT_URL, { prompt }, { headers: firebaseHeaders(), timeout: 30_000 });
-      return data; // { text, provider }
-    } catch (err) {
-      console.warn('Cloudflare injoignable pour la génération de texte — repli suivant :', err.message);
-    }
-  }
-  if (FIREBASE_TEXT_URL) {
-    try {
-      const { data } = await axios.post(FIREBASE_TEXT_URL, { prompt }, { headers: firebaseHeaders(), timeout: 30_000 });
-      return data; // { text, provider }
-    } catch (err) {
-      console.warn('Firebase injoignable pour la génération de texte — repli sur le VPS :', err.message);
-      // On retente via le VPS ci-dessous plutôt que de faire échouer l'appel.
-    }
-  }
-
-  const { data } = await client.post('/api/ai/generate-text', { prompt, history, mode, skillKey });
+async function post(path, body, timeout = 60_000) {
+  const { data } = await axios.post(`${CLOUDFLARE_BASE}${path}`, body, { headers: licenseHeaders(), timeout });
   return data;
+}
+
+function textPrompt(prompt, options = {}) {
+  const parts = [];
+  if (options.mode) parts.push(`Mode de réponse : ${String(options.mode).slice(0, 80)}.`);
+  if (options.skillKey) parts.push(`Spécialité demandée : ${String(options.skillKey).slice(0, 120)}.`);
+  if (Array.isArray(options.history) && options.history.length) {
+    const history = options.history.slice(-12).map(item => {
+      const role = item && (item.role === 'assistant' || item.role === 'model') ? 'assistant' : 'user';
+      return `${role}: ${String(item && (item.text || item.content) || '').slice(0, 1500)}`;
+    });
+    parts.push('Historique récent :\n' + history.join('\n'));
+  }
+  parts.push(String(prompt || '').slice(0, 9000));
+  return parts.join('\n\n').slice(0, 12000);
+}
+
+async function generateText(prompt, options = {}) {
+  if (!String(prompt || '').trim()) throw new Error('Prompt de génération vide.');
+  return post('/ai/text', { prompt: textPrompt(prompt, options) }, 60_000);
 }
 
 async function generateImage(prompt, { width, height } = {}) {
-  if (CLOUDFLARE_IMAGE_URL) {
-    try {
-      const { data } = await axios.post(CLOUDFLARE_IMAGE_URL, { prompt }, { headers: firebaseHeaders(), timeout: 30_000 });
-      return data; // { url, provider }
-    } catch (err) {
-      console.warn('Cloudflare injoignable pour la génération d\'image — repli suivant :', err.message);
-    }
-  }
-  if (FIREBASE_IMAGE_URL) {
-    try {
-      const { data } = await axios.post(FIREBASE_IMAGE_URL, { prompt }, { headers: firebaseHeaders(), timeout: 30_000 });
-      return data; // { url, provider }
-    } catch (err) {
-      console.warn('Firebase injoignable pour la génération d\'image — repli sur le VPS :', err.message);
-    }
-  }
-
-  const { data } = await client.post('/api/media/generate-image', { prompt, width, height });
-  return data;
+  if (!String(prompt || '').trim()) throw new Error('Prompt image vide.');
+  const result = await post('/ai/image', { prompt: String(prompt).slice(0, 2000), width, height }, 60_000);
+  if (!result || !result.url) throw new Error('Le Worker Cloudflare n’a pas renvoyé d’image.');
+  return result;
 }
 
 async function startVideo(imageUrl, { prompt, seed, preferredProvider } = {}) {
-  if (CLOUDFLARE_VIDEO_START_URL) {
-    try {
-      const { data } = await axios.post(CLOUDFLARE_VIDEO_START_URL, { imageUrl, prompt, seed, preferredProvider }, { headers: firebaseHeaders(), timeout: 30_000 });
-      return data; // { jobId, provider }
-    } catch (err) {
-      if (err.response && err.response.data && err.response.data.error) throw new Error(err.response.data.error);
-      console.warn('Cloudflare injoignable pour la vidéo — repli suivant :', err.message);
-    }
-  }
-  if (!FIREBASE_VIDEO_START_URL) {
-    throw new Error('Génération vidéo IA non configurée (FIREBASE_VIDEO_START_URL absent du .env) — aucun repli VPS pour cette fonctionnalité.');
-  }
-  const { data } = await axios.post(
-    FIREBASE_VIDEO_START_URL,
-    { imageUrl, prompt, seed, preferredProvider },
-    { headers: firebaseHeaders(), timeout: 30_000 },
-  );
-  return data; // { jobId, provider }
+  if (!/^https:\/\//i.test(String(imageUrl || ''))) throw new Error('Une URL HTTPS d’image est requise pour créer la vidéo.');
+  return post('/ai/video/start', { imageUrl, prompt, seed, preferredProvider }, 60_000);
 }
 
 async function pollVideo(jobId) {
-  if (CLOUDFLARE_VIDEO_POLL_URL) {
-    try {
-      const { data } = await axios.post(CLOUDFLARE_VIDEO_POLL_URL, { jobId }, { headers: firebaseHeaders(), timeout: 30_000 });
-      return data;
-    } catch (err) {
-      if (err.response && err.response.data && err.response.data.error) throw new Error(err.response.data.error);
-      console.warn('Cloudflare injoignable pour l\'interrogation vidéo — repli suivant :', err.message);
-    }
-  }
-  if (!FIREBASE_VIDEO_POLL_URL) {
-    throw new Error('Génération vidéo IA non configurée (FIREBASE_VIDEO_POLL_URL absent du .env).');
-  }
-  const { data } = await axios.post(
-    FIREBASE_VIDEO_POLL_URL,
-    { jobId },
-    { headers: firebaseHeaders(), timeout: 30_000 },
-  );
-  return data; // { done: false } ou { done: true, url, provider }
+  if (!jobId) throw new Error('Identifiant de génération vidéo absent.');
+  return post('/ai/video/poll', { jobId: String(jobId) }, 60_000);
 }
 
 module.exports = { generateText, generateImage, startVideo, pollVideo };

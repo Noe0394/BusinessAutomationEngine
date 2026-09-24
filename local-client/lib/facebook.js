@@ -732,15 +732,24 @@ class FacebookMessengerAdapter {
    * toutes les `batchSize` messages pour ne pas saturer l'API.
    */
   async sendBulk(recipientIds, message, options = {}) {
-    const { delaySeconds, minDelaySeconds, maxDelaySeconds, batchSize, media, onProgress } = options;
+    const { delaySeconds, minDelaySeconds, maxDelaySeconds, batchSize, media, onAttempt, onProgress, shouldStop } = options;
     const batch = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : recipientIds.length;
     const results = [];
 
     for (let i = 0; i < recipientIds.length; i += 1) {
       const recipientId = recipientIds[i];
+      if (typeof shouldStop === 'function' && shouldStop()) {
+        for (let pendingIndex = i; pendingIndex < recipientIds.length; pendingIndex += 1) {
+          results.push({ to: recipientIds[pendingIndex], status: 'not_sent', error: 'File arrêtée avant cet envoi.', timestamp: new Date().toISOString() });
+        }
+        if (typeof onProgress === 'function') onProgress({ sent: i, total: recipientIds.length, results: results.slice(), stopped: true });
+        break;
+      }
       let status = 'failed';
+      let errorMessage = '';
 
       try {
+        if (typeof onAttempt === 'function') onAttempt({ to: recipientId, index: i, total: recipientIds.length });
         if (media) {
           await this.sendMedia(recipientId, media);
           if (message) {
@@ -752,12 +761,14 @@ class FacebookMessengerAdapter {
         status = 'delivered';
       } catch (err) {
         console.error(`Facebook Messenger: échec de l'envoi à ${recipientId}:`, err?.response?.data || err.message);
+        errorMessage = err?.response?.data?.error?.message || err.message || 'Erreur Meta inconnue.';
+        if (!err?.response || Number(err.response.status) >= 500) status = 'unknown';
       }
 
-      results.push({ to: recipientId, status, timestamp: new Date().toISOString() });
+      results.push({ to: recipientId, status, ...(errorMessage ? { error: errorMessage } : {}), timestamp: new Date().toISOString() });
 
       if (typeof onProgress === 'function') {
-        onProgress({ sent: results.length, total: recipientIds.length, status });
+        onProgress({ sent: results.length, total: recipientIds.length, status, results: results.slice() });
       }
 
       if (i < recipientIds.length - 1) {
@@ -768,7 +779,12 @@ class FacebookMessengerAdapter {
             : randomDelay(10000, 15000);
         const endOfBatch = (i + 1) % batch === 0;
         const delayMs = endOfBatch ? baseDelayMs * 3 : baseDelayMs;
-        await sleep(delayMs);
+        if (typeof shouldStop !== 'function') {
+          await sleep(delayMs);
+        } else {
+          const deadline = Date.now() + delayMs;
+          while (Date.now() < deadline && !shouldStop()) await sleep(Math.min(250, deadline - Date.now()));
+        }
       }
     }
 

@@ -42,7 +42,7 @@ function extractJsonBlock(rawText) {
 // Signature structurelle d'une réponse "hors format" (voir
 // index.js#looksLikeRunawayTutorial) — même garde-fou programmatique,
 // dupliqué ici volontairement (convention déjà en place dans ce dépôt pour
-// ce genre de petit utilitaire, voir firebase-functions/index.js).
+// ce genre de petit utilitaire, voir le Worker Cloudflare du dépôt).
 function looksLikeRunaway(raw) {
   const t = String(raw || '').trim();
   if (t.length > 600) return true;

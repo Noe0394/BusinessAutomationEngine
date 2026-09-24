@@ -1,7 +1,7 @@
 {
   "name": "cyrus-local-client",
   "version": "1.0.0",
-  "description": "Package PC installable (on-premise) — WhatsApp local (whatsapp-web.js) + SQLite local. ZÉRO dépendance VPS (consigne utilisateur 2026-09-22) : l'IA appelle directement les fournisseurs (voir lib/ai/llmFallbackEngine.js, même cascade que le VPS), les licences passent par le Worker Cloudflare (voir cloudflare/license-worker/), jamais par un serveur central. Projet INDÉPENDANT du backend racine (voir README.md) : son propre package.json, jamais construit ni déployé sur le VPS.",
+  "description": "Application PC installable avec WhatsApp, Telegram et SQLite locaux. Cloudflare gère les licences et les passerelles IA média; aucun Firebase ni backend VPS central n'est requis.",
   "private": true,
   "main": "index.js",
   "bin": "index.js",
