@@ -139,12 +139,23 @@ async function oauthCallback(request, env) {
     const extended = await graph(env, 'oauth/access_token', { params: { grant_type: 'fb_exchange_token', client_id: config.appId, client_secret: config.appSecret, fb_exchange_token: short.access_token } });
     if (!extended.access_token) throw new Error('Meta n’a pas renvoye de jeton utilisateur.');
     const encrypted = await encryptToken(extended.access_token, env);
-    await env.DB.prepare(`INSERT INTO facebook_accounts (license_key, device_id, user_token_cipher, page_token_cipher, page_id, page_name, connected_at, updated_at)
-      VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?) ON CONFLICT(license_key) DO UPDATE SET device_id = excluded.device_id,
-      user_token_cipher = excluded.user_token_cipher, page_token_cipher = NULL, page_id = NULL, page_name = NULL,
-      connected_at = excluded.connected_at, updated_at = excluded.updated_at`)
-      .bind(stateRow.license_key, stateRow.device_id, encrypted, isoNow(), isoNow()).run();
-    return oauthResultPage('Autorisation recue. Reviens dans CYRUS pour choisir la Page a connecter.', true);
+    const callbackAuth = { key: stateRow.license_key, deviceId: stateRow.device_id };
+    await acquireCaptureLock(callbackAuth, env);
+    try {
+      await cancelPendingProspectReplies(callbackAuth, env);
+      await env.DB.batch([
+        env.DB.prepare('UPDATE facebook_capture_state SET page_id = NULL, last_scan_at = NULL, scan_started_at = NULL, pending_posts = NULL, post_offset = 0, updated_at = ? WHERE license_key = ? AND device_id = ?').bind(Math.floor(Date.now() / 1000), callbackAuth.key, callbackAuth.deviceId),
+        env.DB.prepare('DELETE FROM facebook_capture_cursors WHERE license_key = ? AND device_id = ?').bind(callbackAuth.key, callbackAuth.deviceId),
+        env.DB.prepare(`INSERT INTO facebook_accounts (license_key, device_id, user_token_cipher, page_token_cipher, page_id, page_name, connected_at, updated_at)
+          VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?) ON CONFLICT(license_key) DO UPDATE SET device_id = excluded.device_id,
+          user_token_cipher = excluded.user_token_cipher, page_token_cipher = NULL, page_id = NULL, page_name = NULL,
+          connected_at = excluded.connected_at, updated_at = excluded.updated_at`)
+          .bind(callbackAuth.key, callbackAuth.deviceId, encrypted, isoNow(), isoNow()),
+      ]);
+      return oauthResultPage('Autorisation recue. Reviens dans CYRUS pour choisir la Page a connecter.', true);
+    } finally {
+      await releaseCaptureLock(callbackAuth, env);
+    }
   } catch (error) {
     return oauthResultPage(error.message || 'Echange OAuth refuse par Meta.', false);
   }
@@ -158,6 +169,45 @@ async function listPages(auth, env) {
   return json({ pages: (result.data || []).map((page) => ({ id: String(page.id), name: String(page.name || ''), tasks: page.tasks || [] })) });
 }
 
+async function cancelPendingProspectReplies(auth, env) {
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE facebook_seen_comments SET status = 'captured', reply_message = NULL, updated_at = ? WHERE license_key = ? AND device_id = ? AND status = 'reply_pending'").bind(now, auth.key, auth.deviceId),
+    env.DB.prepare("UPDATE facebook_leads SET reply_status = 'not_sent', updated_at = ? WHERE license_key = ? AND device_id = ? AND reply_status = 'pending'").bind(now, auth.key, auth.deviceId),
+  ]);
+}
+
+async function acquireCaptureLock(auth, env) {
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare('INSERT OR IGNORE INTO facebook_capture_state (license_key, device_id, updated_at) VALUES (?, ?, ?)').bind(auth.key, auth.deviceId, now).run();
+  const result = await env.DB.prepare(`UPDATE facebook_capture_state SET lock_until = ?, updated_at = ?
+    WHERE license_key = ? AND device_id = ? AND (lock_until IS NULL OR lock_until < ?)`)
+    .bind(now + 120, now, auth.key, auth.deviceId, now).run();
+  if (Number(result.meta?.changes || 0) !== 1) throw Object.assign(new Error('Une synchronisation Facebook est deja en cours; reessaie apres sa fin.'), { status: 409 });
+}
+
+async function releaseCaptureLock(auth, env) {
+  await env.DB.prepare('UPDATE facebook_capture_state SET lock_until = NULL, updated_at = ? WHERE license_key = ? AND device_id = ?')
+    .bind(Math.floor(Date.now() / 1000), auth.key, auth.deviceId).run();
+}
+
+async function bindCaptureStateToPage(auth, pageId, env) {
+  const current = await env.DB.prepare('SELECT page_id FROM facebook_capture_state WHERE license_key = ? AND device_id = ?').bind(auth.key, auth.deviceId).first();
+  if (String(current?.page_id || '') !== String(pageId)) {
+    await cancelPendingProspectReplies(auth, env);
+    await env.DB.prepare('DELETE FROM facebook_capture_cursors WHERE license_key = ? AND device_id = ?').bind(auth.key, auth.deviceId).run();
+  }
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare(`INSERT INTO facebook_capture_state (license_key, device_id, page_id, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(license_key, device_id) DO UPDATE SET page_id = excluded.page_id,
+    last_scan_at = CASE WHEN facebook_capture_state.page_id IS NOT excluded.page_id THEN NULL ELSE facebook_capture_state.last_scan_at END,
+    scan_started_at = CASE WHEN facebook_capture_state.page_id IS NOT excluded.page_id THEN NULL ELSE facebook_capture_state.scan_started_at END,
+    pending_posts = CASE WHEN facebook_capture_state.page_id IS NOT excluded.page_id THEN NULL ELSE facebook_capture_state.pending_posts END,
+    post_offset = CASE WHEN facebook_capture_state.page_id IS NOT excluded.page_id THEN 0 ELSE facebook_capture_state.post_offset END,
+    updated_at = excluded.updated_at`)
+    .bind(auth.key, auth.deviceId, String(pageId), now).run();
+}
+
 async function connectPage(request, auth, env) {
   const pageId = String((await request.json().catch(() => ({}))).pageId || '').trim();
   if (!/^\d{1,40}$/.test(pageId)) return json({ error: 'Identifiant de Page invalide.' }, 400);
@@ -167,10 +217,16 @@ async function connectPage(request, auth, env) {
   const result = await graph(env, 'me/accounts', { token: userToken, params: { fields: 'id,name,tasks,access_token', limit: 100 } });
   const page = (result.data || []).find((item) => String(item.id) === pageId);
   if (!page?.access_token) return json({ error: 'Cette Page ne figure pas dans les Pages autorisees pour ce compte.' }, 403);
-  const encrypted = await encryptToken(page.access_token, env);
-  await env.DB.prepare(`UPDATE facebook_accounts SET page_token_cipher = ?, page_id = ?, page_name = ?, user_token_cipher = NULL, updated_at = ?
-    WHERE license_key = ? AND device_id = ?`).bind(encrypted, pageId, String(page.name || ''), isoNow(), auth.key, auth.deviceId).run();
-  return json({ connected: true, pageId, pageName: String(page.name || '') });
+  await acquireCaptureLock(auth, env);
+  try {
+    await bindCaptureStateToPage(auth, pageId, env);
+    const encrypted = await encryptToken(page.access_token, env);
+    await env.DB.prepare(`UPDATE facebook_accounts SET page_token_cipher = ?, page_id = ?, page_name = ?, user_token_cipher = NULL, updated_at = ?
+      WHERE license_key = ? AND device_id = ?`).bind(encrypted, pageId, String(page.name || ''), isoNow(), auth.key, auth.deviceId).run();
+    return json({ connected: true, pageId, pageName: String(page.name || '') });
+  } finally {
+    await releaseCaptureLock(auth, env);
+  }
 }
 
 async function status(auth, env) {
@@ -195,9 +251,231 @@ async function decodeMedia(media) {
   return { bytes, type: String(media.type), name: String(media.name || 'media').slice(0, 120) };
 }
 
+function normalizeKeyword(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('fr').trim();
+}
+
+async function handleProspects(body, auth, account, token, env) {
+  if (body.action === 'list') {
+    const [rules, leads] = await Promise.all([
+      env.DB.prepare('SELECT id, keyword, reply_message AS replyMessage, auto_reply AS autoReply, created_at AS createdAt FROM facebook_keyword_rules WHERE license_key = ? AND device_id = ? AND page_id = ? ORDER BY created_at LIMIT 100').bind(auth.key, auth.deviceId, account.page_id).all(),
+      env.DB.prepare('SELECT psid, name, source, last_text AS lastText, post_id AS postId, keyword, reply_status AS replyStatus, created_at AS createdAt, updated_at AS updatedAt FROM facebook_leads WHERE license_key = ? AND device_id = ? AND page_id = ? ORDER BY updated_at DESC LIMIT 1000').bind(auth.key, auth.deviceId, account.page_id).all(),
+    ]);
+    return json({ rules: (rules.results || []).map(row => ({ ...row, autoReply: !!row.autoReply })), leads: leads.results || [] });
+  }
+  if (body.action === 'add-rule') {
+    const keyword = String(body.keyword || '').trim();
+    const replyMessage = String(body.replyMessage || '').trim();
+    const autoReply = body.autoReply === true;
+    if (keyword.length < 2 || keyword.length > 100) return json({ error: 'Le mot-cle doit contenir de 2 a 100 caracteres.' }, 400);
+    if (replyMessage.length > 2000 || (autoReply && !replyMessage)) return json({ error: 'Une reponse de 1 a 2000 caracteres est requise pour activer la reponse automatique.' }, 400);
+    await acquireCaptureLock(auth, env);
+    try {
+      const existing = await env.DB.prepare('SELECT keyword FROM facebook_keyword_rules WHERE license_key = ? AND device_id = ? AND page_id = ?').bind(auth.key, auth.deviceId, account.page_id).all();
+      if ((existing.results || []).length >= 100) return json({ error: 'La limite de 100 regles est atteinte.' }, 409);
+      const normalized = normalizeKeyword(keyword);
+      if ((existing.results || []).some(row => normalizeKeyword(row.keyword) === normalized)) return json({ error: 'Cette regle existe deja.' }, 409);
+      const rule = { id: crypto.randomUUID(), keyword, replyMessage, autoReply, createdAt: Math.floor(Date.now() / 1000) };
+      await env.DB.prepare('INSERT INTO facebook_keyword_rules (license_key, device_id, page_id, id, keyword, reply_message, auto_reply, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(auth.key, auth.deviceId, account.page_id, rule.id, keyword, replyMessage, autoReply ? 1 : 0, rule.createdAt).run();
+      return json({ rule }, 201);
+    } finally {
+      await releaseCaptureLock(auth, env);
+    }
+  }
+  if (body.action === 'delete-rule') {
+    const id = String(body.id || '').trim();
+    if (!id) return json({ error: 'Identifiant de regle requis.' }, 400);
+    await acquireCaptureLock(auth, env);
+    try {
+      const changedAt = Math.floor(Date.now() / 1000);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE facebook_seen_comments SET status = 'captured', reply_message = NULL, updated_at = ? WHERE license_key = ? AND device_id = ? AND page_id = ? AND rule_id = ? AND status = 'reply_pending'")
+          .bind(changedAt, auth.key, auth.deviceId, account.page_id, id),
+        env.DB.prepare(`UPDATE facebook_leads SET reply_status = 'not_sent', updated_at = ? WHERE license_key = ? AND device_id = ? AND reply_status = 'pending'
+          AND page_id = ? AND NOT EXISTS (SELECT 1 FROM facebook_seen_comments AS c WHERE c.license_key = ? AND c.device_id = ? AND c.page_id = facebook_leads.page_id AND c.psid = facebook_leads.psid AND c.status = 'reply_pending')`)
+          .bind(changedAt, auth.key, auth.deviceId, account.page_id, auth.key, auth.deviceId),
+        env.DB.prepare('DELETE FROM facebook_keyword_rules WHERE license_key = ? AND device_id = ? AND page_id = ? AND id = ?').bind(auth.key, auth.deviceId, account.page_id, id),
+      ]);
+      return json({ ok: true });
+    } finally {
+      await releaseCaptureLock(auth, env);
+    }
+  }
+  if (body.action !== 'sync') return json({ error: 'Operation prospects Facebook inconnue.' }, 400);
+
+  const now = Math.floor(Date.now() / 1000);
+  await acquireCaptureLock(auth, env);
+
+  let captured = 0;
+  let replied = 0;
+  let complete = true;
+  let remainingPosts = 0;
+  try {
+    const staleBefore = now - 120;
+    await env.DB.batch([
+      env.DB.prepare(`UPDATE facebook_seen_comments SET status = 'reply_unknown', reply_error = 'Worker interrompu pendant la transmission; aucun renvoi automatique.', updated_at = ? WHERE license_key = ? AND device_id = ? AND status = 'reply_sending' AND updated_at < ?`).bind(now, auth.key, auth.deviceId, staleBefore),
+      env.DB.prepare(`UPDATE facebook_leads SET reply_status = 'reply_unknown', updated_at = ? WHERE license_key = ? AND device_id = ? AND reply_status = 'sending' AND updated_at < ?`).bind(now, auth.key, auth.deviceId, staleBefore),
+    ]);
+
+    let state = await env.DB.prepare('SELECT * FROM facebook_capture_state WHERE license_key = ? AND device_id = ?').bind(auth.key, auth.deviceId).first();
+    if (!state) throw Object.assign(new Error('Progression de capture Facebook indisponible.'), { status: 503 });
+    if (state.page_id && String(state.page_id) !== String(account.page_id)) {
+      throw Object.assign(new Error('La Page Facebook a change; reconnecte-la avant de reprendre la capture.'), { status: 409 });
+    }
+    if (!state.page_id) {
+      await env.DB.prepare('UPDATE facebook_capture_state SET page_id = ?, updated_at = ? WHERE license_key = ? AND device_id = ?')
+        .bind(String(account.page_id), now, auth.key, auth.deviceId).run();
+      state = { ...state, page_id: String(account.page_id) };
+    }
+    let postIds = [];
+    let scanStartedAt = Number(state.scan_started_at) || now;
+    if (state.pending_posts) {
+      try { postIds = JSON.parse(state.pending_posts); } catch { postIds = null; }
+      if (!Array.isArray(postIds) || postIds.length > 20 || postIds.some(id => typeof id !== 'string' || !/^\d+(?:_\d+)?$/.test(id))) {
+        postIds = null;
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM facebook_capture_cursors WHERE license_key = ? AND device_id = ?').bind(auth.key, auth.deviceId),
+          env.DB.prepare('UPDATE facebook_capture_state SET pending_posts = NULL, post_offset = 0, scan_started_at = NULL, updated_at = ? WHERE license_key = ? AND device_id = ?').bind(now, auth.key, auth.deviceId),
+        ]);
+        state = { ...state, pending_posts: null, post_offset: 0, scan_started_at: null };
+        scanStartedAt = now;
+      }
+    } else {
+      postIds = null;
+    }
+    if (postIds === null) {
+      const posts = await graph(env, `${account.page_id}/posts`, { token, params: { fields: 'id', limit: '20' } });
+      postIds = (posts.data || []).map(post => String(post.id || '')).filter(id => /^\d+(?:_\d+)?$/.test(id)).slice(0, 20);
+      await env.DB.prepare('UPDATE facebook_capture_state SET pending_posts = ?, post_offset = 0, scan_started_at = ?, updated_at = ? WHERE license_key = ? AND device_id = ?')
+        .bind(JSON.stringify(postIds), now, now, auth.key, auth.deviceId).run();
+      state = { ...state, pending_posts: JSON.stringify(postIds), post_offset: 0, scan_started_at: now };
+      scanStartedAt = now;
+    }
+
+    if (!postIds.length) {
+      await env.DB.prepare('UPDATE facebook_capture_state SET last_scan_at = ?, pending_posts = NULL, post_offset = 0, scan_started_at = NULL, updated_at = ? WHERE license_key = ? AND device_id = ?')
+        .bind(scanStartedAt, now, auth.key, auth.deviceId).run();
+    } else {
+      const rulesResult = await env.DB.prepare('SELECT id, keyword, reply_message, auto_reply FROM facebook_keyword_rules WHERE license_key = ? AND device_id = ? AND page_id = ? ORDER BY created_at LIMIT 100').bind(auth.key, auth.deviceId, account.page_id).all();
+      const rules = rulesResult.results || [];
+      const cursorResults = await env.DB.prepare('SELECT post_id, after_cursor FROM facebook_capture_cursors WHERE license_key = ? AND device_id = ?').bind(auth.key, auth.deviceId).all();
+      const cursors = new Map((cursorResults.results || []).map(row => [String(row.post_id), { after_cursor: row.after_cursor }]));
+      const since = Number(state.last_scan_at) || (scanStartedAt - 7 * 24 * 60 * 60);
+      let offset = Math.max(0, Number(state.post_offset) || 0);
+      const end = Math.min(postIds.length, offset + 5);
+      const maxComments = 8;
+      let commentsScanned = 0;
+      const cursorUpdates = [];
+      let nextOffset = offset;
+      for (let postIndex = offset; postIndex < end && commentsScanned < maxComments; postIndex += 1) {
+        const postId = postIds[postIndex];
+        let cursorRow = cursors.get(postId) || null;
+        let postComplete = false;
+        {
+          const commentsResult = await graph(env, `${postId}/comments`, { token, params: {
+            fields: 'id,message,from,created_time', limit: String(Math.min(8, maxComments - commentsScanned)), since,
+            ...(cursorRow?.after_cursor ? { after: cursorRow.after_cursor } : {}),
+          } });
+          const rawComments = Array.isArray(commentsResult.data) ? commentsResult.data : [];
+          commentsScanned += rawComments.length;
+          const comments = rawComments.filter(comment => /^\d{1,80}$/.test(String(comment.from?.id || ''))
+            && String(comment.from.id) !== String(account.page_id) && String(comment.id || '').length <= 160 && String(comment.message || '').trim())
+            .sort((a, b) => new Date(a.created_time || 0).getTime() - new Date(b.created_time || 0).getTime());
+          const candidates = comments.map(comment => {
+            const text = String(comment.message || '').trim().slice(0, 8000);
+            const normalized = normalizeKeyword(text);
+            const rule = rules.find(item => normalized.includes(normalizeKeyword(item.keyword))) || null;
+            return { comment, text, rule, psid: String(comment.from.id), commentId: String(comment.id) };
+          });
+          if (candidates.length) {
+            const claimResults = await env.DB.batch(candidates.map(item => env.DB.prepare(`INSERT OR IGNORE INTO facebook_seen_comments
+              (license_key, device_id, page_id, comment_id, post_id, psid, name, rule_id, comment_text, keyword, reply_message, status, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+              .bind(auth.key, auth.deviceId, String(account.page_id), item.commentId, postId, item.psid, String(item.comment.from?.name || '').slice(0, 300), item.rule?.id || null, item.text,
+                item.rule?.keyword || null, item.rule?.auto_reply ? String(item.rule.reply_message || '').slice(0, 2000) : null,
+                item.rule?.auto_reply && item.rule.reply_message ? 'reply_pending' : 'captured', now, now)));
+            const fresh = candidates.filter((_, index) => Number(claimResults[index]?.meta?.changes || 0) === 1);
+            captured += fresh.length;
+            if (fresh.length) {
+              await env.DB.batch(fresh.map(item => env.DB.prepare(`INSERT INTO facebook_leads
+                (license_key, device_id, page_id, psid, name, source, last_text, post_id, keyword, reply_status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'comment', ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(license_key, device_id, page_id, psid) DO UPDATE SET name = COALESCE(excluded.name, facebook_leads.name),
+                source = 'comment', last_text = excluded.last_text, post_id = excluded.post_id,
+                keyword = COALESCE(excluded.keyword, facebook_leads.keyword), reply_status = excluded.reply_status, updated_at = excluded.updated_at`)
+                .bind(auth.key, auth.deviceId, String(account.page_id), item.psid, String(item.comment.from?.name || '').slice(0, 300) || null, item.text, postId,
+                  item.rule?.keyword || null, item.rule?.auto_reply ? 'pending' : 'not_sent', now, now)));
+            }
+          }
+
+          const nextCursor = commentsResult.paging?.cursors?.after || null;
+          if (nextCursor) {
+            cursorUpdates.push(env.DB.prepare(`INSERT INTO facebook_capture_cursors (license_key, device_id, post_id, after_cursor, updated_at) VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(license_key, device_id, post_id) DO UPDATE SET after_cursor = excluded.after_cursor, updated_at = excluded.updated_at`)
+              .bind(auth.key, auth.deviceId, postId, nextCursor, now));
+            cursorRow = { after_cursor: nextCursor };
+            postComplete = false;
+          } else {
+            cursorUpdates.push(env.DB.prepare('DELETE FROM facebook_capture_cursors WHERE license_key = ? AND device_id = ? AND post_id = ?').bind(auth.key, auth.deviceId, postId));
+            postComplete = true;
+          }
+        }
+        if (!postComplete) { complete = false; break; }
+        nextOffset = postIndex + 1;
+      }
+      if (nextOffset >= postIds.length) {
+        cursorUpdates.push(env.DB.prepare('UPDATE facebook_capture_state SET last_scan_at = ?, pending_posts = NULL, post_offset = 0, scan_started_at = NULL, updated_at = ? WHERE license_key = ? AND device_id = ?')
+          .bind(scanStartedAt, now, auth.key, auth.deviceId));
+        if (cursorUpdates.length) await env.DB.batch(cursorUpdates);
+        complete = true;
+        remainingPosts = 0;
+      } else {
+        cursorUpdates.push(env.DB.prepare('UPDATE facebook_capture_state SET post_offset = ?, updated_at = ? WHERE license_key = ? AND device_id = ?')
+          .bind(nextOffset, now, auth.key, auth.deviceId));
+        if (cursorUpdates.length) await env.DB.batch(cursorUpdates);
+        complete = false;
+        remainingPosts = Math.max(0, postIds.length - nextOffset);
+      }
+    }
+
+    const pending = await env.DB.prepare(`SELECT comment_id, psid, reply_message FROM facebook_seen_comments
+      WHERE license_key = ? AND device_id = ? AND page_id = ? AND status = 'reply_pending' ORDER BY created_at LIMIT 2`).bind(auth.key, auth.deviceId, account.page_id).all();
+    const pendingRows = pending.results || [];
+    if (pendingRows.length) {
+      const claimAt = Math.floor(Date.now() / 1000);
+      await env.DB.batch(pendingRows.flatMap(row => [
+        env.DB.prepare("UPDATE facebook_seen_comments SET status = 'reply_sending', updated_at = ? WHERE license_key = ? AND device_id = ? AND page_id = ? AND comment_id = ? AND status = 'reply_pending'").bind(claimAt, auth.key, auth.deviceId, account.page_id, row.comment_id),
+        env.DB.prepare("UPDATE facebook_leads SET reply_status = 'sending', updated_at = ? WHERE license_key = ? AND device_id = ? AND page_id = ? AND psid = ?").bind(claimAt, auth.key, auth.deviceId, account.page_id, row.psid),
+      ]));
+      const outcomes = [];
+      for (const row of pendingRows) {
+        try {
+          await graph(env, `${row.comment_id}/private_replies`, { method: 'POST', token, body: { message: row.reply_message } });
+          outcomes.push({ row, status: 'reply_sent', error: null }); replied += 1;
+        } catch (error) {
+          const finalStatus = error.status && error.status < 500 ? 'reply_failed' : 'reply_unknown';
+          outcomes.push({ row, status: finalStatus, error: String(error.message || error).slice(0, 400) });
+        }
+      }
+      const completedAt = Math.floor(Date.now() / 1000);
+      await env.DB.batch(outcomes.flatMap(item => [
+        env.DB.prepare('UPDATE facebook_seen_comments SET status = ?, reply_error = ?, updated_at = ? WHERE license_key = ? AND device_id = ? AND page_id = ? AND comment_id = ?')
+          .bind(item.status, item.error, completedAt, auth.key, auth.deviceId, account.page_id, item.row.comment_id),
+        env.DB.prepare("UPDATE facebook_leads SET reply_status = ?, updated_at = ? WHERE license_key = ? AND device_id = ? AND page_id = ? AND psid = ?")
+          .bind(item.status, completedAt, auth.key, auth.deviceId, account.page_id, item.row.psid),
+      ]));
+    }
+    return json({ captured, replied, complete, remainingPosts, lastScanAt: complete ? scanStartedAt : Number(state.last_scan_at) || null });
+  } finally {
+    await releaseCaptureLock(auth, env);
+  }
+}
+
 async function handleOperation(path, request, auth, env) {
   const body = await request.json().catch(() => ({}));
   const { token, account } = await pageTokenFor(auth, env);
+  if (path === '/facebook/prospects') return handleProspects(body, auth, account, token, env);
   if (path === '/facebook/conversations' && body.action === 'list') {
     const data = await graph(env, 'me/conversations', { token, params: { fields: 'id,snippet,updated_time,participants', limit: '100' } });
     const conversations = (data.data || []).map((conversation) => {
@@ -313,10 +591,20 @@ export async function handleFacebookRequest(request, env) {
     if (url.pathname === '/facebook/pages') return await listPages(auth, env);
     if (url.pathname === '/facebook/connect') return await connectPage(request, auth, env);
     if (url.pathname === '/facebook/disconnect') {
-      await env.DB.prepare('DELETE FROM facebook_accounts WHERE license_key = ? AND device_id = ?').bind(auth.key, auth.deviceId).run();
-      return json({ ok: true });
+      await acquireCaptureLock(auth, env);
+      try {
+        await cancelPendingProspectReplies(auth, env);
+        await env.DB.batch([
+          env.DB.prepare('UPDATE facebook_capture_state SET page_id = NULL, last_scan_at = NULL, scan_started_at = NULL, pending_posts = NULL, post_offset = 0, updated_at = ? WHERE license_key = ? AND device_id = ?').bind(Math.floor(Date.now() / 1000), auth.key, auth.deviceId),
+          env.DB.prepare('DELETE FROM facebook_capture_cursors WHERE license_key = ? AND device_id = ?').bind(auth.key, auth.deviceId),
+          env.DB.prepare('DELETE FROM facebook_accounts WHERE license_key = ? AND device_id = ?').bind(auth.key, auth.deviceId),
+        ]);
+        return json({ ok: true });
+      } finally {
+        await releaseCaptureLock(auth, env);
+      }
     }
-    if (['/facebook/posts', '/facebook/conversations', '/facebook/contacts/resolve', '/facebook/comments'].includes(url.pathname)) return await handleOperation(url.pathname, request, auth, env);
+    if (['/facebook/posts', '/facebook/conversations', '/facebook/contacts/resolve', '/facebook/comments', '/facebook/prospects'].includes(url.pathname)) return await handleOperation(url.pathname, request, auth, env);
     return json({ error: 'Route Facebook introuvable.' }, 404);
   } catch (error) {
     return json({ error: error.message || 'Echec de la passerelle Facebook.' }, error.status || 502);

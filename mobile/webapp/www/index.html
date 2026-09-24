@@ -773,6 +773,22 @@
       <div id="mobile-facebook-comments"></div>
     </div>
     <div class="card">
+      <h3>Prospects Facebook et mots-clés</h3>
+      <p>Les commentaires des 20 publications récentes sont lus par petits lots via le Worker et enregistrés dans D1 pour cette licence/appareil. La capture en continu est facultative et fonctionne lorsque l’application reste ouverte au premier plan.</p>
+      <label style="display:flex;align-items:center;gap:8px"><input id="mobile-facebook-prospect-auto" type="checkbox" style="width:auto;min-height:auto"> Synchroniser automatiquement toutes les 5 minutes quand CYRUS est ouvert</label>
+      <button id="mobile-facebook-prospect-sync" type="button">Synchroniser les commentaires maintenant</button>
+      <p id="mobile-facebook-prospect-status" role="status"></p>
+      <h4>Ajouter une règle</h4>
+      <label for="mobile-facebook-keyword">Mot ou expression</label><input id="mobile-facebook-keyword" maxlength="100" placeholder="ex. TARIF">
+      <label for="mobile-facebook-keyword-reply">Réponse privée à l’auteur</label><textarea id="mobile-facebook-keyword-reply" maxlength="2000" placeholder="Facultatif si la réponse automatique reste désactivée"></textarea>
+      <label style="display:flex;align-items:center;gap:8px"><input id="mobile-facebook-keyword-auto" type="checkbox" style="width:auto;min-height:auto"> Activer la réponse privée automatique</label>
+      <button id="mobile-facebook-keyword-add" type="button">Enregistrer la règle</button>
+      <div id="mobile-facebook-keyword-rules"></div>
+      <h4>Prospects capturés</h4>
+      <button id="mobile-facebook-prospect-export" type="button">Exporter en Excel</button>
+      <div id="mobile-facebook-prospects"></div>
+    </div>
+    <div class="card">
       <h3>Conversations Messenger</h3>
       <p>Meta applique ses fenêtres et autorisations de messagerie. Seuls les contacts PSID associés à une conversation existante peuvent être relancés.</p>
       <button id="mobile-facebook-conversations-refresh" type="button">Charger les conversations</button>

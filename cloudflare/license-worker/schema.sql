@@ -75,3 +75,43 @@ CREATE TABLE IF NOT EXISTS facebook_oauth_states (
   expires_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_facebook_oauth_expires ON facebook_oauth_states (expires_at);
+
+-- Regles, prospects et progression de la capture Facebook sur mobile.
+-- Chaque enregistrement reste isole par licence et appareil deja lie.
+CREATE TABLE IF NOT EXISTS facebook_keyword_rules (
+  license_key TEXT NOT NULL, device_id TEXT NOT NULL, page_id TEXT NOT NULL, id TEXT NOT NULL,
+  keyword TEXT NOT NULL, reply_message TEXT NOT NULL DEFAULT '',
+  auto_reply INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+  PRIMARY KEY (license_key, device_id, page_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_fb_rules_device ON facebook_keyword_rules (license_key, device_id, page_id, created_at);
+
+CREATE TABLE IF NOT EXISTS facebook_leads (
+  license_key TEXT NOT NULL, device_id TEXT NOT NULL, page_id TEXT NOT NULL, psid TEXT NOT NULL,
+  name TEXT, source TEXT NOT NULL DEFAULT 'comment', last_text TEXT NOT NULL DEFAULT '',
+  post_id TEXT, keyword TEXT, reply_status TEXT NOT NULL DEFAULT 'not_sent',
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (license_key, device_id, page_id, psid)
+);
+CREATE INDEX IF NOT EXISTS idx_fb_leads_device ON facebook_leads (license_key, device_id, page_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS facebook_seen_comments (
+  license_key TEXT NOT NULL, device_id TEXT NOT NULL, page_id TEXT NOT NULL, comment_id TEXT NOT NULL,
+  post_id TEXT NOT NULL, psid TEXT NOT NULL, name TEXT, rule_id TEXT, comment_text TEXT NOT NULL,
+  keyword TEXT, reply_message TEXT, status TEXT NOT NULL DEFAULT 'captured',
+  reply_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (license_key, device_id, page_id, comment_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fb_comments_pending ON facebook_seen_comments (license_key, device_id, page_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS facebook_capture_state (
+  license_key TEXT NOT NULL, device_id TEXT NOT NULL, page_id TEXT, last_scan_at INTEGER,
+  scan_started_at INTEGER, pending_posts TEXT, post_offset INTEGER NOT NULL DEFAULT 0,
+  lock_until INTEGER, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (license_key, device_id)
+);
+CREATE TABLE IF NOT EXISTS facebook_capture_cursors (
+  license_key TEXT NOT NULL, device_id TEXT NOT NULL, post_id TEXT NOT NULL,
+  after_cursor TEXT NOT NULL, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (license_key, device_id, post_id)
+);

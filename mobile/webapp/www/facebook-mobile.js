@@ -3,6 +3,10 @@
   const $ = id => document.getElementById(id);
   let conversations = [];
   let activeQueue = null;
+  let facebookProspects = [];
+  let facebookPageConnected = false;
+  let prospectSyncTimer = null;
+  let prospectSyncRunning = false;
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function api(path, body) {
@@ -25,11 +29,17 @@
   }
   async function refreshStatus() {
     const state = await api('/status');
+    facebookPageConnected = !!state.connected;
     $('mobile-facebook-status').textContent = state.connected ? `Connecté · Page ${state.pageName || state.pageId}`
       : state.needsPageSelection ? 'Autorisation reçue · choisis la Page à connecter.'
         : state.error ? `Page indisponible · ${state.error}` : state.connectAvailable ? 'Aucune Page connectée.' : 'Passerelle Meta non configurée.';
     $('mobile-facebook-disconnect').disabled = !state.connected && !state.needsPageSelection;
+    if (!state.connected && prospectSyncTimer) { clearInterval(prospectSyncTimer); prospectSyncTimer = null; }
     if (state.needsPageSelection) await loadPages();
+    if (!state.connected && !state.needsPageSelection) {
+      $('mobile-facebook-prospect-auto').checked = false;
+    }
+    configureProspectAutoSync();
     return state;
   }
   async function loadPages() {
@@ -75,6 +85,65 @@
       }
       if (!result.comments?.length) host.textContent = 'Aucun commentaire accessible.';
     } catch (error) { host.textContent = error.message; }
+  }
+  const facebookTime = value => {
+    const number = Number(value);
+    return number ? new Date(number < 1000000000000 ? number * 1000 : number).toLocaleString() : '—';
+  };
+  function renderFacebookProspects(rules, leads) {
+    const ruleHost = $('mobile-facebook-keyword-rules'); ruleHost.replaceChildren();
+    for (const rule of rules || []) {
+      const card = document.createElement('div'); card.className = 'card';
+      const text = document.createElement('p'); text.textContent = `${rule.keyword} · ${rule.autoReply ? 'réponse auto activée' : 'capture seule'}${rule.replyMessage ? ` · ${rule.replyMessage}` : ''}`;
+      const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Supprimer';
+      remove.addEventListener('click', async () => {
+        try { await api('/prospects', { action: 'delete-rule', id: rule.id }); await loadFacebookProspects(); }
+        catch (error) { $('mobile-facebook-prospect-status').textContent = error.message; }
+      });
+      card.append(text, remove); ruleHost.append(card);
+    }
+    if (!(rules || []).length) ruleHost.textContent = 'Aucune règle enregistrée.';
+
+    facebookProspects = leads || [];
+    const host = $('mobile-facebook-prospects'); host.replaceChildren();
+    if (!facebookProspects.length) { host.textContent = 'Aucun prospect Facebook capturé.'; return; }
+    const table = document.createElement('table');
+    const head = document.createElement('thead'); const header = document.createElement('tr');
+    ['Nom', 'PSID', 'Mot-clé', 'Dernier commentaire', 'Réponse privée', 'Mis à jour'].forEach(value => { const th = document.createElement('th'); th.textContent = value; header.append(th); });
+    head.append(header); table.append(head);
+    const body = document.createElement('tbody');
+    for (const lead of facebookProspects) {
+      const row = document.createElement('tr');
+      const replyStatus = { reply_sent: 'Confirmée', sent: 'Confirmée', sending: 'Transmission', pending: 'En attente', reply_failed: 'Refusée par Meta', reply_unknown: 'Incertaine · vérifier', not_sent: 'Non envoyée' }[lead.replyStatus] || 'Non envoyée';
+      [lead.name || '—', lead.psid || '', lead.keyword || '—', lead.lastText || '', replyStatus, facebookTime(lead.updatedAt)].forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); });
+      body.append(row);
+    }
+    table.append(body); host.append(table);
+  }
+  async function loadFacebookProspects() {
+    const result = await api('/prospects', { action: 'list' });
+    renderFacebookProspects(result.rules, result.leads);
+  }
+  async function syncFacebookProspects() {
+    if (prospectSyncRunning) return;
+    prospectSyncRunning = true;
+    const button = $('mobile-facebook-prospect-sync'); button.disabled = true;
+    $('mobile-facebook-prospect-status').textContent = 'Lecture des commentaires via le Worker…';
+    try {
+      const result = await api('/prospects', { action: 'sync' });
+      await loadFacebookProspects();
+      $('mobile-facebook-prospect-status').textContent = `${result.captured || 0} nouveau(x) prospect(s), ${result.replied || 0} réponse(s) privée(s) confirmée(s).${result.complete ? ' Synchronisation terminée.' : ` Suite en attente · ${result.remainingPosts || 0} publication(s) à parcourir.`}`;
+    } catch (error) { $('mobile-facebook-prospect-status').textContent = error.message; }
+    finally { prospectSyncRunning = false; button.disabled = false; }
+  }
+  function configureProspectAutoSync() {
+    if (prospectSyncTimer) clearInterval(prospectSyncTimer);
+    prospectSyncTimer = null;
+    const enabled = $('mobile-facebook-prospect-auto').checked;
+    try { localStorage.setItem('cyrus_facebook_prospect_capture_enabled', enabled ? 'true' : 'false'); } catch (_) {}
+    if (enabled && facebookPageConnected && !document.hidden) prospectSyncTimer = setInterval(() => syncFacebookProspects(), 5 * 60 * 1000);
+    $('mobile-facebook-prospect-status').textContent = !enabled ? 'Synchronisation automatique désactivée.'
+      : facebookPageConnected ? 'Synchronisation automatique active tant que CYRUS reste au premier plan.' : 'Synchronisation automatique en attente d’une Page Facebook connectée.';
   }
   async function loadConversations() {
     const result = await api('/conversations', { action: 'list' });
@@ -180,12 +249,27 @@
     });
     $('mobile-facebook-refresh').addEventListener('click', async () => { try { await refreshStatus(); feedback('Statut actualisé.'); } catch (error) { feedback(error.message, true); } });
     $('mobile-facebook-select-page').addEventListener('click', async () => {
-      try { const pageId = $('mobile-facebook-pages').value; if (!pageId) throw new Error('Choisis une Page.'); const result = await api('/connect', { pageId }); feedback(`Page connectée : ${result.pageName}.`); await refreshStatus(); }
+      try {
+        const pageId = $('mobile-facebook-pages').value;
+        if (!pageId) throw new Error('Choisis une Page.');
+        const result = await api('/connect', { pageId });
+        feedback(`Page connectée : ${result.pageName}.`);
+        await refreshStatus();
+        await Promise.all([loadPosts(), loadConversations(), loadFacebookProspects()]);
+        if ($('mobile-facebook-prospect-auto').checked) syncFacebookProspects();
+      }
       catch (error) { feedback(error.message, true); }
     });
     $('mobile-facebook-disconnect').addEventListener('click', async () => {
       if (!window.confirm('Déconnecter la Page et supprimer les jetons conservés par la passerelle ?')) return;
-      try { await api('/disconnect'); feedback('Page déconnectée.'); await refreshStatus(); }
+      try {
+        await api('/disconnect');
+        $('mobile-facebook-prospect-auto').checked = false;
+        configureProspectAutoSync();
+        renderFacebookProspects([], []);
+        feedback('Page déconnectée.');
+        await refreshStatus();
+      }
       catch (error) { feedback(error.message, true); }
     });
     $('mobile-facebook-publish').addEventListener('click', async () => {
@@ -198,6 +282,27 @@
       } catch (error) { feedback(error.message, true); }
     });
     $('mobile-facebook-posts-refresh').addEventListener('click', () => loadPosts().catch(error => feedback(error.message, true)));
+    $('mobile-facebook-prospect-sync').addEventListener('click', syncFacebookProspects);
+    try { $('mobile-facebook-prospect-auto').checked = localStorage.getItem('cyrus_facebook_prospect_capture_enabled') === 'true'; }
+    catch (_) { $('mobile-facebook-prospect-auto').checked = false; }
+    $('mobile-facebook-prospect-auto').addEventListener('change', () => {
+      configureProspectAutoSync();
+      if ($('mobile-facebook-prospect-auto').checked) syncFacebookProspects();
+    });
+    $('mobile-facebook-keyword-add').addEventListener('click', async () => {
+      try {
+        await api('/prospects', { action: 'add-rule', keyword: $('mobile-facebook-keyword').value, replyMessage: $('mobile-facebook-keyword-reply').value, autoReply: $('mobile-facebook-keyword-auto').checked });
+        $('mobile-facebook-keyword').value = ''; $('mobile-facebook-keyword-reply').value = ''; $('mobile-facebook-keyword-auto').checked = false;
+        await loadFacebookProspects(); $('mobile-facebook-prospect-status').textContent = 'Règle enregistrée dans D1.';
+      } catch (error) { $('mobile-facebook-prospect-status').textContent = error.message; }
+    });
+    $('mobile-facebook-prospect-export').addEventListener('click', () => {
+      if (!facebookProspects.length) { $('mobile-facebook-prospect-status').textContent = 'Aucun prospect à exporter.'; return; }
+      const safe = value => { const text = String(value ?? ''); return /^[=+\-@]/.test(text) ? `'${text}` : text; };
+      const rows = [['Nom', 'PSID', 'Source', 'Mot-clé', 'Dernier commentaire', 'État de réponse', 'Créé le', 'Mis à jour le'], ...facebookProspects.map(lead => [lead.name, lead.psid, lead.source, lead.keyword, lead.lastText, lead.replyStatus, facebookTime(lead.createdAt), facebookTime(lead.updatedAt)].map(safe))];
+      const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Prospects Facebook');
+      XLSX.writeFile(workbook, 'prospects-facebook.xlsx');
+    });
     $('mobile-facebook-conversations-refresh').addEventListener('click', () => loadConversations().catch(error => feedback(error.message, true)));
     $('mobile-facebook-reply-send').addEventListener('click', async () => {
       try {
@@ -226,9 +331,19 @@
       finally { event.target.value = ''; }
     });
     $('mobile-facebook-queue-stop').addEventListener('click', () => { if (activeQueue) { activeQueue.stop = true; $('mobile-facebook-queue-stop').disabled = true; $('mobile-facebook-queue-status').textContent = 'Arrêt demandé; l’envoi en cours peut se terminer.'; } });
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus().catch(() => {}); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { if (prospectSyncTimer) clearInterval(prospectSyncTimer); prospectSyncTimer = null; return; }
+      refreshStatus().then(async state => {
+        if (state.connected) { await loadFacebookProspects(); if ($('mobile-facebook-prospect-auto').checked) syncFacebookProspects(); }
+      }).catch(() => {});
+      configureProspectAutoSync();
+    });
+    configureProspectAutoSync();
     await restoreQueue();
-    try { const state = await refreshStatus(); if (state.connected) { loadPosts().catch(() => {}); loadConversations().catch(() => {}); } }
+    try {
+      const state = await refreshStatus();
+      if (state.connected) { loadPosts().catch(() => {}); loadConversations().catch(() => {}); await loadFacebookProspects(); if ($('mobile-facebook-prospect-auto').checked) syncFacebookProspects(); }
+    }
     catch (error) { $('mobile-facebook-status').textContent = 'Passerelle Facebook inaccessible : ' + error.message; }
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => init().catch(error => feedback(error.message, true)), { once: true });
