@@ -43,6 +43,24 @@ async function launchDraft(tenant, draft, runtime) {
   }
   const out = await runtime.sendCampaign(payload);
   if (!out || out.ok === false) return fail('LAUNCH_FAILED', (out && out.error) || 'échec du lancement', true);
+  try {
+    const campaignId = String((out.result && out.result.campaignId) || draft.id);
+    const identity = require('./contactIdentity');
+    const used = recipients.map((recipient) => {
+      const raw = String(recipient.telephone || recipient || '').trim();
+      const phone = /^\+|^00/.test(raw) ? raw : `+${raw.replace(/\D/g, '')}`;
+      const contactIdentity = identity.resolveIdentity({
+        channel: draft.channel, phone,
+        username: draft.channel === 'TELEGRAM' && raw.startsWith('@') ? raw.slice(1) : undefined,
+        knownName: recipient.nom || null,
+      });
+      return { channel: draft.channel, from: contactIdentity.phoneNumber || raw, identity: contactIdentity,
+        name: recipient.nom || null, source: 'campaign_target', eventId: `${campaignId}:${raw}`,
+        context: { campaignId, campaignName: draft.name },
+      };
+    });
+    await contactCrm.recordBatch(tenant, used, { batchId: campaignId, source: 'campaign_target' });
+  } catch (e) { console.error('CRM campagne unifiée :', e.message); }
   return { ok: true, result: Object.assign({ excludedOptOut: draft.recipients.length - recipients.length }, out.result || {}) };
 }
 

@@ -49,7 +49,7 @@ test('génération : clé au format KEY-XXXXXXXX-AAAA, modules par défaut', asy
   const r = await call('POST', '/admin/create', { note: 'client A' });
   assert.equal(r.status, 201);
   assert.match(r.body.key, /^KEY-[0-9A-F]{8}-\d{4}$/);
-  assert.deepEqual(r.body.allowedModules, ['whatsapp', 'telegram', 'studio_video']);
+  assert.deepEqual(r.body.allowedModules, ['whatsapp', 'telegram', 'studio_video', 'facebook']);
   assert.equal(r.body.active, true);
   env.key = r.body.key;
 });
@@ -280,4 +280,47 @@ test('anti-force-brute : 5 secrets erronés = blocage 429 même avec le bon secr
   assert.equal((await hit('secret-test', '7.7.7.7')).status, 200);
   const row = await env.DB.prepare('SELECT * FROM admin_attempts WHERE ip = ?').bind('7.7.7.7').first();
   assert.equal(row, null);
+});
+
+test('base contacts D1 : exclusion admin principal, dÃ©duplication inter-utilisateurs, recherche, fusion et identifiants techniques', async () => {
+  const primary = await env.DB.prepare('SELECT key FROM licenses ORDER BY created_at ASC, key ASC LIMIT 1').first();
+  assert.ok(primary && primary.key, 'le compte admin principal doit Ãªtre prÃ©sent');
+  const other = (await call('POST', '/admin/create', { note: 'contacts test' })).body.key;
+  const third = (await call('POST', '/admin/create', { note: 'contacts test 2' })).body.key;
+  assert.equal((await call('GET', '/contacts/status', null, false)).status, 401, 'les routes contacts restent admin-only');
+
+  const events = [
+    { tenantId: primary.key, channel: 'WHATSAPP', source: 'incoming_message', phone: '+225070000001', name: 'Compte principal', idempotencyKey: 'contact-admin-excluded' },
+    { tenantId: other, channel: 'WHATSAPP', source: 'auto_reply_incoming', phone: '+225070000001', name: 'Awa', groupName: 'Entrepreneurs Marketing', campaignName: 'Formation Patisserie Septembre', category: 'Commerce', interests: ['Cuisine'], idempotencyKey: 'contact-user-one' },
+    { tenantId: third, channel: 'TELEGRAM', source: 'telegram_import', phone: '+225070000001', name: 'Awa', idempotencyKey: 'contact-user-two' },
+  ];
+  const ingested = await call('POST', '/contacts/events', { events });
+  assert.equal(ingested.status, 200);
+  assert.deepEqual(ingested.body.results.map((x) => x.status), ['excluded_primary_admin', 'created', 'updated']);
+  const contacts = await env.DB.prepare('SELECT * FROM global_contacts WHERE phone_e164 = ?').bind('+225070000001').all();
+  assert.equal(contacts.results.length, 1, 'mÃªme tÃ©lÃ©phone rattachÃ© Ã  plusieurs utilisateurs = une fiche');
+  const contactId = contacts.results[0].id;
+  const rels = await env.DB.prepare('SELECT * FROM global_contact_relations WHERE contact_id = ?').bind(contactId).all();
+  assert.equal(rels.results.length, 2, 'chaque utilisateur garde sa relation');
+  assert.equal(contacts.results[0].country_code, 'CI');
+  assert.equal((await call('GET', '/contacts/?keyword=patisserie&platform=WHATSAPP')).body.total, 1, 'recherche et filtre interrogent les facettes/contexte');
+  assert.equal((await call('GET', '/contacts/?country=CI&interest=Cuisine&limit=1')).body.contacts.length, 1);
+
+  const unknown = await call('POST', '/contacts/events', { events: [
+    { tenantId: other, channel: 'WHATSAPP', source: 'group_extraction', phone: '22599999999@lid', technicalId: '22599999999@lid', idempotencyKey: 'contact-lid-only' },
+  ] });
+  assert.equal(unknown.body.results[0].status, 'created');
+  const lid = await env.DB.prepare("SELECT * FROM global_contacts WHERE phone_e164 IS NULL").first();
+  assert.ok(lid, 'un LID seul reste un identifiant technique sans faux tÃ©lÃ©phone');
+  const tech = await env.DB.prepare("SELECT identifier_type FROM global_contact_identifiers WHERE contact_id = ?").bind(lid.id).first();
+  assert.equal(tech.identifier_type, 'technical');
+
+  const duplicate = await call('POST', '/contacts/events', { events: [
+    { tenantId: other, channel: 'WHATSAPP', source: 'campaign', phone: '+225010101010', idempotencyKey: 'contact-merge-target' },
+  ] });
+  const merged = await call('POST', '/contacts/merge', { masterId: contactId, duplicateIds: [duplicate.body.results[0].contactId] });
+  assert.equal(merged.body.merged, 1);
+  const afterMerge = await env.DB.prepare('SELECT COUNT(*) AS n FROM global_contacts').first();
+  assert.equal(afterMerge.n, 2, 'fusion supprime le doublon et conserve le contact technique distinct');
+  assert.equal((await call('POST', '/contacts/consolidate', {})).body.ok, true);
 });

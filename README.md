@@ -17,6 +17,11 @@ Vercel autorisées. Pour les clés d'API, consulter `.env.example` et
 `.env.SECRETS-INDEX.md`; ne pas copier aveuglément le `.env` local, qui contient
 aussi des paramètres réservés aux outils locaux et aux déploiements distincts.
 
+Avant toute publication sur `main`, suivre la porte de contrôle et la liste des
+écarts dans [`docs/MIGRATION-GOOGLE-RENDER.md`](docs/MIGRATION-GOOGLE-RENDER.md).
+L'ancienne VM n'étant plus accessible, ne pas supposer que son état applicatif
+ou ses données ont tous été répliqués.
+
 Le plan Render actuel utilise un système de fichiers éphémère. La persistance
 des licences, sessions et autres états dépend donc des sauvegardes externes
 configurées par module (`GITHUB_TOKEN` et `GITHUB_DATA_REPO`, ou un stockage

@@ -135,7 +135,7 @@ const TOOLS = {
     permission: null,
     risk: 'LOW_WRITE',
     inputSchema: {
-      name: { type: 'string', required: true, description: 'Nom du service/projet.' },
+      name: { type: 'string', required: false, description: 'Nom facultatif; Cyrus le déduit de la mémoire si besoin.' },
       memo: { type: 'string', required: false, description: 'Mémoire libre de l\'activité : TOUT ce que l\'utilisateur a dit (produits, prix, promos, dates, règles, paiement, FAQ...), transmis tel quel — Cyrus en extrait automatiquement les champs structurés. Toujours préférable à remplir les champs un par un.' },
       type: { type: 'string', required: false, description: 'Type d\'activité (formation, ecommerce, service…).' },
       price: { type: 'number', required: false, description: 'Prix principal (facultatif si déjà dans "memo").' },
@@ -158,16 +158,22 @@ const TOOLS = {
       const scopes = String(args.scopes || '').split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
       const connection = args.baseUrl ? { kind: 'api', connectorType: args.connectorType || (/agent-gateway|riea/i.test(args.baseUrl) ? 'platform_gateway' : 'generic'), baseUrl: args.baseUrl, authHeader: args.authHeader || 'X-API-Key' } : { kind: 'none' };
       if (connection.connectorType === 'platform_gateway') connection.endpoints = { enroll: '/api/v1/agent-gateway/enroll-student', suspend: '/api/v1/agent-gateway/suspend-student' };
-      // Un service portant déjà ce nom est MIS À JOUR (jamais dupliqué) ; sinon il est créé.
-      const existing = (await businessServices.list(ctx.tenant)).find((s) => String(s.name).trim().toLowerCase() === String(args.name).trim().toLowerCase());
+      const existing = args.name
+        ? (await businessServices.list(ctx.tenant)).find((s) => String(s.name).trim().toLowerCase() === String(args.name).trim().toLowerCase())
+        : null;
       const payload = {
-        name: args.name, type: args.type || (existing && existing.type) || 'autre', connection: args.baseUrl ? connection : (existing ? existing.connection : connection), scopes: scopes.length ? scopes : (existing ? existing.scopes : scopes),
-        commercial: Object.assign({}, existing ? existing.commercial : {}, {
-          memo: args.memo != null ? String(args.memo).slice(0, 8000) : (existing && existing.commercial ? existing.commercial.memo : ''),
-          price: args.price != null ? Number(args.price) : (existing && existing.commercial ? existing.commercial.price : null), currency: args.currency || (existing && existing.commercial && existing.commercial.currency) || 'FCFA', description: args.description || (existing && existing.commercial && existing.commercial.description) || '',
-        }),
-        products: products.length ? products : (existing ? existing.products : products), rules: args.rules ? splitList(args.rules) : (existing ? existing.rules : []), objectives: args.objectives ? splitList(args.objectives) : (existing ? existing.objectives : []),
+        name: args.name || undefined,
+        type: args.type || (existing && existing.type) || undefined,
+        connection: args.baseUrl ? connection : (existing ? existing.connection : { kind: 'none' }),
+        scopes: scopes.length ? scopes : (existing ? existing.scopes : scopes),
+        commercial: Object.assign({}, args.memo != null ? { memo: String(args.memo).slice(0, 8000) } : {},
+          args.price != null ? { price: Number(args.price) } : {},
+          args.currency ? { currency: args.currency } : {},
+          args.description ? { description: args.description } : {}),
       };
+      if (products.length) payload.products = products;
+      if (args.rules) payload.rules = splitList(args.rules);
+      if (args.objectives) payload.objectives = splitList(args.objectives);
       const svc = existing ? await businessServices.update(ctx.tenant, existing.id, payload) : await businessServices.create(ctx.tenant, payload);
       let test = null; let connected = false;
       if (args.apiKey && args.baseUrl) {

@@ -60,12 +60,25 @@ async function get(tenant, id) {
   return s ? publicView(s) : null;
 }
 
+function suggestName(memo) {
+  const text = String(memo || '').trim();
+  if (!text) return 'Mon activite';
+  const first = text.split(/[\n.!?]/).map((x) => x.trim()).find(Boolean) || text;
+  return first.replace(/^(?:cree|cr[eé]e|ajoute|configure)\s+(?:un\s+)?service(?:\s+metier)?\s*(?:pour\s+)?(?:mon\s+activite)?\s*:?\s*/i, '').slice(0, 80) || 'Mon activite';
+}
+
 function normalizeService(data) {
   const d = data || {};
   const conn = d.connection || {};
+  const commercial = Object.assign({
+    memo: '', price: null, promoPrice: null, currency: 'FCFA', description: '', advantages: '',
+    objections: '', responses: '', paymentTerms: '', accessTerms: '', target: '',
+    audience: '', period: '', source: '', initialMessage: '', closing: '', escalation: '',
+    knowledge: '', supportRules: '', hours: '', importantDates: [], location: '', delivery: '', faq: [],
+  }, d.commercial || {});
   return {
     id: d.id || uid(),
-    name: String(d.name || 'Service sans nom').slice(0, 120),
+    name: String(d.name || suggestName(commercial.memo)).slice(0, 120),
     type: d.type || 'autre',
     project: d.project || null,
     connection: {
@@ -89,7 +102,8 @@ function normalizeService(data) {
       objections: '', responses: '', paymentTerms: '', accessTerms: '', target: '',
       // Champs de pilotage de la conversation commerciale (tous facultatifs, jamais inventés) :
       audience: '', period: '', source: '', initialMessage: '', closing: '', escalation: '', knowledge: '', supportRules: '',
-    }, d.commercial || {}),
+      hours: '', importantDates: [], location: '', delivery: '', faq: [],
+    }, commercial),
     // Spécialistes recommandés pour ce service (identifiants du registre d'agents) et cycle de vie : active | paused | disabled.
     specialists: Array.isArray(d.specialists) ? d.specialists.map(String).slice(0, 8) : [],
     lifecycle: ['active', 'paused', 'disabled'].includes(d.lifecycle) ? d.lifecycle : 'active',
@@ -118,7 +132,68 @@ function addHistory(service, event) {
 // Champs structurés qu'on tente de déduire automatiquement du mémo libre — UNIQUEMENT ceux encore VIDES
 // (jamais une valeur déjà renseignée explicitement n'est écrasée par cette extraction, quel que soit ce que dit
 // le mémo : en cas de désaccord, le champ structuré explicite prime, le mémo reste consultable tel quel).
-const MEMO_EXTRACT_FIELDS = ['price', 'promoPrice', 'currency', 'description', 'advantages', 'paymentTerms', 'target', 'period', 'accessTerms'];
+const MEMO_EXTRACT_FIELDS = [
+  'type', 'project', 'price', 'promoPrice', 'currency', 'description', 'products', 'rules', 'objectives',
+  'advantages', 'paymentTerms', 'target', 'period', 'accessTerms', 'hours', 'importantDates', 'location',
+  'delivery', 'faq', 'supportRules', 'knowledge', 'objections', 'responses',
+];
+
+const SERVICE_FIELDS = new Set(['type', 'project', 'products', 'rules', 'objectives']);
+const ARRAY_FIELDS = new Set(['products', 'rules', 'objectives', 'importantDates', 'faq']);
+const COMMERCIAL_FIELDS = new Set(MEMO_EXTRACT_FIELDS.filter((k) => !SERVICE_FIELDS.has(k)));
+
+function isBlank(value) {
+  return value == null || value === '' || (Array.isArray(value) && value.length === 0);
+}
+
+function stripPaymentUrls(value) {
+  return String(value || '').replace(/https?:\/\/\S+|www\.\S+/gi, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+function memoForAssistant(value) {
+  return String(value || '').split(/(?<=[.!?])\s+|\n/).map((part) =>
+    /paiement|payer|payez|r[eè]gle(?:r|ment)|mobile\s*money|wave|orange\s*money|mtn\s*money|moov/i.test(part)
+      ? part.replace(/https?:\/\/\S+|www\.\S+/gi, '[lien de paiement retiré]')
+      : part,
+  ).join('\n');
+}
+
+function currentFacts(service) {
+  const s = service || {};
+  const c = s.commercial || {};
+  const facts = {};
+  for (const key of MEMO_EXTRACT_FIELDS) facts[key] = SERVICE_FIELDS.has(key) ? (s[key] == null ? null : s[key]) : (c[key] == null ? null : c[key]);
+  return facts;
+}
+
+function validateExtractedField(key, value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (key === 'price' || key === 'promoPrice') {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  if (ARRAY_FIELDS.has(key)) {
+    if (!Array.isArray(value)) return null;
+    if (key === 'products') return value.filter((p) => p && typeof p === 'object' && String(p.name || '').trim()).slice(0, 100).map((p) => ({ name: String(p.name).slice(0, 120), price: Number.isFinite(Number(p.price)) && p.price !== null ? Number(p.price) : null }));
+    if (key === 'faq') return value.filter((x) => x && typeof x === 'object' && String(x.question || x.q || '').trim() && String(x.answer || x.a || '').trim()).slice(0, 50).map((x) => ({ question: String(x.question || x.q).slice(0, 300), answer: String(x.answer || x.a).slice(0, 600) }));
+    return value.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 100).map((x) => x.slice(0, 600));
+  }
+  const text = String(value).trim().slice(0, 1200);
+  return key === 'paymentTerms' ? stripPaymentUrls(text) : text;
+}
+
+function applyMemoFacts(service, facts, skip) {
+  if (!facts || typeof facts !== 'object') return;
+  const blocked = skip || new Set();
+  service.commercial = service.commercial || {};
+  for (const key of MEMO_EXTRACT_FIELDS) {
+    if (blocked.has(key) || facts[key] === null || facts[key] === undefined) continue;
+    const value = validateExtractedField(key, facts[key]);
+    if (value === null || (Array.isArray(value) && !value.length)) continue;
+    if (SERVICE_FIELDS.has(key)) service[key] = value;
+    else service.commercial[key] = value;
+  }
+}
 
 // Extraction LLM best-effort du mémo libre vers les champs structurés encore vides (voir MEMO_EXTRACT_FIELDS) —
 // point de passage UNIQUE pour "comprendre" un mémo, appelé par create()/update() ci-dessous. JAMAIS bloquant :
@@ -127,29 +202,38 @@ const MEMO_EXTRACT_FIELDS = ['price', 'promoPrice', 'currency', 'description', '
 // donc rien n'est perdu même si cette extraction ne trouve rien. JAMAIS d'invention : seuls les champs que le
 // modèle retrouve EXPLICITEMENT dans le texte sont retenus (consigne dans le prompt + validation programmatique
 // du type de chaque champ ci-dessous).
-async function extractFromMemo(memo, currentCommercial) {
+async function extractFromMemo(memo, service, opts) {
   const text = String(memo || '').trim();
   if (!text) return {};
-  const missing = MEMO_EXTRACT_FIELDS.filter((k) => currentCommercial[k] == null || currentCommercial[k] === '');
+  const mode = opts && opts.mode || 'create';
+  const explicit = opts && opts.explicitFields || new Set();
+  const current = currentFacts(service);
+  const missing = mode === 'create'
+    ? MEMO_EXTRACT_FIELDS.filter((k) => !explicit.has(k) && (isBlank(current[k]) || (k === 'type' && current[k] === 'autre') || (k === 'currency' && current[k] === 'FCFA')))
+    : MEMO_EXTRACT_FIELDS;
   if (!missing.length) return {};
   try {
     const llmFallbackEngine = require('../lib/ai/llmFallbackEngine');
     const prompt = [
-      'Tu extrais des informations commerciales STRUCTURÉES à partir d\'un texte libre décrivant une activité (mémoire métier écrite par le vendeur lui-même).',
-      `Champs à extraire, UNIQUEMENT s'ils sont EXPLICITEMENT présents dans le texte (sinon null — n'invente RIEN, ne déduis rien qui ne soit pas écrit) : ${missing.join(', ')}.`,
-      'price/promoPrice : nombre seul, sans devise ni texte. currency : code ou nom court de la devise (ex: FCFA, XOF, EUR). period : dates/durée/validité en texte libre tel qu\'écrit. paymentTerms : reprends TEXTUELLEMENT les moyens/numéros/titulaires de paiement mentionnés, sans reformuler ni compléter.',
-      `Réponds UNIQUEMENT avec un objet JSON strict, exactement ces clés (valeur null si absente du texte) : ${JSON.stringify(missing)}.`,
-      `Texte à analyser :\n${text.slice(0, 4000)}`,
+      'Tu indexes une mémoire métier écrite par le propriétaire. Le texte complet reste la source de vérité; tu ne fais que faciliter sa recherche.',
+      `Champs autorisés : ${missing.join(', ')}. Ne crée aucune information : ne reprends que les faits explicitement écrits dans la mémoire.`,
+      mode === 'create'
+        ? 'Pour les champs déjà présents dans l’index, retourne null. Pour les autres, extrais les faits écrits; plusieurs offres doivent rester séparées.'
+        : 'Mets à jour l’index actuel avec les informations de la mémoire. Le texte peut inclure des ajouts ou corrections plus récents : la correction explicite la plus récente remplace l’ancienne valeur du même fait, les autres faits restent conservés. Pour les listes (produits, règles, dates, FAQ), conserve les éléments actuels et ajoute/modifie seulement ce qui est explicitement décrit. Si un champ n’est ni modifié ni décrit, retourne sa valeur actuelle; s’il faut réellement le vider, ne le devine pas.',
+      'price/promoPrice sont des nombres seuls. currency est une devise réellement écrite. products est une liste d’objets {"name":"...","price":nombre|null}; rules/objectives/importantDates sont des listes de textes; faq est une liste {"question":"...","answer":"..."}. paymentTerms reprend les moyens, pays, numéros/comptes et titulaires exactement indiqués, sans jamais inclure d’URL ou lien. N’utilise jamais de lien de paiement.',
+      `Index actuel (référence, pas une source pour inventer) : ${JSON.stringify(current)}`,
+      `Réponds UNIQUEMENT avec un objet JSON strict contenant exactement ces clés, null si rien de nouveau : ${JSON.stringify(missing)}.`,
+      `Mémoire complète à indexer :\n${memoForAssistant(text).slice(0, 6000)}`,
     ].join('\n');
-    const res = await llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'business_memo_extraction', tier: 'standard', maxTokens: 500, jsonOutput: true });
+    const res = await llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'business_memo_extraction', tier: 'standard', maxTokens: 1200, jsonOutput: true });
     const raw = String((res && res.text) || '{}').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
     const parsed = JSON.parse(raw);
     const out = {};
     for (const k of missing) {
       const v = parsed[k];
       if (v === null || v === undefined || v === '') continue;
-      if (k === 'price' || k === 'promoPrice') { const n = Number(v); if (Number.isFinite(n)) out[k] = n; }
-      else out[k] = String(v).slice(0, 600);
+      const checked = validateExtractedField(k, v);
+      if (checked !== null && (!Array.isArray(checked) || checked.length)) out[k] = checked;
     }
     return out;
   } catch (e) {
@@ -160,7 +244,21 @@ async function extractFromMemo(memo, currentCommercial) {
 async function create(tenant, data) {
   const doc = await load(tenant);
   const service = normalizeService(data);
-  if (service.commercial.memo) Object.assign(service.commercial, await extractFromMemo(service.commercial.memo, service.commercial));
+  if (!data || !data.name) {
+    const baseName = service.name;
+    let suffix = 2;
+    while ((doc.services || []).some((s) => String(s.name).toLowerCase() === service.name.toLowerCase())) service.name = `${baseName.slice(0, 110)} (${suffix++})`;
+  }
+  if (service.commercial.memo) {
+    const explicit = new Set(Object.keys((data && data.commercial) || {}).filter((k) => k !== 'memo' && !isBlank(data.commercial[k])));
+    if (data && data.products && data.products.length) explicit.add('products');
+    if (data && data.rules && data.rules.length) explicit.add('rules');
+    if (data && data.objectives && data.objectives.length) explicit.add('objectives');
+    if (data && data.type) explicit.add('type');
+    if (data && data.project) explicit.add('project');
+    const facts = await extractFromMemo(service.commercial.memo, service, { mode: 'create', explicitFields: explicit });
+    applyMemoFacts(service, facts, explicit);
+  }
   addHistory(service, 'Service créé');
   doc.services = Array.isArray(doc.services) ? doc.services : [];
   doc.services.push(service);
@@ -174,13 +272,17 @@ async function update(tenant, id, patch) {
   const i = findIdx(doc, id);
   if (i < 0) return null;
   const before = doc.services[i];
-  const merged = normalizeService(Object.assign({}, before, patch, { id, createdAt: before.createdAt, history: before.history, connection: Object.assign({}, before.connection, patch.connection || {}) }));
-  // Mémo modifié dans ce patch : tente de remplir les champs structurés encore vides à partir du texte à jour
-  // (jamais ceux déjà renseignés — voir extractFromMemo). Le mémo précédent n'est jamais "réextrait" à chaque
-  // update() : seulement quand CE patch touche réellement le mémo, pour ne pas refaire un appel IA à chaque
-  // modification d'un champ sans rapport (ex: changer juste le prix).
+  const merged = normalizeService(Object.assign({}, before, patch, {
+    id, createdAt: before.createdAt, history: before.history,
+    commercial: Object.assign({}, before.commercial || {}, patch.commercial || {}),
+    connection: Object.assign({}, before.connection, patch.connection || {}),
+  }));
+  // Une correction ajoutée à la mémoire peut remplacer un fait indexé ancien; les champs directement modifiés dans l'interface restent prioritaires.
   if (patch.commercial && patch.commercial.memo !== undefined && merged.commercial.memo) {
-    Object.assign(merged.commercial, await extractFromMemo(merged.commercial.memo, merged.commercial));
+    const facts = await extractFromMemo(merged.commercial.memo, merged, { mode: 'update' });
+    const explicit = new Set(Object.keys(patch.commercial).filter((k) => k !== 'memo'));
+    for (const key of ['products', 'rules', 'objectives', 'type', 'project']) if (patch[key] !== undefined) explicit.add(key);
+    applyMemoFacts(merged, facts, explicit);
   }
   addHistory(merged, 'Service modifié');
   doc.services[i] = merged;
@@ -339,7 +441,7 @@ function renderService(s) {
     // Mémoire métier en texte libre : SOURCE BRUTE écrite par le vendeur — à consulter pour tout détail non
     // repris explicitement dans les champs structurés ci-dessous (une extraction automatique imparfaite ne fait
     // jamais perdre une information, elle reste lisible ici telle quelle).
-    if (c.memo) lines.push(`  Mémoire de l'activité (texte du vendeur, source complète) : ${c.memo}`);
+    if (c.memo) lines.push(`  Mémoire de l'activité (texte du vendeur, source complète) : ${memoForAssistant(c.memo)}`);
     if (c.description) lines.push(`  Description : ${c.description}`);
     if (c.price != null) lines.push(`  Prix : ${c.price} ${cur}`.trim() + (c.promoPrice != null ? ` (promo : ${c.promoPrice} ${cur})`.replace(/\s+\)/, ')') : ''));
     if (c.target) lines.push(`  Cible : ${c.target}`);
@@ -353,10 +455,15 @@ function renderService(s) {
     if (c.objections) lines.push(`  Objections & réponses : ${c.objections}`);
     if (c.responses) lines.push(`  Réponses préparées : ${c.responses}`);
     // Instructions de paiement / d'accès configurées par le vendeur : à donner EXACTEMENT, jamais complétées ni inventées.
-    if (c.paymentTerms) lines.push(`  INSTRUCTIONS DE PAIEMENT (seuls moyens/numéros valides, à donner tels quels) : ${c.paymentTerms}`);
+    if (c.paymentTerms) lines.push(`  INSTRUCTIONS DE PAIEMENT (seuls moyens/numéros valides, à donner tels quels) : ${stripPaymentUrls(c.paymentTerms)}`);
     else lines.push('  Instructions de paiement : NON CONFIGURÉES (ne cite aucun numéro, lien ni moyen de paiement).');
     if (c.audience) lines.push(`  Audience visée : ${c.audience}`);
     if (c.period) lines.push(`  Période / dates : ${c.period}`);
+    if (c.hours) lines.push(`  Horaires : ${c.hours}`);
+    if (c.importantDates && c.importantDates.length) lines.push(`  Dates importantes : ${c.importantDates.join(' ; ')}`);
+    if (c.location) lines.push(`  Localisation : ${c.location}`);
+    if (c.delivery) lines.push(`  Livraison : ${c.delivery}`);
+    if (c.faq && c.faq.length) lines.push(`  FAQ : ${c.faq.map((x) => `${x.question} — ${x.answer}`).join(' ; ')}`);
     if (c.closing) lines.push(`  Consignes de closing : ${c.closing}`);
     if (c.escalation) lines.push(`  Quand passer la main au propriétaire : ${c.escalation}`);
     if (c.knowledge) lines.push(`  Connaissances complémentaires : ${c.knowledge}`);
@@ -374,20 +481,52 @@ function renderService(s) {
 //      le plus RÉCENT ;
 //   2. les autres services actifs ne sont donnés qu'en SUGGESTIONS COMPLÉMENTAIRES (résumé court) ;
 //   3. tout vient des données configurées : rien n'est inventé. Renvoie { text, priority, others, count }.
-function pickPriority(services, hint) {
+const SEARCH_STOP_WORDS = new Set(['les', 'des', 'une', 'mon', 'ma', 'mes', 'pour', 'dans', 'avec', 'chez', 'est', 'sont', 'qui', 'que', 'quoi', 'quel', 'quelle', 'quels', 'combien', 'prix', 'tarif', 'offre', 'service', 'services', 'formation', 'formations', 'montrer', 'donner', 'rappeler', 'activité', 'activite']);
+function searchWords(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]+/g) || [];
+}
+
+function matchService(services, hint) {
+  const h = searchWords(hint).filter((x) => x.length > 2 && !SEARCH_STOP_WORDS.has(x));
+  const phrase = h.join(' ');
+  if (!phrase || !services.length) return null;
+  const exactName = services.find((s) => searchWords(s.name).join(' ') === phrase);
+  if (exactName) return exactName;
+  const scored = services.map((s) => {
+    const c = s.commercial || {};
+    const name = searchWords(s.name).join(' ');
+    const products = (s.products || []).map((p) => searchWords(p && (p.name || p)).join(' '));
+    const detailText = [s.type, s.project, c.description, c.memo, c.target, c.period, c.paymentTerms, c.hours, c.location, c.delivery]
+      .concat(s.rules || [], s.objectives || [], products).join(' ');
+    const detail = new Set(searchWords(detailText).filter((x) => x.length > 2 && !SEARCH_STOP_WORDS.has(x)));
+    let score = 0;
+    if (name && phrase.includes(name)) score += 100 + name.length;
+    for (const product of products) if (product && phrase.includes(product)) score = Math.max(score, 90 + product.length);
+    for (const word of new Set(h)) {
+      if (detail.has(word)) score += word.length >= 6 ? 3 : 1;
+      if (name.split(' ').includes(word)) score += 6;
+      if (products.some((product) => product.split(' ').includes(word))) score += 5;
+    }
+    return { service: s, score };
+  }).sort((a, b) => b.score - a.score);
+  if (!scored.length || scored[0].score <= 0) return null;
+  if (scored[1] && scored[0].score === scored[1].score) return null;
+  return scored[0].service;
+}
+
+function pickPriority(services, hint, currentHint) {
   const active = services.filter((s) => s.active !== false);
   const pool = active.length ? active : services;
-  const h = String(hint || '').trim().toLowerCase();
-  if (h) {
-    const hit = pool.find((s) => String(s.name || '').toLowerCase() === h) || pool.find((s) => h.includes(String(s.name || '').toLowerCase()) && String(s.name || '').length >= 3);
-    if (hit) return hit;
-  }
+  const currentMatch = matchService(pool, currentHint);
+  if (currentMatch) return currentMatch;
+  const contextMatch = matchService(pool, hint);
+  if (contextMatch) return contextMatch;
   return pool.slice().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0] || null;
 }
 async function getPrioritizedContext(tenant, opts) {
   const services = await getEngineContext(tenant);
   if (!services.length) return { text: '', priority: null, others: [], count: 0, recommendedSpecialists: [] };
-  const prio = pickPriority(services, opts && opts.hint);
+  const prio = pickPriority(services, opts && opts.hint, opts && opts.currentHint);
   const others = services.filter((s) => s !== prio && s.active !== false);
   const brief = (s) => { const c = s.commercial || {}; return `• ${s.name}${c.price != null ? ` — ${c.price} ${c.currency || ''}`.trimEnd() : ''}${c.description ? ` : ${String(c.description).slice(0, 140)}` : ''}`; };
   const parts = [`SERVICE PRIORITAIRE À PRÉSENTER (le plus pertinent pour ce contact — présente-le en premier et réponds à toutes ses questions dessus) :\n${renderService(prio)}`];
@@ -406,11 +545,11 @@ async function syncOffersToProfile(tenant) {
   const fromServices = [];
   for (const s of (doc.services || [])) {
     const c = s.commercial || {};
-    if (c.description || c.price != null || (s.products || []).length) {
+    if (c.memo || c.description || c.price != null || (s.products || []).length) {
       fromServices.push({
         source: 'service_metier', serviceId: s.id,
         name: s.name, category: s.type, price: c.price != null ? `${c.price} ${c.currency || ''}`.trim() : null,
-        description: c.description || '', options: (s.products || []).map((p) => p.name || p).join(', '),
+        description: c.description || String(c.memo || '').slice(0, 600), options: (s.products || []).map((p) => p.name || p).join(', '),
         advantages: c.advantages || '', objections: c.objections || '',
       });
     }
@@ -453,5 +592,5 @@ async function syncToConnectors(tenant) {
 
 module.exports = {
   STATUS, list, get, create, update, remove, connectApi, testConnection,
-  setPermissions, summary, getEngineContext, getEngineContextText, getPrioritizedContext, syncOffersToProfile, syncToConnectors, NAMESPACE,
+  setPermissions, summary, getEngineContext, getEngineContextText, getPrioritizedContext, syncOffersToProfile, syncToConnectors, NAMESPACE, suggestName, stripPaymentUrls, memoForAssistant, matchService,
 };

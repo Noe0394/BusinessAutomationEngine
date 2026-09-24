@@ -24,6 +24,8 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const contactExtractor = require('./ai-engine/contactExtractor');
 const contactsPipeline = require('./ai-engine/contactsPipeline');
+const globalContactSync = require('./ai-engine/globalContactSync');
+const globalContactImport = require('./ai-engine/globalContactImport');
 
 // EXTRACTION UNIQUE de contacts depuis un fichier, quelle que soit la source (Excel toutes feuilles, CSV, TXT, vCard, JSON) : colonnes
 // reconnues par leur contenu, numéros normalisés/validés/dédoublonnés par le même pipeline que le collage et l'OCR.
@@ -36,6 +38,26 @@ function importContactsFromFile(file, opts) {
     contacts: valid.map((r) => ({ telephone: r.number, prenom: r.name || '', nom: r.name || '' })),
     skipped: cls.rows.filter((r) => r.state !== 'valid').slice(0, 50).map((r) => ({ number: r.number || r.raw, name: r.name, state: r.state, reason: r.reason })),
   };
+}
+
+async function persistTelegramImports(tenantId, contacts, source) {
+  const rows = Array.isArray(contacts) ? contacts : [];
+  const phoneRows = rows.filter((c) => /^\+\d{8,15}$/.test(String(c && c.identifier || '')));
+  if (phoneRows.length) await require('./ai-engine/contactCrm').importContacts(tenantId, phoneRows.map((c) => ({ phone: c.identifier, name: c.name })), {
+    source, channel: 'TELEGRAM', defaultCountryCode: process.env.DEFAULT_COUNTRY_CODE,
+  });
+  const otherRows = rows.filter((c) => !/^\+\d{8,15}$/.test(String(c && c.identifier || '')));
+  if (!otherRows.length) return { phones: phoneRows.length, technical: 0 };
+  const batchId = crypto.randomUUID();
+  const used = otherRows.map((contact) => {
+    const raw = String(contact.identifier || '').trim();
+    const identity = require('./ai-engine/contactIdentity').resolveIdentity({
+      channel: 'TELEGRAM', username: raw.startsWith('@') ? raw.slice(1) : raw, knownName: contact.name || null,
+    });
+    return { channel: 'TELEGRAM', from: raw, identity, name: contact.name || null, source, eventId: `${batchId}:${raw}` };
+  });
+  const report = await require('./ai-engine/contactCrm').recordBatch(tenantId, used, { batchId, source });
+  return { phones: phoneRows.length, technical: report.total };
 }
 const QRCode = require('qrcode');
 const axios = require('axios');
@@ -1067,6 +1089,142 @@ app.get('/api/admin/storage-status', requireAdmin, (req, res) => {
   });
 });
 
+function adminContactQuery(query) {
+  const allowed = ['country', 'user', 'service', 'platform', 'source', 'group', 'campaign', 'category', 'interest', 'status',
+    'firstFrom', 'firstTo', 'lastFrom', 'lastTo', 'createdFrom', 'createdTo', 'keyword', 'page', 'limit', 'from', 'to', 'sort', 'order'];
+  const params = new URLSearchParams();
+  for (const key of allowed) {
+    const value = query && query[key];
+    if (value !== undefined && value !== null && String(value).trim() !== '') params.set(key, String(value).trim());
+  }
+  return params.toString();
+}
+
+app.get('/api/admin/contacts/status', requireAdmin, async (_req, res) => {
+  try {
+    const [local, remote] = await Promise.all([
+      globalContactSync.status(), globalContactSync.request('/status').catch((err) => ({ ok: false, error: err.message })),
+    ]);
+    res.json({ ok: true, local, remote });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/contacts/summary', requireAdmin, async (_req, res) => {
+  try { res.json(await globalContactSync.request('/summary')); }
+  catch (err) { res.status(503).json({ error: 'Registre central indisponible.', detail: err.message }); }
+});
+
+app.get('/api/admin/contacts', requireAdmin, async (req, res) => {
+  try {
+    const query = adminContactQuery(req.query);
+    res.json(await globalContactSync.request(`/?${query}`));
+  } catch (err) { res.status(503).json({ error: 'Recherche centrale indisponible.', detail: err.message }); }
+});
+
+app.post('/api/admin/contacts/import-preview', requireAdmin, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Fichier Excel/CSV requis.' });
+  try {
+    const report = await globalContactImport.preview(req.file, {
+      from: req.body && req.body.from, to: req.body && req.body.to,
+      defaultCountryCode: req.body && req.body.defaultCountryCode, channel: req.body && req.body.channel,
+    });
+    res.json({ ok: true, report });
+  } catch (err) { res.status(503).json({ error: 'Aperçu impossible : registre central indisponible ou fichier invalide.', detail: err.message }); }
+});
+
+app.post('/api/admin/contacts/import', requireAdmin, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Fichier Excel/CSV requis.' });
+  try {
+    const result = await globalContactImport.start(req.file, {
+      from: req.body && req.body.from, to: req.body && req.body.to,
+      defaultCountryCode: req.body && req.body.defaultCountryCode, channel: req.body && req.body.channel,
+    });
+    res.status(result.job ? 202 : 200).json({ ok: true, ...result });
+  } catch (err) { res.status(503).json({ error: 'Import impossible : registre central indisponible ou fichier invalide.', detail: err.message }); }
+});
+
+app.get('/api/admin/contacts/import/:id', requireAdmin, async (req, res) => {
+  try {
+    const job = await globalContactImport.get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Import introuvable.' });
+    res.json({ ok: true, job: globalContactImport.publicJob(job) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/contacts/merge', requireAdmin, async (req, res) => {
+  try { res.json(await globalContactSync.request('/merge', { method: 'POST', body: req.body || {} })); }
+  catch (err) { res.status(503).json({ error: 'Fusion impossible.', detail: err.message }); }
+});
+
+app.post('/api/admin/contacts/consolidate', requireAdmin, async (_req, res) => {
+  try { res.json(await globalContactSync.request('/consolidate', { method: 'POST', body: {} })); }
+  catch (err) { res.status(503).json({ error: 'Consolidation indisponible.', detail: err.message }); }
+});
+
+app.get('/api/admin/contacts/export', requireAdmin, async (req, res) => {
+  try {
+    const params = new URLSearchParams(adminContactQuery(req.query));
+    params.delete('page');
+    const from = Math.max(1, Number(req.query.from) || 1);
+    const toParam = Number(req.query.to);
+    const hasRange = Number.isFinite(toParam) && toParam >= from;
+    let rows = [];
+    const selectedIds = Array.isArray(req.query.id) ? req.query.id : (req.query.id ? [req.query.id] : []);
+    if (selectedIds.length) {
+      for (let i = 0; i < selectedIds.length; i += 100) {
+        const q = new URLSearchParams(params);
+        q.delete('from'); q.delete('to'); q.delete('limit');
+        for (const id of selectedIds.slice(i, i + 100)) q.append('id', String(id));
+        const page = await globalContactSync.request(`/?${q.toString()}`);
+        rows.push(...(page.contacts || []));
+      }
+      rows = Array.from(new Map(rows.map((c) => [c.id, c])).values());
+    } else if (hasRange) {
+      for (let start = from; start <= toParam; start += 500) {
+        const q = new URLSearchParams(params);
+        q.set('from', String(start)); q.set('to', String(Math.min(toParam, start + 499)));
+        const page = await globalContactSync.request(`/?${q.toString()}`);
+        rows.push(...(page.contacts || []));
+      }
+    } else {
+      const first = new URLSearchParams(params); first.set('page', '1'); first.set('limit', '500');
+      const page1 = await globalContactSync.request(`/?${first.toString()}`);
+      if (Number(page1.total) > 5000) return res.status(413).json({ error: 'La sélection dépasse 5 000 lignes par fichier Excel. Exportez-la en lots/plages successifs ; la base reste entière.' });
+      rows.push(...(page1.contacts || []));
+      for (let pageNo = 2; rows.length < Number(page1.total); pageNo += 1) {
+        const q = new URLSearchParams(params); q.set('page', String(pageNo)); q.set('limit', '500');
+        const page = await globalContactSync.request(`/?${q.toString()}`);
+        if (!page.contacts || !page.contacts.length) break;
+        rows.push(...page.contacts);
+      }
+    }
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.json_to_sheet(rows.map((c) => ({
+      Nom: c.name || '', Téléphone: c.phone || '', Pays: c.countryName || c.country || '', Plateformes: (c.platforms || []).join(', '),
+      Utilisateurs: Array.from(new Set((c.relations || []).map((r) => r.userLabel).filter(Boolean))).map((x) => `…${x}`).join(', '),
+      'Services métiers': Array.from(new Set((c.relations || []).map((r) => r.serviceName).filter(Boolean))).join(', '),
+      Catégorie: c.category || (c.categories || []).join(', '), Intérêts: (c.interests || []).join(', '),
+      Sources: Array.from(new Set((c.relations || []).map((r) => r.source).filter(Boolean))).join(', '),
+      Groupes: Array.from(new Set((c.relations || []).map((r) => r.groupName).filter(Boolean))).join(', '),
+      Campagnes: Array.from(new Set((c.relations || []).map((r) => r.campaignName).filter(Boolean))).join(', '),
+      'Première activité': c.firstActivity || '', 'Dernière activité': c.lastActivity || '', Statut: c.status || '',
+    })));
+    if (sheet['!ref']) {
+      const range = XLSX.utils.decode_range(sheet['!ref']);
+      const phoneColumn = 1;
+      for (let row = range.s.r + 1; row <= range.e.r; row += 1) {
+        const cell = sheet[XLSX.utils.encode_cell({ r: row, c: phoneColumn })];
+        if (cell) { cell.t = 's'; cell.z = '@'; cell.v = String(cell.v); }
+      }
+    }
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Contacts Cyrus');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="contacts_cyrus.xlsx"');
+    res.send(buffer);
+  } catch (err) { res.status(503).json({ error: 'Export indisponible.', detail: err.message }); }
+});
+
 app.get('/api/admin/overview', requireAdmin, (req, res) => {
   res.status(200).json(licenses.getOverview());
 });
@@ -1295,12 +1453,32 @@ app.get('/api/groups', requireAccess, requireModule('whatsapp'), attachWhatsapp,
 app.get('/api/groups/:id/participants', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
     const participants = await req.whatsapp.getGroupParticipants(req.params.id);
+    await trackExtractedWhatsappMembers(req, req.params.id, participants);
     res.status(200).json(participants);
   } catch (err) {
     console.error('Erreur lors de la récupération des participants:', err);
     res.status(500).json({ error: describeGroupQueryError(err) || 'Échec de la récupération des participants.' });
   }
 });
+
+async function trackExtractedWhatsappMembers(req, groupId, participants) {
+  const batchId = crypto.randomUUID();
+  const rows = [];
+  for (const p of participants || []) {
+    const phoneJid = p && p.jid && !String(p.jid).endsWith('@lid')
+      ? String(p.jid)
+      : (p && p.id && !String(p.id).endsWith('@lid') ? String(p.id) : null);
+    if (!phoneJid || !contactIdentity.parseJid(phoneJid).phone) continue;
+    const lid = p.lid || (p.id && p.id !== phoneJid ? p.id : null);
+    const identity = contactIdentity.resolveIdentity({ channel: 'WHATSAPP', jid: phoneJid, altJids: lid ? [lid] : [], knownName: p.name || p.notify || null });
+    rows.push({ channel: 'WHATSAPP', from: identity.phoneNumber || phoneJid, name: identity.displayName,
+      identity, source: 'group_extraction', eventId: `${batchId}:${groupId}:${phoneJid}`,
+      context: { groupId, groupName: p.groupName || null },
+    });
+  }
+  if (rows.length) await contactCrm.recordBatch(resolveTenantId(req), rows, { batchId, source: 'group_extraction' });
+  return rows.length;
+}
 
 // Extraction consolidée des membres d'un ou plusieurs groupes sélectionnés
 // vers un unique fichier Excel téléchargeable (module de gestion des
@@ -1330,6 +1508,8 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
   // jamais interrompre le reste de l'extraction.
   let runId;
   try {
+    const extractionBatchId = crypto.randomUUID();
+    const contactsForCentral = [];
     // extractRows() : "telephone" est extrait de participant.jid, PAS
     // participant.id : pour un participant ayant activé la confidentialité
     // WhatsApp "masquer mon numéro", .id porte un identifiant anonyme (@lid)
@@ -1358,6 +1538,11 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
           : (p.id && !p.id.endsWith('@lid') ? p.id : null);
         if (!phoneJid) return;
         const lidJid = p.lid || (p.id !== phoneJid ? p.id : null);
+        const identity = contactIdentity.resolveIdentity({ channel: 'WHATSAPP', jid: phoneJid, altJids: lidJid ? [lidJid] : [], knownName: p.name || null });
+        contactsForCentral.push({ channel: 'WHATSAPP', from: identity.phoneNumber || phoneJid, identity,
+          name: identity.displayName, source: 'group_extraction', eventId: `${extractionBatchId}:${groupId}:${phoneJid}`,
+          context: { groupId },
+        });
         rows[phoneJid] = {
           telephone: jidToE164(phoneJid),
           nom: req.whatsapp.getContactName(phoneJid) || (lidJid ? req.whatsapp.getContactName(lidJid) : '') || '',
@@ -1378,6 +1563,9 @@ app.post('/api/groups/export-members', requireAccess, requireModule('whatsapp'),
     }
 
     const rows = scrapedNumbers.listRun(runId);
+    if (contactsForCentral.length) {
+      await contactCrm.recordBatch(resolveTenantId(req), contactsForCentral, { batchId: extractionBatchId, source: 'group_extraction' });
+    }
     const sheet = XLSX.utils.json_to_sheet(rows);
 
     // Force la colonne "telephone" (A) en TEXTE (format '@') : sans ça,
@@ -1539,6 +1727,26 @@ app.post('/api/messages/queue', requireAccess, requireModule('whatsapp'), attach
     duplicateWindowHours: duplicateWindowHours !== undefined && duplicateWindowHours !== '' ? parseFloat(duplicateWindowHours) : undefined,
     enqueueIfBusy: true,
   });
+
+  try {
+    const batchId = campaign.id || crypto.randomUUID();
+    const used = recipients.map((recipient) => {
+      const raw = String(recipient && (recipient.telephone || recipient.phone || recipient.id) || recipient || '').trim();
+      const normalized = !raw.includes('@') ? contactsPipeline.normalizeOne(raw, { defaultCountryCode: process.env.DEFAULT_COUNTRY_CODE }) : null;
+      const reliablePhone = /^\+|^00/.test(raw) ? raw : (normalized && normalized.phone && !normalized.reason ? `+${normalized.phone}` : undefined);
+      const identity = contactIdentity.resolveIdentity({
+        channel: 'WHATSAPP', jid: raw.includes('@') ? raw : undefined,
+        phone: reliablePhone,
+        knownName: recipient && typeof recipient === 'object' ? (recipient.nom || recipient.name) : null,
+      });
+      return { channel: 'WHATSAPP', from: identity.phoneNumber || raw, identity,
+        name: recipient && typeof recipient === 'object' ? (recipient.nom || recipient.name) : null,
+        source: 'campaign_target', eventId: `${batchId}:${raw}`,
+        context: { campaignId: batchId, campaignName: campaign.name || req.body.name || null },
+      };
+    }).filter((x) => x.from && !contactIdentity.parseJid(x.from).kind.match(/group|broadcast/));
+    await contactCrm.recordBatch(resolveTenantId(req), used, { source: 'campaign_target', batchId });
+  } catch (err) { console.error('CRM campagne WhatsApp :', err.message); }
 
   res.status(202).json({
     status: campaign.status === 'queued' ? 'campaign_queued' : 'campaign_started',
@@ -1765,7 +1973,10 @@ app.post('/api/contacts/import', requireAccess, requireModule('whatsapp'), uploa
 
   try {
     const r = importContactsFromFile(req.file, { defaultCountryCode: req.body && req.body.defaultCountryCode });
-    res.status(200).json({ contacts: r.contacts, total: r.contacts.length, counts: r.counts, skipped: r.skipped });
+    const crmReport = await contactCrm.importContacts(resolveTenantId(req), r.contacts.map((c) => ({ phone: c.telephone, name: c.nom })), {
+      source: 'campaign_import', channel: 'WHATSAPP', defaultCountryCode: req.body && req.body.defaultCountryCode,
+    });
+    res.status(200).json({ contacts: r.contacts, total: r.contacts.length, counts: r.counts, skipped: r.skipped, crmReport });
   } catch (err) {
     console.error('Erreur lors de l\'import du fichier de contacts:', err);
     res.status(400).json({ error: 'Fichier illisible. Formats acceptés : .xlsx, .xls, .csv, .txt, .vcf, .json (les numéros sont reconnus dans toutes les colonnes).' });
@@ -1795,6 +2006,9 @@ app.post('/api/messages/manual-import', requireAccess, requireModule('whatsapp')
   }
 
   const tenantId = resolveTenantId(req);
+  await contactCrm.importContacts(tenantId, contacts.map((c) => ({ phone: c.telephone, name: c.nom })), {
+    source: 'manual_queue_import', channel: 'WHATSAPP', defaultCountryCode: (req.body || {}).defaultCountryCode,
+  }).catch((err) => console.error('CRM import manuel WhatsApp :', err.message));
   const messageHash = messageHistory.hashTemplate([template]);
   const duplicateWindowHours = messageHistory.clampWindowHours((req.body || {}).duplicateWindowHours);
   const windowMs = duplicateWindowHours * 3_600_000;
@@ -2464,6 +2678,18 @@ app.post('/api/facebook/contacts/import', requireAccess, requireModule('facebook
     }))
     .filter((c) => c.psid || c.name);
 
+  // Un PSID est un identifiant Messenger technique, jamais un numéro. Quand
+  // l'import est fait sous une licence utilisateur, garder cette relation
+  // dans le CRM et le registre central sans transformer l'identifiant.
+  if (req.licenseKey) {
+    const identified = contacts.filter((c) => c.psid).map((c) => ({
+      channel: 'FACEBOOK', from: c.psid, name: c.name || null, source: 'facebook_import',
+      identity: require('./ai-engine/contactIdentity').resolveIdentity({ channel: 'FACEBOOK', jid: c.psid, knownName: c.name || null }),
+      eventId: `facebook_import:${crypto.createHash('sha256').update(c.psid).digest('hex')}`,
+    }));
+    if (identified.length) await require('./ai-engine/contactCrm').recordBatch(req.licenseKey, identified, { source: 'facebook_import', batchId: crypto.randomUUID() });
+  }
+
   if (!facebook.isConfigured()) {
     return res.status(200).json({ contacts, total: contacts.length, matched: 0 });
   }
@@ -2879,6 +3105,25 @@ app.post('/api/telegram/queue', requireAccess, requireModule('telegram'), attach
     enqueueIfBusy: true,
   });
 
+  try {
+    const batchId = campaign.id || crypto.randomUUID();
+    const used = recipients.map((recipient) => {
+      const raw = String(recipient && (recipient.identifier || recipient.telephone || recipient.phone || recipient.id) || recipient || '').trim();
+      const identity = contactIdentity.resolveIdentity({
+        channel: 'TELEGRAM', jid: raw.startsWith('@') ? undefined : raw,
+        username: raw.startsWith('@') ? raw.slice(1) : undefined,
+        phone: /^\+|^00/.test(raw) ? raw : undefined,
+        knownName: recipient && typeof recipient === 'object' ? (recipient.name || recipient.nom) : null,
+      });
+      return { channel: 'TELEGRAM', from: identity.phoneNumber || raw, identity,
+        name: recipient && typeof recipient === 'object' ? (recipient.name || recipient.nom) : null,
+        source: 'campaign_target', eventId: `${batchId}:${raw}`,
+        context: { campaignId: batchId, campaignName: campaign.name || req.body.name || null },
+      };
+    }).filter((x) => x.from && !String(x.from).startsWith('-100'));
+    await contactCrm.recordBatch(resolveTenantId(req), used, { source: 'campaign_target', batchId });
+  } catch (err) { console.error('CRM campagne Telegram :', err.message); }
+
   res.status(202).json({
     status: campaign.status === 'queued' ? 'campaign_queued' : 'tg_queue_started',
     id: campaign.id,
@@ -2922,6 +3167,8 @@ app.post('/api/telegram/contacts/import', requireAccess, requireModule('telegram
     return c && c.state === 'valid' ? c.number : null;
   });
 
+  await persistTelegramImports(resolveTenantId(req), contacts, 'telegram_campaign_import');
+
   res.status(200).json({ contacts, total: contacts.length });
 });
 
@@ -2943,6 +3190,7 @@ app.post('/api/telegram/campaign/manual-import', requireAccess, requireModule('t
   }
 
   const tenantId = resolveTenantId(req);
+  await persistTelegramImports(tenantId, contacts, 'telegram_manual_queue_import').catch((err) => console.error('CRM import manuel Telegram :', err.message));
   const messageHash = messageHistory.hashTemplate([template]);
   const duplicateWindowHours = messageHistory.clampWindowHours((req.body || {}).duplicateWindowHours);
   const windowMs = duplicateWindowHours * 3_600_000;
@@ -5153,7 +5401,10 @@ app.post('/api/contacts/import-crm', requireAccess, upload.single('file'), async
     // que la lecture par noms de colonnes exacts ; les champs annexes (entreprise, ville…) restent ceux de la lecture par en-têtes.
     const smart = contactExtractor.extractFromFile({ buffer: req.file.buffer, name: req.file.originalname, type: req.file.mimetype }).entries.filter((e) => e.phone);
     if (smart.length > contacts.filter((c) => c.phone).length) contacts.splice(0, contacts.length, ...smart.map((e) => ({ phone: e.phone, name: e.name || '', fields: {} })));
-    const report = await contactCrm.importContacts(resolveTenantId(req), contacts, { source: 'import_fichier', channel: (req.body && req.body.channel) || 'WHATSAPP' });
+    const report = await contactCrm.importContacts(resolveTenantId(req), contacts, {
+      source: 'import_fichier', channel: (req.body && req.body.channel) || 'WHATSAPP',
+      defaultCountryCode: req.body && req.body.defaultCountryCode,
+    });
     res.json({ ok: true, report });
   } catch (err) {
     console.error('Import CRM contacts:', err.message);
@@ -5344,6 +5595,39 @@ app.get('/api/reports/activity', requireAccess, async (req, res) => {
 
 // RAPPORT & ACTIVITÉ — centre d'intelligence (ai-engine/activityIntelligence.js) : fait / pas fait / bloqué / à améliorer / amélioré, filtres,
 // boucle d'amélioration contrôlée. Données RÉELLES du compte uniquement (tenant issu de la clé de licence, jamais d'un paramètre client).
+app.get('/api/reports/contacts', requireAccess, async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const [summary, syncState] = await Promise.all([contactCrm.counts(tenantId), globalContactSync.statusForTenant(tenantId)]);
+    res.json({ ok: true, summary, sync: syncState });
+  } catch (err) { res.status(500).json({ error: 'Rapport contacts indisponible.' }); }
+});
+
+app.get('/api/reports/contacts/export-excel', requireAccess, async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const contacts = await contactCrm.list(tenantId);
+    const sheet = XLSX.utils.json_to_sheet(contacts.map((c) => ({
+      Nom: c.name || '', Téléphone: c.from || '', Plateforme: c.channel || '', Catégorie: (c.tags || []).join(', '),
+      Source: (c.sources || [c.source]).filter(Boolean).join(', '), Statut: c.stage || '',
+      'Première activité': c.firstSeen || '', 'Dernière activité': c.lastSeen || '',
+    })));
+    if (sheet['!ref']) {
+      const range = XLSX.utils.decode_range(sheet['!ref']);
+      for (let row = range.s.r + 1; row <= range.e.r; row += 1) {
+        const cell = sheet[XLSX.utils.encode_cell({ r: row, c: 1 })];
+        if (cell) { cell.t = 's'; cell.z = '@'; cell.v = String(cell.v); }
+      }
+    }
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Mes contacts');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="mes_contacts_cyrus.xlsx"');
+    res.send(buffer);
+  } catch (err) { res.status(500).json({ error: 'Export de vos contacts indisponible.' }); }
+});
+
 const activityIntelligence = require('./ai-engine/activityIntelligence');
 app.get('/api/reports/intelligence', requireAccess, async (req, res) => {
   try {
@@ -5566,6 +5850,26 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     }
   }
 
+  // Enregistre les contacts privés avant les routeurs, car assistant.route()
+  // et autoResponder.handleIncoming() peuvent terminer le traitement avant
+  // l'ancien pipeline commercial. Les groupes ont leur propre registre.
+  const crmFrom = extractFromId(channel, msg);
+  const crmName = channel === 'WHATSAPP'
+    ? (msg && msg.pushName) || null
+    : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
+  let crmSeen = null;
+  if (crmFrom) {
+    try {
+      crmSeen = await contactCrm.recordIncoming(tenantId, {
+        channel, from: (identity && identity.phoneNumber) || crmFrom, name: crmName,
+        identity, messageId: extractMessageId(channel, msg),
+        isGroup: autoResponder.isGroupChat(channel, crmFrom),
+      });
+    } catch (err) {
+      console.error(`contactCrm.recordIncoming (tenant "${tenantId}", ${channel}) :`, err.message);
+    }
+  }
+
   // CAMPAGNES DE GROUPES : intérêt d'un membre / preuve de paiement d'un prospect (expéditeur RÉEL, jamais l'identifiant du groupe).
   try {
     if (channel === 'WHATSAPP') {
@@ -5703,7 +6007,7 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
         ? (msg && msg.pushName) || null
         : (msg && msg.sender && (msg.sender.firstName || msg.sender.username)) || null;
       try {
-        const seen = await contactCrm.recordSeen(tenantId, { channel, from, name: senderName });
+        const seen = crmSeen || { isNew: false, contact: null };
         // Module 1 : message d'accueil au NOUVEAU contact (une seule fois),
         // puis on laisse l'échange suivant à emotionalCloser. Envoi réel gardé
         // derrière AUTO_ENGAGE_NEW_CONTACTS.
@@ -6011,6 +6315,8 @@ licenses
     console.error('Erreur lors de la restauration/migration des licences :', err);
   })
   .finally(() => {
+    globalContactSync.init();
+    globalContactImport.init().catch((err) => console.error('Reprise import contacts globaux :', err.message));
     app.listen(PORT, () => {
       console.log(`Server listening on port ${PORT}`);
       printAndWriteAdminAccessInstructions();

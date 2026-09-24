@@ -190,14 +190,29 @@ async function discoverPeople(tenant, input) {
 // les SEULS chemins d'envoi réel, jamais déclenchés ici). Le(s) mot-clé(s) de
 // découverte sont ajoutés comme étiquettes pour retrouver ce lot plus tard.
 async function syncPeopleToCrm(tenant, people) {
-  let created = 0; let updated = 0;
+  const rows = [];
+  const tagTargets = [];
+  const batchId = require('node:crypto').randomUUID();
   for (const p of people || []) {
     if (!p || !p.ref || !p.channel) continue;
-    const { isNew } = await contactCrm.recordSeen(tenant, { channel: p.channel, from: p.ref, name: p.name });
-    await contactCrm.addTags(tenant, p.channel, p.ref, ['decouverte'].concat(p.keywords || []));
-    if (isNew) created += 1; else updated += 1;
+    const channel = String(p.channel).toUpperCase();
+    const identity = require('./contactIdentity').resolveIdentity({
+      channel,
+      jid: channel === 'WHATSAPP' || !String(p.ref).startsWith('@') ? p.ref : undefined,
+      username: channel === 'TELEGRAM' && String(p.ref).startsWith('@') ? String(p.ref).slice(1) : undefined,
+      phone: /^\+|^00/.test(String(p.ref)) ? p.ref : undefined,
+      knownName: p.name || null,
+    });
+    const source = p.groupId ? 'group_extraction' : 'contact_discovery';
+    rows.push({ channel, from: identity.phoneNumber || p.ref, name: p.name, identity, source,
+      eventId: `${batchId}:${channel}:${p.ref}`,
+      context: { groupId: p.groupId, groupName: p.groupName, interests: p.keywords || [] },
+    });
+    tagTargets.push({ channel, ref: p.ref, keywords: p.keywords || [] });
   }
-  return { count: created + updated, created, updated };
+  const report = await contactCrm.recordBatch(tenant, rows, { source: 'contact_discovery', batchId });
+  for (const target of tagTargets) await contactCrm.addTags(tenant, target.channel, target.ref, ['decouverte'].concat(target.keywords));
+  return { count: report.total, created: report.created, updated: report.updated };
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +260,7 @@ async function extractMembers(tenant, input) {
   const community = await contactCrm.getCommunity(tenant, channel, ref);
   if (!community) { const e = new Error('Communauté inconnue — lancez d\'abord une découverte (discover) puis synchronisez-la.'); e.code = 'COMMUNITY_NOT_FOUND'; throw e; }
   const people = channel === 'TELEGRAM' ? await extractMembersTelegram(tenant, community) : await extractMembersWhatsApp(tenant, community);
-  const withKeywords = people.map((p) => Object.assign({ keywords: community.keywords }, p));
+  const withKeywords = people.map((p) => Object.assign({ keywords: community.keywords, groupId: community.ref, groupName: community.name }, p));
   const { count } = await syncPeopleToCrm(tenant, withKeywords);
   return { channel, ref, found: people.length, synced: count };
 }

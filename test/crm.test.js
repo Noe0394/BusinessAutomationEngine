@@ -31,6 +31,38 @@ test('recordSeen : nouveau contact étiqueté nouveau_contact + prospect', async
   assert.equal(r2.contact.messageCount, 2);
 });
 
+test('recordIncoming : enregistre chaque conversation privée et ignore les groupes', async () => {
+  const t = 'tenantInbound';
+  const first = await contactCrm.recordIncoming(t, {
+    channel: 'WHATSAPP', from: '22600000009@s.whatsapp.net', name: 'Nafi', isGroup: false,
+  });
+  assert.equal(first.isNew, true);
+  assert.ok(first.contact.tags.includes('nouveau_contact'));
+  assert.ok(first.contact.tags.includes('prospect'));
+
+  const group = await contactCrm.recordIncoming(t, {
+    channel: 'WHATSAPP', from: '120363000000000000@g.us', name: 'Groupe', isGroup: true,
+  });
+  assert.equal(group.contact, null);
+  assert.equal((await contactCrm.counts(t)).total, 1, 'un groupe ne doit pas apparaître comme client');
+
+  const repeated = await contactCrm.recordIncoming(t, {
+    channel: 'WHATSAPP', from: '22600000009@s.whatsapp.net', isGroup: false,
+  });
+  assert.equal(repeated.isNew, false);
+  assert.equal(repeated.contact.messageCount, 2);
+});
+
+test('pipeline entrant : l’enregistrement CRM précède les routeurs qui peuvent retourner tôt', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  const handler = source.indexOf('async function handleIncomingCustomerMessage');
+  const record = source.indexOf('contactCrm.recordIncoming(', handler);
+  const privateRoute = source.indexOf('assistant.route({', handler);
+  const autoReply = source.indexOf('autoResponder.handleIncoming(', privateRoute);
+  assert.ok(handler >= 0 && record > handler, 'le handler doit enregistrer le contact');
+  assert.ok(privateRoute > record && autoReply > privateRoute, 'le CRM doit précéder les sorties des routeurs');
+});
+
 test('markPurchase : le contact devient client (retire nouveau_contact)', async () => {
   const t = 'tenantB';
   await contactCrm.recordSeen(t, { channel: 'WHATSAPP', from: '22600000002@s.whatsapp.net', name: 'Koffi' });

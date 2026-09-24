@@ -92,6 +92,59 @@
         </div>
       </section>
 
+      <section id="global-contacts-section">
+        <h2>Base centrale des contacts Cyrus</h2>
+        <p id="global-contacts-status" class="empty">Vérification du registre D1…</p>
+        <div id="global-contacts-kpis" class="overview-grid"></div>
+        <div class="row">
+          <div class="field"><label for="gc-keyword">Recherche mot-clé</label><input id="gc-keyword" type="search" placeholder="nom, groupe, campagne, service, intérêt"></div>
+          <div class="field"><label for="gc-country">Pays (ISO ou nom)</label><input id="gc-country" placeholder="CI, SN, Côte d’Ivoire"></div>
+          <div class="field"><label for="gc-user">Utilisateur Cyrus (clé de licence)</label><input id="gc-user" placeholder="Clé de licence"></div>
+          <div class="field"><label for="gc-service">Service métier (ID ou nom)</label><input id="gc-service" placeholder="Service ou identifiant"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="gc-platform">Plateforme</label><select id="gc-platform"><option value="">Toutes</option><option>WHATSAPP</option><option>TELEGRAM</option><option>IMPORT</option></select></div>
+          <div class="field"><label for="gc-source">Source</label><input id="gc-source" placeholder="incoming_message, group_extraction…"></div>
+          <div class="field"><label for="gc-group">Groupe (ID ou nom)</label><input id="gc-group"></div>
+          <div class="field"><label for="gc-campaign">Campagne (ID ou nom)</label><input id="gc-campaign"></div>
+          <div class="field"><label for="gc-category">Catégorie</label><input id="gc-category"></div>
+          <div class="field"><label for="gc-interest">Intérêt</label><input id="gc-interest"></div>
+          <div class="field"><label for="gc-status">Statut</label><select id="gc-status"><option value="">Tous</option><option>active</option><option>prospect</option><option>client</option><option>opted_out</option><option>inactive</option><option>unknown</option></select></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="gc-first-from">Première activité depuis</label><input id="gc-first-from" type="date"></div>
+          <div class="field"><label for="gc-first-to">Première activité jusqu’au</label><input id="gc-first-to" type="date"></div>
+          <div class="field"><label for="gc-last-from">Dernière activité depuis</label><input id="gc-last-from" type="date"></div>
+          <div class="field"><label for="gc-last-to">Dernière activité jusqu’au</label><input id="gc-last-to" type="date"></div>
+          <div class="field"><label for="gc-created-from">Enregistré depuis</label><input id="gc-created-from" type="date"></div>
+          <div class="field"><label for="gc-created-to">Enregistré jusqu’au</label><input id="gc-created-to" type="date"></div>
+        </div>
+        <div class="row" style="align-items:end">
+          <div class="field"><label for="gc-page-size">Lignes par page</label><select id="gc-page-size"><option>10</option><option>20</option><option>50</option><option>100</option><option selected>200</option></select></div>
+          <div class="field"><label for="gc-from">Extraire de</label><input id="gc-from" type="number" min="1" placeholder="1"></div>
+          <div class="field"><label for="gc-to">à</label><input id="gc-to" type="number" min="1" placeholder="200"></div>
+          <button type="button" id="gc-search-btn" class="primary-btn">Rechercher / filtrer</button>
+          <button type="button" id="gc-select-page">Sélectionner la page</button>
+          <button type="button" id="gc-select-all">Sélectionner tous les résultats filtrés</button>
+          <button type="button" id="gc-export">Exporter la sélection / plage / résultat (Excel)</button>
+          <button type="button" id="gc-merge">Fusionner la sélection (premier = maître)</button>
+        </div>
+        <p id="gc-results-label" class="empty">Aucun résultat chargé.</p>
+        <div class="table-wrap"><table style="min-width:1200px"><thead><tr><th>Sélection</th><th>Nom</th><th>Téléphone</th><th>Pays</th><th>Plateformes</th><th>Utilisateurs</th><th>Services</th><th>Catégorie / intérêts</th><th>Source / groupes / campagnes</th><th>Première activité</th><th>Dernière activité</th><th>Statut</th></tr></thead><tbody id="gc-rows"><tr><td colspan="12" class="empty">Le registre central n’a pas encore été chargé.</td></tr></tbody></table></div>
+        <div class="row" style="margin-top:1rem"><button type="button" id="gc-prev">← Page précédente</button><span id="gc-page-label" class="empty"></span><button type="button" id="gc-next">Page suivante →</button></div>
+        <details style="margin-top:1rem"><summary>Importer des contacts Excel / CSV dans la base globale</summary>
+          <div class="row" style="margin-top:1rem">
+            <div class="field"><label for="gc-import-file">Fichier .xlsx / .xls / .csv</label><input type="file" id="gc-import-file" accept=".xlsx,.xls,.csv,.txt,.vcf,.json"></div>
+            <div class="field"><label for="gc-import-channel">Plateforme</label><select id="gc-import-channel"><option>WHATSAPP</option><option>TELEGRAM</option></select></div>
+            <div class="field"><label for="gc-country-code">Indicatif local connu (facultatif)</label><input id="gc-country-code" placeholder="225"></div>
+            <div class="field"><label for="gc-import-from">Début de la plage extraite</label><input id="gc-import-from" type="number" min="1" placeholder="1"></div>
+            <div class="field"><label for="gc-import-to">Fin de la plage extraite</label><input id="gc-import-to" type="number" min="1" placeholder="Tout"></div>
+          </div>
+          <button type="button" id="gc-import-preview">Prévisualiser</button><button type="button" id="gc-import-start">Importer par lots</button>
+          <p id="gc-import-feedback" class="empty">Aucun aperçu.</p>
+        </details>
+      </section>
+
       <section>
         <h2>Générer une nouvelle clé</h2>
 
@@ -698,12 +751,230 @@
       }
     });
 
+    const globalContactSelection = new Set();
+    let globalContactPage = 1;
+    let globalContactTotal = 0;
+    let globalContactPageSize = 200;
+    let globalContactRangeActive = false;
+
+    function gcEscape(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function gcFilters() {
+      const map = {
+        keyword: 'gc-keyword', country: 'gc-country', user: 'gc-user', service: 'gc-service', platform: 'gc-platform',
+        source: 'gc-source', group: 'gc-group', campaign: 'gc-campaign', category: 'gc-category', interest: 'gc-interest',
+        status: 'gc-status', firstFrom: 'gc-first-from', firstTo: 'gc-first-to', lastFrom: 'gc-last-from', lastTo: 'gc-last-to',
+        createdFrom: 'gc-created-from', createdTo: 'gc-created-to',
+      };
+      const params = new URLSearchParams();
+      Object.keys(map).forEach((key) => { const value = document.getElementById(map[key]).value.trim(); if (value) params.set(key, value); });
+      return params;
+    }
+    function gcShowFeedback(message, error) {
+      const el = document.getElementById('gc-import-feedback');
+      el.textContent = message;
+      el.style.color = error ? '#c0392b' : '';
+    }
+    async function gcLoadStatus() {
+      const label = document.getElementById('global-contacts-status');
+      const kpis = document.getElementById('global-contacts-kpis');
+      try {
+        const r = await apiFetch('/api/admin/contacts/status');
+        const d = await r.json();
+        const remote = d.remote || {};
+        if (!remote.ok) {
+          label.textContent = 'Registre D1 indisponible : ' + (remote.error || 'le Worker n’expose pas encore les routes contacts. Aucun chiffre fictif n’est affiché.');
+          label.style.color = '#9a3412';
+          kpis.innerHTML = '';
+          return;
+        }
+        label.textContent = remote.configured
+          ? `Registre D1 actif · synchronisation en attente : ${d.local.pending || 0} · dernière synchronisation : ${d.local.lastSuccessAt ? new Date(d.local.lastSuccessAt).toLocaleString('fr-FR') : 'aucune'}`
+          : 'Registre joignable, mais le compte administrateur principal n’a pas pu être identifié dans les licences.';
+        label.style.color = remote.configured ? '#166534' : '#9a3412';
+        const s = remote.summary || {};
+        kpis.innerHTML = [
+          ['Contacts globaux', s.total], ['Nouveaux · 30 jours', s.newLast30Days], ['Entrants', s.incoming],
+          ['Importés', s.imported], ['Événements traités', s.processedEvents], ['Événements en attente', s.pendingEvents],
+        ].map(([labelText, value]) => `<div class="overview-card"><div class="value">${Number(value) || 0}</div><div class="label">${gcEscape(labelText)}</div></div>`).join('');
+      } catch (err) {
+        label.textContent = 'Statut indisponible : ' + err.message;
+        label.style.color = '#c0392b';
+      }
+    }
+    function gcCurrentQuery(includePage) {
+      const params = gcFilters();
+      globalContactPageSize = Number(document.getElementById('gc-page-size').value) || 200;
+      const from = Number(document.getElementById('gc-from').value);
+      const to = Number(document.getElementById('gc-to').value);
+      globalContactRangeActive = Number.isFinite(from) && from > 0 && Number.isFinite(to) && to >= from;
+      if (globalContactRangeActive) { params.set('from', String(from)); params.set('to', String(to)); }
+      else { params.set('limit', String(globalContactPageSize)); if (includePage !== false) params.set('page', String(globalContactPage)); }
+      return params;
+    }
+    function gcRender(data) {
+      const body = document.getElementById('gc-rows');
+      const contacts = Array.isArray(data.contacts) ? data.contacts : [];
+      globalContactTotal = Number(data.total) || 0;
+      if (!contacts.length) {
+        body.innerHTML = '<tr><td colspan="12" class="empty">Aucun contact ne correspond aux critères.</td></tr>';
+      } else {
+        body.innerHTML = contacts.map((c) => {
+          const rel = c.relations || [];
+          const users = Array.from(new Set(rel.map((r) => r.userLabel).filter(Boolean))).map((x) => '…' + x).join(', ');
+          const services = Array.from(new Set(rel.map((r) => r.serviceName).filter(Boolean))).join(', ');
+          const sources = Array.from(new Set(rel.map((r) => r.source).filter(Boolean))).join(', ');
+          const groups = Array.from(new Set(rel.map((r) => r.groupName || r.group_id).filter(Boolean))).join(', ');
+          const campaigns = Array.from(new Set(rel.map((r) => r.campaignName || r.campaign_id).filter(Boolean))).join(', ');
+          const category = c.category || (c.categories || []).join(', ');
+          const interest = (c.interests || []).join(', ');
+          return `<tr><td><input type="checkbox" class="gc-contact-select" data-id="${gcEscape(c.id)}" ${globalContactSelection.has(c.id) ? 'checked' : ''}></td>
+            <td>${gcEscape(c.name || '—')}</td><td>${gcEscape(c.phone || '—')}</td><td>${gcEscape(c.countryName || c.country || '—')}</td>
+            <td>${gcEscape((c.platforms || []).join(', ') || '—')}</td><td>${gcEscape(users || '—')}</td><td>${gcEscape(services || '—')}</td>
+            <td>${gcEscape([category, interest].filter(Boolean).join(' · ') || '—')}</td><td>${gcEscape([sources, groups, campaigns].filter(Boolean).join(' · ') || '—')}</td>
+            <td>${gcEscape(c.firstActivity || '—')}</td><td>${gcEscape(c.lastActivity || '—')}</td><td>${gcEscape(c.status || '—')}</td></tr>`;
+        }).join('');
+      }
+      body.querySelectorAll('.gc-contact-select').forEach((checkbox) => checkbox.addEventListener('change', () => {
+        if (checkbox.checked) globalContactSelection.add(checkbox.dataset.id); else globalContactSelection.delete(checkbox.dataset.id);
+        gcUpdateSelectionLabel();
+      }));
+      document.getElementById('gc-results-label').textContent = `${globalContactTotal} contact(s) filtré(s) · ${contacts.length} affiché(s) · ${globalContactSelection.size} sélectionné(s)`;
+      document.getElementById('gc-page-label').textContent = globalContactRangeActive
+        ? `Plage ${data.from || 0}–${data.to || 0} sur le résultat filtré (${globalContactTotal})`
+        : `Page ${data.page || globalContactPage} · ${globalContactPageSize} par page · ${globalContactTotal} résultat(s)`;
+      document.getElementById('gc-prev').disabled = globalContactRangeActive || globalContactPage <= 1;
+      document.getElementById('gc-next').disabled = globalContactRangeActive || !data.hasMore;
+    }
+    function gcUpdateSelectionLabel() {
+      const label = document.getElementById('gc-results-label');
+      if (label.textContent) label.textContent = label.textContent.replace(/\d+ sélectionné\(s\)$/, `${globalContactSelection.size} sélectionné(s)`);
+    }
+    async function gcLoad() {
+      const params = gcCurrentQuery(true);
+      document.getElementById('gc-rows').innerHTML = '<tr><td colspan="12" class="empty">Recherche D1 en cours…</td></tr>';
+      try {
+        const r = await apiFetch('/api/admin/contacts?' + params.toString());
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Recherche indisponible');
+        gcRender(data);
+      } catch (err) {
+        document.getElementById('gc-rows').innerHTML = `<tr><td colspan="12" class="empty">${gcEscape(err.message)}</td></tr>`;
+      }
+    }
+    async function gcSelectAllFiltered() {
+      const params = gcFilters();
+      const from = Number(document.getElementById('gc-from').value);
+      const to = Number(document.getElementById('gc-to').value);
+      const range = Number.isFinite(from) && from > 0 && Number.isFinite(to) && to >= from;
+      const first = range ? from : 1;
+      let end = range ? to : Infinity;
+      let offset = first;
+      try {
+        do {
+          const q = new URLSearchParams(params);
+          if (range) { q.set('from', String(offset)); q.set('to', String(Math.min(end, offset + 999))); }
+          else { q.set('page', String(Math.ceil(offset / 1000))); q.set('limit', '1000'); }
+          const r = await apiFetch('/api/admin/contacts?' + q.toString());
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || 'Sélection indisponible');
+          (d.contacts || []).forEach((c) => globalContactSelection.add(c.id));
+          if (!range) end = Number(d.total) || 0;
+          offset += 1000;
+          document.getElementById('gc-results-label').textContent = `Sélection en cours… ${globalContactSelection.size} contact(s)`;
+          if (!(d.contacts || []).length) break;
+        } while (offset <= end);
+        gcUpdateSelectionLabel();
+        await gcLoad();
+      } catch (err) { alert('Sélection impossible : ' + err.message); }
+    }
+    async function gcDownloadExport() {
+      const params = gcFilters();
+      if (globalContactSelection.size) globalContactSelection.forEach((id) => params.append('id', id));
+      else {
+        const from = Number(document.getElementById('gc-from').value);
+        const to = Number(document.getElementById('gc-to').value);
+        if (Number.isFinite(from) && from > 0 && Number.isFinite(to) && to >= from) { params.set('from', String(from)); params.set('to', String(to)); }
+      }
+      try {
+        const r = await apiFetch('/api/admin/contacts/export?' + params.toString());
+        if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Export impossible'); }
+        const blob = await r.blob();
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = href; a.download = 'contacts_cyrus.xlsx'; a.click(); URL.revokeObjectURL(href);
+      } catch (err) { alert('Export impossible : ' + err.message); }
+    }
+    async function gcMergeSelection() {
+      const ids = Array.from(globalContactSelection);
+      if (ids.length < 2) { alert('Sélectionnez au moins deux fiches.'); return; }
+      if (!confirm(`Fusionner ${ids.length - 1} fiche(s) dans la première sélectionnée ?`)) return;
+      try {
+        const r = await apiFetch('/api/admin/contacts/merge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ masterId: ids[0], duplicateIds: ids.slice(1) }) });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Fusion impossible');
+        globalContactSelection.clear(); await gcLoad(); await gcLoadStatus();
+        alert(`${d.merged || 0} doublon(s) fusionné(s).`);
+      } catch (err) { alert('Fusion impossible : ' + err.message); }
+    }
+    function gcImportData(file) {
+      const form = new FormData(); form.append('file', file);
+      form.append('channel', document.getElementById('gc-import-channel').value);
+      form.append('defaultCountryCode', document.getElementById('gc-country-code').value.trim());
+      form.append('from', document.getElementById('gc-import-from').value || '1');
+      form.append('to', document.getElementById('gc-import-to').value || '');
+      return form;
+    }
+    document.getElementById('gc-search-btn').addEventListener('click', () => { globalContactPage = 1; gcLoad(); });
+    document.getElementById('gc-page-size').addEventListener('change', () => { globalContactPage = 1; gcLoad(); });
+    document.getElementById('gc-prev').addEventListener('click', () => { globalContactPage = Math.max(1, globalContactPage - 1); gcLoad(); });
+    document.getElementById('gc-next').addEventListener('click', () => { globalContactPage += 1; gcLoad(); });
+    document.getElementById('gc-select-page').addEventListener('click', () => {
+      document.querySelectorAll('.gc-contact-select').forEach((c) => { c.checked = true; globalContactSelection.add(c.dataset.id); });
+      gcUpdateSelectionLabel();
+    });
+    document.getElementById('gc-select-all').addEventListener('click', gcSelectAllFiltered);
+    document.getElementById('gc-export').addEventListener('click', gcDownloadExport);
+    document.getElementById('gc-merge').addEventListener('click', gcMergeSelection);
+    document.getElementById('gc-import-preview').addEventListener('click', async () => {
+      const file = document.getElementById('gc-import-file').files[0];
+      if (!file) { gcShowFeedback('Choisissez un fichier à prévisualiser.', true); return; }
+      gcShowFeedback('Analyse et vérification réelle dans D1…');
+      try {
+        const r = await apiFetch('/api/admin/contacts/import-preview', { method: 'POST', body: gcImportData(file) });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Aperçu indisponible');
+        const x = d.report;
+        gcShowFeedback(`${x.totalFound} lignes de contact extraites · ${x.uniqueContacts} contacts uniques · ${x.newContacts} nouveaux · ${x.alreadyPresent} déjà présents · ${x.duplicatesInFile} doublons dans le fichier · ${x.invalid} invalides · ${x.withoutReliableIdentity} sans identité fiable · ${x.countryDetected} pays détectés.`);
+      } catch (err) { gcShowFeedback(err.message, true); }
+    });
+    document.getElementById('gc-import-start').addEventListener('click', async () => {
+      const file = document.getElementById('gc-import-file').files[0];
+      if (!file) { gcShowFeedback('Choisissez un fichier à importer.', true); return; }
+      gcShowFeedback('Création du travail d’import par lots…');
+      try {
+        const r = await apiFetch('/api/admin/contacts/import', { method: 'POST', body: gcImportData(file) });
+        const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Import impossible');
+        if (!d.job) { gcShowFeedback('Aucun contact fiable à importer. Le fichier n’a pas créé de fiche.'); return; }
+        const jobId = d.job.id;
+        let job;
+        do {
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+          const status = await apiFetch('/api/admin/contacts/import/' + encodeURIComponent(jobId));
+          const data = await status.json(); if (!status.ok) throw new Error(data.error || 'Suivi indisponible');
+          job = data.job;
+          gcShowFeedback(`Import ${job.progress || 0}% · ${job.processed || 0}/${job.total} contacts traités · ${job.created || 0} nouveaux · ${job.alreadyPresent || 0} déjà présents · état : ${job.status}${job.lastError ? ' · ' + job.lastError : ''}`);
+        } while (job && ['queued', 'running', 'retrying'].includes(job.status));
+        if (job && job.status === 'complete') { gcShowFeedback(`Import terminé : ${job.created} nouveaux, ${job.alreadyPresent} déjà présents, ${job.duplicatesInFile} doublons internes, ${job.invalid} invalides.`); await gcLoad(); await gcLoadStatus(); }
+      } catch (err) { gcShowFeedback(err.message, true); }
+    });
+
     function init() {
       loadOverview();
       loadLicenses();
       loadStorageStatus();
+      gcLoadStatus();
+      gcLoad();
       if (pollInterval) clearInterval(pollInterval);
-      pollInterval = setInterval(() => { loadOverview(); loadLicenses(); loadStorageStatus(); }, 8000);
+      pollInterval = setInterval(() => { loadOverview(); loadLicenses(); loadStorageStatus(); gcLoadStatus(); }, 8000);
     }
 
     tryAutoLogin().then((ok) => { if (ok) init(); });

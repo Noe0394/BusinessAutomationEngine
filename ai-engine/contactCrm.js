@@ -66,7 +66,7 @@ function addTagsTo(contact, tags) {
 // Un nouveau contact est automatiquement étiqueté `nouveau_contact` + `prospect`
 // (point d'entrée du tunnel) — jamais `client` tant qu'aucun achat n'est
 // confirmé (voir markPurchase).
-async function recordSeen(tenantId, { channel, from, name }) {
+async function recordSeen(tenantId, { channel, from, name, identity, messageId, source = 'crm', context } = {}) {
   if (!from) return { isNew: false, contact: null };
   const doc = await load(tenantId);
   // Même clé normalisée que ensureContact() (identityOf) — sinon ce pré-contrôle rate systématiquement le contact déjà
@@ -75,11 +75,88 @@ async function recordSeen(tenantId, { channel, from, name }) {
   const isNew = !doc.contacts[key];
   const contact = ensureContact(doc, channel, from);
   if (name && !contact.name) contact.name = String(name).slice(0, 120);
+  if (source) {
+    contact.source = contact.source || String(source);
+    contact.sources = Array.from(new Set([].concat(contact.sources || [], String(source))));
+  }
   if (isNew) addTagsTo(contact, [TAG_NEW, TAG_PROSPECT]);
   contact.lastSeen = new Date().toISOString();
   contact.messageCount = (contact.messageCount || 0) + 1;
   save(tenantId, doc);
+  try {
+    const resolver = require('./contactIdentity');
+    let explicitPhone = /^\+|^00/.test(String(from || '')) ? from : undefined;
+    if (!explicitPhone && String(channel || '').toUpperCase() === 'WHATSAPP' && !String(from || '').includes('@')) {
+      const normalized = require('./contactsPipeline').normalizeOne(from, { defaultCountryCode: process.env.DEFAULT_COUNTRY_CODE });
+      if (normalized && normalized.phone && !normalized.reason) explicitPhone = `+${normalized.phone}`;
+    }
+    const resolved = identity || resolver.resolveIdentity({
+      channel, jid: from,
+      phone: explicitPhone,
+      username: channel === 'TELEGRAM' && String(from || '').startsWith('@') ? String(from).slice(1) : undefined,
+      knownName: contact.name || name || null,
+    });
+    await require('./globalContactSync').enqueue({
+      tenantId, channel, identity: resolved, source,
+      eventId: messageId || `crm:${contact.key}:${Date.now()}`,
+      name: contact.name || name, context,
+    });
+  } catch (err) {
+    console.error('globalContactSync.recordSeen :', err.message);
+  }
   return { isNew, contact };
+}
+
+// Entrée unique pour les messages reçus : tout échange privé nourrit le CRM,
+// même si le routeur d'assistance ou le répondeur automatique termine ensuite
+// le traitement avant le pipeline commercial historique. Les groupes restent
+// exclus : ils disposent de leur propre registre de membres/prospects.
+async function recordIncoming(tenantId, { channel, from, name, isGroup, identity, messageId, context } = {}) {
+  if (!from || isGroup) return { isNew: false, contact: null };
+  return recordSeen(tenantId, { channel, from, name, identity, messageId, source: 'incoming_message', context });
+}
+
+// Écriture groupée pour imports, extractions et campagnes : une lecture et une
+// écriture CRM par lot, tout en publiant chaque relation de contact au registre
+// central avec une clé d'idempotence indépendante.
+async function recordBatch(tenantId, records, opts = {}) {
+  const rows = Array.isArray(records) ? records : [];
+  const doc = await load(tenantId);
+  const events = [];
+  let created = 0;
+  let updated = 0;
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    if (!row || !row.from || row.isGroup) continue;
+    const channel = String(row.channel || opts.channel || 'WHATSAPP').toUpperCase();
+    const identity = row.identity || require('./contactIdentity').resolveIdentity({
+      channel, jid: row.from,
+      phone: /^\+|^00/.test(String(row.from)) ? row.from : undefined,
+      username: channel === 'TELEGRAM' && String(row.from).startsWith('@') ? String(row.from).slice(1) : undefined,
+      knownName: row.name || null,
+    });
+    const keyValue = identity.phoneNumber || row.from;
+    const key = contactKey(channel, identityOf(keyValue));
+    const isNew = !doc.contacts[key];
+    const contact = ensureContact(doc, channel, keyValue);
+    if (row.name && !contact.name) contact.name = String(row.name).slice(0, 120);
+    contact.source = contact.source || String(row.source || opts.source || 'contact_used');
+    contact.sources = Array.from(new Set([].concat(contact.sources || [], String(row.source || opts.source || 'contact_used'))));
+    contact.firstSeen = contact.firstSeen || now;
+    contact.lastSeen = now;
+    if (isNew) { addTagsTo(contact, [TAG_NEW, TAG_PROSPECT]); created += 1; } else updated += 1;
+    events.push({
+      tenantId, channel, identity, name: row.name || contact.name,
+      source: row.source || opts.source || 'contact_used', eventId: row.eventId || `${opts.batchId || now}:${channel}:${key}`,
+      context: row.context || {}, at: row.at || now,
+    });
+  }
+  save(tenantId, doc);
+  if (events.length) {
+    try { await require('./globalContactSync').enqueueMany(events); }
+    catch (err) { console.error('globalContactSync.recordBatch :', err.message); }
+  }
+  return { created, updated, total: events.length };
 }
 
 async function addTags(tenantId, channel, from, tags) {
@@ -137,6 +214,9 @@ async function importContacts(tenantId, contacts, opts) {
   const doc = await load(tenantId);
   const seenInBatch = new Set();
   let imported = 0; let updated = 0; let duplicates = 0; let invalid = 0;
+  const importedForCentral = [];
+  const contactExtractor = require('./contactsPipeline');
+  const importId = require('node:crypto').randomUUID();
   for (const entry of (Array.isArray(contacts) ? contacts : [])) {
     const phone = normalizePhone(entry && (entry.phone || entry.number || entry.telephone));
     if (!phone) { invalid += 1; continue; }
@@ -151,9 +231,23 @@ async function importContacts(tenantId, contacts, opts) {
       contact.fields = Object.assign({}, contact.fields || {}, entry.fields);
     }
     addTagsTo(contact, ['importé', TAG_PROSPECT]);
+    const normalized = contactExtractor.normalizeOne(entry && (entry.phone || entry.number || entry.telephone), { defaultCountryCode: o.defaultCountryCode });
+    if (normalized && normalized.phone && !normalized.reason) {
+      importedForCentral.push({
+        tenantId, channel, source, name: entry.name || contact.name,
+        identity: { channel, phoneNumber: normalized.phone, internationalPhoneNumber: `+${normalized.phone}`, displayName: entry.name || contact.name || null },
+        eventId: `${importId}:${key}`,
+      });
+    }
     if (existed) { updated += 1; } else { imported += 1; }
   }
+  doc.stats = doc.stats || {};
+  doc.stats.duplicatesAvoided = (doc.stats.duplicatesAvoided || 0) + duplicates;
   save(tenantId, doc);
+  if (importedForCentral.length) {
+    try { await require('./globalContactSync').enqueueMany(importedForCentral); }
+    catch (err) { console.error('globalContactSync.importContacts :', err.message); }
+  }
   return { total: (Array.isArray(contacts) ? contacts.length : 0), imported, updated, duplicates, invalid, source, channel };
 }
 
@@ -179,18 +273,36 @@ async function list(tenantId, opts) {
 async function counts(tenantId) {
   const doc = await load(tenantId);
   const byTag = {};
+  const bySource = {};
   for (const c of Object.values(doc.contacts || {})) {
     for (const t of (c.tags || [])) byTag[t] = (byTag[t] || 0) + 1;
+    for (const source of (c.sources || (c.source ? [c.source] : []))) bySource[source] = (bySource[source] || 0) + 1;
   }
-  return { total: Object.keys(doc.contacts || {}).length, byTag };
+  const contacts = Object.values(doc.contacts || {});
+  const dayAgo = Date.now() - 86400000;
+  const newerThanDay = (value) => value && new Date(value).getTime() >= dayAgo;
+  return {
+    total: contacts.length, byTag, bySource,
+    newLast24Hours: contacts.filter((c) => newerThanDay(c.firstSeen)).length,
+    incoming: contacts.filter((c) => (c.sources || [c.source]).some((s) => s === 'incoming_message')).length,
+    imported: contacts.filter((c) => (c.sources || [c.source]).some((s) => String(s || '').includes('import'))).length,
+    extracted: contacts.filter((c) => (c.sources || [c.source]).some((s) => String(s || '').includes('extraction'))).length,
+    used: contacts.filter((c) => (c.sources || [c.source]).some((s) => String(s || '').includes('campaign') || s === 'contact_used')).length,
+    duplicatesAvoided: Number(doc.stats && doc.stats.duplicatesAvoided) || 0,
+  };
 }
 
 // Registre de refus : un contact qui a refusé/demandé l'arrêt ne doit plus être
 // sollicité (campagnes, relances, envois autonomes) tant qu'il ne revient pas.
 const TAG_OPTOUT = 'ne_pas_contacter';
 function identityOf(from) {
-  const raw = String(from == null ? '' : from).split('@')[0];
-  return normalizePhone(raw) || raw;
+  const raw = String(from == null ? '' : from).trim();
+  const parsed = require('./contactIdentity').parseJid(raw);
+  // Seul un JID PN WhatsApp fiable représente un téléphone. Les LID, JID
+  // inconnus et IDs numériques Telegram restent des identifiants techniques
+  // complets : aucun suffixe n'est retiré et aucun numéro n'est fabriqué.
+  if (parsed.kind === 'pn' && parsed.phone) return parsed.phone;
+  return raw;
 }
 
 async function markOptOut(tenantId, channel, from, reason) {
@@ -308,7 +420,7 @@ module.exports = {
   upsertCommunity, listCommunities, getCommunity, markCommunityJoined,
   getContact, updateContact, removeContact,
   markOptOut, clearOptOut, isOptedOut, optedOutSet, identityOf, TAG_OPTOUT,
-  recordSeen, addTags, setStage, markPurchase, list, counts,
+  recordSeen, recordIncoming, recordBatch, addTags, setStage, markPurchase, list, counts,
   importContacts, normalizePhone,
   TAG_NEW, TAG_PROSPECT, TAG_CLIENT, NAMESPACE,
 };

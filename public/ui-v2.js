@@ -122,7 +122,7 @@
 
   function buildAppearancePanel() {
     if (document.getElementById('cy-appearance-btn')) return;
-    var btn = document.createElement('button'); btn.id = 'cy-appearance-btn'; btn.type = 'button'; btn.setAttribute('aria-label', 'Apparence'); btn.title = 'Apparence : thème et couleur'; btn.textContent = '🎨';
+    var btn = document.createElement('button'); btn.id = 'cy-appearance-btn'; btn.type = 'button'; btn.setAttribute('aria-label', 'Apparence'); btn.title = 'Apparence : thème et couleur'; btn.textContent = '🎨 Apparence';
     var panel = document.createElement('div'); panel.id = 'cy-appearance-panel'; panel.hidden = true;
     var themeMode = safeGet(THEME_KEY) || 'dark';
     var accentId = safeGet(ACCENT_KEY) || 'violet'; var customHex = safeGet(ACCENT_CUSTOM_KEY) || '#7c5cff';

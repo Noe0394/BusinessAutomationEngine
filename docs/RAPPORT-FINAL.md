@@ -1,5 +1,10 @@
 # 📦 CYRUS SUPER ASSISTANT — RAPPORT FINAL DE LIVRAISON
 
+> **Rapport historique :** ses preuves de production concernent l'ancienne VM
+> Google Cloud. L'interface Vercel et le backend Render sont la cible actuelle;
+> l'état de la migration et ses blocages sont suivis dans
+> [`MIGRATION-GOOGLE-RENDER.md`](MIGRATION-GOOGLE-RENDER.md).
+
 > Créé le 2026-09-13. Récapitule la mission d'unification : UNE plateforme, UNE
 > URL Vercel, DEUX modes (VPS / Local), réparation complète du backend VPS,
 > parité fonctionnelle, vérification réelle (zéro mock), licences/auth non

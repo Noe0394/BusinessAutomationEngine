@@ -1,5 +1,10 @@
 # 🔑 Accès SSH au VPS — CYRUS SUPER ASSISTANT
 
+> **Archive — ne pas utiliser.** La VM Google Cloud ci-dessous n'est plus
+> active selon l'utilisateur. Le backend cible est désormais Render; suivre
+> `docs/DEPLOIEMENT-JARVIS.md`. Les coordonnées SSH sont conservées uniquement
+> comme historique et ne donnent pas accès au service Render.
+
 > **À lire avant toute tentative d'accès SSH au VPS.** Ce document est la source
 > de référence pour se connecter au VPS sans jamais recréer de clé.
 

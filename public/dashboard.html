@@ -2145,7 +2145,7 @@
         @media(max-width:640px){#panel-services-metiers .svc-grid{grid-template-columns:1fr}}
       </style>
       <h2>🏢 Services Métiers</h2>
-      <p style="opacity:.8;max-width:720px">Configure ici <strong>tout ce que Cyrus doit connaître et utiliser pour ton activité</strong> : tes projets, produits, prix, règles commerciales, plateformes, comptes et APIs, avec les permissions que tu accordes. Les clés API sont <strong>chiffrées</strong> et ne sont jamais affichées. (La mémoire sélective de Cyrus reste séparée.)</p>
+      <p style="opacity:.8;max-width:720px">Décris ton activité une seule fois dans le mémo. C’est suffisant pour commencer : Cyrus en tire le contexte, les produits, les prix et les règles. Le nom et les précisions sont facultatifs.</p>
       <div style="margin:14px 0"><button type="button" id="svc-add-btn" class="btn-primary">+ Ajouter un Service Métier</button></div>
       <div id="svc-feedback" hidden></div>
 
@@ -2153,17 +2153,18 @@
       <div class="svc-form" id="svc-form" hidden>
         <input type="hidden" id="svc-id" />
         <h3 id="svc-form-title">Nouveau Service Métier</h3>
-        <div class="svc-grid">
-          <div><label>Nom du service / projet</label><input id="svc-name" placeholder="ex : Plateforme de Formation" /></div>
-          <div><label>Type d'activité</label>
-            <select id="svc-type"><option value="formation">Formation</option><option value="ecommerce">E-commerce</option><option value="produit">Produit</option><option value="service">Service</option><option value="importation">Importation / Revente</option><option value="paiement">Paiement</option><option value="crm">CRM</option><option value="autre">Autre</option></select>
-          </div>
-        </div>
-        <label>Projet associé (facultatif)</label><input id="svc-project" placeholder="ex : Formation en ligne" />
+        <label>Nom (facultatif)</label><input id="svc-name" placeholder="Laisse vide : le nom sera tiré de ta description" />
+        <label style="font-weight:600;">📝 Décris ton activité</label>
+        <textarea id="svc-memo" rows="7" placeholder="Écris ou colle librement ce que Cyrus doit savoir : activité, produits, prix, horaires, promotions, livraison, règles, questions fréquentes, moyens de paiement…"></textarea>
+        <div class="svc-hint">Tu peux enregistrer avec ce seul texte. Les informations ci-dessous sont facultatives.</div>
 
-        <label style="font-weight:600;">📝 Mémoire de votre activité (recommandé — écrivez tout ici)</label>
-        <textarea id="svc-memo" rows="6" placeholder="Écrivez ou collez tout ce qui concerne votre activité : produits, prix, promotions et dates, horaires, règles, livraison, FAQ, moyens de paiement (numéro, opérateur, titulaire)...&#10;&#10;Ex. : « Je propose une formation Épicerie et Bouillon à 8 000 FCFA. Elle commence le 19 septembre sur WhatsApp et Telegram. Promotion à 5 000 FCFA jusqu'au 25 septembre. Paiement Wave au XX XX XX XX au nom de X et Orange Money au XX XX XX XX au nom de Y. »"></textarea>
-        <div class="svc-hint">Cyrus lit ce texte et en comprend automatiquement le prix, les promotions, les moyens de paiement, etc. — les champs ci-dessous restent disponibles en complément/correction, mais ne sont plus obligatoires.</div>
+        <details><summary>Ajouter des précisions (facultatif)</summary>
+          <div class="svc-grid">
+            <div><label>Type d'activité</label>
+              <select id="svc-type"><option value="autre">Autre</option><option value="formation">Formation</option><option value="ecommerce">E-commerce</option><option value="produit">Produit</option><option value="service">Service</option><option value="importation">Importation / Revente</option><option value="paiement">Paiement</option><option value="crm">CRM</option></select>
+            </div>
+            <div><label>Projet associé</label><input id="svc-project" placeholder="ex : Formation en ligne" /></div>
+          </div>
 
         <label>Description (facultatif si déjà dans la mémoire ci-dessus)</label><textarea id="svc-desc" rows="2" placeholder="Ce que tu proposes"></textarea>
 
@@ -2217,6 +2218,8 @@
 
         <details><summary>🎯 Objectifs de ce service (un par ligne)</summary>
           <textarea id="svc-objectives" rows="2" placeholder="Vendre 10 formations par semaine&#10;Relancer les prospects sous 24h"></textarea>
+        </details>
+
         </details>
 
         <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
@@ -2489,6 +2492,7 @@
       </style>
       <h2>📊 Rapports, Activités &amp; Amélioration <button type="button" id="reports-refresh" style="float:right;font-size:.8rem;padding:5px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit;cursor:pointer">🔄 Rafraîchir</button></h2>
       <p class="empty">Supervision en temps réel : coûts IA et activités réelles (messages, réponses automatiques, actions/outils, erreurs). Données déterministes — cette page n'utilise aucune IA.</p>
+      <div id="reports-contacts"></div>
       <div id="reports-content"><p style="opacity:.6">Chargement…</p></div>
     </section>
 
@@ -10527,6 +10531,7 @@
 
     // ===================== SERVICES MÉTIERS =====================
     let svcWired = false;
+    let svcOriginal = null;
     function svcEsc(s) {
       return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
@@ -10549,10 +10554,11 @@
     function svcOpenForm(service) {
       const f = (id) => document.getElementById(id);
       const s = service || {};
+      svcOriginal = service ? JSON.parse(JSON.stringify(service)) : null;
       const c = s.commercial || {}; const conn = s.connection || {};
       f('svc-form-title').textContent = service ? 'Modifier le service' : 'Nouveau Service Métier';
       f('svc-id').value = s.id || '';
-      f('svc-name').value = s.name || ''; f('svc-type').value = s.type || 'formation'; f('svc-project').value = s.project || '';
+      f('svc-name').value = s.name || ''; f('svc-type').value = s.type || 'autre'; f('svc-project').value = s.project || '';
       f('svc-memo').value = c.memo || '';
       f('svc-desc').value = c.description || '';
       f('svc-price').value = c.price != null ? c.price : ''; f('svc-currency').value = c.currency || 'FCFA';
@@ -10566,7 +10572,10 @@
       f('svc-rules').value = (s.rules || []).join('\n'); f('svc-objectives').value = (s.objectives || []).join('\n');
       svcToggleApiFields();
       f('svc-form').hidden = false; f('svc-feedback').hidden = true;
-      f('svc-name').focus();
+      f('svc-memo').focus();
+    }
+    function svcSuggestedName(memo) {
+      return String(memo || '').trim().split(/[\n.!?]/).map((line) => line.trim()).find(Boolean)?.slice(0, 80) || '';
     }
     function svcCollectPayload() {
       const f = (id) => document.getElementById(id).value;
@@ -10576,22 +10585,38 @@
       if (kind === 'api' && connectorType === 'platform_gateway') {
         connection.endpoints = { enroll: '/api/v1/agent-gateway/enroll-student', suspend: '/api/v1/agent-gateway/suspend-student' };
       }
-      return {
-        name: f('svc-name'), type: f('svc-type'), project: f('svc-project') || null,
-        commercial: {
-          memo: f('svc-memo'),
-          price: f('svc-price') ? Number(f('svc-price')) : null, currency: f('svc-currency') || 'FCFA',
-          promoPrice: f('svc-promo') ? Number(f('svc-promo')) : null, target: f('svc-target'),
-          description: f('svc-desc'), advantages: f('svc-advantages'), objections: f('svc-objections'),
-          paymentTerms: f('svc-payterms'), accessTerms: f('svc-accessterms'),
-        },
-        products: svcParseProducts(f('svc-products')), rules: svcParseLines(f('svc-rules')),
-        objectives: svcParseLines(f('svc-objectives')), scopes, connection,
+      const original = svcOriginal || {};
+      const before = original.commercial || {};
+      const commercial = {};
+      const memo = f('svc-memo');
+      if (!svcOriginal || memo !== String(before.memo || '')) commercial.memo = memo;
+      const values = {
+        price: f('svc-price') ? Number(f('svc-price')) : null, currency: f('svc-currency') || 'FCFA',
+        promoPrice: f('svc-promo') ? Number(f('svc-promo')) : null, target: f('svc-target'),
+        description: f('svc-desc'), advantages: f('svc-advantages'), objections: f('svc-objections'),
+        paymentTerms: f('svc-payterms'), accessTerms: f('svc-accessterms'),
       };
+      for (const [key, value] of Object.entries(values)) {
+        const old = before[key] == null ? (key === 'currency' ? 'FCFA' : null) : before[key];
+        if (!svcOriginal ? value !== null && value !== '' && !(key === 'currency' && value === 'FCFA') : JSON.stringify(value) !== JSON.stringify(old)) commercial[key] = value;
+      }
+      const payload = {
+        name: f('svc-name').trim() || svcSuggestedName(memo), scopes, connection,
+        commercial,
+      };
+      const type = f('svc-type'); const project = f('svc-project') || null;
+      if ((!svcOriginal && type !== 'autre') || (svcOriginal && type !== (original.type || 'autre'))) payload.type = type;
+      if (!svcOriginal || project !== (original.project || null)) payload.project = project;
+      const products = svcParseProducts(f('svc-products'));
+      const rules = svcParseLines(f('svc-rules')); const objectives = svcParseLines(f('svc-objectives'));
+      if (!svcOriginal || JSON.stringify(products) !== JSON.stringify(original.products || [])) payload.products = products;
+      if (!svcOriginal || JSON.stringify(rules) !== JSON.stringify(original.rules || [])) payload.rules = rules;
+      if (!svcOriginal || JSON.stringify(objectives) !== JSON.stringify(original.objectives || [])) payload.objectives = objectives;
+      return payload;
     }
     async function svcSave(withTest) {
       const payload = svcCollectPayload();
-      if (!payload.name) { svcFeedback('Donne un nom au service.', true); return; }
+      if (!payload.name && !String(document.getElementById('svc-memo').value || '').trim()) { svcFeedback('Décris ton activité ou donne un nom pour continuer.', true); return; }
       const id = document.getElementById('svc-id').value;
       const apiKey = document.getElementById('svc-apikey').value.trim();
       try {
@@ -10747,17 +10772,34 @@
     async function reportsLoad() {
       const box = document.getElementById('reports-content');
       box.innerHTML = '<p style="opacity:.6">Chargement…</p>';
-      let usage = null; let activity = null;
+      let usage = null; let activity = null; let contacts = null;
       try {
-        const [ru, ra] = await Promise.all([
+        const [ru, ra, rc] = await Promise.all([
           apiFetch('/api/reports/ai-usage').then((r) => r.json()).catch(() => null),
           apiFetch('/api/reports/activity').then((r) => r.json()).catch(() => null),
+          apiFetch('/api/reports/contacts').then((r) => r.json()).catch(() => null),
         ]);
         usage = ru && ru.usage ? ru.usage : null;
         activity = ra && ra.activity ? ra.activity : null;
+        contacts = rc && rc.summary ? rc : null;
       } catch (e) { if (e.message === 'unauthorized') return; }
       const t = (usage && usage.totals) || { calls: 0, tokens: 0, cost: 0 };
       let html = '';
+      if (contacts) {
+        const c = contacts.summary; const sync = contacts.sync || {};
+        html += '<div class="rep-section"><strong>📇 Mes contacts</strong>'
+          + '<button type="button" id="rep-contacts-export" style="margin-left:12px">Télécharger Excel</button>'
+          + '<div class="rep-kpis">'
+          + '<div class="rep-kpi"><div class="v">' + (c.total || 0) + '</div><div class="l">contacts connus</div></div>'
+          + '<div class="rep-kpi"><div class="v">' + (c.newLast24Hours || 0) + '</div><div class="l">nouveaux · 24 h</div></div>'
+          + '<div class="rep-kpi"><div class="v">' + (c.incoming || 0) + '</div><div class="l">entrants</div></div>'
+          + '<div class="rep-kpi"><div class="v">' + (c.imported || 0) + '</div><div class="l">importés</div></div>'
+          + '<div class="rep-kpi"><div class="v">' + (c.extracted || 0) + '</div><div class="l">extraits</div></div>'
+          + '<div class="rep-kpi"><div class="v">' + (c.used || 0) + '</div><div class="l">utilisés</div></div>'
+          + '<div class="rep-kpi"><div class="v">' + (c.duplicatesAvoided || 0) + '</div><div class="l">doublons évités à l’import</div></div>'
+          + '<div class="rep-kpi"><div class="v">' + (sync.pending || 0) + '</div><div class="l">synchronisation en attente</div></div>'
+          + '</div><div class="empty">Dernière synchronisation : ' + (sync.lastSuccessAt ? repEsc(new Date(sync.lastSuccessAt).toLocaleString('fr-FR')) : 'aucune confirmée') + '</div></div>';
+      }
       html += '<div class="rep-section"><strong>💸 Coûts IA (aujourd\'hui)</strong>';
       html += '<div class="rep-kpis">'
         + '<div class="rep-kpi"><div class="v">' + (t.calls || 0) + '</div><div class="l">appels IA</div></div>'
@@ -10784,6 +10826,8 @@
       html += '</div>';
       html += '<div class="rep-section" id="rep-intel"></div>';
       box.innerHTML = html;
+      const contactExport = document.getElementById('rep-contacts-export');
+      if (contactExport) contactExport.addEventListener('click', () => { window.location.href = buildAuthedUrl('/api/reports/contacts/export-excel'); });
       repIntelLoad();
     }
 

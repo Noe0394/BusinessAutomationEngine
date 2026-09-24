@@ -140,10 +140,11 @@ const GOAL_RE = /(\bcampagne|\bvend|\bvente|prospect|groupes?|membres?|publier|p
 // pour ne PAS happer un ordre d'action ("présente ma formation à ce client" =
 // action, pas une question). Placé APRÈS toutes les intentions d'action et
 // juste AVANT 'goal' : une vraie commande garde la priorité.
-const BUSINESSINFO_RE = /((?:\bquel(?:le|s|les)?\b|\bcombien\b|c(?:'|’)?est\s+(?:quoi|combien)|\bliste[rz]?\b|\bmontre|\baffiche|\brappelle|\bdonne(?:-|\s)moi|\bc'est\s+quoi)[^]{0,40}(?:prix|tarif|co[ûu]te?|produits?|formations?|offres?|services?|catalogue|r[èe]gles?|objectifs?))|((?:prix|tarif)\s+(?:de|d'|du|de\s+la|de\s+ma|de\s+mon)\b)|(mes\s+(?:produits?|offres?|formations?|r[èe]gles?|objectifs?|tarifs?)\b)|(mon\s+catalogue\b)/i;
+const BUSINESSINFO_RE = /((?:\bquel(?:le|s|les)?\b|\bcombien\b|c(?:'|’)?est\s+(?:quoi|combien)|\bliste[rz]?\b|\bmontre|\baffiche|\brappelle|\bdonne(?:-|\s)moi|\bc'est\s+quoi)[^]{0,60}(?:prix|tarif|co[ûu]te?|produits?|formations?|offres?|services?|catalogue|r[èe]gles?|objectifs?|horaires?|dates?|promotions?|paiement|livraison|localisation|conditions?|activit[ée]|FAQ|num[ée]ro))|((?:prix|tarif|horaire|date|promotion|paiement|livraison)\s+(?:de|d'|du|de\s+la|de\s+ma|de\s+mon)\b)|(mes\s+(?:produits?|offres?|formations?|r[èe]gles?|objectifs?|tarifs?|horaires?|promotions?|conditions?)\b)|(mon\s+catalogue\b)/i;
 // Configuration d'un Service Métier PAR LE CHAT (création / connexion API /
 // permissions). Placé AVANT payment/account/businessinfo/goal.
 const CONFIGSVC_RE = /((cr[ée]e?r?|configur|param[èe]tr|enregistre?|ajoute?r?|mets?\s+en\s+place)\w*[^]{0,40}(service\s+m[ée]tier|nouveau\s+service|mon\s+service|activit[ée]|business))|((connect|branch|relie?|lie?)\w*[^]{0,30}(api|plateforme|passerelle|system\.?io))|(configure?r?\s+mon\s+api)/i;
+const SERVICE_UPDATE_RE = /\b(?:ajout\w*|chang\w*|modifi\w*|remplac\w*|corrig\w*|actualis\w*|mets?\s+(?:[àa]\s+)?jour|pr[ée]cis\w*)\b[^]{0,120}\b(?:promo(?:tion)?|prix|tarif|paiement|wave|orange\s+money|mtn\s+money|moov|num[ée]ro|t[ée]l[ée]phone|horaire|ouverture|date|livraison|localisation|faq|r[èe]gle|condition|offre|produit|service)\b/i;
 // Import de contacts en masse depuis un fichier joint dans le chat.
 const IMPORTCONTACTS_RE = /((importe?r?|charge?r?|ajoute?r?|int[èe]gre?r?)\s+(ces?|les?|mes?|mon|ma|ce|le|un|des)?\s*(contacts?|fichier|liste|excel|csv))|(importe?r?\s+(ce|le)\s+fichier)/i;
 // Génération d'un média (affiche/image/visuel) — hors publication de groupe.
@@ -190,7 +191,7 @@ function isQuickChat(text) {
 }
 
 function detectIntent(text, lastAssistantMessage) {
-  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply', 'adcampaign', 'groupcampaign'];
+  const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply', 'adcampaign', 'groupcampaign', 'configsvc'];
   if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
     return lastAssistantMessage.intent;
   }
@@ -198,6 +199,7 @@ function detectIntent(text, lastAssistantMessage) {
   if (SELF_QUESTION_RE.test(text) && !/\d{6,}/.test(text)) return 'selfknow';
   if (WHY_REPLY_RE.test(text) || CONVPOLICY_RE.test(text)) return 'convpolicy';
   if (/\b(?:cr[ée]e\w*|cr[ée]er|ajoute\w*|ajouter)\s+(?:(?:le|la|un|une|ce|mon|nouveau|nouvelle)\s+){1,2}service\b/i.test(text) && !/\b(?:supprim|effac|retir)\w*/i.test(text)) return 'configsvc'; // création d'un Service métier : extraction + outil vérifié
+  if (SERVICE_UPDATE_RE.test(text)) return 'configsvc'; // toute correction métier part dans la mémoire du service, sans remplacer le reste
   if (require('./serviceCommands').isCommand(text)) return 'svccmd'; // supprimer / mettre en pause / réactiver / restaurer un Service métier : exécution directe et vérifiée
   if (LIFE_WHY_RE.test(text) || LIFE_CANDIDATES_RE.test(text) || LIFE_SAV_RE.test(text) || LIFE_ORDERS_RE.test(text)) return 'lifecycle';
   if (ACTIVITY_REPORT_RE.test(text)) return 'activityreport';
@@ -1073,7 +1075,7 @@ async function handleCrm(text, tenantId) {
 
 // ---------------------------------------------------------------------------
 // 'payment' — extraction LLM ciblée (montant, destinataire, produit, remise
-// demandée) puis exécution directe GENERATE_PAYMENT_LINK / NEGOTIATE_DISCOUNT.
+// demandée) puis instructions de paiement manuelles / NEGOTIATE_DISCOUNT.
 // Même patron qu'index.js#planOrAsk (planImage/planVideo/planBook) : un seul
 // appel LLM par tour, JSON "ready" ou question courte.
 // ---------------------------------------------------------------------------
@@ -1116,7 +1118,7 @@ async function handlePayment(text, history, tenantId, deps) {
     };
   }
 
-  const out = await deps.runtime.actionExecutor.execute('GENERATE_PAYMENT_LINK', {
+  const out = await deps.runtime.actionExecutor.execute('PROVIDE_PAYMENT_INSTRUCTIONS', {
     amount: parsed.amount, currency: parsed.currency, product: parsed.product, tenantId,
   }, { tenantId });
   if (!out.ok) {
@@ -1274,8 +1276,9 @@ async function handleConnector(text, history, tenantId, deps) {
 // "DONNÉES → INTELLIGENCE" : le chat lit la vraie donnée au lieu de l'inventer.
 // Si rien n'est configuré, il le dit franchement (jamais un prix fictif).
 // ---------------------------------------------------------------------------
-async function handleBusinessInfo(text, history, tenantId) {
-  const ctxText = await businessServices.getEngineContextText(tenantId).catch(() => '');
+async function handleBusinessInfo(text, history, tenantId, deps) {
+  const prioritized = await businessServices.getPrioritizedContext(tenantId, { currentHint: text }).catch(() => ({ text: '' }));
+  const ctxText = prioritized.text || await businessServices.getEngineContextText(tenantId).catch(() => '');
   if (!ctxText) {
     return {
       text: "Je n'ai encore aucune information sur tes produits ou services. Ajoute-les dans l'onglet « Services Métiers » (activité, produits, prix, règles, objectifs) et je pourrai répondre précisément à ce genre de question.",
@@ -1291,7 +1294,9 @@ async function handleBusinessInfo(text, history, tenantId) {
     "Réponds à sa question en t'appuyant UNIQUEMENT sur ces données. Cite le chiffre / le fait EXACT (ex. le prix précis). N'invente JAMAIS un prix, un produit, une règle ou un objectif absent de ces données — si l'information demandée n'y figure pas, dis-le franchement et invite-le à la renseigner dans l'onglet Services Métiers.",
   ].join('\n');
   try {
-    const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history || []);
+    const raw = deps && typeof deps.llm === 'function'
+      ? await deps.llm(prompt, history || [])
+      : (await llmFallbackEngine.generateAIResponse(prompt, history || [])).text;
     const answer = String(raw || '').trim();
     return {
       text: answer || "Je n'ai pas trouvé cette information dans ta configuration actuelle.",
@@ -1305,34 +1310,72 @@ async function handleBusinessInfo(text, history, tenantId) {
 }
 
 // ---------------------------------------------------------------------------
-// 'configsvc' — configure un Service Métier depuis une instruction en langage
-// naturel (extraction LLM des champs) puis exécute l'outil réel
-// configureBusinessService (création + connexion API + test réel si fournis).
+function serviceMemoFromCommand(text) {
+  const value = String(text || '').trim();
+  const m = value.match(/(?:service\s+m[ée]tier|mon\s+activit[ée])[^:\n]{0,100}:\s*([\s\S]+)$/i);
+  return m ? m[1].trim() : value;
+}
+
+function serviceNameFromCommand(text, memo) {
+  const m = String(text || '').match(/(?:service(?:\s+m[ée]tier)?\s+(?:nomm[ée]|appel[ée]|intitul[ée])|nom\s+du\s+service)\s+[«"']?([^»"'\n,:.]+)/i);
+  return (m && m[1] || businessServices.suggestName(memo)).trim().slice(0, 120);
+}
+
+// 'configsvc' — la mémoire libre est le parcours normal. Les API restent une
+// option secondaire et conservent le connecteur/vérification existants.
 // ---------------------------------------------------------------------------
-async function handleConfigSvc(text, history, tenantId) {
-  const prompt = [
-    personaManager.personaSystemPrompt('default'),
-    'Le vendeur veut créer/configurer un Service Métier. Extrais ses informations.',
-    `Instruction : "${text}"`,
-    'Réponds UNIQUEMENT avec cet objet JSON (aucun texte autour), en ne remplissant que ce qui est fourni : {"ready":true,"name":"...","type":"formation|ecommerce|service|autre","price":8000,"currency":"FCFA","description":"","products":"Nom|Prix; Nom|Prix","rules":"regle1; regle2","objectives":"obj1; obj2","baseUrl":"","apiKey":"","authHeader":"X-API-Key","connectorType":"platform_gateway|systemio|generic","scopes":"students:create,students:suspend"}. Si le NOM du service manque vraiment, réponds plutôt {"ready":false,"ask":"question courte pour obtenir le nom"}.',
-  ].join('\n');
-  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history || []);
-  const parsed = extractJsonBlock(String(raw || '').trim());
-  if (!parsed || parsed.ready === false || !parsed.name) {
-    return { text: (parsed && parsed.ask) || 'Quel nom veux-tu donner à ce service métier, et quel type d\'activité (formation, e-commerce, service…) ?', isPlanningQuestion: true, intent: 'configsvc' };
+async function handleConfigSvc(text, history, tenantId, deps, lastAssistantMessage) {
+  const services = await businessServices.list(tenantId).catch(() => []);
+  const awaitingChoice = !!(lastAssistantMessage && lastAssistantMessage.intent === 'configsvc' && lastAssistantMessage.isPlanningQuestion);
+  const previousRequest = awaitingChoice && Array.isArray(history)
+    ? [...history].reverse().find((m) => m && m.role === 'user' && m.text)
+    : null;
+  const request = previousRequest ? String(previousRequest.text) : String(text || '');
+  const updating = SERVICE_UPDATE_RE.test(request);
+
+  if (updating) {
+    if (!services.length) return { text: 'Je n’ai aucun Service métier à modifier. Dis-moi « Crée un Service métier pour mon activité : … » et j’enregistre les informations en mémoire.', isPlanningQuestion: true, intent: 'configsvc' };
+    let selected = awaitingChoice ? businessServices.matchService(services, text) : null;
+    if (!selected) selected = businessServices.matchService(services, request);
+    if (!selected && services.length === 1) selected = services[0];
+    if (!selected) {
+      return { text: `À quel Service métier rattacher cette modification ? ${services.map((s) => `« ${s.name} »`).join(', ')}.`, isPlanningQuestion: true, intent: 'configsvc' };
+    }
+    const call = await toolRegistry.execute(tenantId, 'updateBusinessService', { service: selected.name, memoAppend: request }, {});
+    if (call.state !== 'SUCCESS') return { text: `Je n’ai pas pu mettre à jour « ${selected.name} » (${(call.error && (call.error.message || call.error.code)) || call.state}).`, actionLog: [{ icon: '⚠️', label: 'Mise à jour du Service métier échouée', status: 'error' }] };
+    const result = call.result || {};
+    return { text: `✅ C’est enregistré dans la mémoire de « ${result.name || selected.name} ». Les informations précédentes sont conservées et l’index métier a été actualisé.`, toolCall: { name: 'updateBusinessService', state: call.state, result }, actionLog: [{ icon: '🏢', label: `Mémoire de « ${result.name || selected.name} » mise à jour`, status: 'done' }] };
   }
-  const call = await toolRegistry.execute(tenantId, 'configureBusinessService', parsed, {});
+
+  const memo = serviceMemoFromCommand(text);
+  const name = serviceNameFromCommand(text, memo);
+  // Le parsing LLM n’est utilisé que si l’utilisateur demande une intégration API.
+  // La création par texte libre ne pose pas de question de formulaire et ne coûte
+  // pas un appel de sélection de champs avant l’indexation de la mémoire.
+  if (/(?:api|plateforme|passerelle|system\.?io)/i.test(text)) {
+    const prompt = [
+      personaManager.personaSystemPrompt('default'),
+      'Le propriétaire demande une intégration API facultative pour son Service métier. N’extrais que les paramètres d’intégration réellement écrits; la mémoire métier reste le texte brut transmis.',
+      `Instruction : "${text}"`,
+      'Réponds en JSON strict : {"name":"nom fourni ou vide","baseUrl":"URL fournie ou vide","apiKey":"clé explicitement fournie ou vide","authHeader":"X-API-Key","connectorType":"platform_gateway|systemio|generic","scopes":"permissions explicitement demandées"}. Aucun champ métier ne doit être inventé.',
+    ].join('\n');
+    let raw;
+    try { raw = deps && typeof deps.llm === 'function' ? await deps.llm(prompt, history || []) : (await llmFallbackEngine.generateAIResponse(prompt, history || [])).text; }
+    catch (e) { raw = ''; }
+    const parsed = extractJsonBlock(String(raw || '').trim()) || {};
+    const apiArgs = Object.assign({}, parsed, { name: parsed.name || name, memo });
+    const call = await toolRegistry.execute(tenantId, 'configureBusinessService', apiArgs, {});
+    if (call.state !== 'SUCCESS') return { text: `Je n’ai pas pu configurer le service (${(call.error && (call.error.code || call.error.message)) || call.state}).`, actionLog: [{ icon: '⚠️', label: 'Échec configuration service', status: 'error' }] };
+    const r = call.result;
+    return { text: `✅ La mémoire de « ${r.name} » est enregistrée.${r.test ? (r.connected ? ' L’intégration API répond au test.' : ' Le test API a échoué; la mémoire métier reste enregistrée.') : ''}`, toolCall: { name: 'configureBusinessService', state: call.state, result: r }, actionLog: [{ icon: '🏢', label: `Service « ${r.name} » configuré`, status: r.connected || !r.test ? 'done' : 'warning' }] };
+  }
+
+  const call = await toolRegistry.execute(tenantId, 'configureBusinessService', { name, memo }, {});
   if (call.state !== 'SUCCESS') {
     return { text: `Je n'ai pas pu configurer le service (${(call.error && call.error.code) || call.state}).`, actionLog: [{ icon: '⚠️', label: 'Échec configuration service', status: 'error' }] };
   }
   const r = call.result;
-  let msg = `✅ C'est configuré : le service « ${r.name} » est créé.`;
-  if (r.test) {
-    msg += r.connected
-      ? ` J'ai connecté ton API et le test est bon (${r.test.detail || 'authentifié et joignable'}).`
-      : ` Par contre le test de l'API n'est pas passé (${(r.test && r.test.detail) || 'non connecté'}) — vérifie l'URL et la clé.`;
-  }
-  return { text: msg, toolCall: { name: 'configureBusinessService', state: call.state, result: r }, actionLog: [{ icon: '🏢', label: `Service « ${r.name} » configuré`, status: r.connected || !r.test ? 'done' : 'warning' }] };
+  return { text: `✅ La mémoire métier de « ${r.name} » est enregistrée. Tu peux ajouter ou corriger les informations directement dans le Chat intelligent ou Self WhatsApp.`, toolCall: { name: 'configureBusinessService', state: call.state, result: r }, actionLog: [{ icon: '🏢', label: `Mémoire de « ${r.name} » enregistrée`, status: 'done' }] };
 }
 
 // ---------------------------------------------------------------------------
@@ -1583,8 +1626,8 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
     case 'crm': return handleCrm(text, tenantId);
     case 'payment': return handlePayment(text, history, tenantId, d);
     case 'connector': return handleConnector(text, history, tenantId, d);
-    case 'businessinfo': return handleBusinessInfo(text, history, tenantId);
-    case 'configsvc': return handleConfigSvc(text, history, tenantId);
+    case 'businessinfo': return handleBusinessInfo(text, history, tenantId, d);
+    case 'configsvc': return handleConfigSvc(text, history, tenantId, d, lastAssistantMessage);
     case 'importcontacts': return handleImportContacts(text, tenantId);
     case 'genmedia': return handleGenMedia(text, tenantId, d);
     case 'community': return handleCommunity(text, history, tenantId, sessionId, d);

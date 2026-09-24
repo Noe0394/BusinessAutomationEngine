@@ -1,5 +1,10 @@
 # Déploiement du backend sur Render
 
+> **Contrôle préalable obligatoire :** consulter
+> [`MIGRATION-GOOGLE-RENDER.md`](MIGRATION-GOOGLE-RENDER.md). Ne pas publier sur
+> `main` avant d'avoir réconcilié les mises à jour de la VM et vérifié la
+> persistance Render. Une publication de `main` déclenche le déploiement.
+
 Le service de production est `business-automation-engine` :
 <https://business-automation-engine.onrender.com>. Render construit le
 `Dockerfile` racine depuis la branche GitHub `main` et déploie les commits

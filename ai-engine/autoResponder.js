@@ -96,7 +96,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   let hint = (convState && ((convState.ad && convState.ad.productName) || (convState.memory && (convState.memory.interestService || convState.memory.subject)))) || '';
   // Un groupe lié (après vérification admin) à un Service métier répond d'abord sur CE service, quel que soit le métier.
   if (isGroupChat(channel, from)) { try { const linked = (await businessServices.list(tenant)).find((s) => (s.groups || []).some((g) => String(g.id) === String(from) && String(g.channel).toUpperCase() === String(channel).toUpperCase())); if (linked) hint = linked.name; } catch (e) { /* sans lien : comportement habituel */ } }
-  const prio = await businessServices.getPrioritizedContext(tenant, { hint }).catch(() => ({ text: '' }));
+  const prio = await businessServices.getPrioritizedContext(tenant, { hint, currentHint: isGroupChat(channel, from) ? '' : text }).catch(() => ({ text: '' }));
   // Registre NATUREL (discussion courante, salutation, rappel du fil) : l'offre n'est PAS le sujet ; on la garde en tête sans la mettre en avant.
   const registerNow = ctx && ctx.decision && ctx.decision.engagement && ctx.decision.engagement.register;
   const bizCtx = ['NATURAL', 'NATURAL_CONTINUITY'].includes(registerNow)
@@ -153,7 +153,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
     'Rédige UNIQUEMENT le message à lui envoyer (1 à 4 phrases naturelles, parlées), sans préambule ni guillemets. Ne présente JAMAIS une action (paiement reçu, accès débloqué) comme déjà faite — propose-la.',
   ].filter(Boolean).join('\n');
   const raw = await gen(prompt);
-  return String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1500);
+  return scrubPaymentUrls(String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1500), text);
 }
 
 // TOUR D'APPRENTISSAGE : prompt pédagogique (extraits ciblés du cours, provenance distinguée), recherche externe RÉELLE seulement si nécessaire et
@@ -249,6 +249,13 @@ const PROMISE_TO_OWNER_RE = /(?:revi(?:ens|endrai|endra)\s+vers\s+(?:toi|vous|lu
 
 // Consignes de personnalisation de l'accueil : contact enregistré -> on l'appelle par son nom ; inconnu -> on demande poliment
 // son nom/l'objet de sa demande (sans insister s'il ne répond pas).
+function scrubPaymentUrls(reply, context) {
+  const text = String(reply || '');
+  return /paiement|payer|payez|mobile\s*money|wave|orange\s*money|mtn\s*money|moov/i.test(`${context || ''} ${text}`)
+    ? text.replace(/https?:\/\/\S+|www\.\S+/gi, '').replace(/\s{2,}/g, ' ').trim()
+    : text;
+}
+
 function identityDirectives(identity, name) {
   if (identity && identity.isSavedContact && identity.contactName) return [`Ce contact est enregistré dans le répertoire du propriétaire sous le nom « ${identity.contactName} » : appelle-le par ce nom, sans le lui redemander.`];
   if (name) return [`Le contact se fait appeler « ${name} » (nom public, non vérifié) : tu peux l'utiliser naturellement.`];
@@ -299,7 +306,10 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
     // client, sinon sujet courant de la conversation — voir jarvis/conversationEngine.js#applyState) plutôt que
     // toujours le service le plus récent : un `hint` vide ici faisait retomber getPrioritizedContext sur son seul
     // repli "le plus récent" à CHAQUE message, y compris en pleine conversation sur un autre service.
-    priorityService: (await businessServices.getPrioritizedContext(tenantId, { hint: (st && st.memory && (st.memory.interestService || st.memory.subject)) || '' }).catch(() => ({}))).priority || null,
+    priorityService: (await businessServices.getPrioritizedContext(tenantId, {
+      hint: (st && st.memory && (st.memory.interestService || st.memory.subject)) || '',
+      currentHint: isGroupChat(channel, from) ? '' : items.map((i) => i.text).join('\n'),
+    }).catch(() => ({}))).priority || null,
     // Politique du propriétaire + mémoire 7 jours de CETTE discussion → décision d'engagement (répondre ? registre ? présenter un service ?). Sans réseau ni IA.
     engagementFn: async ({ cls, state, text: batchText, items: batchItems }) => {
       const group = isGroupChat(channel, from);
@@ -352,4 +362,4 @@ async function legacyReply({ tenantId, channel, from, name, text }, d) {
   return { sent, status: out.status, confirmationId: out.confirmationId || null, error: out.error || null, reply };
 }
 
-module.exports = { handleHumanActivity, isGroupChat, handleIncoming, composeReply, getSettings, setSettings, isEnabled, markProcessed, SETTINGS_NS };
+module.exports = { handleHumanActivity, isGroupChat, handleIncoming, composeReply, scrubPaymentUrls, getSettings, setSettings, isEnabled, markProcessed, SETTINGS_NS };

@@ -4,10 +4,13 @@ name = "cyrus-license"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
+[triggers]
+crons = ["0 0 * * *"]
+
 [vars]
 FACEBOOK_GRAPH_API_VERSION = "v26.0"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "cyrus-licenses"
-database_id = "REMPLACER_PAR_L_ID_RETOURNE_PAR_wrangler_d1_create"
+database_id = "55364790-7d4a-44cc-9b82-1d3b56493169"

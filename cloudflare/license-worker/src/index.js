@@ -6,6 +6,7 @@ import { ADMIN_PAGE } from './adminPage.js';
 import { generateImage, startVideo, pollVideo } from './media.js';
 import { handleFacebookRequest } from './facebookGateway.js';
 import { transcribeAudio } from './voice.js';
+import contactMaster from './contactMaster.js';
 
 const ALL_MODULES = ['whatsapp', 'telegram', 'studio_video', 'facebook'];
 const CORS = {
@@ -323,6 +324,11 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     if (url.pathname === '/health') return json({ ok: true });
     if (url.pathname.startsWith('/facebook/')) return handleFacebookRequest(request, env);
+    if (url.pathname.startsWith('/contacts/')) {
+      const denied = await adminGate(request, env);
+      if (denied) return denied;
+      return contactMaster.handleContactsRequest(request, env);
+    }
     if (PUBLIC[url.pathname]) return request.method === 'POST' ? verify(request, env) : json({ error: 'POST requis.' }, 405);
     if (AI_ROUTES[url.pathname]) return request.method === 'POST' ? AI_ROUTES[url.pathname](request, env) : json({ error: 'POST requis.' }, 405);
     if (url.pathname === '/checkUpdateOffline') return checkUpdate(env);
@@ -340,6 +346,9 @@ export default {
     }
     if (url.pathname === '/' || url.pathname === '/index.html') return new Response(ADMIN_PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } });
     return json({ error: 'Introuvable.' }, 404);
+  },
+  async scheduled(_event, env, ctx) {
+    ctx.waitUntil(contactMaster.consolidate(env.DB));
   },
 };
 

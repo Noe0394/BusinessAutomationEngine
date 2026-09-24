@@ -109,9 +109,11 @@ reprendre sans tout relire :
    correspondante, plus bas dans `docs/PARITE-LOCAL.md`, pas prioritaire
    tant que le chantier ci-dessus n'est pas avancé.
 
-## ⚠️ CHANGEMENT D'INFRASTRUCTURE VPS (2026-09-14, à ne jamais oublier)
+## Archive — infrastructure Google Cloud (état documenté le 2026-09-14)
 
-**Le VPS de production n'est PLUS Render** — migré vers une VM Google Cloud
+> Les consignes SSH et de déploiement qui suivent sont historiques. L'utilisateur indique que la VM Google n'est plus active faute de paiement : ne pas l'utiliser comme cible. La cible actuelle est le backend Render; Vercel reste l'interface web et `public/config.js` pointe vers Render. Lire `docs/MIGRATION-GOOGLE-RENDER.md` avant toute publication. Aucun push sur `main` tant que les écarts de code, d'environnement et de données n'ont pas été réconciliés, car `main` déclenche le déploiement Render.
+
+**À la date de cette archive, le VPS de production n'était PLUS Render** — il avait été migré vers une VM Google Cloud
 Compute Engine, confirmé explicitement par l'utilisateur le 2026-09-14.
 Render reste configuré (webhook GitHub + auto-deploy actifs) mais le
 service y est **SUSPENDU** depuis au moins le 2026-09-08 (dernier déploiement
@@ -199,11 +201,15 @@ Le checkout applicatif vit dans `/home/cyrus2026/BusinessAutomationEngine`
 ## État actuel du projet (résumé)
 
 **CYRUS SUPER ASSISTANT** — plateforme Node.js/Express (`index.js`).
-**Historique de déploiement** (voir alerte tout en haut de ce fichier) :
-initialement en continu (GitOps GitHub → Render) sur Render, service web
-Docker en plan Free (région Oregon) — **CE MÉCANISME EST AUJOURD'HUI
-INACTIF** (service Render suspendu depuis le 2026-09-08). La production
-réelle tourne désormais sur une VM Google Cloud (voir accès ci-dessus).
+La cible courante est le backend Render (`business-automation-engine`); Vercel
+sert l'interface web et le dashboard appelle l'URL Render définie dans
+`public/config.js`. Le service Render est actif sur `main`; le dernier état
+vérifié est le commit `bbee8e59ee8531811451fcc4f7aa9c96525bb5b2` en `Live`,
+avec `/health` en 200 et le `config.js` Vercel en 200 vers Render. Cette
+publication automatique a eu lieu le 2026-09-24 à 16:24 UTC, avant l'audit
+actuel. Ne pas lancer de build supplémentaire pour ce même commit. L'exact SHA
+et les modifications hors Git de la VM ne sont toujours pas établis; contrôler
+les sauvegardes de données avant de déclarer la migration intégrale.
 Dashboard servi en HTML/JS statique unique (`public/dashboard.html`), avec
 export PWA (`manifest.json`, `sw.js`, `icon.svg`) et un build d'obfuscation
 (`npm run build` → `public/dist/dashboard.html`) — inchangé par cette

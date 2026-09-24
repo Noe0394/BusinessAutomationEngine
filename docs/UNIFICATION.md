@@ -1,5 +1,11 @@
 # 🎯 CYRUS SUPER ASSISTANT — MISSION D'UNIFICATION (Suivi vivant)
 
+> **Archive historique :** les sections ci-dessous décrivent l'architecture et
+> les vérifications de septembre 2026 lorsque le backend utilisait Google
+> Cloud. La cible actuelle est Render; Vercel reste l'interface principale.
+> Voir `README.md` et `docs/MIGRATION-GOOGLE-RENDER.md` avant toute action de
+> déploiement. Les anciennes adresses et consignes GCP ne sont plus des cibles.
+
 > Document de travail/maintenance créé le 2026-09-13.
 > **Pis redémarrable** : une session future peut reprendre la mission ici.
 > S'actualise au fur et à mesure (micro-étapes, jamais de gros saut).

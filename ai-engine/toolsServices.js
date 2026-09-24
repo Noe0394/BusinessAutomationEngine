@@ -20,8 +20,11 @@ function pick(list, ref) {
   const q = norm(ref); if (!q) return { error: 'REF_REQUIRED' };
   const byId = list.filter((s) => s.id === String(ref).trim()); if (byId.length === 1) return { service: byId[0] };
   const exact = list.filter((s) => norm(s.name) === q); if (exact.length === 1) return { service: exact[0] };
+  const exactProduct = list.filter((s) => (s.products || []).some((p) => norm(p && (p.name || p)) === q)); if (exactProduct.length === 1) return { service: exactProduct[0] };
   const contains = list.filter((s) => norm(s.name).includes(q) || (norm(s.name).length >= 4 && q.includes(norm(s.name))));
   if (contains.length === 1) return { service: contains[0] };
+  const productMatches = list.filter((s) => (s.products || []).some((p) => { const n = norm(p && (p.name || p)); return n.length >= 4 && (n.includes(q) || q.includes(n)); }));
+  if (productMatches.length === 1) return { service: productMatches[0] };
   const qt = new Set(toks(ref));
   const scored = list.map((s) => ({ s, hit: toks(s.name).filter((t) => qt.has(t)).length, n: toks(s.name).length })).filter((x) => x.hit > 0).sort((a, z) => z.hit - a.hit);
   if (scored.length && (scored.length === 1 || scored[0].hit > scored[1].hit) && scored[0].hit >= Math.min(2, scored[0].n)) return { service: scored[0].s };
@@ -96,13 +99,12 @@ const TOOLS = {
     async execute(a, ctx) {
       const r = await resolve(ctx.tenant, a.service); if (r.err) return r.err;
       const s = r.service; const split = (v) => String(v || '').split(/[\n;]+/).map((x) => x.trim()).filter(Boolean);
-      const patch = {}; const changed = [];
+      const patch = {}; const changed = []; const commercial = {};
       if (a.name) { patch.name = String(a.name).slice(0, 120); changed.push('name'); }
-      const commercial = Object.assign({}, s.commercial);
       for (const k of ['price', 'currency', 'description', 'advantages', 'paymentTerms', 'supportRules', 'target']) if (a[k] !== undefined && a[k] !== null && a[k] !== '') { commercial[k] = k === 'price' ? Number(a[k]) : String(a[k]); changed.push(k); }
       if (a.memo !== undefined && a.memo !== null) { commercial.memo = String(a.memo).slice(0, 8000); changed.push('memo'); }
-      else if (a.memoAppend) { commercial.memo = String(commercial.memo || '').trim().concat(commercial.memo ? '\n' : '', String(a.memoAppend)).slice(0, 8000); changed.push('memo'); }
-      if (changed.some((k) => k !== 'name')) patch.commercial = commercial;
+      else if (a.memoAppend) { commercial.memo = String(s.commercial && s.commercial.memo || '').trim().concat(s.commercial && s.commercial.memo ? '\n' : '', String(a.memoAppend)).slice(0, 8000); changed.push('memo'); }
+      if (Object.keys(commercial).length) patch.commercial = commercial;
       let products = (s.products || []).slice();
       if (a.addProducts) { for (const line of split(a.addProducts)) { const [n, p] = line.split('|').map((x) => x.trim()); const item = { name: n || line, price: p ? Number(p) : null }; const i = products.findIndex((x) => norm(x.name) === norm(item.name)); if (i >= 0) products[i] = item; else products.push(item); } changed.push('addProducts'); }
       if (a.removeProducts) { const rm = split(a.removeProducts).map(norm); products = products.filter((x) => !rm.includes(norm(x.name))); changed.push('removeProducts'); }
