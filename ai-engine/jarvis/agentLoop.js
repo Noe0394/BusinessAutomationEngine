@@ -99,6 +99,7 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
 
   const requestText = d.rawText || text;
   if (!steps.length) {
+    if (d.returnGap === false) return null;
     // Une demande d'ACTION qu'aucun outil ne permet ne retombe JAMAIS sur la conversation libre (qui pourrait prétendre l'avoir faite) : réponse claire sur ce qui est / n'est pas possible.
     if (stopReason === 'IMPOSSIBLE' || capabilityGap.isActionRequest(requestText)) {
       return { text: capabilityGap.explain(requestText, tools), steps: [], stopReason: 'NO_TOOL', toolCalls: [], impossible: true, actionLog: [{ icon: '🚫', label: 'Aucune fonction ne correspond : rien exécuté', status: 'warning' }] };

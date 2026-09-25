@@ -185,6 +185,88 @@ const TOOLS = {
     },
     async verify(result) { return { verified: !!(result && result.jobId) }; },
   },
+  listMyCommunityGroups: {
+    feature: 'communities', capabilities: ['list', 'search', 'select-existing-group'],
+    description: 'Liste les groupes réellement accessibles sur le compte WhatsApp ou Telegram connecté, avec leur identifiant de plateforme, nom, nombre de membres et droits admin. Pour sélectionner un groupe existant ou « mes groupes ». Ne confond pas avec les groupes publics enregistrés dans le CRM.',
+    permission: null, risk: 'READ',
+    inputSchema: { channel: { type: 'string', description: 'WHATSAPP ou TELEGRAM (WhatsApp par défaut).' }, query: { type: 'string', description: 'Filtre facultatif sur le nom.' }, limit: { type: 'number', description: 'Nombre maximal de groupes à retourner (1–500).' } },
+    async execute(args, ctx) {
+      try {
+        const channel = chan(args.channel);
+        const groups = await require('./communityService').listExistingGroups(ctx.tenant, channel, args.query);
+        // Pour une recherche ciblée, joindre seulement les liens réellement
+        // retournés par WhatsApp (jamais reconstruits depuis un ID de groupe).
+        if (channel === 'WHATSAPP' && args.query && groups.length <= 5) {
+          const session = require('../adapters/whatsappManager').getOrCreate(ctx.tenant).session;
+          if (session && typeof session.getGroupInviteLink === 'function') {
+            for (const group of groups) {
+              try { const link = await session.getGroupInviteLink(group.id); if (link) group.link = String(link); } catch (e) { /* lien facultatif */ }
+            }
+          }
+        }
+        const limit = Math.max(1, Math.min(500, Number(args.limit) || 100));
+        return { ok: true, result: { total: groups.length, truncated: groups.length > limit, groups: groups.slice(0, limit) } };
+      } catch (e) { return fail(e.code || 'GROUP_LIST_FAILED', e.message); }
+    },
+  },
+  extractMyCommunityGroupMembers: {
+    feature: 'communities', capabilities: ['extract-existing-group-members', 'verified-platform-data'],
+    description: 'Extrait les membres réellement visibles dans un groupe WhatsApp/Telegram déjà rejoint (identifiant interne ou nom exact non ambigu). Lecture seulement. WhatsApp ne révèle pas les numéros des membres anonymisés par LID; ceux-ci sont omis.',
+    permission: null, risk: 'READ',
+    inputSchema: { channel: { type: 'string' }, groupId: { type: 'string' }, groupName: { type: 'string' } },
+    async execute(args, ctx) {
+      try {
+        const svc = require('./communityService');
+        const group = await svc.resolveExistingGroup(ctx.tenant, args.channel || 'WHATSAPP', { groupId: args.groupId, groupName: args.groupName, requireAdmin: false });
+        const members = await svc.DRIVERS[group.channel](ctx.tenant).membersOf(group.id);
+        if (!Array.isArray(members)) return fail('GROUP_EXTRACTION_FAILED', 'La plateforme n’a pas fourni la liste des membres.');
+        return { ok: true, result: { group: { id: group.id, name: group.name }, total: members.length, members: members.slice(0, 500) } };
+      } catch (e) { return fail(e.code || 'GROUP_EXTRACTION_FAILED', e.message); }
+    },
+  },
+  addMembersToExistingCommunityGroup: {
+    feature: 'communities', capabilities: ['add-members-to-existing-group', 'text', 'existing-list', 'cyrus-contacts', 'excel', 'csv', 'group-extraction', 'deduplicate', 'membership-check', 'persisted-progress', 'pause', 'resume', 'stop', 'verify'],
+    description: 'Ajoute une liste de contacts à un groupe WHATSAPP/TELEGRAM QUI EXISTE DÉJÀ. Sélectionne le groupe réel par son nom exact (ou son ID de plateforme), puis prend les contacts depuis text, un fichier Excel/CSV/image en pièce jointe (fileId), une liste déjà préparée (recipientsDraftId), le CRM Cyrus (source=crm) ou l’extraction des membres d’un autre groupe (memberSourceGroupId/memberSourceGroupName). Déduplique, vérifie les opt-out et membres déjà présents, persiste la progression et les erreurs dans le moteur Communauté, puis vérifie la liste réelle des membres. N’invente aucun groupe. Confirme immédiatement seulement que le job a démarré; consulte getCommunityGroupStatus pour son résultat final.',
+    permission: 'messages:send', risk: 'WRITE',
+    inputSchema: {
+      channel: { type: 'string', description: 'WHATSAPP par défaut ou TELEGRAM.' },
+      groupName: { type: 'string', description: 'Nom exact du groupe existant.' }, groupId: { type: 'string', description: 'ID réel du groupe, si déjà connu.' },
+      source: { type: 'string', description: 'crm ou group; le défaut accepte le texte/fichier/liste préparée.' }, crmTag: { type: 'string' },
+      memberSourceGroupId: { type: 'string' }, memberSourceGroupName: { type: 'string' },
+      recipientsDraftId: { type: 'string' }, fileId: { type: 'string', description: 'ID d’un fichier Excel/CSV/texte/image déjà joint et détenu par ce compte.' },
+      text: { type: 'string', description: 'Numéros/@usernames fournis dans le message.' },
+    },
+    async prepare(args, ctx) {
+      const svc = require('./communityService');
+      const group = await svc.resolveExistingGroup(ctx.tenant, args.channel || 'WHATSAPP', { groupId: args.groupId, groupName: args.groupName }).catch((e) => ({ name: null, id: null, error: e.message }));
+      let contacts = null;
+      try {
+        if (args.source === 'crm') contacts = (await require('./contactCrm').list(ctx.tenant, { channel: args.channel || 'WHATSAPP', tag: args.crmTag })).length;
+        else if (args.text) contacts = require('./contactExtractor').extractFromText(args.text, 'texte').entries.length;
+        else if (args.fileId) { const f = await chatUploads.readFile(ctx.tenant, args.fileId); contacts = f && require('./contactExtractor').extractFromFile({ buffer: f.buffer, name: f.meta.name, type: f.meta.type }).entries.length; }
+      } catch (e) { contacts = null; }
+      return { ok: !!group.id && (contacts == null || contacts > 0), preview: { group: group.name, groupId: group.id, contactsDetectes: contacts, source: args.source || (args.fileId ? 'file' : (args.recipientsDraftId ? 'list' : 'text')) }, warnings: group.error ? [group.error] : (contacts === 0 ? ['AUCUN_CONTACT_DETECTE'] : []) };
+    },
+    async execute(args, ctx) {
+      const channel = chan(args.channel);
+      const input = { channel, existingGroupId: args.groupId, groupName: args.groupName, source: args.source, crm: args.source === 'crm', crmTag: args.crmTag, memberSourceGroupId: args.memberSourceGroupId, memberSourceGroupName: args.memberSourceGroupName };
+      if (args.recipientsDraftId) input.recipientsId = args.recipientsDraftId;
+      else if (args.fileId) {
+        const f = await chatUploads.readFile(ctx.tenant, args.fileId); if (!f) return fail('FILE_NOT_FOUND');
+        if (/^image\//.test(f.meta.type || '')) input.image = f.buffer; else input.file = { buffer: f.buffer, name: f.meta.name, type: f.meta.type };
+      } else if (args.text) input.text = args.text;
+      else if (args.source !== 'crm' && args.source !== 'group' && !args.memberSourceGroupId && !args.memberSourceGroupName) return fail('NO_RECIPIENTS', 'Fournissez du texte, une liste préparée, un fichier, les contacts Cyrus ou un groupe source.');
+      try {
+        const job = await require('./communityService').addMembersToGroup(ctx.tenant, input);
+        return { ok: true, result: { jobId: job.id, operation: job.operation, status: job.status, channel: job.channel, group: job.group, total: job.counts.total, duplicateInput: job.counts.duplicate_input } };
+      } catch (e) { return fail(e.code || 'ADD_MEMBERS_FAILED', e.message); }
+    },
+    async verify(result, args, ctx) {
+      if (!result || !result.jobId) return { verified: false };
+      const job = await require('./communityService').getJob(ctx.tenant, result.jobId);
+      return { verified: !!job && job.operation === 'ADD_TO_EXISTING' && !!job.group && job.group.id === result.group.id && job.title === result.group.subject, jobId: result.jobId, groupId: job && job.group && job.group.id, status: job && job.status };
+    },
+  },
   configureGroupTiming: {
     description: 'Règle la temporisation (cadence) de la création/alimentation d\'un groupe : taille des lots, délai entre deux personnes, pause entre deux lots, pause plus longue toutes les N lots, délai initial, nombre maximal de personnes par reprise. Le traitement doit être en pause pour changer sa cadence (sinon : « mets d\'abord l\'ajout en pause »).',
     permission: null, risk: 'LOW_WRITE',

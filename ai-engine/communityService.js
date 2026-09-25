@@ -74,6 +74,26 @@ function whatsappDriver(tenant) {
   return {
     channel: 'WHATSAPP',
     connected: () => !!session && (typeof session.isConnected !== 'function' || session.isConnected()),
+    async groups() {
+      if (!session || typeof session.getGroupsSummary !== 'function') return [];
+      return (await session.getGroupsSummary()) || [];
+    },
+    async membersOf(groupId) {
+      if (!session || typeof session.getGroupParticipants !== 'function') return null;
+      const participants = await session.getGroupParticipants(groupId);
+      return (participants || []).map((p) => {
+        const ids = [p && p.id, p && p.jid, p && p.phoneNumber].filter(Boolean).map(String);
+        const phoneJid = ids.find((id) => /@s\.whatsapp\.net$/i.test(id));
+        const barePhone = phoneJid || ids.find((id) => /^\+?\d{8,18}$/.test(id));
+        return { id: barePhone ? barePhone.replace(/\D/g, '') : null, name: (p && (p.name || p.notify || p.verifiedName)) || '' };
+      }).filter((p) => p.id);
+    },
+    async verifyAdded(groupId, members) {
+      const actual = await this.membersOf(groupId);
+      if (!Array.isArray(actual)) return null;
+      const present = new Set(actual.map((m) => String(m.id)));
+      return members.map((m) => ({ id: m.id, present: present.has(String(m.identifier)) }));
+    },
     async verify(members) {
       for (let i = 0; i < members.length; i += 50) {
         const chunk = members.slice(i, i + 50);
@@ -110,6 +130,46 @@ function telegramDriver(tenant) {
   return {
     channel: 'TELEGRAM',
     connected: () => !!session && typeof session.isConnected === 'function' && session.isConnected(),
+    async groups() {
+      if (!session || typeof session.getGroupsSummary !== 'function') return [];
+      return (await session.getGroupsSummary()) || [];
+    },
+    async membersOf(groupId, members) {
+      if (!session || typeof session.getGroupMembers !== 'function') return null;
+      const existing = await session.getGroupMembers(groupId, { limit: cfg().maxMembers + 500 });
+      if (!Array.isArray(members)) return (existing || []).map((m) => ({ id: String(m.id || ''), username: m.username || null, phone: m.phone || null, name: m.name || '' })).filter((m) => m.id);
+      const ids = new Set((existing || []).map((m) => String(m.id || '')));
+      const usernames = new Set((existing || []).map((m) => String(m.username || '').replace(/^@/, '').toLowerCase()).filter(Boolean));
+      const phones = new Set((existing || []).map((m) => String(m.phone || '').replace(/\D/g, '')).filter(Boolean));
+      const present = [];
+      for (const member of members || []) {
+        const entity = entities.get(member.id);
+        const id = entity && entity.id != null ? String(entity.id) : '';
+        const username = String(entity && entity.username || member.identifier || '').replace(/^@/, '').toLowerCase();
+        const phone = String(entity && entity.phone || member.identifier || '').replace(/\D/g, '');
+        if ((id && ids.has(id)) || (username && usernames.has(username)) || (phone.length >= 8 && phones.has(phone))) present.push(member.id);
+      }
+      return present;
+    },
+    async verifyAdded(groupId, members) {
+      const actual = await session.getGroupMembers(groupId, { limit: cfg().maxMembers + 500 });
+      if (!Array.isArray(actual)) return null;
+      const ids = new Set(actual.map((m) => String(m.id || '')));
+      const usernames = new Set(actual.map((m) => String(m.username || '').replace(/^@/, '').toLowerCase()).filter(Boolean));
+      const phones = new Set(actual.map((m) => String(m.phone || '').replace(/\D/g, '')).filter(Boolean));
+      const checks = [];
+      for (const member of members) {
+        try {
+          const entity = entities.get(member.id) || await session.resolveRecipient(member.identifier);
+          if (entity) entities.set(member.id, entity);
+          const id = entity && entity.id != null ? String(entity.id) : '';
+          const username = String(entity && entity.username || member.identifier || '').replace(/^@/, '').toLowerCase();
+          const phone = String(entity && entity.phone || member.identifier || '').replace(/\D/g, '');
+          checks.push({ id: member.id, present: Boolean((id && ids.has(id)) || (username && usernames.has(username)) || (phone.length >= 8 && phones.has(phone))) });
+        } catch (e) { checks.push({ id: member.id, present: false }); }
+      }
+      return checks;
+    },
     async verify(members) {
       for (const m of members) {
         if (m.status !== 'pending') continue;
@@ -142,8 +202,58 @@ function telegramDriver(tenant) {
 }
 const DRIVERS = { WHATSAPP: whatsappDriver, TELEGRAM: telegramDriver };
 
+function publicPlatformGroup(channel, group) {
+  return {
+    id: String(group.id),
+    name: String(group.name || group.subject || group.title || 'Sans nom'),
+    size: Number.isFinite(Number(group.size)) ? Number(group.size) : 0,
+    isAdmin: !!group.isAdmin,
+    isChannel: !!group.isChannel,
+    channel,
+  };
+}
+
+async function listExistingGroups(tenant, channel, subject) {
+  const ch = String(channel || 'WHATSAPP').toUpperCase();
+  const makeDriver = DRIVERS[ch];
+  if (!makeDriver) { const e = new Error('Canal inconnu (WHATSAPP ou TELEGRAM).'); e.code = 'INVALID_CHANNEL'; throw e; }
+  const driver = makeDriver(tenant);
+  if (!driver.connected()) { const e = new Error(`${ch}_NOT_CONNECTED`); e.code = `${ch}_NOT_CONNECTED`; throw e; }
+  const q = String(subject || '').trim().toLocaleLowerCase();
+  return (await driver.groups()).map((g) => publicPlatformGroup(ch, g))
+    .filter((g) => !g.isChannel || ch !== 'TELEGRAM')
+    .filter((g) => !q || g.name.toLocaleLowerCase().includes(q));
+}
+
+async function resolveExistingGroup(tenant, channel, { groupId, groupName, requireAdmin = true } = {}) {
+  const groups = await listExistingGroups(tenant, channel);
+  const id = String(groupId || '').trim();
+  const name = String(groupName || '').trim().toLocaleLowerCase();
+  let matches = id ? groups.filter((g) => g.id === id) : [];
+  if (!id && name) {
+    const exact = groups.filter((g) => g.name.toLocaleLowerCase() === name);
+    matches = exact.length ? exact : groups.filter((g) => g.name.toLocaleLowerCase().includes(name));
+  }
+  if (matches.length > 1) {
+    const e = new Error(`Plusieurs groupes correspondent à « ${groupName} » : ${matches.slice(0, 10).map((g) => g.name).join(', ')}.`);
+    e.code = 'AMBIGUOUS_GROUP'; e.candidates = matches.slice(0, 10); throw e;
+  }
+  if (!matches.length) { const e = new Error('Groupe existant introuvable dans les groupes réellement accessibles à ce compte.'); e.code = 'GROUP_NOT_FOUND'; throw e; }
+  const group = matches[0];
+  if (requireAdmin && !group.isAdmin) { const e = new Error(`Le compte connecté n’est pas administrateur du groupe « ${group.name} »; l’ajout direct n’est pas disponible.`); e.code = 'GROUP_ADMIN_REQUIRED'; throw e; }
+  return group;
+}
+
 // ---------------------------------------------------------------------------- persistance
 const loadDoc = (tenant) => storageAdapter.get(NS, sanitize(tenant), { tenant: sanitize(tenant), jobs: {} });
+async function listRecipientLists(tenant) {
+  const doc = await storageAdapter.get('campaign_drafts', sanitize(tenant), { tenant: sanitize(tenant), drafts: {} });
+  return Object.values(doc.drafts || {}).filter((d) => d && d.kind === 'recipients').sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)).slice(0, 100).map((d) => ({
+    id: String(d.id), source: String(d.source || 'list'), createdAt: d.createdAt || null,
+    total: Array.isArray(d.rows) ? d.rows.filter((r) => r.state === 'valid').length : 0,
+    counts: d.counts || {},
+  }));
+}
 async function saveJob(tenant, job) {
   const doc = await loadDoc(tenant);
   doc.jobs[job.id] = job;
@@ -169,13 +279,15 @@ function liveStatus(job) {
 function publicJob(job, withMembers) {
   const c = {};
   for (const m of job.members) c[m.status] = (c[m.status] || 0) + 1;
+  c.verified_added = job.members.filter((m) => m.status === 'added' && m.verifiedOnPlatform === true).length;
+  c.unverified_added = job.members.filter((m) => m.status === 'added' && m.verifiedOnPlatform !== true).length;
   return {
-    id: job.id, channel: job.channel, title: job.title, status: liveStatus(job), error: job.error || null, phase: job.phase || null,
+    id: job.id, channel: job.channel, operation: job.operation || 'CREATE_GROUP', title: job.title, status: liveStatus(job), error: job.error || null, phase: job.phase || null,
     progress: progressOf(job), timing: job.timing || null, batchesDone: job.batchesDone || 0,
     group: job.group ? { id: job.group.id, subject: job.group.subject, link: job.group.link || null } : null,
-    counts: Object.assign({ total: job.members.length, added: 0, invited_dm: 0, already_member: 0, not_on_platform: 0, opted_out: 0, failed: 0, pending: 0, needs_invite: 0 }, c),
+    counts: Object.assign({ total: job.members.length, added: 0, invited_dm: 0, already_member: 0, not_on_platform: 0, opted_out: 0, failed: 0, pending: 0, needs_invite: 0, duplicate_input: job.duplicateInput || 0, verified_added: 0, unverified_added: 0 }, c),
     createdAt: job.createdAt, finishedAt: job.finishedAt || null,
-    members: withMembers ? job.members.slice(0, 100).map((m) => ({ identifier: m.identifier, name: m.name, status: m.status, reason: m.reason || null })) : undefined,
+    members: withMembers ? job.members.slice(0, 100).map((m) => ({ identifier: m.identifier, name: m.name, status: m.status, reason: m.reason || null, verifiedOnPlatform: m.verifiedOnPlatform === true })) : undefined,
   };
 }
 
@@ -185,8 +297,28 @@ async function resolveMembers(tenant, channel, input) {
   let recipients = null; let usernames = [];
   if (Array.isArray(input.recipients)) {
     recipients = input.recipients.map((r) => ({ identifier: String(r.identifier || r.number || r.telephone || r.phone || '').replace(channel === 'WHATSAPP' ? /\D/g : /\s/g, ''), name: r.name || r.nom || '' })).filter((r) => r.identifier);
+  } else if (input.crm === true || input.source === 'crm') {
+    const contacts = await contactCrm.list(tenant, { channel, tag: input.crmTag || undefined });
+    recipients = contacts.map((c) => {
+      const raw = c.phone || c.telephone || c.username || c.from || '';
+      const compact = String(raw).replace(/[\s()-]/g, '');
+      const identifier = channel === 'WHATSAPP' ? String(raw).replace(/\D/g, '') : (/^@/.test(compact) ? compact : (compact.includes('@') ? compact : (/^\+?\d{8,18}$/.test(compact) ? `+${compact.replace(/\D/g, '')}` : '')));
+      return { identifier, name: c.name || '' };
+    }).filter((r) => r.identifier);
+  } else if (input.memberSourceGroupId || input.memberSourceGroupName) {
+    const driver = DRIVERS[channel](tenant);
+    const sourceGroup = await resolveExistingGroup(tenant, channel, { groupId: input.memberSourceGroupId, groupName: input.memberSourceGroupName, requireAdmin: false });
+    if (typeof driver.membersOf !== 'function') { const e = new Error('Extraction des membres indisponible pour ce canal.'); e.code = 'GROUP_EXTRACTION_UNAVAILABLE'; throw e; }
+    const extracted = await driver.membersOf(sourceGroup.id);
+    if (!Array.isArray(extracted)) { const e = new Error('Impossible de vérifier les membres du groupe source.'); e.code = 'GROUP_EXTRACTION_FAILED'; throw e; }
+    if (channel === 'WHATSAPP') {
+      recipients = extracted.map((m) => ({ identifier: m.id, name: m.name || '' }));
+    } else {
+      const rawMembers = await require('../adapters/telegramManager').getOrCreate(tenant).session.getGroupMembers(sourceGroup.id, { limit: cfg().maxMembers + 500 });
+      recipients = (rawMembers || []).map((m) => ({ identifier: m.username ? `@${m.username}` : (m.phone ? `+${String(m.phone).replace(/\D/g, '')}` : ''), name: m.name || '' })).filter((r) => r.identifier);
+    }
   } else {
-    let recipientsId = input.recipientsId;
+    let recipientsId = input.recipientsId || input.recipientsDraftId;
     if (!recipientsId) {
       const src = {};
       if (input.file) src.file = input.file; else if (input.image) src.image = input.image; else if (input.text) src.text = input.text;
@@ -199,8 +331,16 @@ async function resolveMembers(tenant, channel, input) {
     recipients = draft.rows.filter((r) => r.state === 'valid').map((r) => ({ identifier: channel === 'TELEGRAM' ? `+${r.number}` : String(r.number), name: r.name || '' }));
     if (channel === 'TELEGRAM') usernames.forEach((u) => recipients.push({ identifier: u.startsWith('@') ? u : `@${u}`, name: '' }));
   }
-  const seen = new Set(); const out = [];
-  for (const r of recipients) { const k = r.identifier.toLowerCase(); if (seen.has(k)) continue; seen.add(k); out.push(r); }
+  const seen = new Set(); const out = []; let duplicateInput = 0;
+  for (const r of recipients) {
+    const normalized = channel === 'WHATSAPP' ? String(r.identifier).replace(/\D/g, '') : String(r.identifier).replace(/^@/, '').replace(/\s/g, '').toLowerCase();
+    if (!normalized) continue;
+    r.identifier = channel === 'WHATSAPP' ? normalized : (/^\+?\d{8,18}$/.test(normalized) ? `+${normalized.replace(/\D/g, '')}` : (String(r.identifier).startsWith('@') ? `@${normalized}` : normalized));
+    const k = normalized;
+    if (seen.has(k)) { duplicateInput += 1; continue; }
+    seen.add(k); out.push(r);
+  }
+  out.duplicateInput = duplicateInput;
   return out;
 }
 
@@ -215,6 +355,18 @@ async function runJob(tenant, job) {
     const optedOut = await contactCrm.optedOutSet(tenant, job.channel).catch(() => new Set());
     for (const m of job.members) if (m.status === 'pending' && optedOut.has(contactCrm.identityOf(m.identifier))) { m.status = 'opted_out'; m.reason = 'A demandé à ne plus être sollicité'; }
     if (job.members.some((m) => m.status === 'pending' && !m.verified)) { await driver.verify(job.members.filter((m) => m.status === 'pending')); job.members.forEach((m) => { m.verified = true; }); await saveJob(tenant, job); }
+    if (job.group && typeof driver.membersOf === 'function' && job.members.some((m) => m.status === 'pending')) {
+      try {
+        let groupMembers = null;
+        if (job.channel === 'TELEGRAM') groupMembers = await driver.membersOf(job.group.id, job.members);
+        else groupMembers = await driver.membersOf(job.group.id);
+        if (Array.isArray(groupMembers)) {
+          job.membershipPrecheck = 'verified';
+          const present = new Set(groupMembers.map((x) => typeof x === 'string' ? x : x.id).filter(Boolean).map(String));
+          for (const m of job.members) if (m.status === 'pending' && present.has(String(job.channel === 'WHATSAPP' ? m.identifier : m.id))) { m.status = 'already_member'; m.reason = 'Déjà membre du groupe'; }
+        } else job.membershipPrecheck = 'unavailable';
+      } catch (e) { job.membershipPrecheck = 'unavailable'; /* l'API d'ajout fera le contrôle définitif si la liste n'est pas lisible */ }
+    }
 
     const todo = () => job.members.filter((m) => m.status === 'pending');
     const cancelNow = () => {
@@ -291,11 +443,28 @@ async function runJob(tenant, job) {
         }
       }
     }
+    const directAdded = job.members.filter((m) => m.status === 'added');
+    if (directAdded.length && typeof driver.verifyAdded === 'function') {
+      job.phase = 'verification'; await saveJob(tenant, job);
+      const checks = await driver.verifyAdded(job.group.id, directAdded).catch(() => null);
+      const byId = new Map((checks || []).map((c) => [String(c.id), c.present === true]));
+      for (const m of directAdded) {
+        m.verifiedOnPlatform = byId.get(String(m.id)) === true;
+        if (!m.verifiedOnPlatform) m.reason = 'La plateforme a accepté l’ajout, mais la présence n’a pas pu être confirmée dans la liste réelle des membres.';
+      }
+      await saveJob(tenant, job);
+    }
     job.phase = null;
-    job.status = job.members.some((m) => m.status === 'failed') ? 'DONE_WITH_ISSUES' : 'DONE';
+    const unverified = job.members.filter((m) => m.status === 'added' && m.verifiedOnPlatform !== true).length;
+    const failed = job.members.some((m) => m.status === 'failed');
+    job.status = failed || unverified ? 'DONE_WITH_ISSUES' : 'DONE';
+    if (unverified) job.error = `${unverified} ajout(s) direct(s) n'ont pas pu être confirmés dans la liste réelle des membres.`;
+    else if (job.membershipPrecheck === 'unavailable') job.error = 'La liste des membres existants n’était pas lisible avant l’ajout; les réponses d’ajout de la plateforme ont été utilisées.';
   } catch (err) {
     console.warn(`communityService — job ${job.id} en échec : ${require('../lib/ai/aiErrors').redact(err && err.message)}`);
-    job.status = 'FAILED'; job.error = 'Erreur technique pendant la création du groupe.';
+    job.status = 'FAILED'; job.error = job.operation === 'ADD_TO_EXISTING'
+      ? 'Erreur technique pendant l’ajout au groupe existant.'
+      : 'Erreur technique pendant la création du groupe.';
   } finally {
     job.finishedAt = ['RUNNING'].includes(job.status) ? null : new Date().toISOString();
     try { await saveJob(tenant, job); } catch (e) { /* non bloquant */ }
@@ -309,16 +478,23 @@ async function runJob(tenant, job) {
 async function startGroup(tenant, input) {
   const channel = String(input.channel || 'WHATSAPP').toUpperCase();
   if (!DRIVERS[channel]) { const e = new Error('Canal inconnu (WHATSAPP ou TELEGRAM).'); e.code = 'INVALID_CHANNEL'; throw e; }
-  const title = String(input.title || '').trim().replace(/[\u0000-\u001f]/g, ' ').slice(0, 100);
+  const existingGroupId = String(input.existingGroupId || input.groupId || '').trim();
+  const existingGroup = existingGroupId || input.groupName
+    ? await resolveExistingGroup(tenant, channel, { groupId: existingGroupId, groupName: input.groupName })
+    : null;
+  const title = String(existingGroup ? existingGroup.name : (input.title || '')).trim().replace(/[\u0000-\u001f]/g, ' ').slice(0, 100);
   if (title.length < 2) { const e = new Error('Un nom de groupe est requis.'); e.code = 'TITLE_REQUIRED'; throw e; }
   const key = `${sanitize(tenant)}:${channel}`;
   if (running.has(key)) { const e = new Error('Un groupe est déjà en cours de création sur ce canal : attendez sa fin.'); e.code = 'JOB_ALREADY_RUNNING'; throw e; }
-  const members = (await resolveMembers(tenant, channel, input)).slice(0, cfg().maxMembers + 500);
+  const resolved = await resolveMembers(tenant, channel, input);
+  const duplicateInput = resolved.duplicateInput || 0;
+  const members = resolved.slice(0, cfg().maxMembers + 500);
   if (!members.length) { const e = new Error('Aucun contact valide dans la liste.'); e.code = 'NO_VALID_MEMBER'; throw e; }
   const capped = members.slice(0, cfg().maxMembers);
   const job = {
     id: uid(), tenant: sanitize(tenant), channel, title, description: String(input.description || '').slice(0, 250), inviteMessage: input.inviteMessage ? String(input.inviteMessage) : null,
-    status: 'QUEUED', createdAt: new Date().toISOString(), group: null, truncated: members.length > capped.length ? members.length - capped.length : 0,
+    operation: existingGroup ? 'ADD_TO_EXISTING' : 'CREATE_GROUP',
+    status: 'QUEUED', createdAt: new Date().toISOString(), group: existingGroup ? { id: existingGroup.id, subject: existingGroup.name, link: null } : null, truncated: members.length > capped.length ? members.length - capped.length : 0, duplicateInput,
     members: capped.map((m, i) => ({ id: i, identifier: m.identifier, name: m.name || '', status: 'pending', verified: false })),
     timing: resolveTiming(channel, input.timing),
   };
@@ -377,4 +553,4 @@ async function setTiming(tenant, jobId, patch) {
   await saveJob(tenant, job); return publicJob(job, false);
 }
 
-module.exports = { startGroup, resumeJob, cancelJob, pauseJob, setTiming, resolveTiming, TIMING_BOUNDS, getJob, listJobs, waitFor, renderInvite, DEFAULT_INVITE, DRIVERS, _setSleep: (fn) => { sleepFn = fn; }, _running: running };
+module.exports = { startGroup, addMembersToGroup: (tenant, input) => startGroup(tenant, Object.assign({}, input, { existingGroupId: input.existingGroupId || input.groupId })), listExistingGroups, listRecipientLists, resolveExistingGroup, resolveMembers, resumeJob, cancelJob, pauseJob, setTiming, resolveTiming, TIMING_BOUNDS, getJob, listJobs, waitFor, renderInvite, DEFAULT_INVITE, DRIVERS, _setSleep: (fn) => { sleepFn = fn; }, _running: running };

@@ -75,6 +75,40 @@ test('sans runtime -> NO_RUNTIME (jamais de faux succès)', async () => {
   assert.equal(out.skipped, 'NO_RUNTIME');
 });
 
+test('NO_RUNTIME ne consomme pas le message : même identifiant retenté dès que la session revient', async () => {
+  const tenant = 'tAutoRuntimeRetry'; const record = [];
+  await businessServices.create(tenant, { name: 'Cuisine', products: [{ name: 'Formation', price: 8000 }], commercial: { currency: 'FCFA' } });
+  await autoResponder.setSettings(tenant, { whatsapp: true });
+  const msg = { tenantId: tenant, channel: 'WHATSAPP', from: '22600000111', text: 'combien coûte la Formation ?', messageId: 'runtime-retry-1' };
+  assert.equal((await autoResponder.handleIncoming(msg, { llm: fakeLlm() })).skipped, 'NO_RUNTIME');
+  const retried = await autoResponder.handleIncoming(msg, { runtime: fakeRuntime(record), llm: fakeLlm() });
+  assert.equal(retried.sent, true); assert.equal(record.length, 1);
+});
+
+test('PENDING sans accusé de la plateforme ne marque pas la conversation comme répondue', async () => {
+  const tenant = 'tAutoPending';
+  await businessServices.create(tenant, { name: 'Cuisine', products: [{ name: 'Formation', price: 8000 }], commercial: { currency: 'FCFA' } });
+  await autoResponder.setSettings(tenant, { whatsapp: true });
+  const out = await autoResponder.handleIncoming(
+    { tenantId: tenant, channel: 'WHATSAPP', from: '22600000112', text: 'combien coûte la Formation ?', messageId: 'pending-1' },
+    { runtime: { sendMessageVerified: async () => ({ status: 'PENDING' }) }, llm: fakeLlm() },
+  );
+  assert.equal(out.sent, false); assert.equal(out.status, 'PENDING');
+  const state = await require('../ai-engine/jarvis/conversationState').get(tenant, 'WHATSAPP', '22600000112');
+  assert.ok(!state.lastReplyTs); assert.equal(state.recentReplies.length, 0);
+  assert.ok(state.processedIds.includes('pending-1'), 'un résultat incertain reste dédupliqué pour éviter un double envoi');
+});
+
+test('un échec d’envoi certain laisse le même message retraitable', async () => {
+  const tenant = 'tAutoSendRetry'; const from = '22600000113'; const msg = { tenantId: tenant, channel: 'WHATSAPP', from, text: 'combien coûte la Formation ?', messageId: 'send-retry-1' };
+  await businessServices.create(tenant, { name: 'Cuisine', products: [{ name: 'Formation', price: 8000 }], commercial: { currency: 'FCFA' } });
+  await autoResponder.setSettings(tenant, { whatsapp: true });
+  const failed = await autoResponder.handleIncoming(msg, { runtime: { sendMessageVerified: async () => ({ status: 'FAILED', error: 'NOT_CONNECTED' }) }, llm: fakeLlm() });
+  assert.equal(failed.status, 'FAILED'); assert.equal(failed.sent, false);
+  const retried = await autoResponder.handleIncoming(msg, { runtime: fakeRuntime([]), llm: fakeLlm() });
+  assert.equal(retried.sent, true, JSON.stringify(retried));
+});
+
 test('composeReply s\'appuie sur le contexte métier réel', async () => {
   const txt = await autoResponder.composeReply({ tenant: T, channel: 'WHATSAPP', from: '22600000002', name: 'Koffi', text: 'prix ?', llm: async (prompt) => {
     // prouve que le prompt contient bien le contexte métier réel injecté

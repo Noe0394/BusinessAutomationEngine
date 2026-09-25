@@ -99,6 +99,7 @@ const INBOX_RE = /((?:as|ai|avez)-?\s*(?:tu|je|vous)\s+re[çc]u\s+(?:des?\s+|de\
 // groupes ne doit pas lancer le moteur d'objectifs. La véritable exécution
 // ("écris aux membres du groupe X …") reste gérée par 'goal' (à enrichir).
 const GROUPS_RE = /(mes\s+groupes?|liste[rz]?\s+(?:mes\s+)?groupes?|quels?\s+(?:sont\s+)?(?:mes\s+)?groupes?|combien\s+de\s+groupes?|groupes?\s+(?:dont|o[ùu])\s+je\s+suis\s+admin|groupes?\s+que\s+j.?administre|mes\s+groupes?\s+admin)/i;
+const GROUPS_LOOKUP_RE = /\b(?:list\w*|montre\w*|affiche\w*|donne\w*|dis[- ]moi|quel(?:s|les)?|combien|trouve\w*|cherch\w*|recherch\w*)\b[^.?!]{0,100}\bgroupes?\b/i;
 // « Cherche/trouve le groupe Épicerie » : recherche parmi MES PROPRES groupes connectés (jamais la découverte publique, déjà couverte par
 // COMMUNITY_SEARCH_RE et vérifiée avant ce point) — même intention 'groups', avec extraction du nom recherché (voir handleGroups ci-dessous).
 const GROUP_SEARCH_MINE_RE = /\b(?:cherch\w*|trouve\w*|recherch\w*|montre\w*|affiche\w*)\b[^.?!]{0,15}\b(?:mon|le|un|ce)?\s*groupes?\b/i;
@@ -181,7 +182,7 @@ const CONVPOLICY_RE = /(?:comportement|politique|r[èe]glages?)\s+(?:du\s+)?r[é
 // informationnelle (« quels sont mes tarifs ? », « combien coûte le service ? ») ne doit PAS forcer le chemin lent (boucle d'outils + spécialistes) —
 // seul un ordre avec un verbe d'action réel le justifie. Une question sur l'activité est déjà bien répondue par le chemin rapide (contexte métier réel
 // injecté dans le prompt, voir assistantLayer.chatFallback), plus vite et sans détour inutile.
-const ACTION_RE = /\b(?:envoi\w*|envoy\w+|cr[ée]e\w*|cr[ée]er|lance\w*|list\w*|montre\w*|affiche\w*|programm\w*|planifi\w*|import\w*|ajout\w*|supprim\w*|efface\w*|retir\w*|configur\w*|g[ée]n[èe]r\w*|publi\w*|relanc\w*|cherch\w*|trouv\w*|activ\w*|d[ée]sactiv\w*|arr[êe]t\w*|stopp\w*|modifi\w*|renomm\w*|chang\w*|mets?|compt\w*|export\w*|t[ée]l[ée]charg\w*|pay\w*|valid\w*|annul\w*|connect\w*|d[ée]connect\w*|restaur\w*)\b/i;
+const ACTION_RE = /\b(?:envoi\w*|envoy\w+|cr[ée]e\w*|cr[ée]er|lance\w*|list\w*|donne\w*|montre\w*|affiche\w*|programm\w*|planifi\w*|import\w*|ajout\w*|ajoute\w*|supprim\w*|efface\w*|retir\w*|configur\w*|g[ée]n[èe]r\w*|publi\w*|relanc\w*|cherch\w*|trouv\w*|activ\w*|d[ée]sactiv\w*|arr[êe]t\w*|stopp\w*|pause\w*|reprend\w*|resume\w*|modifi\w*|renomm\w*|chang\w*|mets?|compt\w*|export\w*|t[ée]l[ée]charg\w*|pay\w*|valid\w*|annul\w*|connect\w*|d[ée]connect\w*|restaur\w*|r[ée]gl\w*)\b/i;
 // L'avis des spécialistes ne doit jamais faire attendre : passé ce délai, on continue sans lui.
 const SPECIALIST_BUDGET_MS = Math.max(0, parseInt(process.env.OWNER_SPECIALIST_BUDGET_MS, 10) || 4000);
 const withSpecialistBudget = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), SPECIALIST_BUDGET_MS))]);
@@ -226,6 +227,9 @@ function detectIntent(text, lastAssistantMessage) {
   if (CONFIGSVC_RE.test(text)) return 'configsvc';
   if (IMPORTCONTACTS_RE.test(text)) return 'importcontacts';
   if (GENMEDIA_RE.test(text) && !/groupe/i.test(text)) return 'genmedia';
+  // Une demande de consultation explicite des groupes l'emporte sur la
+  // détection de publication ("envoie-moi la liste de mes groupes").
+  if (GROUPS_LOOKUP_RE.test(text) && (GROUPS_RE.test(text) || GROUP_SEARCH_MINE_RE.test(text))) return 'groups';
   // Ordre important : une programmation récurrente ("chaque matin envoie au
   // groupe…") l'emporte sur une publication ponctuelle ; une publication (verbe
   // poste/partage/…) l'emporte sur la simple LISTE des groupes — sinon
@@ -853,20 +857,29 @@ async function handleGroups(text, tenantId, deps) {
   const adminOnly = /(admin|administre|dont\s+je\s+suis|o[ùu]\s+je\s+suis)/i.test(text);
   // Nom recherché : soit un lien explicite (sur/contenant/thème/à propos de/parlant de X), soit directement après « groupe(s) » (« cherche le
   // groupe Épicerie ») — en excluant les mots qui ne sont pas un nom (telegram/whatsapp/dont/où/que/admin/publics).
-  const subjLinked = text.match(/(?:sur|contenant|th[èe]me|[àa]\s+propos\s+de|parlant\s+de)\s+["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
+  const subjLinked = text.match(/(?:sur|contenant|th[èe]me|[àa]\s+propos\s+de|parlant\s+de)\s+["']?(?!whatsapp\b|telegram\b)([\p{L}\d][\p{L}\d \-]{1,40})/iu);
   // NOTE : \b ne fonctionne pas de façon fiable après une lettre accentuée (où/privé/thème…) en JS — (?=\s|$|[.,;:!?]) le remplace partout ici.
   const subjBare = !subjLinked && text.match(/groupes?\s+(?!telegram(?=\s|$|[.,;:!?])|whatsapp(?=\s|$|[.,;:!?])|dont(?=\s|$|[.,;:!?])|o[ùu](?=\s|$|[.,;:!?])|que(?=\s|$|[.,;:!?])|admin\w*(?=\s|$|[.,;:!?])|publics?(?=\s|$|[.,;:!?])|priv[ée]s?(?=\s|$|[.,;:!?])|sur(?=\s|$|[.,;:!?])|contenant(?=\s|$|[.,;:!?])|th[èe]me(?=\s|$|[.,;:!?])|[àa]\s+propos(?=\s|$|[.,;:!?])|parlant(?=\s|$|[.,;:!?]))["']?([\p{L}\d][\p{L}\d \-]{1,40})/iu);
   const subjName = (subjLinked && subjLinked[1]) || (subjBare && subjBare[1]);
-  const res = await searchMyGroups(channel, { adminOnly, subject: subjName }, tenantId, deps);
-  if (!res.ok) return { text: res.error === 'ENGINE_UNAVAILABLE' ? 'Je ne peux pas lister les groupes pour le moment (moteur non disponible).' : `Je n'ai pas pu récupérer tes groupes ${label} (${res.error}).` };
-  if (res.connected === false) {
+  const call = await toolRegistry.execute(tenantId, 'listMyCommunityGroups', { channel, query: subjName, limit: 500 }, { permissions: deps && deps.toolPermissions });
+  if (call.state !== 'SUCCESS') {
+    const code = call.error && call.error.code;
     return {
-      text: res.paired
-        ? `Ton compte ${label} est appairé mais la connexion se rétablit — réessaie dans un instant pour que je liste tes groupes.`
-        : `Je ne suis pas connecté à ${label} — appaire d'abord le compte dans l'onglet ${label}.`,
-      actionLog: [{ icon: '🔄', label: `${label} ${res.paired ? 'reconnexion' : 'non appairé'}`, status: 'warning' }],
+      text: code === `${channel}_NOT_CONNECTED`
+        ? `Je ne suis pas connecté à ${label} — vérifie la session dans l'onglet ${label}.`
+        : `Je n'ai pas pu récupérer tes groupes ${label} (${(call.error && call.error.message) || code || call.state}).`,
+      toolCall: { name: 'listMyCommunityGroups', state: call.state, error: call.error || null },
+      actionLog: [{ icon: '⚠️', label: `${label} : liste des groupes indisponible`, status: 'warning' }],
     };
   }
+  const allGroups = (call.result && call.result.groups) || [];
+  const selected = adminOnly ? allGroups.filter((g) => g.isAdmin) : allGroups;
+  const res = {
+    ok: true, connected: true, total: (call.result && call.result.total) || allGroups.length,
+    matched: selected.length,
+    groups: selected.slice().sort((a, b) => (b.size || 0) - (a.size || 0)).slice(0, 20),
+    truncated: !!(call.result && call.result.truncated) || selected.length > 20,
+  };
   if (!res.matched) {
     return {
       text: adminOnly
@@ -882,6 +895,7 @@ async function handleGroups(text, tenantId, deps) {
   const more = res.truncated ? `\n… et ${res.matched - res.groups.length} autre(s).` : '';
   return {
     text: [header, ...lines].join('\n') + more,
+    toolCall: { name: 'listMyCommunityGroups', state: call.state, result: call.result },
     actionLog: [{ icon: '👥', label: `${res.matched} groupe(s) ${label}`, status: 'done' }],
   };
 }
@@ -1566,6 +1580,13 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
 
   const intent = detectIntent(text, lastAssistantMessage);
   if (!intent && isQuickChat(text)) return null; // conversation courante : réponse directe (voir isQuickChat)
+  if (intent && intent !== 'community' && intent !== 'groups' && ACTION_RE.test(text)) {
+    const genericAgent = await agentLoop.runAgentLoop(
+      { text, history, tenantId, sessionId },
+      { rawText: text, returnGap: false, runtime: d.runtime || null, permissions: d.toolPermissions || undefined, generateImage: d.generateImage || null, llm: d.llm || undefined },
+    ).catch((err) => { console.warn('chatOrchestrator tool registry fallback:', err.message); return null; });
+    if (genericAgent) return genericAgent;
+  }
   if (!intent) {
     // Aucune intention à motif connu : l'AGENT À OUTILS prend le relais — le LLM
     // choisit dynamiquement un outil RÉEL du registre (toolRegistry), l'exécute

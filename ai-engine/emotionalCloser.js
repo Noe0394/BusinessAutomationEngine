@@ -188,7 +188,8 @@ async function handleCustomerMessage({ tenantId, channel, from, text }) {
     crm: contactCrm,
     knownText: facts,
     compose: (directives, ctx) => composeClosingReply({ text: ctx.text, history: [], analysis, strategy, facts, domain, directives }),
-    send: async () => ({ status: 'SUCCESS' }), // l'envoi réel est fait par l'appelant (index.js)
+    send: async () => ({ status: 'SUCCESS' }), // livraison différée suivie par l'appelant (index.js)
+    deferredDelivery: true,
     notify: (msg) => platformOrchestrator.notifyTenantChat(tenantId, `⚠️ ${msg}`, [{ icon: '⚠️', label: 'Conversation à traiter', status: 'warning' }]),
   }).catch((err) => {
     console.warn('emotionalCloser — moteur Jarvis indisponible, repli sur le gabarit de stratégie :', err.message);

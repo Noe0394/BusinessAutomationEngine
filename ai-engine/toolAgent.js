@@ -25,7 +25,8 @@ function describeTools(tools) {
   return tools.map((t) => {
     const params = Object.entries(t.inputSchema || {})
       .map(([k, s]) => `${k}${s.required ? ' (requis)' : ''}: ${s.description || ''}`).join(' ; ');
-    return `- ${t.name} : ${t.description}\n  Args : ${params || '(aucun)'}`;
+    const capabilities = Array.isArray(t.capabilities) && t.capabilities.length ? t.capabilities.join(', ') : 'général';
+    return `- ${t.name} [fonction=${t.feature || 'général'}; capacités=${capabilities}; risque=${t.risk || 'READ'}] : ${t.description}\n  Args : ${params || '(aucun)'}`;
   }).join('\n');
 }
 

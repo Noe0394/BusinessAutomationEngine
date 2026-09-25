@@ -2335,6 +2335,18 @@
           </table>
         </div>
 
+        <h3 style="margin-top:1.5rem;">Ajouter des membres à un groupe existant</h3>
+        <p class="empty">Sélectionnez un groupe réellement accessible, puis une liste de contacts. L’interface réutilise le traitement persistant de la Communauté et affiche les ajouts confirmés, les membres déjà présents et les échecs.</p>
+        <div class="field"><label for="cm-wa-existing-group">Groupe de destination</label><select id="cm-wa-existing-group"><option value="">Charger les groupes…</option></select></div>
+        <button type="button" id="cm-wa-existing-refresh">↻ Actualiser les groupes</button>
+        <div class="field"><label for="cm-wa-existing-source">Source des contacts</label><select id="cm-wa-existing-source"><option value="text">Texte collé</option><option value="file">Fichier Excel/CSV/texte</option><option value="crm">Contacts Cyrus</option><option value="list">Liste déjà préparée</option><option value="group">Membres d’un autre groupe</option></select></div>
+        <div class="field" id="cm-wa-existing-text-wrap"><label for="cm-wa-existing-text">Contacts (un par ligne)</label><textarea id="cm-wa-existing-text" rows="4" placeholder="+22670123456 Awa"></textarea></div>
+        <div class="field" id="cm-wa-existing-file-wrap" hidden><label for="cm-wa-existing-file">Fichier source</label><input type="file" id="cm-wa-existing-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" /></div>
+        <div class="field" id="cm-wa-existing-list-wrap" hidden><label for="cm-wa-existing-list-id">Liste de contacts préparée</label><select id="cm-wa-existing-list-id"><option value="">Charger les listes…</option></select></div>
+        <div class="field" id="cm-wa-existing-source-group-wrap" hidden><label for="cm-wa-existing-source-group">Groupe source à extraire</label><select id="cm-wa-existing-source-group"><option value="">Sélectionnez un groupe</option></select></div>
+        <button type="button" id="cm-wa-existing-add" class="send-button" style="width:auto;">Ajouter au groupe sélectionné</button>
+        <p id="cm-wa-existing-feedback" hidden></p>
+
         <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
         <div class="field">
           <label for="cm-wa-kw">Mots-clés sectoriels (séparés par des virgules)</label>
@@ -2425,6 +2437,18 @@
             <tbody id="cm-tg-mine-results"><tr><td colspan="4" class="empty">Aucune recherche pour l'instant.</td></tr></tbody>
           </table>
         </div>
+
+        <h3 style="margin-top:1.5rem;">Ajouter des membres à un groupe existant</h3>
+        <p class="empty">Sélectionnez un groupe réellement accessible, puis une liste de contacts. L’interface réutilise le traitement persistant de la Communauté et affiche les ajouts confirmés, les membres déjà présents et les échecs.</p>
+        <div class="field"><label for="cm-tg-existing-group">Groupe de destination</label><select id="cm-tg-existing-group"><option value="">Charger les groupes…</option></select></div>
+        <button type="button" id="cm-tg-existing-refresh">↻ Actualiser les groupes</button>
+        <div class="field"><label for="cm-tg-existing-source">Source des contacts</label><select id="cm-tg-existing-source"><option value="text">Texte collé</option><option value="file">Fichier Excel/CSV/texte</option><option value="crm">Contacts Cyrus</option><option value="list">Liste déjà préparée</option><option value="group">Membres d’un autre groupe</option></select></div>
+        <div class="field" id="cm-tg-existing-text-wrap"><label for="cm-tg-existing-text">Contacts (un par ligne : numéro ou @username)</label><textarea id="cm-tg-existing-text" rows="4" placeholder="@utilisateur"></textarea></div>
+        <div class="field" id="cm-tg-existing-file-wrap" hidden><label for="cm-tg-existing-file">Fichier source</label><input type="file" id="cm-tg-existing-file" accept=".xlsx,.xls,.csv,.tsv,.txt,.vcf,.json,image/*" /></div>
+        <div class="field" id="cm-tg-existing-list-wrap" hidden><label for="cm-tg-existing-list-id">Liste de contacts préparée</label><select id="cm-tg-existing-list-id"><option value="">Charger les listes…</option></select></div>
+        <div class="field" id="cm-tg-existing-source-group-wrap" hidden><label for="cm-tg-existing-source-group">Groupe source à extraire</label><select id="cm-tg-existing-source-group"><option value="">Sélectionnez un groupe</option></select></div>
+        <button type="button" id="cm-tg-existing-add" class="send-button" style="width:auto;">Ajouter au groupe sélectionné</button>
+        <p id="cm-tg-existing-feedback" hidden></p>
 
         <h3 style="margin-top:1.5rem;">🔎 Découvrir des communautés thématiques</h3>
         <div class="field">
@@ -11056,9 +11080,22 @@
           var cap = document.createElement('div'); cap.style.fontWeight = '600'; cap.textContent = pr.percent + ' % — ' + pr.processed + ' / ' + pr.total + ' contact(s) traité(s)' + (job.phase && phases[job.phase] ? ' · ' + phases[job.phase] : ''); box.appendChild(cap);
           var lines = [
             'Statut : ' + (statusFr[job.status] || job.status) + (job.error ? ' — ' + job.error : ''),
-            'Ajoutés directement : ' + (c.added || 0) + ' · Invitations envoyées en message privé : ' + (c.invited_dm || 0) + ' · Déjà membres : ' + (c.already_member || 0),
+            'Ajouts directs : ' + (c.added || 0) + ' (confirmés : ' + (c.verified_added || 0) + ', non confirmés : ' + (c.unverified_added || 0) + ') · Invitations envoyées : ' + (c.invited_dm || 0) + ' · Déjà membres : ' + (c.already_member || 0) + (c.duplicate_input ? ' · Doublons ignorés : ' + c.duplicate_input : ''),
             'Absents de la plateforme : ' + (c.not_on_platform || 0) + ' · Désinscrits (ignorés) : ' + (c.opted_out || 0) + ' · Échecs : ' + (c.failed || 0) + ' · En attente : ' + ((c.pending || 0) + (c.needs_invite || 0)) + ' / ' + (c.total || 0),
           ];
+          var memberResults = Array.isArray(job.members) ? job.members : [];
+          var resultGroups = [
+            { status: 'added', label: 'Ajoutés' },
+            { status: 'already_member', label: 'Déjà membres' },
+            { status: 'invited_dm', label: 'Invitations envoyées' },
+            { status: 'failed', label: 'Échecs' },
+            { status: 'not_on_platform', label: 'Absents de la plateforme' },
+            { status: 'opted_out', label: 'Désinscrits, ignorés' },
+          ];
+          resultGroups.forEach(function (g) {
+            var rows = memberResults.filter(function (m) { return m.status === g.status; });
+            if (rows.length) lines.push(g.label + ' : ' + rows.map(function (m) { return (m.name || m.identifier || 'contact') + (m.verifiedOnPlatform ? ' (vérifié)' : '') + (m.reason ? ' — ' + m.reason : ''); }).join(' · '));
+          });
           if (job.group && job.group.link) lines.push('Lien du groupe : ' + job.group.link);
           lines.forEach(function (l) { var d = document.createElement('div'); d.textContent = l; box.appendChild(d); });
           var paused = ['PAUSED_RATE_LIMIT', 'DONE_WITH_ISSUES', 'PAUSED_USER', 'INTERRUPTED'].indexOf(job.status) >= 0;
@@ -11079,6 +11116,53 @@
           };
           tick(); pollTimer = setInterval(tick, 4000);
         }
+        async function refreshExistingGroups() {
+          var target = $('existing-group'); var source = $('existing-source-group');
+          if (!target || !source) return;
+          target.textContent = ''; source.textContent = '';
+          try {
+            var res = await apiFetch('/api/communities/available-groups?channel=' + channel); var data = await res.json();
+            if (!res.ok || !data.ok) throw new Error((data && data.error) || 'Liste des groupes indisponible.');
+            var placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = 'Sélectionnez le groupe de destination'; target.appendChild(placeholder);
+            var sourcePlaceholder = document.createElement('option'); sourcePlaceholder.value = ''; sourcePlaceholder.textContent = 'Sélectionnez un groupe source'; source.appendChild(sourcePlaceholder);
+            var adminGroups = 0;
+            (data.groups || []).forEach(function (g) {
+              if (g.isAdmin) { var opt = document.createElement('option'); opt.value = g.id; opt.textContent = g.name + ' · ' + g.size + ' membre(s) · admin'; target.appendChild(opt); adminGroups += 1; }
+              var opt2 = document.createElement('option'); opt2.value = g.id; opt2.textContent = g.name + ' · ' + g.size + ' membre(s)'; source.appendChild(opt2);
+            });
+            if (!adminGroups) { target.textContent = ''; var none = document.createElement('option'); none.value = ''; none.textContent = 'Aucun groupe dont vous êtes administrateur'; target.appendChild(none); }
+            try {
+              var listSelect = $('existing-list-id'); var listRes = await apiFetch('/api/communities/recipient-lists?channel=' + channel); var listData = await listRes.json();
+              if (listRes.ok && listData.ok && listSelect) {
+                listSelect.textContent = ''; var listPlaceholder = document.createElement('option'); listPlaceholder.value = ''; listPlaceholder.textContent = 'Sélectionnez une liste préparée'; listSelect.appendChild(listPlaceholder);
+                (listData.lists || []).forEach(function (l) { var lo = document.createElement('option'); lo.value = l.id; lo.textContent = l.id + ' · ' + l.total + ' contacts valides · ' + l.source; listSelect.appendChild(lo); });
+              }
+            } catch (e) { /* liste facultative */ }
+          } catch (e) { say($('existing-feedback'), e.message || 'Impossible de charger les groupes.', false); }
+        }
+        if ($('existing-refresh')) $('existing-refresh').addEventListener('click', refreshExistingGroups);
+        if ($('existing-source')) $('existing-source').addEventListener('change', function () {
+          var mode = $('existing-source').value;
+          $('existing-text-wrap').hidden = mode !== 'text'; $('existing-file-wrap').hidden = mode !== 'file';
+          $('existing-list-wrap').hidden = mode !== 'list'; $('existing-source-group-wrap').hidden = mode !== 'group';
+        });
+        if ($('existing-add')) $('existing-add').addEventListener('click', async function () {
+          var groupId = $('existing-group').value; var mode = $('existing-source').value;
+          if (!groupId) return say($('existing-feedback'), 'Sélectionnez le groupe de destination dans la liste réelle.', false);
+          var fd = new FormData(); fd.append('channel', channel); fd.append('existingGroupId', groupId);
+          if (mode === 'text') { if (!$('existing-text').value.trim()) return say($('existing-feedback'), 'Saisissez une liste de contacts.', false); fd.append('text', $('existing-text').value); }
+          if (mode === 'file') { var f = $('existing-file').files[0]; if (!f) return say($('existing-feedback'), 'Sélectionnez un fichier source.', false); fd.append('file', f, f.name); }
+          if (mode === 'crm') fd.append('source', 'crm');
+          if (mode === 'list') { var listId = $('existing-list-id').value.trim(); if (!listId) return say($('existing-feedback'), 'Indiquez l’identifiant de la liste préparée.', false); fd.append('recipientsId', listId); }
+          if (mode === 'group') { var sourceId = $('existing-source-group').value; if (!sourceId) return say($('existing-feedback'), 'Sélectionnez le groupe source.', false); if (sourceId === groupId) return say($('existing-feedback'), 'Le groupe source et la destination doivent être différents.', false); fd.append('memberSourceGroupId', sourceId); }
+          $('existing-add').disabled = true; say($('existing-feedback'), 'Vérification du groupe et préparation des contacts…');
+          try {
+            var res = await apiFetch('/api/communities/groups', { method: 'POST', body: fd }); var data = await res.json();
+            if (!res.ok || !data.ok) say($('existing-feedback'), (data && data.error) || 'Échec du démarrage.', false);
+            else { currentJob = data.group; say($('existing-feedback'), 'Ajout démarré dans « ' + data.group.group.subject + ' » : ' + data.group.counts.total + ' contact(s) après déduplication.', true); renderProgress(data.group); poll(data.group.id); }
+          } catch (e) { if (e.message !== 'unauthorized') say($('existing-feedback'), 'Erreur de communication avec le serveur.', false); }
+          $('existing-add').disabled = false;
+        });
         $('create-btn').addEventListener('click', async function () {
           var title = $('title').value.trim();
           if (title.length < 2) return say($('create-feedback'), 'Indiquez un nom de groupe.', false);
@@ -11100,6 +11184,7 @@
         });
         // Le traitement tourne CÔTÉ SERVEUR : rafraîchir la page ne l'arrête pas. Au chargement, on retrouve le traitement en cours (ou le dernier) de ce canal et on reprend l'affichage.
         var reattach = async function () {
+          refreshExistingGroups();
           try {
             var res = await apiFetch('/api/communities/groups?channel=' + channel);
             var data = await res.json();

@@ -39,6 +39,12 @@ const engagement = require('./engagement');
 // Déduplication en mémoire par tenant (Baileys/Telegram peuvent redélivrer le
 // même message ; on ne répond qu'UNE fois). Borné pour ne pas fuir en mémoire.
 const processed = new Map(); // tenant -> Set(messageId)
+const inFlight = new Set(); // tenant:channel:messageId -> protection contre deux événements concurrents
+function processedKey(channel, id) { return `${String(channel || '').toUpperCase()}:${String(id || '')}`; }
+function wasProcessed(tenant, id) {
+  const set = processed.get(tenant);
+  return !!(id && set && set.has(id));
+}
 function markProcessed(tenant, id) {
   if (!id) return false; // sans id, on ne peut pas dédupliquer — on laisse passer
   let set = processed.get(tenant);
@@ -188,12 +194,21 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId, 
   const settings = d.settings || await getSettings(tenantId);
   if (!isEnabled(settings, channel)) return { skipped: 'DISABLED' };
   if (!from || !text) return { skipped: 'EMPTY_REPLY' };
-  if (markProcessed(tenantId, messageId)) return { skipped: 'DUPLICATE' };
   if (!d.runtime || typeof d.runtime.sendMessageVerified !== 'function') return { skipped: 'NO_RUNTIME' };
+  // L'identifiant n'est consommé qu'après un résultat terminal. Une panne IA
+  // ou un échec certain d'envoi peut donc être retenté avec le même message ;
+  // deux livraisons simultanées restent bloquées par inFlight.
+  const dedupeId = messageId ? processedKey(channel, messageId) : null;
+  const flightId = dedupeId ? `${sanitizeTenant(tenantId)}:${dedupeId}` : null;
+  if (dedupeId && wasProcessed(tenantId, dedupeId)) return { skipped: 'DUPLICATE' };
+  if (flightId && inFlight.has(flightId)) return { skipped: 'DUPLICATE_IN_FLIGHT' };
+  if (flightId) inFlight.add(flightId);
+  try {
   // Anti-boucle entre assistants : jamais de réponse automatique à un message signé par un assistant, ni à répétition avec un autre compte Cyrus.
   const peer = require('./botSignature').detectPeer({ tenantId, channel, from, text });
   if (peer) {
     try { require('./activityStore').record({ type: 'peer_bot_ignored', action: 'Message venant d’un autre assistant : aucune réponse automatique', status: 'warning', channel, tenant: tenantId, target: from, detail: peer.reason }); } catch (e) { /* non bloquant */ }
+    if (dedupeId) markProcessed(tenantId, dedupeId);
     return { skipped: 'PEER_BOT', reason: peer.reason };
   }
 
@@ -201,19 +216,32 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId, 
 
   // Ancien mode : même limite par client (10 échanges IA/heure) que le moteur Jarvis.
   if (settings.jarvis === false) {
-    return require('./clientLimitGuard').guardExchange(
+    const out = await require('./clientLimitGuard').guardExchange(
       { tenantId, channel, from, senderId, identity: d.identity, name, exchangeId: messageId, isGroup: isGroupChat(channel, from) },
       () => legacyReply({ tenantId, channel, from, name, text }, d),
     );
+    if (dedupeId && terminalOutcome(out)) markProcessed(tenantId, dedupeId);
+    return out;
   }
 
   const debounceMs = d.debounceMs != null ? d.debounceMs : (settings.debounceMs != null ? settings.debounceMs : DEFAULT_DEBOUNCE_MS);
-  return conversationQueue.submit(
+  const out = await conversationQueue.submit(
     `${sanitizeTenant(tenantId)}:${channel}:${from}`,
     { text, messageId, senderId, addressing },
     (items) => processBatch({ tenantId, channel, from, name, items, settings }, d),
     { debounceMs },
   );
+  if (dedupeId && terminalOutcome(out)) markProcessed(tenantId, dedupeId);
+  return out;
+  } finally {
+    if (flightId) inFlight.delete(flightId);
+  }
+}
+
+function terminalOutcome(out) {
+  if (!out) return false;
+  if (out.sent === true || out.status === 'PENDING') return true;
+  return ['NO_ACTION', 'PEER_BOT', 'DISABLED', 'EMPTY_REPLY'].includes(out.skipped);
 }
 
 async function sendAndLog({ tenantId, channel, from, reply }, d) {

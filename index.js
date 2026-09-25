@@ -5983,6 +5983,9 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
       console.error(`autoResponder (tenant "${tenantId}", ${channel}) :`, err.message);
       return { skipped: 'ERROR' };
     });
+    if (autoOut && autoOut.skipped) {
+      try { require('./ai-engine/activityStore').record({ type: 'auto_reply_gate', action: `Répondeur automatique : ${autoOut.skipped}`, status: ['DISABLED', 'DUPLICATE'].includes(autoOut.skipped) ? 'warning' : 'error', channel, tenant: tenantId, target: from, detail: autoOut.reason || autoOut.skipped }); } catch (e) { /* diagnostic non bloquant */ }
+    }
     // Activé (donc pris en charge par l'auto-réponse) : on ne double pas avec
     // les flux legacy. On ne retombe dessus que si l'auto-réponse est DÉSACTIVÉE.
     if (!autoOut || autoOut.skipped !== 'DISABLED') return;
@@ -6259,7 +6262,7 @@ try {
   };
   app.post('/api/communities/groups', requireAccess, upload.single('file'), cmRoute(async (req, tenant) => {
     const b = req.body || {};
-    const input = { channel: cmChannel(req), title: b.title, description: b.description, inviteMessage: b.inviteMessage, text: b.text, defaultCountryCode: b.defaultCountryCode };
+    const input = { channel: cmChannel(req), title: b.title, existingGroupId: b.existingGroupId || b.groupId, groupName: b.groupName, source: b.source, crm: b.crm === 'true' || b.crm === true, crmTag: b.crmTag, memberSourceGroupId: b.memberSourceGroupId, memberSourceGroupName: b.memberSourceGroupName, description: b.description, inviteMessage: b.inviteMessage, text: b.text, defaultCountryCode: b.defaultCountryCode };
     if (req.file) { if (/^image\//.test(req.file.mimetype || '')) input.image = req.file.buffer; else input.file = { buffer: req.file.buffer, name: req.file.originalname, type: req.file.mimetype }; }
     if (b.recipientsId) input.recipientsId = b.recipientsId;
     if (b.timing) { try { input.timing = typeof b.timing === 'string' ? JSON.parse(b.timing) : b.timing; } catch (e) { /* temporisation ignorée si mal formée : les défauts s'appliquent */ } }
@@ -6267,6 +6270,8 @@ try {
   }));
   // Temporisation de la création/alimentation d'un groupe (taille de lot, délais, pauses…) — voir communityService.TIMING_BOUNDS.
   app.get('/api/communities/timing-bounds', requireAccess, (req, res) => res.json({ ok: true, bounds: communityService.TIMING_BOUNDS }));
+  app.get('/api/communities/available-groups', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, groups: await communityService.listExistingGroups(tenant, cmChannel(req), req.query && req.query.subject) })));
+  app.get('/api/communities/recipient-lists', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, lists: await communityService.listRecipientLists(tenant) })));
   app.post('/api/communities/groups/:id/timing', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, group: await communityService.setTiming(tenant, req.params.id, req.body || {}) })));
   app.get('/api/communities/groups', requireAccess, cmRoute(async (req, tenant) => ({ ok: true, groups: await communityService.listJobs(tenant) })));
   app.get('/api/communities/groups/:id', requireAccess, cmRoute(async (req, tenant) => { const g = await communityService.getJob(tenant, req.params.id); if (!g) throw Object.assign(new Error('Groupe introuvable.'), { code: 'NOT_FOUND' }); return { ok: true, group: g }; }));

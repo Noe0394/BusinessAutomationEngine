@@ -294,7 +294,7 @@ async function guard(text, decision, ctx) {
   return { text: null, issue };
 }
 
-function applyState(state, cls, decision, sent, replyText, items, now, deps) {
+function applyState(state, cls, decision, sent, replyText, items, now, deps, recordProcessedIds) {
   const { intent, flags } = cls;
   const prev = state.state;
   state.state = conversationState.nextState(prev, intent, flags);
@@ -328,7 +328,7 @@ function applyState(state, cls, decision, sent, replyText, items, now, deps) {
   }
   state.lastMessage = String(items.map((i) => i.text).join(' ')).slice(0, 120);
   state.lastMessageTs = now;
-  for (const it of items) if (it.messageId) state.processedIds.push(String(it.messageId));
+  if (recordProcessedIds !== false) for (const it of items) if (it.messageId) state.processedIds.push(String(it.messageId));
   state.turns += 1;
 }
 
@@ -392,7 +392,12 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
 
   if (action === 'REPLY') {
     out = await d.send(replyText);
-    sent = !!out && out.status !== 'FAILED';
+    // PENDING signifie qu'aucun accusé réel n'est encore arrivé. Il ne peut
+    // donc ni ouvrir le tour suivant ni marquer l'état métier comme répondu.
+    // Le chemin emotionalCloser rend le brouillon à son appelant pour livraison
+    // dans index.js ; dans ce seul chemin, SUCCESS indique le transfert différé.
+    // Tous les envois directs exigent l'identifiant réel de confirmation.
+    sent = !!out && out.status === 'SUCCESS' && (!!out.confirmationId || d.deferredDelivery === true);
   }
   if (MUTED.has(decision.reason)) {
     // Silence de contexte (humain actif, groupe, boucle) : on ne fait pas évoluer l'état commercial.
@@ -400,7 +405,11 @@ async function handleBatch({ tenantId, channel, from, name, items }, deps) {
     state.recentTs = recentTs.concat(now);
     state.lastMessageTs = now;
   } else {
-    applyState(state, cls, decision, sent, replyText, fresh, now, d);
+    // FAILED est un échec explicite avant confirmation : le même message doit
+    // pouvoir être retraité. PENDING reste dédupliqué car la plateforme a pu
+    // accepter l'envoi sans fournir son identifiant de confirmation.
+    const retryableSendFailure = action === 'REPLY' && !sent && out && out.status === 'FAILED';
+    applyState(state, cls, decision, sent, replyText, fresh, now, d, !retryableSendFailure);
     state.recentTs = recentTs.concat(now).slice(-30);
   }
   await conversationState.save(state);

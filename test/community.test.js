@@ -35,13 +35,15 @@ const customer = (t) => authz.issuePrincipal({ tenant: t, role: 'CUSTOMER', chan
 // ---- faux moteur WhatsApp (mêmes primitives que adapters/whatsappEngineBaileys.js) ---------------------------------------------------
 function fakeWa(opts) {
   const o = Object.assign({ statuses: {}, notOnWa: [], connected: true }, opts || {});
-  const s = { calls: [], dms: [], added: [] };
+  const s = { calls: [], dms: [], added: [], groups: [], participants: {} };
   Object.assign(s, {
     isConnected: () => o.connected,
     checkNumbersOnWhatsApp: async (nums) => nums.map((n) => ({ number: n, exists: !o.notOnWa.includes(n), jid: `${n}@s.whatsapp.net` })),
-    createGroup: async (subject) => { s.calls.push(['create', subject]); return { id: '120363999@g.us', subject }; },
+    getGroupsSummary: async () => s.groups.map((g) => Object.assign({ size: (s.participants[g.id] || []).length }, g)),
+    getGroupParticipants: async (id) => s.participants[id] || [],
+    createGroup: async (subject) => { s.calls.push(['create', subject]); const g = { id: '120363999@g.us', subject, name: subject, isAdmin: true }; s.groups.push(g); s.participants[g.id] = []; return g; },
     setGroupDescription: async () => {},
-    addGroupParticipants: async (gid, nums) => { s.calls.push(['add', nums.slice()]); if (o.floodOn && nums.includes(o.floodOn)) throw new Error('rate-overlimit'); return nums.map((n) => { const st = o.statuses[n] || '200'; if (st === '200') s.added.push(n); return { number: n, status: st }; }); },
+    addGroupParticipants: async (gid, nums) => { s.calls.push(['add', nums.slice()]); if (o.floodOn && nums.includes(o.floodOn)) throw new Error('rate-overlimit'); return nums.map((n) => { const st = o.statuses[n] || '200'; if (st === '200') { s.added.push(n); (s.participants[gid] || (s.participants[gid] = [])).push({ id: `${n}@s.whatsapp.net`, phoneNumber: n }); } return { number: n, status: st }; }); },
     getGroupInviteLink: async () => 'https://chat.whatsapp.com/AbCdEfGhIjKlMnOp',
     sendMessage: async (jid, text) => { s.dms.push({ jid, text }); return { key: { id: 'm' + s.dms.length } }; },
     getInviteInfo: async (code) => { if (code === 'EXPIREDEXPIREDEXPIRED') throw new Error('gone'); return { subject: 'Groupe ' + code.slice(0, 4), size: 120, description: 'desc' }; },
@@ -87,6 +89,24 @@ test('WHATSAPP : liste issue d\'un fichier EXCEL (pipeline contacts existant : n
   assert.deepEqual(wa.added.sort(), ['22670111111', '22670222222']);
 });
 
+test('WHATSAPP : ajoute une liste dédupliquée à un groupe existant réel et confirme les nouveaux membres', async () => {
+  const T = 'tExistingGroup'; const wa = fakeWa(); useWa(wa);
+  const id = '120363123456@g.us';
+  wa.groups.push({ id, name: 'Formation Cuisine', subject: 'Formation Cuisine', isAdmin: true, channel: 'WHATSAPP' });
+  wa.participants[id] = [{ id: '22670000999@s.whatsapp.net', phoneNumber: '22670000999' }];
+  const found = await svc.listExistingGroups(T, 'WHATSAPP');
+  assert.equal(found[0].id, id); assert.equal(found[0].name, 'Formation Cuisine');
+  const job = await svc.addMembersToGroup(T, { channel: 'WHATSAPP', groupName: 'Formation Cuisine', recipients: members(['22670000999', '22670000123', '22670000123']) });
+  await svc.waitFor(job.id);
+  const result = await svc.getJob(T, job.id);
+  assert.equal(result.operation, 'ADD_TO_EXISTING'); assert.equal(result.group.id, id); assert.equal(result.status, 'DONE');
+  assert.equal(result.counts.total, 2); assert.equal(result.counts.duplicate_input, 1); assert.equal(result.counts.already_member, 1);
+  assert.equal(result.counts.added, 1); assert.equal(result.counts.verified_added, 1); assert.equal(result.counts.unverified_added, 0);
+  assert.equal(wa.calls.filter((c) => c[0] === 'create').length, 0, 'aucun groupe parallèle créé');
+  assert.equal(wa.calls.filter((c) => c[0] === 'add').flatMap((c) => c[1]).join(','), '22670000123');
+  await assert.rejects(() => svc.resolveExistingGroup(T, 'WHATSAPP', { groupName: 'Absent' }), (e) => e.code === 'GROUP_NOT_FOUND');
+});
+
 test('WHATSAPP : liste issue d\'un texte collé et d\'une IMAGE (OCR)', async () => {
   const wa = fakeWa(); useWa(wa);
   const j1 = await svc.startGroup('tWa3', { channel: 'WHATSAPP', title: 'Texte', text: 'Awa +226 70 33 33 33\nIssa 22670444444' });
@@ -107,7 +127,7 @@ test('WHATSAPP : limitation de débit → PAUSE automatique (jamais d\'insistanc
   assert.equal(r.status, 'PAUSED_RATE_LIMIT'); assert.match(r.error, /reprise possible/);
   assert.equal(r.counts.added, 3, 'le premier lot est passé'); assert.equal(r.counts.pending, 3, 'les autres attendent : contexte conservé');
   const callsAtPause = wa.calls.length;
-  wa.addGroupParticipants = async (gid, nums) => nums.map((n) => { wa.added.push(n); return { number: n, status: '200' }; }); // la limitation est levée
+  wa.addGroupParticipants = async (gid, nums) => nums.map((n) => { wa.added.push(n); (wa.participants[gid] || (wa.participants[gid] = [])).push({ id: `${n}@s.whatsapp.net`, phoneNumber: n }); return { number: n, status: '200' }; }); // limitation levée, membres reflétés par le groupe simulé
   const resumed = await svc.resumeJob(T, job.id); await svc.waitFor(resumed.id);
   r = await svc.getJob(T, job.id);
   assert.equal(r.status, 'DONE'); assert.equal(r.counts.added, 6);
@@ -145,6 +165,7 @@ test('TELEGRAM : ajout direct ; USER_PRIVACY_RESTRICTED / missingInvitees → li
     resolveRecipient: async (id) => { if (id === '+22670999999') throw new Error('RECIPIENT_NOT_FOUND'); return { id: 100n + BigInt(String(id).length), ident: id }; },
     createCommunityGroup: async () => ({ id: '555', entity: { id: 555n, accessHash: 9007199254740993n } }),
     getGroupEntity: async (id) => ({ id: BigInt(id) }),
+    getGroupMembers: async () => invited.map((ident) => ({ id: String(100 + String(ident).length), username: ident.startsWith('@') ? ident.slice(1) : null, phone: ident.replace(/\D/g, '') })),
     inviteUserToGroup: async (g, u) => {
       if (u.ident === '+22670000002') throw Object.assign(new Error('x'), { errorMessage: 'USER_PRIVACY_RESTRICTED' });
       if (u.ident === '@prive') return { added: false, privacyRestricted: true };
@@ -211,6 +232,51 @@ test('SYNCHRONISATION CRM : communautés enregistrées dans la base CRM, SÉPAR�
 });
 
 // ============================================================================ Chat intelligent / Tool Registry
+test('Tool de fonctionnalité enregistré dynamiquement est découvert et appelé par le routeur générique', async () => {
+  const toolName = 'renderVpsCapabilityProbe'; let executions = 0; let llmCalls = 0;
+  const toolDefinition = {
+    feature: 'test-vps-feature', capabilities: ['export', 'natural-language'], description: 'Exporte un rapport de test réellement disponible.',
+    permission: null, risk: 'LOW_WRITE', inputSchema: {},
+    async execute() { executions += 1; return { ok: true, result: { reportId: 'real-report-1' } }; },
+    async verify(result) { return { verified: result.reportId === 'real-report-1' }; },
+  };
+  toolRegistry.registerTool(toolName, toolDefinition);
+  assert.equal(toolRegistry.registerTool(toolName, toolDefinition), toolName, 'un rechargement idempotent ne duplique pas le tool');
+  const described = toolRegistry.describe();
+  assert.ok(described.length >= 100, 'le registre expose les tools hérités réellement présents');
+  assert.ok(described.every((t) => t.feature && t.capabilities.length), 'tous les tools hérités ont un domaine et des capacités exposés');
+  const llm = async (prompt) => {
+    if (prompt.includes('Réponds UNIQUEMENT en JSON')) {
+      llmCalls += 1;
+      return llmCalls === 1 ? JSON.stringify({ tool: toolName, args: {} }) : JSON.stringify({ done: true });
+    }
+    return 'Le rapport réel a été exporté.';
+  };
+  const result = await authz.runAs(owner('tDynamicTool'), () => chatOrchestrator.handle(
+    { text: 'Exporte mes rapports de test', tenantId: 'tDynamicTool', sessionId: 'dynamic-tool' }, { llm },
+  ));
+  assert.equal(executions, 1); assert.equal(result.toolCall.name, toolName); assert.equal(result.toolCall.state, 'SUCCESS');
+  assert.ok(toolRegistry.describe().find((t) => t.name === toolName).capabilities.includes('natural-language'));
+});
+
+test('un nouveau module tool-modules est découvert automatiquement et supporte le rechargement', () => {
+  const dir = path.join(__dirname, '..', 'ai-engine', 'tool-modules');
+  const file = path.join(dir, 'renderNaturalLanguageDiscovery.js');
+  const hadDir = fs.existsSync(dir);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, "module.exports = { renderLoadedFeatureProbe: { feature: 'test-discovery', capabilities: ['natural-language'], description: 'Probe de découverte automatique.', execute: async () => ({ ok: true, result: { discovered: true } }) } };\n");
+  try {
+    toolRegistry.loadToolModules();
+    toolRegistry.loadToolModules();
+    const meta = toolRegistry.describe().find((t) => t.name === 'renderLoadedFeatureProbe');
+    assert.ok(meta); assert.equal(meta.feature, 'test-discovery'); assert.deepEqual(meta.capabilities, ['natural-language']);
+  } finally {
+    delete require.cache[require.resolve(file)];
+    fs.rmSync(file, { force: true });
+    if (!hadDir) fs.rmdirSync(dir);
+  }
+});
+
 test('TOOL REGISTRY : createCommunityGroup — identité obligatoire, rôle client refusé, tour teinté (fichier) → confirmation, puis exécution vérifiée', async () => {
   const T = 'tTool1'; const wa = fakeWa(); useWa(wa);
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Nom', 'Telephone'], ['Awa', '22670777001'], ['Issa', '22670777002']]), 'S');

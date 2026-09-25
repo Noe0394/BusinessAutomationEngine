@@ -19,6 +19,8 @@ const messageHistory = require('./messageHistory');
 const knowledgeBase = require('./knowledgeBase');
 const chatUploads = require('./chatUploads');
 const authz = require('./authz');
+const fs = require('fs');
+const path = require('path');
 
 // Niveaux de risque : l'utilisateur donne l'ordre, Cyrus l'exécute. Une confirmation n'est demandée QUE si elle est
 // explicitement configurée (ctx.confirmFrom ou JARVIS_CONFIRM_FROM = premier niveau exigeant une confirmation).
@@ -435,14 +437,87 @@ const TOOLS = {
 // Outils étendus (contacts, campagnes, file, CRM, diagnostic, notifications) — voir toolsExtra.js
 for (const [name, tool] of Object.entries(require('./toolsExtra').TOOLS)) TOOLS[name] = Object.assign({ resultSchema: {}, errorSchema: { code: 'string' } }, tool);
 
+// Outils de fonctionnalités extensibles : un module placé dans tool-modules/ et
+// exportant { TOOLS } est découvert au démarrage, sans modification du routeur
+// Chat/WhatsApp/Telegram. Chaque entrée garde le même contrat et les mêmes
+// contrôles d'identité, de permissions, d'exécution et de vérification.
+const registeredSources = new Map();
+function registerTool(name, tool, opts) {
+  const key = String(name || '').trim();
+  if (!/^[A-Za-z][A-Za-z0-9_]{1,79}$/.test(key) || !tool || typeof tool !== 'object'
+      || typeof tool.description !== 'string' || typeof tool.execute !== 'function'
+      || typeof tool.feature !== 'string' || !tool.feature.trim()
+      || !Array.isArray(tool.capabilities) || !tool.capabilities.length || tool.capabilities.some((c) => typeof c !== 'string' || !c.trim())) {
+    throw new TypeError('Un tool exige un nom, une description, feature, capabilities et execute(args, ctx).');
+  }
+  // Recharger le catalogue (tests, supervision, hot reload) avec le même module
+  // ne doit pas faire échouer le démarrage ni enregistrer deux fois un outil.
+  if (TOOLS[key] && registeredSources.get(key) === tool && !(opts && opts.replace === true)) return key;
+  if (TOOLS[key] && !(opts && opts.replace === true)) throw new Error(`Tool déjà enregistré : ${key}`);
+  TOOLS[key] = Object.assign({ resultSchema: {}, errorSchema: { code: 'string' } }, tool);
+  registeredSources.set(key, tool);
+  return key;
+}
+function loadToolModules() {
+  const dir = path.join(__dirname, 'tool-modules');
+  if (!fs.existsSync(dir)) return;
+  for (const file of fs.readdirSync(dir).filter((f) => /^[A-Za-z0-9_-]+\.js$/.test(f)).sort()) {
+    const mod = require(path.join(dir, file));
+    const entries = mod && mod.TOOLS ? mod.TOOLS : mod;
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries)) throw new TypeError(`Module tool invalide : ${file}`);
+    for (const [name, tool] of Object.entries(entries)) registerTool(name, tool);
+  }
+}
+loadToolModules();
+
 // --------------------------------------------------------------------------
 // API publique
 // --------------------------------------------------------------------------
 function describe() {
   return Object.entries(TOOLS).map(([name, t]) => ({
-    name, description: t.description, permission: t.permission || null, risk: t.risk || 'READ',
+    name, description: t.description, feature: t.feature || inferredFeature(name), capabilities: t.capabilities && t.capabilities.length ? t.capabilities : inferredCapabilities(name), permission: t.permission || null, risk: t.risk || 'READ',
     inputSchema: t.inputSchema || {}, resultSchema: t.resultSchema || {}, errorSchema: t.errorSchema || {},
   }));
+}
+
+// Les outils historiques restent utilisables sans réécriture de leurs moteurs.
+// Leur domaine et verbes sont exposés au routeur à partir du nom jusqu'à ce que
+// leur auteur ajoute des métadonnées explicites. Les nouveaux modules, eux,
+// doivent fournir feature/capabilities dans registerTool().
+function inferredFeature(name) {
+  const n = String(name || '').toLowerCase();
+  if (/community|communit|group/.test(n)) return 'communities';
+  if (/campaign|followup|relance/.test(n)) return 'campaigns_followups';
+  if (/contact|recipient|phone|customer/.test(n)) return 'contacts_crm';
+  if (/conversation|message|reply/.test(n)) return 'conversations_messaging';
+  if (/autoreply|auto.?responder|policy|automation|task|queue/.test(n)) return 'automation_operations';
+  if (/media|image|video|ebook|course|studio/.test(n)) return 'media_content';
+  if (/notification/.test(n)) return 'notifications';
+  if (/report|activity|statistics|analyze/.test(n)) return 'reports_analytics';
+  if (/facebook|adcampaign/.test(n)) return 'facebook_marketing';
+  if (/businessservice|productprice|businesscontext|order|sav|specialist/.test(n)) return 'business_services';
+  if (/documentation|capabilities|systemstatus/.test(n)) return 'help_system';
+  return 'general_operations';
+}
+
+function inferredCapabilities(name) {
+  const n = String(name || '').toLowerCase();
+  const caps = [];
+  const verbs = [
+    [/^(list|search|find|query|count|describe|get|why|explain|monitor|analyze|validate|normalize|deduplicate|parse|extract|segment|discover|followupcandidates|planfollowup)/, 'read'],
+    [/^(create|configure|set|update|tag|link|attach|record|promote|resolve|open|ingest|restore|mark)/, 'manage'],
+    [/^(send|broadcast)/, 'send'],
+    [/^(import)/, 'import'], [/^(export)/, 'export'],
+    [/^(generate)/, 'generate'], [/^(prepare)/, 'prepare'],
+    [/^(pause|resume|cancel|stop|schedule|launch|play)/, 'control'],
+    [/^(delete|unlink)/, 'delete'],
+  ];
+  for (const [re, capability] of verbs) if (re.test(n)) caps.push(capability);
+  if (/status|progress|report/.test(n) && !caps.includes('read')) caps.push('read');
+  if (/status/.test(n)) caps.push('status');
+  if (/report/.test(n)) caps.push('report');
+  if (!caps.length) caps.push('execute');
+  return [...new Set(caps)];
 }
 
 // Liste des outils réellement UTILISABLES pour ce contexte (permissions).
@@ -584,4 +659,4 @@ async function prepare(tenant, name, args, ctx) {
   return { state: 'PREPARED', risk: tool.risk, needsConfirmation: needsConfirmation(tool.risk, fullCtx), prepared };
 }
 
-module.exports = { STATE, RISK, TOOLS, describe, list, execute, prepare, runChain, needsConfirmation };
+module.exports = { STATE, RISK, TOOLS, describe, list, execute, prepare, runChain, needsConfirmation, registerTool, loadToolModules };

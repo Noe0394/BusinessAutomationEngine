@@ -11,6 +11,13 @@ process.env.GITHUB_TOKEN = ''; process.env.GEMINI_API_KEY = 'test-key';
 require('./helpers/auth').actAsAdmin();
 const orch = require('../ai-engine/chatOrchestrator');
 const waManager = require('../adapters/whatsappManager');
+const useGroups = (groups, linkOf) => {
+  waManager.getOrCreate = () => ({ session: {
+    isConnected: () => true,
+    getGroupsSummary: async () => groups,
+    getGroupInviteLink: async (id) => linkOf ? linkOf(id) : null,
+  } });
+};
 
 function fakeRuntime(groups, linkOf) {
   return { actionExecutor: { execute: async (type) => (type === 'LIST_GROUPS' ? { ok: true, result: { connected: true, groups } } : { ok: false, error: 'X' }) } };
@@ -18,7 +25,9 @@ function fakeRuntime(groups, linkOf) {
 
 test('« Cherche le groupe Épicerie » : intention groups (pas la découverte publique), noms RÉELS, plusieurs résultats possibles', async () => {
   const groups = [{ id: '1@g.us', name: 'Épicerie Awa', size: 40, isAdmin: true }, { id: '2@g.us', name: 'Épicerie Nord', size: 12, isAdmin: false }, { id: '3@g.us', name: 'Foot entre amis', size: 8, isAdmin: false }];
+  useGroups(groups);
   assert.equal(orch.detectIntent('Cherche le groupe Épicerie'), 'groups');
+  assert.equal(orch.detectIntent('Envoie-moi la liste de mes groupes sur WhatsApp'), 'groups');
   assert.notEqual(orch.detectIntent('Cherche le groupe Épicerie'), 'community');
   const r = await orch.handleGroups ? null : null; // handleGroups n'est pas exporté ; on passe par handle()
   const out = await orch.handle({ text: 'Cherche le groupe Épicerie', history: [], tenantId: 'gs1', sessionId: 's' }, { runtime: fakeRuntime(groups) });
@@ -28,24 +37,23 @@ test('« Cherche le groupe Épicerie » : intention groups (pas la découverte p
 
 test('Aucun résultat : message clair, jamais un lien inventé', async () => {
   const groups = [{ id: '1@g.us', name: 'Foot entre amis', size: 8, isAdmin: false }];
+  useGroups(groups);
   const out = await orch.handle({ text: 'Cherche le groupe Boulangerie', history: [], tenantId: 'gs2', sessionId: 's' }, { runtime: fakeRuntime(groups) });
   assert.match(out.text, /Aucun groupe WhatsApp ne correspond à « Boulangerie »/); assert.doesNotMatch(out.text, /https?:\/\//);
 });
 
 test('Recherche « mes groupes contenant X » (mission §17) fonctionne toujours', async () => {
   const groups = [{ id: '1@g.us', name: 'Épicerie Awa', size: 40, isAdmin: true }];
+  useGroups(groups);
   const out = await orch.handle({ text: 'Cherche mes groupes contenant Épicerie', history: [], tenantId: 'gs3', sessionId: 's' }, { runtime: fakeRuntime(groups) });
   assert.match(out.text, /Épicerie Awa/);
 });
 
 test('Lien réel joint quand WhatsApp le fournit (recherche ciblée, peu de résultats) ; jamais fabriqué si absent', async () => {
   const groups = [{ id: '1@g.us', name: 'Épicerie Awa', size: 40, isAdmin: true }];
-  const orig = waManager.getOrCreate;
-  waManager.getOrCreate = () => ({ session: { getGroupInviteLink: async (id) => (id === '1@g.us' ? 'https://chat.whatsapp.com/REALCODE123' : null) } });
-  try {
-    const out = await orch.handle({ text: 'Cherche le groupe Épicerie', history: [], tenantId: 'gs4', sessionId: 's' }, { runtime: fakeRuntime(groups) });
-    assert.match(out.text, /https:\/\/chat\.whatsapp\.com\/REALCODE123/);
-  } finally { waManager.getOrCreate = orig; }
+  useGroups(groups, (id) => (id === '1@g.us' ? 'https://chat.whatsapp.com/REALCODE123' : null));
+  const out = await orch.handle({ text: 'Cherche le groupe Épicerie', history: [], tenantId: 'gs4', sessionId: 's' }, { runtime: fakeRuntime(groups) });
+  assert.match(out.text, /https:\/\/chat\.whatsapp\.com\/REALCODE123/);
 });
 
 test('Discovery PUBLIQUE (communityDiscovery) reste distincte : « cherche des groupes publics sur la formation » ne cherche PAS mes propres groupes', () => {
@@ -64,6 +72,7 @@ test('COMMUNITY DISCOVERY — Telegram/WhatsApp : jamais un JID/LID présenté c
 // dans l'onglet Communautés du dashboard, pas seulement accessible en discutant avec l'IA).
 test('searchMyGroups() : données structurées réutilisables par la route HTTP du dashboard (filtre admin, sujet, non connecté, moteur absent)', async () => {
   const groups = [{ id: '1@g.us', name: 'Épicerie Awa', size: 40, isAdmin: true }, { id: '2@g.us', name: 'Foot entre amis', size: 8, isAdmin: false }];
+  useGroups(groups);
   const deps = { runtime: fakeRuntime(groups) };
   const all = await orch.searchMyGroups('WHATSAPP', {}, 'gs5', deps);
   assert.equal(all.ok, true); assert.equal(all.connected, true); assert.equal(all.matched, 2);
