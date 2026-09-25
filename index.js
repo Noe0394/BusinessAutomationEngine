@@ -5317,7 +5317,14 @@ app.post('/api/admin/diag/assistant-check', requireAccess, async (req, res) => {
     const settings = await autoResponder.getSettings(tenantId);
     out.settings = { whatsapp: !!settings.whatsapp, telegram: !!settings.telegram, alwaysOn: !!settings.alwaysOn, ownerChannelEnabled: require('./ai-engine/ownerChannel').isEnabled(settings) };
     const svcs = await require('./ai-engine/businessServices').list(tenantId);
-    out.services = svcs.map((s) => ({ name: s.name, hasPrice: !!(s.commercial && s.commercial.price != null), hasPaymentTerms: !!(s.commercial && s.commercial.paymentTerms), adCampaigns: (s.adCampaigns || []).length }));
+    out.services = svcs.map((s) => {
+      const products = Array.isArray(s.products) ? s.products : [];
+      const productsWithPrice = products.filter((p) => p && typeof p === 'object' && p.price != null).length;
+      const servicePrice = s.commercial && s.commercial.price != null;
+      return { name: s.name, hasPrice: !!servicePrice || productsWithPrice > 0,
+        productCount: products.length, productsWithPrice,
+        hasPaymentTerms: !!(s.commercial && s.commercial.paymentTerms), adCampaigns: (s.adCampaigns || []).length };
+    });
     out.groupCampaigns = (await groupCampaigns.list(tenantId)).map((c) => ({ name: c.name, status: c.status, groups: c.groups.length }));
     // Connexions IA (noms de fournisseurs seulement, jamais de clé) : ordre effectif par niveau ; « missingStrongModels » = clés à ajouter.
     out.ai = llmFallbackEngine.getProviderStatus();

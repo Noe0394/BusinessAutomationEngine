@@ -27,6 +27,13 @@ test('mission complexe : un appel de planification puis outils déterministes v�
     ],
     commercial: { currency: 'FCFA' },
   });
+  const catalog = await authz.runAs(principal, () => registry.execute(TENANT, 'getBusinessServices', {}, { principal, permissions: [] }));
+  const configuredOffer = catalog.result.services.find((service) => service.name === 'Cuisine');
+  assert.equal(configuredOffer.hasConfiguredPrice, true);
+  assert.deepEqual(configuredOffer.products, [
+    { name: 'Formation Cuisine', price: 12500 },
+    { name: 'Formation Pâtisserie', price: 18000 },
+  ]);
   let aiCalls = 0;
   const llm = async () => {
     aiCalls += 1;

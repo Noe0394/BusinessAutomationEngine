@@ -15,6 +15,10 @@ Ces numéros sont réservés aux tests de messagerie individuels. Chaque essai d
 limité au scénario annoncé et documenté avec l'identifiant réel de remise. Ne pas les inclure dans
 une campagne ou un groupe.
 
+## État actuel du compte de test
+
+Au **25 septembre 2026**, le propriétaire indique que le compte `KEY-B4403774-2026` est actuellement vide pour les essais. Il précise que le Service Métier **RIEA Afrique** possède bien des prix configurés. Le diagnostic Render confirme les sessions WhatsApp et Telegram connectées/appairées et le répondeur activé sur les deux canaux. Sa première vérification de prix ne regardait que `commercial.price` et ignorait les tarifs des produits (`products[].price`); son résultat « aucun prix » était donc incomplet. Le diagnostic a été corrigé pour compter les deux formes de prix. Aucun message client entrant réel n'a encore permis de valider la réponse tarifaire de bout en bout. Le diagnostic n'a pas inventorié les contacts ou les campagnes; leur absence n'est pas affirmée ici.
+
 ## Prérequis (une seule fois, données mobiles : regrouper)
 1. Vérifier que le commit testé est déployé sur Render (`https://business-automation-engine.onrender.com/health`) et utiliser exclusivement la licence `KEY-B4403774-2026`.
 2. Activer l'auto-réponse du compte de test (WhatsApp et/ou Telegram) dans les réglages, avec un Service Métier ayant **un prix configuré et aucune date de session**.

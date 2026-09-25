@@ -62,16 +62,25 @@ const TOOLS = {
     permission: null,
     risk: 'READ',
     inputSchema: {},
-    resultSchema: { services: 'array<{id,name,type,price,connected}>' },
+    resultSchema: { services: 'array<{id,name,type,price,hasConfiguredPrice,products:[{name,price}],connected}>' },
     errorSchema: { code: 'string' },
     async execute(args, ctx) {
       const services = await businessServices.list(ctx.tenant);
-      return { ok: true, result: { count: services.length, services: services.map((s) => ({
-        id: s.id, name: s.name, type: s.type,
-        price: s.commercial && s.commercial.price != null ? s.commercial.price : null,
-        currency: (s.commercial && s.commercial.currency) || null,
-        connected: s.status === 'CONNECTED',
-      })) } };
+      return { ok: true, result: { count: services.length, services: services.map((s) => {
+        const products = (Array.isArray(s.products) ? s.products : []).map((p) => ({
+          name: p && typeof p === 'object' ? (p.name || null) : String(p || ''),
+          price: p && typeof p === 'object' && p.price != null ? p.price : null,
+        }));
+        const servicePrice = s.commercial && s.commercial.price != null ? s.commercial.price : null;
+        return {
+          id: s.id, name: s.name, type: s.type,
+          price: servicePrice,
+          hasConfiguredPrice: servicePrice != null || products.some((p) => p.price != null),
+          products,
+          currency: (s.commercial && s.commercial.currency) || null,
+          connected: s.status === 'CONNECTED',
+        };
+      }) } };
     },
   },
 
