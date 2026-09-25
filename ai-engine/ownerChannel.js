@@ -92,6 +92,16 @@ async function sendToSelf(tenantId, session, text, to) {
   return { ok: true, messageId: sentId(res), to: dest };
 }
 
+async function sendToSelfTelegram(tenantId, session, text) {
+  if (!session || typeof session.getSelfId !== 'function' || typeof session.sendMessage !== 'function') return { ok: false, error: 'SELF_ID_UNKNOWN' };
+  const dest = await session.getSelfId();
+  if (!dest) return { ok: false, error: 'SELF_ID_UNKNOWN' };
+  const out = String(text).slice(0, 3800) + MARK;
+  rememberSent(sanitize(tenantId), out);
+  const res = await session.sendMessage(String(dest), out);
+  return { ok: true, messageId: res && res.id != null ? String(res.id) : null, to: String(dest) };
+}
+
 // Livreur d'alertes pour alertCenter : WhatsApp du propriétaire, seulement si la session est réellement active.
 function whatsappDeliverer({ peek, getSettings }) {
   return async (tenantId, text) => {
@@ -335,4 +345,4 @@ async function handleOwnerMessage(input, deps) {
   return next;
 }
 
-module.exports = { MARK, SESSION_TITLE, handleOwnerMessage, whatsappDeliverer, studioChatDeliverer, isEnabled, isConfiguredOwner, sendToSelf, extractText, quotedId, ADAPTERS, _test: { seen, rate, lastSent } };
+module.exports = { MARK, SESSION_TITLE, handleOwnerMessage, whatsappDeliverer, studioChatDeliverer, isEnabled, isConfiguredOwner, sendToSelf, sendToSelfTelegram, extractText, quotedId, ADAPTERS, _test: { seen, rate, lastSent } };

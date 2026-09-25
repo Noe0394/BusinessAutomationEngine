@@ -528,6 +528,7 @@ function list(ctx) {
   const principal = (ctx && ctx.principal) || authz.currentPrincipal();
   if (!authz.isPrincipal(principal)) return [];
   return describe()
+    .filter((t) => !TOOLS[t.name].directOnly)
     .filter((t) => authz.authorizeTool({ tool: TOOLS[t.name], toolName: t.name, tenant: principal.tenant, principal }).allowed)
     // Masquer dès le catalogue les outils dont le module n'est pas attribué;
     // le même contrôle est répété à l'exécution pour bloquer toute tentative
@@ -569,6 +570,10 @@ async function _execute(tenant, name, args, ctx) {
   call.risk = tool.risk || 'READ'; // nature de l'outil, exposée à ceux qui doivent savoir si une action d'ÉCRITURE a réellement eu lieu
   const fullCtx = Object.assign({ tenant }, ctx || {});
   const done = (extra) => Object.assign(call, extra, { finishedAt: new Date().toISOString() });
+
+  // Secrets d'authentification et codes d'appairage ne peuvent être appelés
+  // que par le routeur direct, même si un autre chemin connaît leur nom.
+  if (tool.directOnly && fullCtx.direct !== true) return done({ state: STATE.BLOCKED, error: { code: 'DIRECT_ROUTE_REQUIRED', message: 'Cet outil doit être appelé par le routage direct sécurisé.' } });
 
   // 1) AUTHENTIFIER + 2) AUTORISER (deny-by-default) : le principal vient du contexte serveur (jamais d'un argument, jamais
   //    du LLM) ; le rôle doit figurer dans les rôles de l'outil ; un compte n'opère que sur lui-même.

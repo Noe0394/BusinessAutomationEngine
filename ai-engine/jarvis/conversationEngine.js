@@ -140,7 +140,10 @@ function decide(state, cls, ctx) {
   if (c.engagement && d.action === 'REPLY') {
     const e = c.engagement;
     d.directives = d.directives.concat(e.directives || []);
-    if (['NATURAL', 'NATURAL_CONTINUITY'].includes(e.register) && !['CLOSE', 'SUPPORT'].includes(d.kind)) d.noPromo = true;
+    // A natural register prevents Cyrus from inserting unsolicited selling
+    // language. It must not suppress an answer the customer explicitly asked
+    // for (price, payment, delivery, dates, offer details, etc.).
+    if (['NATURAL', 'NATURAL_CONTINUITY'].includes(e.register) && !commercial && !['CLOSE', 'SUPPORT'].includes(d.kind)) d.noPromo = true;
     d.engagement = { code: e.code, why: e.why, register: e.register };
   }
   return d;

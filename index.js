@@ -4607,7 +4607,13 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
   // normale de la conversation. Jamais un prix inventé : voir la même
   // philosophie dans ai-engine/offerClarifier.js.
   const saleIntent = SALE_SUFFIX_RE.test(text);
-  const userMessage = { role: 'user', text, createdAt: new Date().toISOString(), attachment, saleIntent, voiceTranscript };
+  // Les codes et mots de passe Telegram transitent uniquement par le routeur
+  // direct. Leur valeur brute reste disponible à l'exécution de ce tour, mais
+  // n'est jamais conservée dans l'historique du Chat Intelligent.
+  const storedUserText = /^\s*(?:\/telegram-(?:code|password)\b|(?:code|otp)\s*telegram\b)/i.test(text)
+    ? '[identifiant Telegram masqué]'
+    : text;
+  const userMessage = { role: 'user', text: storedUserText, createdAt: new Date().toISOString(), attachment, saleIntent, voiceTranscript };
 
   // BUG CORRIGÉ (constaté en test réel : une conversation de planification
   // affiche/vidéo/livre "perdait le fil" dès la réponse aux questions de
@@ -4668,6 +4674,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
       // jamais depuis la config committée ni la conversation.
       executeOptions: { env: process.env },
       toolContext: buildNaturalToolContext(tenantId),
+      notifyMission: notifyMissionProgress,
       // Génération de visuel à la volée pour "génère une affiche et poste-la
       // dans le groupe X" (voir chatOrchestrator#handleGroupPost). Renvoie un
       // buffer en mémoire, jamais un fichier persistant.
@@ -6130,6 +6137,25 @@ function buildNaturalToolContext(tenantId) {
   };
 }
 
+async function notifyMissionProgress({ tenantId, text, status }) {
+  const out = [];
+  const message = String(text || '').slice(0, 1400);
+  try { await require('./ai-engine/platformOrchestrator').notifyTenantChat(tenantId, message, [{ icon: status === 'error' ? '⚠️' : '🧭', label: 'Avancement mission', status: status === 'error' ? 'error' : 'pending' }]); out.push('chat'); } catch (e) { /* canal optionnel */ }
+  let settings = null;
+  try { settings = await autoResponder.getSettings(tenantId); } catch (e) { /* réglages optionnels */ }
+  const ownerChannel = require('./ai-engine/ownerChannel');
+  if (!ownerChannel.isEnabled(settings)) return out;
+  const wa = whatsappManager.peek(tenantId);
+  if (wa && wa.session && typeof wa.session.sendMessage === 'function' && (!wa.session.isConnected || wa.session.isConnected())) {
+    try { const r = await ownerChannel.sendToSelf(tenantId, wa.session, message); if (r.ok) out.push('whatsapp'); } catch (e) { /* canal non disponible */ }
+  }
+  const tg = telegramManager.peek(tenantId);
+  if (tg && tg.session && typeof tg.session.sendMessage === 'function' && (!tg.session.isConnected || tg.session.isConnected())) {
+    try { const r = await ownerChannel.sendToSelfTelegram(tenantId, tg.session, message); if (r.ok) out.push('telegram'); } catch (e) { /* canal non disponible */ }
+  }
+  return out;
+}
+
 function buildChatDeps(tenantId) {
   return {
     runtime: intelligenceBridge && intelligenceBridge.runtime,
@@ -6147,6 +6173,7 @@ function buildChatDeps(tenantId) {
     },
     executeOptions: { env: process.env },
     toolContext: buildNaturalToolContext(tenantId),
+    notifyMission: notifyMissionProgress,
     generateImage: async (prompt) => {
       const r = await imageAiEngine.generateImage({ prompt: String(prompt || '').slice(0, 600), width: 1024, height: 1024 });
       return { buffer: r.buffer, mimetype: r.mimetype };
@@ -6178,6 +6205,34 @@ const assistant = require('./ai-engine/assistantLayer').create({
   },
 });
 assistant.start();
+
+// Réattache au redémarrage le suivi des missions persistées. Les moteurs de
+// campagne restaurent leur progression eux-mêmes; cette boucle ne rejoue
+// aucune étape métier et ne surveille que les campagnes déjà lancées.
+function restoreObjectiveMissionMonitors() {
+  const missions = require('./ai-engine/missionOrchestrator');
+  const storage = require('./ai-engine/storageAdapter');
+  const authz = require('./ai-engine/authz');
+  const timer = setTimeout(async () => {
+    for (const docId of storage.listIds(missions.NS)) {
+      try {
+        const doc = await storage.get(missions.NS, docId, null);
+        const tenantId = String(doc && doc.tenant || docId);
+        const known = licenses.listLicenses().some((item) => String(item.key || '').trim().toUpperCase() === tenantId.toUpperCase());
+        if (!known && tenantId !== whatsappManager.ADMIN_TENANT_ID && tenantId !== telegramManager.ADMIN_TENANT_ID) continue;
+        const principal = authz.issuePrincipal({ tenant: tenantId, role: 'OWNER', userId: tenantId, channel: 'SYSTEM', via: 'mission_recovery' });
+        await authz.runAs(principal, async () => {
+          const active = await missions.list(tenantId, 50);
+          for (const mission of active.filter((m) => m.state === 'monitoring')) {
+            await missions.recoverMonitoring(tenantId, mission.id, buildChatDeps(tenantId));
+          }
+        });
+      } catch (err) { console.warn('Reprise du suivi de mission impossible :', err.message); }
+    }
+  }, 1500);
+  if (timer.unref) timer.unref();
+}
+restoreObjectiveMissionMonitors();
 
 whatsappManager.setIncomingMessageHandler(handleIncomingCustomerMessage);
 // Mémoire 7 jours : historique WhatsApp, messages rattrapés hors ligne et messages écrits depuis le téléphone.

@@ -339,7 +339,7 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
       currentHint: isGroupChat(channel, from) ? '' : items.map((i) => i.text).join('\n'),
     }).catch(() => ({}))).priority || null,
     // Politique du propriétaire + mémoire 7 jours de CETTE discussion → décision d'engagement (répondre ? registre ? présenter un service ?). Sans réseau ni IA.
-    engagementFn: async ({ cls, state, text: batchText, items: batchItems }) => {
+    engagementFn: typeof d.engagementFn === 'function' ? d.engagementFn : async ({ cls, state, text: batchText, items: batchItems }) => {
       const group = isGroupChat(channel, from);
       const pol = conversationPolicy.resolveFor(conversationPolicy.fromSettings(settings), channel, from, group);
       const ctx = await conversationContext.analyze({ tenant: tenantId, channel, from, isGroup: group, text: batchText, windowDays: pol.windowDays });

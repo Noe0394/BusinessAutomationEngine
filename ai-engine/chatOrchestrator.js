@@ -21,6 +21,7 @@ const actionLedger = require('./actionLedger');
 const conversationRouter = require('./conversationRouter');
 const alertCenter = require('./alertCenter');
 const contactIdentity = require('./contactIdentity');
+const missionOrchestrator = require('./missionOrchestrator');
 
 // CHAT-DRIVEN AGENT ORCHESTRATOR — ai-engine/chatOrchestrator.js
 // ---------------------------------------------------------------------------
@@ -258,6 +259,7 @@ function detectIntent(text, lastAssistantMessage) {
     && !/(?:\blance\w*|\bcr[ée]e\w*|\bprogramme\w*|\bd[ée]marre\w*|\bnouvelle\b)/i.test(text)) return null;
   // Une simple QUESTION d'explication (« comment ça marche », « c'est quoi ») n'est pas un objectif : conversation / agent à outils.
   if (/(?:^|\s)(?:explique\w*|comment\s+(?:ça\s+|ca\s+)?(?:fonctionne|marche)|c['’]?est\s+quoi|qu['’]?est[- ]ce\s+que|[àa]\s+quoi\s+sert)/i.test(text)) return null;
+  if (OBJECTIVE_RE.test(text)) return 'goal';
   if (GOAL_RE.test(text)) return 'goal';
   return null;
 }
@@ -1551,9 +1553,31 @@ async function handle(input, deps) {
 // Demande d'AVIS / d'ANALYSE / de STRATÉGIE du propriétaire (et non un ordre d'exécution) : les spécialistes peuvent y répondre même quand une
 // intention d'action (« goal ») a été détectée. Un ordre d'exécution (envoyer, lancer, programmer…) ne passe jamais par eux.
 const ADVISORY_RE = /(analys|strat[ée]gie|comprend\w*\s+pourquoi|conseill|que penses|[ée]value|diagnostic|optimis|am[ée]lior|d[ée]cortiqu)/i;
+const OBJECTIVE_RE = /(?:\bobjectif\b|\bmission\b|organise\s+(?:tout|la\s+mission)|prends?\s+en\s+charge|fais\s+(?:tout|le\s+nécessaire)|je\s+veux\s+(?:vendre|atteindre|obtenir|réaliser)|aujourd['’]hui[^.]{0,60}\b(?:vendre|atteindre|obtenir)\b|(?:vendre|convertir|inscrire)[^.]{0,35}\b\d+\b)/i;
+
+function isComplexObjective(text) {
+  const value = String(text || '');
+  if (/je\s+veux\s+(?:vendre|atteindre|obtenir|r[eé]aliser)|aujourd['’]hui[^.]{0,60}\b(?:vendre|atteindre|obtenir)\b/i.test(value)
+    && !/\b\d+\b/.test(value) && !/\b(?:objectif|mission)\b|organise\s+(?:tout|la\s+mission)|prends?\s+en\s+charge|fais\s+le\s+n[eé]cessaire/i.test(value)) return false;
+  return OBJECTIVE_RE.test(value);
+}
+
+function missionDeps(d) {
+  return {
+    runtime: d.runtime || null, permissions: d.toolPermissions || undefined,
+    toolContext: d.toolContext || undefined, generateImage: d.generateImage || null,
+    llm: d.objectiveLlm || d.llm || undefined, notifyMission: d.notifyMission || undefined,
+  };
+}
 
 async function handleInner({ text, history, tenantId, sessionId, lastAssistantMessage }, deps) {
   const d = deps || {};
+
+  // Secrets d'authentification des canaux doivent être traités avant toute
+  // résolution de confirmation en attente (même si un mot de passe ressemble
+  // à « oui »/« non »). Ils ne passent jamais dans l'agent ni dans le LLM.
+  const loginResult = await handleDirectLogin(text, tenantId, d);
+  if (loginResult) return loginResult;
 
   // Décision de validation de paiement manuel (Human-in-the-Loop) — un
   // "VALIDER"/"REFUSER" tapé par l'admin dans SON tchat ne correspond à aucune
@@ -1573,6 +1597,22 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
   const confirmed = await agentLoop.resolvePending({ tenantId, sessionId, text }, { ctx: { runtime: d.runtime || null } }).catch(() => null);
   if (confirmed) return confirmed;
 
+  // Une réponse à une question de mission reprend l'état persistant, aussi
+  // depuis un autre canal Self rattaché au même compte.
+  try {
+    const pendingMissions = await missionOrchestrator.list(tenantId, 20);
+    const pending = pendingMissions.find((m) => String(m.sessionId || '') === String(sessionId || '')
+      && ['waiting_input', 'needs_confirmation'].includes(m.state));
+    if (pending) {
+      const freshCommand = isComplexObjective(text) && !/^(?:oui|non|ok|d'accord)\b/i.test(String(text).trim());
+      if (!freshCommand && (pending.state === 'needs_confirmation'
+        ? require('./personaManager').detectAffirmative(text) || require('./personaManager').detectDecline(text)
+        : (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion || !detectIntent(text, null) || detectIntent(text, null) === 'goal'))) {
+        return missionOrchestrator.resume({ tenantId, id: pending.id, answer: text }, missionDeps(d));
+      }
+    }
+  } catch (err) { console.warn('missionOrchestrator continuation:', err.message); }
+
   // « Objectif du mois : 1 000 000 FCFA » : rattaché à la campagne de groupes s'il en existe une (sinon comportement historique).
   if (GROUPGOAL_RE.test(text) && !(lastAssistantMessage && lastAssistantMessage.isPlanningQuestion)) {
     try { if ((await require('./groupCampaigns').list(tenantId)).length) return handleGroupCampaign(text, history, tenantId, d, lastAssistantMessage); } catch (e) { /* repli */ }
@@ -1580,6 +1620,9 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
 
   const intent = detectIntent(text, lastAssistantMessage);
   if (!intent && isQuickChat(text)) return null; // conversation courante : réponse directe (voir isQuickChat)
+  if (intent === 'goal' && isComplexObjective(text) && !ADVISORY_RE.test(String(text))) {
+    return missionOrchestrator.start({ text, tenantId, sessionId, channel: (authz.currentPrincipal() || {}).channel }, missionDeps(d));
+  }
   if (intent && intent !== 'community' && intent !== 'groups' && ACTION_RE.test(text)) {
     const genericAgent = await agentLoop.runAgentLoop(
       { text, history, tenantId, sessionId },
@@ -1660,6 +1703,43 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
     case 'activityreport': return handleActivityReport(text, tenantId);
     default: return null;
   }
+}
+
+// Les codes Telegram et le code d’appairage WhatsApp sont des secrets
+// d’authentification : ils passent par un routage direct (sans agent/LLM).
+async function handleDirectLogin(text, tenantId, deps) {
+  const value = String(text || '').trim();
+  const p = authz.currentPrincipal();
+  const ctx = Object.assign({}, deps.toolContext || {}, { tenant: tenantId, principal: p,
+    runtime: deps.runtime || null, permissions: deps.toolPermissions || ['messages:send'], confirmed: true, direct: true });
+  const pairRequested = /whats?app/i.test(value) && /(?:connect|reconnect|appair|associe|lier)/i.test(value);
+  if (pairRequested) {
+    const digits = (value.match(/\+?\d[\d\s().-]{7,}/) || [])[0];
+    if (!digits) return { text: 'Indiquez le numéro international à appairer, par exemple +226…', isPlanningQuestion: true, intent: 'channel_login' };
+    const call = await toolRegistry.execute(tenantId, 'startWhatsAppPairing', { phoneNumber: digits }, ctx);
+    if (call.state !== 'SUCCESS') return { text: 'Je n’ai pas pu demander le code WhatsApp (' + ((call.error && call.error.code) || call.state) + '). ' + ((call.error && call.error.message) || ''), intent: 'channel_login', toolCall: { name: 'startWhatsAppPairing', state: call.state } };
+    const code = call.result.pairingCode;
+    return { text: 'Code d’appairage WhatsApp pour le numéro indiqué : ' + code + '. Saisissez-le dans WhatsApp sur le téléphone à lier.', intent: 'channel_login', toolCall: { name: 'startWhatsAppPairing', state: call.state, result: { state: call.result.state, phoneNumber: call.result.phoneNumber } }, actionLog: [{ icon: '📲', label: 'Code d’appairage généré par la session WhatsApp', status: 'done' }] };
+  }
+
+  const codeMatch = value.match(/^(?:\/telegram-code|(?:code|otp)\s*(?:telegram)?)[\s:=_-]*(\d{4,8})$/i);
+  const passMatch = value.match(/^\/telegram-password\s+([\s\S]{1,200})$/i);
+  if (!codeMatch && !passMatch) return null;
+  const manager = require('../adapters/telegramManager');
+  const entry = manager.peek(tenantId);
+  const session = entry && entry.session;
+  const state = session && typeof session.getLoginStep === 'function' ? session.getLoginStep() : 'missing';
+  if (!session || state === 'missing' || state === 'pending' || state === 'connected') {
+    return { text: 'Aucune authentification Telegram n’attend ce code. Je ne l’ai transmis à aucun outil ni modèle.', intent: 'channel_login', actionLog: [{ icon: '🔒', label: 'Code non utilisé', status: 'warning' }] };
+  }
+  if (codeMatch) {
+    if (state !== 'code_required') return { text: 'Telegram n’attend pas un code à cette étape (' + state + '). Utilisez le mot de passe 2FA seulement si Cyrus le demande.', intent: 'channel_login' };
+    const call = await toolRegistry.execute(tenantId, 'submitTelegramLoginCode', { code: codeMatch[1] }, ctx);
+    return { text: call.state === 'SUCCESS' ? (call.result.step === 'connected' ? 'Telegram est connecté.' : call.result.step === 'password_required' ? 'Telegram demande le mot de passe 2FA. Envoyez /telegram-password suivi du mot de passe.' : 'Code Telegram accepté; étape suivante : ' + call.result.step + '.') : 'Telegram n’a pas accepté le code (' + ((call.error && call.error.code) || call.state) + ').', intent: 'channel_login', toolCall: { name: 'submitTelegramLoginCode', state: call.state, result: call.result || null, error: call.error || null }, actionLog: [{ icon: call.state === 'SUCCESS' ? '🔐' : '⚠️', label: 'Code Telegram traité sans appel IA', status: call.state === 'SUCCESS' ? 'done' : 'error' }] };
+  }
+  if (state !== 'password_required') return { text: 'Telegram n’attend pas de mot de passe 2FA à cette étape (' + state + ').', intent: 'channel_login' };
+  const call = await toolRegistry.execute(tenantId, 'submitTelegramLoginPassword', { password: passMatch[1] }, ctx);
+  return { text: call.state === 'SUCCESS' && call.result.step === 'connected' ? 'Telegram est connecté.' : call.state === 'SUCCESS' ? 'Mot de passe accepté; état de connexion : ' + call.result.step + '.' : 'Telegram n’a pas accepté le mot de passe (' + ((call.error && call.error.code) || call.state) + ').', intent: 'channel_login', toolCall: { name: 'submitTelegramLoginPassword', state: call.state, result: call.result || null, error: call.error || null }, actionLog: [{ icon: call.state === 'SUCCESS' ? '🔐' : '⚠️', label: '2FA Telegram traité sans appel IA', status: call.state === 'SUCCESS' ? 'done' : 'error' }] };
 }
 
 module.exports = { detectIntent, isQuickChat, handle, handleOwnerQueue, searchMyGroups };

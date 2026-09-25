@@ -36,6 +36,7 @@ const LOCAL_ONLY_NAMESPACES = new Set([
   'contact_sync_outbox',
   'contact_import_jobs',
   'contact_sync_status',
+  'objective_missions',
   // Numéros de téléphone / clés de clients / contenus de formation : jamais poussés vers le miroir GitHub.
   'community_jobs', 'client_ai_quota', 'course_kb', 'lifecycle', 'improvements', 'guided_setup', 'service_trash',
 ]);

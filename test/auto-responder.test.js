@@ -57,6 +57,26 @@ test('activé -> compose (ancré prix réel) + envoi vérifié', async () => {
   assert.match(rec[0].text, /8000/);
 });
 
+test('question commerciale explicite : le registre naturel ne bloque pas la réponse du Service métier', async () => {
+  const tenant = 'tAutoNaturalPrice'; const sent = [];
+  await businessServices.create(tenant, {
+    name: 'Cuisine', products: [{ name: 'Formation Cuisine et Pâtisserie', price: 12500 }],
+    commercial: { currency: 'FCFA' },
+  });
+  await autoResponder.setSettings(tenant, { whatsapp: true });
+  const out = await autoResponder.handleIncoming({
+    tenantId: tenant, channel: 'WHATSAPP', from: '22600000991', name: 'Test',
+    text: 'Quel est le prix de la Formation Cuisine et Pâtisserie ?', messageId: 'natural-price-1',
+  }, {
+    runtime: fakeRuntime(sent),
+    llm: async () => 'La Formation Cuisine et Pâtisserie coûte 12 500 FCFA.',
+    engagementFn: async () => ({ respond: true, code: 'TEST_NATURAL', why: 'test', register: 'NATURAL', directives: [] }),
+  });
+  assert.equal(out.sent, true, JSON.stringify(out));
+  assert.match(sent[0].text, /12\s?500\s?FCFA/i);
+  assert.doesNotMatch(sent[0].text, /reviens vers vous très vite avec une réponse précise/i);
+});
+
 test('même messageId -> DUPLICATE (pas de double réponse)', async () => {
   const rec = [];
   const out = await autoResponder.handleIncoming(

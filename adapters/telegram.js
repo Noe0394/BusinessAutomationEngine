@@ -634,6 +634,7 @@ function createSession(tenantId) {
   function getLoginError() {
     return loginError ? (loginError.message || String(loginError)) : null;
   }
+  function getLoginStep() { return currentStep(); }
 
   // isAdmin/creator + taille depuis l'entité du dialogue (best-effort : selon
   // le type de groupe/canal, certains champs peuvent manquer — on ne lève
@@ -873,6 +874,7 @@ function createSession(tenantId) {
     onIncomingMessage,
     onOwnerMessage,
     isSavedMessages,
+    getSelfId: ensureSelfId,
     onAccountReset,
     restoreSessionFromRemote,
     getStorageStatus,
@@ -883,6 +885,7 @@ function createSession(tenantId) {
     submitCode,
     submitPassword,
     getLoginError,
+    getLoginStep,
     getGroups,
     getGroupsSummary,
     getGroupMembers,

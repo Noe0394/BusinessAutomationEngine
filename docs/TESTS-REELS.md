@@ -6,6 +6,15 @@
 une autre licence ni créer une autre licence pour ces tests. Les tests unitaires restent isolés,
 avec des moteurs simulés, et ne doivent pas appeler le compte Render.
 
+Destinataires autorisés pour des essais de messagerie individuels (aucun envoi de campagne) :
+
+- WhatsApp : **+22664977093**
+- Telegram : **+22660162093**
+
+Ces numéros sont réservés aux tests de messagerie individuels. Chaque essai doit rester individuel,
+limité au scénario annoncé et documenté avec l'identifiant réel de remise. Ne pas les inclure dans
+une campagne ou un groupe.
+
 ## Prérequis (une seule fois, données mobiles : regrouper)
 1. Vérifier que le commit testé est déployé sur Render (`https://business-automation-engine.onrender.com/health`) et utiliser exclusivement la licence `KEY-B4403774-2026`.
 2. Activer l'auto-réponse du compte de test (WhatsApp et/ou Telegram) dans les réglages, avec un Service Métier ayant **un prix configuré et aucune date de session**.

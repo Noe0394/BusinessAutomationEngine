@@ -157,8 +157,11 @@ function create(d) {
       let title = null;
       if (!id) { id = (await d.aiStudioStore.createSession(tenantId)).id; title = ownerChannel.SESSION_TITLE; }
       const now = new Date().toISOString();
+      const storedUserText = /^\s*(?:\/telegram-(?:code|password)\b|(?:code|otp)\s*telegram\b)/i.test(String(userText || ''))
+        ? '[identifiant Telegram masqué]'
+        : userText;
       await d.aiStudioStore.appendMessages(tenantId, id, [
-        { role: 'user', text: userText, createdAt: now, via: 'whatsapp_owner' },
+        { role: 'user', text: storedUserText, createdAt: now, via: 'whatsapp_owner' },
         { role: 'assistant', text: answer, createdAt: now, via: 'whatsapp_owner' },
       ], title);
     },
@@ -174,8 +177,9 @@ function create(d) {
     // (OWNER, émis par ownerChannel après vérification du self-chat) et la « teinte » du tour (contenu externe) sont transmis tels quels.
     chat: async ({ text, tenantId, history, principal, tainted }) => {
       const last = [...history].reverse().find((m) => m.role === 'assistant') || null;
-      const sid = await ownerSessionId(tenantId);
-      return d.chatOrchestrator.handle({ text, history, tenantId, sessionId: sid || 'owner-whatsapp', lastAssistantMessage: last, principal, tainted: !!tainted }, d.chatDeps(tenantId));
+      // Clé stable : les missions persistantes et confirmations restent
+      // retrouvables après la création du premier historique propriétaire.
+      return d.chatOrchestrator.handle({ text, history, tenantId, sessionId: 'owner-self-chat', lastAssistantMessage: last, principal, tainted: !!tainted }, d.chatDeps(tenantId));
     },
     // Aucune intention/outil applicable : conversation générale, comme le fait l'onglet du tableau de bord.
     // Conversation courante : persona + activité réelle du compte + mémoire récente, UN seul appel (niveau standard de la cascade, doublon parallèle si un modèle est lent).

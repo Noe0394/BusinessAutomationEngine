@@ -10791,6 +10791,12 @@
       const box = document.getElementById('reports-content');
       const rbtn = document.getElementById('reports-refresh');
       if (rbtn && !rbtn.dataset.wired) { rbtn.dataset.wired = '1'; rbtn.addEventListener('click', () => reportsLoad()); }
+      if (!window.__cyrusReportsLiveTimer) {
+        window.__cyrusReportsLiveTimer = window.setInterval(() => {
+          const panel = document.getElementById('panel-reports');
+          if (panel && panel.classList.contains('active')) reportsLoad();
+        }, 8000);
+      }
       reportsLoad();
     }
     async function reportsLoad() {
