@@ -396,7 +396,7 @@ async function verifyKey(key, deviceId) {
     // RE-LIE cette clé au nouvel appareil. Le contrôle strict (403) reste
     // possible via LICENSE_STRICT_DEVICE_BINDING=true. Rien n'est supprimé
     // ni régénéré : la clé elle-même ne change jamais.
-    if (process.env.LICENSE_STRICT_DEVICE_BINDING === 'true') {
+    if (process.env.LICENSE_STRICT_DEVICE_BINDING !== 'false') {
       recordFailure(license.key, 'DEVICE_MISMATCH');
       return { valid: false, reason: 'DEVICE_MISMATCH' };
     }

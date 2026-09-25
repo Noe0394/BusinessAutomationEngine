@@ -17,18 +17,36 @@ const uid = (p) => `${p}_${Date.now().toString(36)}${Math.random().toString(36).
 const chan = (c) => String(c || 'WHATSAPP').toUpperCase();
 const err = (code, message, http) => Object.assign(new Error(message || code), { code, http: http || 400 });
 
+function trustedModules(tenant, allowedModules) {
+  if (allowedModules !== undefined) return allowedModules;
+  const authz = require('./authz');
+  const principal = authz.currentPrincipal();
+  if (!authz.isPrincipal(principal)) return [];
+  if (principal.role === 'ADMIN') return null;
+  return principal.tenant === String(tenant) ? principal.allowedModules : [];
+}
+
 const load = (tenant) => storageAdapter.get('campaign_drafts', sanitize(tenant), { tenant: sanitize(tenant), drafts: {} });
 const save = (tenant, doc) => storageAdapter.setDurable('campaign_drafts', sanitize(tenant), doc);
 
 function requireChannelModule(allowedModules, channel) {
-  if (allowedModules === null || allowedModules === undefined) return;
+  if (allowedModules === null) return;
   const need = channel === 'TELEGRAM' ? 'telegram' : 'whatsapp';
   if (!Array.isArray(allowedModules) || !allowedModules.includes(need)) throw err('MODULE_NOT_ALLOWED', `Votre clé de licence n'inclut pas le module "${need}".`, 403);
 }
 
+function requireAnyCampaignModule(allowedModules) {
+  if (allowedModules === null) return;
+  if (!Array.isArray(allowedModules) || !CHANNELS.some((channel) => allowedModules.includes(channel === 'TELEGRAM' ? 'telegram' : 'whatsapp'))) {
+    throw err('MODULE_NOT_ALLOWED', 'Votre clé de licence ne permet pas l’accès aux campagnes WhatsApp ou Telegram.', 403);
+  }
+}
+
 // Lancement RÉEL : filtre des refus, média éventuel, puis runtime.sendCampaign (moteurs existants).
-async function launchDraft(tenant, draft, runtime) {
+async function launchDraft(tenant, draft, runtime, allowedModules) {
   const fail = (code, message, retryable) => ({ ok: false, error: { code, message: message || code, retryable: !!retryable } });
+  try { requireChannelModule(allowedModules, chan(draft && draft.channel)); }
+  catch (e) { return fail(e.code || 'MODULE_NOT_ALLOWED', e.message, false); }
   if (!runtime || typeof runtime.sendCampaign !== 'function') return fail('RUNTIME_MISSING', 'Moteur de campagne indisponible.');
   const optedOut = await contactCrm.optedOutSet(tenant, draft.channel);
   // Les contacts ayant demandé l'arrêt sont exclus PAR DÉFAUT ; l'utilisateur peut décider de les inclure (includeOptOut).
@@ -69,6 +87,8 @@ async function launchDraft(tenant, draft, runtime) {
 // Sources : text (liste collée / CSV), file { buffer, name, type } (Excel/CSV), image { buffer } (OCR).
 async function prepareRecipients(tenant, src, opts) {
   const o = opts || {};
+  const modules = trustedModules(tenant, o.allowedModules);
+  requireAnyCampaignModule(modules);
   const extractor = require('./contactExtractor');
   let input = null; let uncertainNumbers = []; let source = 'text'; let entries = [];
   if (src.image) {
@@ -98,7 +118,8 @@ async function prepareRecipients(tenant, src, opts) {
   return { recipientsId: id, source, counts, rows: rows.slice(0, 200), usernames };
 }
 
-async function getRecipientsPage(tenant, id, { offset, limit }) {
+async function getRecipientsPage(tenant, id, { offset, limit }, allowedModules) {
+  requireAnyCampaignModule(trustedModules(tenant, allowedModules));
   const d = (await load(tenant)).drafts[id];
   if (!d || d.kind !== 'recipients') throw err('NOT_FOUND', 'Liste de destinataires introuvable.', 404);
   const o = Math.max(0, Number(offset) || 0); const l = Math.min(500, Math.max(1, Number(limit) || 100));
@@ -107,6 +128,7 @@ async function getRecipientsPage(tenant, id, { offset, limit }) {
 
 // ---------------------------------------------------------------- campagnes
 async function createCampaign(tenant, input, allowedModules) {
+  allowedModules = trustedModules(tenant, allowedModules);
   const channel = chan(input.channel);
   if (!CHANNELS.includes(channel)) throw err('INVALID_CHANNEL');
   requireChannelModule(allowedModules, channel);
@@ -131,17 +153,19 @@ async function createCampaign(tenant, input, allowedModules) {
   };
   doc.drafts[id] = draft;
   await save(tenant, doc);
-  if (input.scheduledAt) return schedule(tenant, id, input.scheduledAt);
+  if (input.scheduledAt) return schedule(tenant, id, input.scheduledAt, allowedModules);
   return summaryOf(draft, null);
 }
 
-async function schedule(tenant, id, at) {
+async function schedule(tenant, id, at, allowedModules) {
   const when = new Date(at).getTime();
   if (!Number.isFinite(when)) throw err('INVALID_DATE', 'Date de programmation invalide.');
   if (when < Date.now() - 60000) throw err('DATE_IN_PAST', 'La date de programmation est dans le passé.');
   const doc = await load(tenant);
   const d = doc.drafts[id];
   if (!d || d.kind !== 'campaign') throw err('NOT_FOUND', 'Campagne introuvable.', 404);
+  allowedModules = trustedModules(tenant, allowedModules);
+  requireChannelModule(allowedModules, d.channel);
   if (!['draft', 'scheduled'].includes(d.status)) throw err('INVALID_STATE', 'Cette campagne est déjà lancée ou terminée.', 409);
   const { task, deduplicated } = await taskQueue.enqueue(tenant, { type: 'LAUNCH_CAMPAIGN', payload: { draftId: id }, runAt: when, priority: -10, ref: id, dedupeKey: `launch:${id}` });
   d.status = 'scheduled'; d.scheduledAt = when; d.taskId = task.id;
@@ -150,12 +174,13 @@ async function schedule(tenant, id, at) {
 }
 
 async function launch(tenant, id, runtime, allowedModules) {
+  allowedModules = trustedModules(tenant, allowedModules);
   const doc = await load(tenant);
   const d = doc.drafts[id];
   if (!d || d.kind !== 'campaign') throw err('NOT_FOUND', 'Campagne introuvable.', 404);
   requireChannelModule(allowedModules, d.channel);
   if (!['draft', 'scheduled'].includes(d.status)) throw err('INVALID_STATE', 'Cette campagne est déjà lancée ou terminée.', 409);
-  const out = await launchDraft(tenant, d, runtime);
+  const out = await launchDraft(tenant, d, runtime, allowedModules);
   if (!out.ok) throw err(out.error.code, out.error.message, out.error.code === 'RUNTIME_MISSING' ? 503 : 422);
   // La tâche programmée n'est annulée qu'APRÈS un lancement réussi (sinon la campagne programmée serait perdue).
   if (d.status === 'scheduled' && d.taskId) await taskQueue.cancel(tenant, d.taskId).catch(() => null);
@@ -164,10 +189,12 @@ async function launch(tenant, id, runtime, allowedModules) {
   return summaryOf(d, null);
 }
 
-async function control(tenant, id, action, runtime) {
+async function control(tenant, id, action, runtime, allowedModules, requestedChannel) {
+  allowedModules = trustedModules(tenant, allowedModules);
   const doc = await load(tenant);
   const d = doc.drafts[id];
   const channel = d ? d.channel : null;
+  if (channel) requireChannelModule(allowedModules, channel);
   const engineId = d ? d.engineCampaignId : id;
   if (d && action === 'cancel' && ['draft', 'scheduled'].includes(d.status)) {
     if (d.taskId) await taskQueue.cancel(tenant, d.taskId).catch(() => null);
@@ -179,13 +206,17 @@ async function control(tenant, id, action, runtime) {
   const fn = { pause: 'pauseCampaign', resume: 'resumeCampaign', cancel: 'stopCampaign' }[action];
   if (!runtime || typeof runtime[fn] !== 'function') throw err('RUNTIME_MISSING', 'Moteur de campagne indisponible.', 503);
   let out = null;
-  for (const ch of (channel ? [channel] : CHANNELS)) {
+  const candidateChannels = channel ? [channel] : (requestedChannel ? [chan(requestedChannel)] : CHANNELS.filter((ch) => allowedModules === null || (Array.isArray(allowedModules) && allowedModules.includes(ch === 'TELEGRAM' ? 'telegram' : 'whatsapp'))));
+  if (requestedChannel && !CHANNELS.includes(chan(requestedChannel))) throw err('INVALID_CHANNEL');
+  if (!candidateChannels.length) throw err('MODULE_NOT_ALLOWED', undefined, 403);
+  for (const ch of candidateChannels) {
+    requireChannelModule(allowedModules, ch);
     out = await runtime[fn]({ channel: ch, campaignId: engineId, tenantId: tenant });
     if (out.ok) break;
   }
   if (!out || !out.ok) throw err('ACTION_FAILED', String((out && out.error) || 'échec'), 422);
   if (d && action === 'cancel') { d.status = 'cancelled'; d.cancelledAt = Date.now(); await save(tenant, doc); }
-  return get(tenant, id, runtime, {});
+  return get(tenant, id, runtime, {}, allowedModules);
 }
 
 // ---------------------------------------------------------------- lecture
@@ -201,7 +232,8 @@ function summaryOf(d, live) {
 async function liveStatus(runtime, channel, engineId, tenant) {
   if (!runtime || !runtime.getCampaignStatus || !engineId) return null;
   const out = await runtime.getCampaignStatus({ channel, campaignId: engineId, tenantId: tenant }).catch(() => null);
-  return out && out.ok ? out.result : null;
+  if (!out || !out.ok || !out.result || Array.isArray(out.result.campaigns)) return null;
+  return String(out.result.id || '') === String(engineId) ? out.result : null;
 }
 
 function enrich(base, live, rows) {
@@ -219,12 +251,14 @@ function enrich(base, live, rows) {
   });
 }
 
-async function get(tenant, id, runtime, page) {
+async function get(tenant, id, runtime, page, allowedModules) {
+  allowedModules = trustedModules(tenant, allowedModules);
   const doc = await load(tenant);
   const d = doc.drafts[id];
   const p = page || {};
   const offset = Math.max(0, Number(p.offset) || 0); const limit = Math.min(500, Math.max(1, Number(p.limit) || 100));
   if (d && d.kind === 'campaign') {
+    requireChannelModule(allowedModules, d.channel);
     const base = summaryOf(d, null);
     if (d.status !== 'launched') {
       const rows = d.recipients.map((r, i) => ({ index: i, name: r.nom, number: r.telephone, status: 'pending', lastAttemptAt: null, error: null }));
@@ -243,7 +277,8 @@ async function get(tenant, id, runtime, page) {
     return out;
   }
   // campagne créée depuis un ancien onglet : lecture directe du moteur
-  for (const ch of CHANNELS) {
+  const readableChannels = CHANNELS.filter((ch) => allowedModules === null || (Array.isArray(allowedModules) && allowedModules.includes(ch === 'TELEGRAM' ? 'telegram' : 'whatsapp')));
+  for (const ch of readableChannels) {
     const live = await liveStatus(runtime, ch, id, tenant);
     if (!live) continue;
     const rr = runtime.getCampaignRecipients ? await runtime.getCampaignRecipients({ channel: ch, campaignId: id, tenantId: tenant }) : null;
@@ -256,11 +291,13 @@ async function get(tenant, id, runtime, page) {
   throw err('NOT_FOUND', 'Campagne introuvable.', 404);
 }
 
-async function list(tenant, runtime) {
+async function list(tenant, runtime, allowedModules) {
+  allowedModules = trustedModules(tenant, allowedModules);
+  requireAnyCampaignModule(allowedModules);
   const doc = await load(tenant);
   const out = [];
   const known = new Set();
-  for (const d of Object.values(doc.drafts).filter((x) => x.kind === 'campaign').sort((a, b) => b.createdAt - a.createdAt)) {
+  for (const d of Object.values(doc.drafts).filter((x) => x.kind === 'campaign' && (allowedModules === null || (Array.isArray(allowedModules) && allowedModules.includes(x.channel === 'TELEGRAM' ? 'telegram' : 'whatsapp')))).sort((a, b) => b.createdAt - a.createdAt)) {
     if (d.engineCampaignId) known.add(d.engineCampaignId);
     const base = summaryOf(d, null);
     if (d.status === 'launched') {
@@ -270,7 +307,7 @@ async function list(tenant, runtime) {
     out.push(base);
   }
   if (runtime && runtime.getCampaignStatus) {
-    for (const ch of CHANNELS) {
+    for (const ch of CHANNELS.filter((value) => allowedModules === null || (Array.isArray(allowedModules) && allowedModules.includes(value === 'TELEGRAM' ? 'telegram' : 'whatsapp')))) {
       const r = await runtime.getCampaignStatus({ channel: ch, tenantId: tenant }).catch(() => null);
       for (const c of (r && r.ok ? r.result.campaigns : [])) {
         if (known.has(c.id)) continue;
@@ -281,8 +318,8 @@ async function list(tenant, runtime) {
   return out;
 }
 
-async function report(tenant, id, runtime) {
-  const c = await get(tenant, id, runtime, { limit: 500, offset: 0 });
+async function report(tenant, id, runtime, allowedModules) {
+  const c = await get(tenant, id, runtime, { limit: 500, offset: 0 }, allowedModules);
   const rows = c.recipientRows || [];
   const fbList = await continuity.list(tenant);
   const fb = fbList.find((f) => f.parentCampaignId === (c.engineCampaignId || c.id));

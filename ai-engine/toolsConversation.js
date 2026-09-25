@@ -71,7 +71,7 @@ const TOOLS = {
       }
       const rows = [];
       for (let d = 0; d < 3 && rows.length < 12; d += 1) {
-        const s = await act.summary(new Date(Date.now() - d * DAY).toISOString().slice(0, 10), 300).catch(() => ({ events: [] }));
+        const s = await act.summary(new Date(Date.now() - d * DAY).toISOString().slice(0, 10), 300, ctx.tenant).catch(() => ({ events: [] }));
         for (const e of s.events) if (e.type === 'engagement' && String(e.tenant) === String(ctx.tenant) && (!digits || String(e.target || '').split('@')[0] === digits)) rows.push(e);
       }
       const out = rows.slice(0, 12).map((e) => { const [code, why] = String(e.detail || '').split(' | '); return { when: e.ts, decision: e.action, code: code || null, why: why || null, channel: e.channel }; });

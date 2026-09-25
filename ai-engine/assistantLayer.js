@@ -195,6 +195,11 @@ function create(d) {
       // retrouvables après la création du premier historique propriétaire.
       return d.chatOrchestrator.handle({ text, history, tenantId, sessionId: 'owner-self-chat', lastAssistantMessage: last, principal, tainted: !!tainted }, d.chatDeps(tenantId));
     },
+    getAllowedModules: (tenantId) => {
+      const cd = d.chatDeps(tenantId);
+      const modules = cd && cd.toolContext && cd.toolContext.allowedModules;
+      return Array.isArray(modules) ? modules : (tenantId === '__admin__' ? null : []);
+    },
     // Aucune intention/outil applicable : conversation générale, comme le fait l'onglet du tableau de bord.
     // Conversation courante : persona + activité réelle du compte + mémoire récente, UN seul appel (niveau standard de la cascade, doublon parallèle si un modèle est lent).
     chatFallback: async (text, history, tenantId) => {

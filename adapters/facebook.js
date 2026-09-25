@@ -22,7 +22,9 @@ function readJsonFile(filePath) {
 }
 
 function writeJsonFile(filePath, data) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(filePath, 0o600); } catch (err) { /* ACLs can differ on Windows. */ }
 }
 
 const FACEBOOK_TOKEN_PATH = process.env.FB_TOKEN_PATH || path.join(__dirname, '..', 'facebook_token.json');
@@ -50,13 +52,22 @@ const FACEBOOK_GROUPS_PATH = process.env.FB_GROUPS_PATH || path.join(__dirname, 
  * régulateur de débit côté client pour rester sous les limites de l'API.
  */
 class FacebookMessengerAdapter {
-  constructor() {
+  constructor({ tenantId = '__admin__' } = {}) {
+    this.tenantId = String(tenantId || '__admin__');
+    this.allowEnvToken = this.tenantId === '__admin__';
+    const tenantHash = crypto.createHash('sha256').update(this.tenantId).digest('hex');
+    this.tokenPath = this.allowEnvToken
+      ? FACEBOOK_TOKEN_PATH
+      : path.join(path.dirname(FACEBOOK_TOKEN_PATH), 'tenant-data', tenantHash, 'facebook-token.json');
+    this.groupsPath = this.allowEnvToken
+      ? FACEBOOK_GROUPS_PATH
+      : path.join(path.dirname(FACEBOOK_GROUPS_PATH), 'tenant-data', tenantHash, 'facebook-groups.json');
     this.apiVersion = process.env.FB_GRAPH_API_VERSION || 'v19.0';
     this.baseUrl = `https://graph.facebook.com/${this.apiVersion}`;
     this.pageId = null;
     this.pageName = null;
 
-    if (!process.env.FB_PAGE_ACCESS_TOKEN && !readJsonFile(FACEBOOK_TOKEN_PATH)?.pageAccessToken) {
+    if (!this.getPageAccessToken()) {
       console.warn(
         'Facebook non connecté : utilisez le bouton "Se connecter avec Facebook" dans l\'onglet Connexions ' +
         '(après avoir renseigné l\'App ID/App Secret dans le portail admin, ou via FB_APP_ID/FB_APP_SECRET).',
@@ -85,18 +96,18 @@ class FacebookMessengerAdapter {
   }
 
   getStoredToken() {
-    return readJsonFile(FACEBOOK_TOKEN_PATH);
+    return readJsonFile(this.tokenPath);
   }
 
   getPageAccessToken() {
-    return process.env.FB_PAGE_ACCESS_TOKEN || process.env.FACEBOOK_PAGE_ACCESS_TOKEN
+    return (this.allowEnvToken && (process.env.FB_PAGE_ACCESS_TOKEN || process.env.FACEBOOK_PAGE_ACCESS_TOKEN))
       || this.getStoredToken()?.pageAccessToken || null;
   }
 
   // Voir le commentaire dans handleOAuthCallback : les publications dans des
   // Groupes utilisent ce jeton utilisateur, jamais le jeton de Page.
   getUserAccessToken() {
-    return process.env.FB_USER_ACCESS_TOKEN || this.getStoredToken()?.userAccessToken || null;
+    return (this.allowEnvToken && process.env.FB_USER_ACCESS_TOKEN) || this.getStoredToken()?.userAccessToken || null;
   }
 
   isConfigured() {
@@ -131,14 +142,14 @@ class FacebookMessengerAdapter {
   // peut couper) : envTokenStillActive le signale à l'appelant.
   disconnect() {
     try {
-      fs.unlinkSync(FACEBOOK_TOKEN_PATH);
+      fs.unlinkSync(this.tokenPath);
     } catch (err) {
       // déjà absent
     }
     this.pageId = null;
     this.pageName = null;
     return {
-      envTokenStillActive: Boolean(process.env.FB_PAGE_ACCESS_TOKEN || process.env.FACEBOOK_PAGE_ACCESS_TOKEN),
+      envTokenStillActive: Boolean(this.allowEnvToken && (process.env.FB_PAGE_ACCESS_TOKEN || process.env.FACEBOOK_PAGE_ACCESS_TOKEN)),
     };
   }
 
@@ -247,7 +258,8 @@ class FacebookMessengerAdapter {
       // reste utilisable, seul le Studio (Instagram) restera indisponible.
     }
 
-    writeJsonFile(FACEBOOK_TOKEN_PATH, {
+    fs.mkdirSync(path.dirname(this.tokenPath), { recursive: true });
+    writeJsonFile(this.tokenPath, {
       pageAccessToken: page.access_token,
       pageId: page.id,
       pageName: page.name,
@@ -374,7 +386,7 @@ class FacebookMessengerAdapter {
    * du jeton, plutôt que redemandée à chaque publication.
    */
   getManagedGroups() {
-    const stored = readJsonFile(FACEBOOK_GROUPS_PATH);
+    const stored = readJsonFile(this.groupsPath);
     return Array.isArray(stored?.groups) ? stored.groups : [];
   }
 
@@ -385,13 +397,15 @@ class FacebookMessengerAdapter {
     }
     const groups = this.getManagedGroups().filter((g) => g.id !== id);
     groups.push({ id, name: String(name || '').trim() || id, addedAt: new Date().toISOString() });
-    writeJsonFile(FACEBOOK_GROUPS_PATH, { groups });
+    fs.mkdirSync(path.dirname(this.groupsPath), { recursive: true });
+    writeJsonFile(this.groupsPath, { groups });
     return groups;
   }
 
   removeManagedGroup(groupId) {
     const groups = this.getManagedGroups().filter((g) => g.id !== String(groupId || '').trim());
-    writeJsonFile(FACEBOOK_GROUPS_PATH, { groups });
+    fs.mkdirSync(path.dirname(this.groupsPath), { recursive: true });
+    writeJsonFile(this.groupsPath, { groups });
     return groups;
   }
 

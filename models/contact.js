@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // "Table/Modèle Contact" du module de Capture Automatique de Prospects.
 // Même principe de persistance par fichier JSON que le reste du projet (pas
@@ -7,16 +8,28 @@ const path = require('path');
 // choix motivé.
 const STORE_PATH = process.env.CONTACTS_PATH || path.join(__dirname, '..', 'contacts.json');
 
+function tenantStorePath(tenantId) {
+  if (!tenantId) throw new Error('TENANT_REQUIRED');
+  const tenant = String(tenantId);
+  if (tenant === '__admin__') return STORE_PATH;
+  const key = crypto.createHash('sha256').update(tenant).digest('hex');
+  return path.join(path.dirname(STORE_PATH), 'tenant-data', key, 'facebook-contacts.json');
+}
+
+function createStore(tenantId) {
+const storePath = tenantStorePath(tenantId);
 function readAll() {
   try {
-    return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+    const value = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    return Array.isArray(value) ? value : [];
   } catch (err) {
     return [];
   }
 }
 
 function writeAll(list) {
-  fs.writeFileSync(STORE_PATH, JSON.stringify(list, null, 2), 'utf8');
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify(list, null, 2), 'utf8');
 }
 
 function list({ keyword, source } = {}) {
@@ -92,4 +105,8 @@ function markAutoReplied(id) {
   return all[idx];
 }
 
-module.exports = { list, get, upsertFromLead, markAutoReplied };
+return { list, get, upsertFromLead, markAutoReplied };
+}
+
+const adminStore = createStore('__admin__');
+module.exports = { ...adminStore, forTenant: (tenantId) => createStore(tenantId) };

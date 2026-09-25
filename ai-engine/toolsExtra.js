@@ -18,6 +18,13 @@ const fail = (code, message, retryable) => ({ ok: false, error: { code, message:
 const sanitize = (id) => String(id || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'default';
 const uid = (p) => `${p}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const chan = (c) => String(c || 'WHATSAPP').toUpperCase();
+function channelPermitted(channel, ctx) {
+  if (!Array.isArray(ctx && ctx.allowedModules)) return ctx && ctx.allowedModules === null;
+  const value = String(channel || '').toLowerCase();
+  if (value === 'facebook_page' || value.startsWith('facebook')) return true;
+  if (['instagram', 'youtube', 'tiktok'].includes(value)) return ctx.allowedModules.includes('studio_video');
+  return ctx.allowedModules.includes(value);
+}
 
 async function readUploadText(tenant, fileId) {
   const meta = await chatUploads.get(tenant, fileId);
@@ -40,23 +47,34 @@ async function loadDrafts(tenant) { return storageAdapter.get('campaign_drafts',
 async function saveDrafts(tenant, doc) { return storageAdapter.setDurable('campaign_drafts', sanitize(tenant), doc); }
 
 // Gestionnaires de la file durable (utilisés par le worker) : exécutent réellement l'action.
-function queueHandlers(tenant, runtime) {
+function queueHandlers(tenant, runtime, allowedModules) {
+  if (allowedModules === undefined) {
+    const authz = require('./authz');
+    const principal = authz.currentPrincipal();
+    allowedModules = authz.isPrincipal(principal) && (principal.role === 'ADMIN' || principal.tenant === String(tenant))
+      ? principal.allowedModules : [];
+  }
   return {
     LAUNCH_CAMPAIGN: async (task) => {
       const doc = await loadDrafts(tenant);
       const draft = doc.drafts[task.payload.draftId];
       if (!draft) return { ok: false, error: 'DRAFT_NOT_FOUND', retryable: false };
-      const out = await launchDraft(tenant, draft, runtime);
+      const out = await launchDraft(tenant, draft, runtime, allowedModules);
       if (out.ok) { draft.status = 'launched'; draft.launchedAt = Date.now(); draft.startedAt = draft.launchedAt; draft.engineCampaignId = out.result.campaignId || null; await saveDrafts(tenant, doc); }
       return out.ok ? { ok: true, result: out.result } : { ok: false, error: out.error.message, retryable: out.error.retryable };
     },
     // Relance / suivi client : la décision (10 vérifications) est reprise AU MOMENT d'envoyer, jamais à la planification.
     FOLLOW_UP: async (task) => {
+      const followUps = await require('./customerLifecycle').listFollowUps(tenant);
+      const followUp = followUps.find((item) => item.id === task.payload.followUpId);
+      if (!followUp) return { ok: false, error: 'NOT_FOUND', retryable: false };
+      if (!channelPermitted(followUp.contact && followUp.contact.channel, { allowedModules })) return { ok: false, error: 'MODULE_NOT_ALLOWED', retryable: false };
       const out = await require('./customerLifecycle').runFollowUp(tenant, task.payload.followUpId, { runtime });
       if (out.ok || out.skipped) return { ok: true, result: { decision: out.decision ? out.decision.action : undefined, skipped: out.skipped } };
       return { ok: false, error: out.error || 'FOLLOW_UP_FAILED', retryable: out.error !== 'NOT_FOUND' };
     },
     SEND_MESSAGE: async (task) => {
+      if (!channelPermitted(task.payload.channel, { allowedModules })) return { ok: false, error: 'MODULE_NOT_ALLOWED', retryable: false };
       if (!runtime || typeof runtime.sendMessageVerified !== 'function') return { ok: false, error: 'RUNTIME_MISSING', retryable: true };
       const out = await runtime.sendMessageVerified({ channel: task.payload.channel, to: task.payload.to, text: task.payload.text, tenantId: tenant });
       if (out.status === 'SUCCESS') return { ok: true, result: { confirmationId: out.confirmationId } };
@@ -177,6 +195,7 @@ const TOOLS = {
     },
     async execute(args, ctx) {
       const input = { channel: chan(args.channel), title: args.title, description: args.description, inviteMessage: args.inviteMessage };
+      if (!channelPermitted(input.channel, ctx)) return fail('MODULE_NOT_ALLOWED');
       const timing = {}; for (const k of ['batchSize', 'delayBetweenItems', 'delayBetweenBatches', 'pauseEveryNBatches', 'pauseDuration', 'initialDelay', 'maxItems']) if (args[k] !== undefined) timing[k] = args[k];
       if (Object.keys(timing).length) input.timing = timing;
       if (args.recipientsDraftId) input.recipientsId = args.recipientsDraftId;
@@ -185,7 +204,7 @@ const TOOLS = {
         if (/^image\//.test(f.meta.type || '')) input.image = f.buffer; else input.file = { buffer: f.buffer, name: f.meta.name, type: f.meta.type };
       } else if (args.text) input.text = args.text;
       else return fail('NO_RECIPIENTS', 'Fournissez un fichier, une liste préparée ou des contacts en texte.');
-      try { const job = await require('./communityService').startGroup(ctx.tenant, input); return { ok: true, result: { jobId: job.id, status: job.status, channel: job.channel, title: job.title, total: job.counts.total } }; }
+      try { const job = await require('./communityService').startGroup(ctx.tenant, input, ctx.allowedModules); return { ok: true, result: { jobId: job.id, status: job.status, channel: job.channel, title: job.title, total: job.counts.total } }; }
       catch (e) { return fail(e.code || 'GROUP_START_FAILED', e.message); }
     },
     async verify(result) { return { verified: !!(result && result.jobId) }; },
@@ -386,7 +405,7 @@ const TOOLS = {
         src = { file: r.file };
       }
       try {
-        const out = await campaignService.prepareRecipients(ctx.tenant, src, { defaultCountryCode: args.defaultCountryCode });
+        const out = await campaignService.prepareRecipients(ctx.tenant, src, { defaultCountryCode: args.defaultCountryCode, allowedModules: ctx.allowedModules });
         const c = out.counts;
         return { ok: true, result: { recipientsDraftId: out.recipientsId, report: { parsed: c.total, duplicates: c.duplicate, invalid: c.invalid, uncertain: c.uncertain, valid: c.valid }, invalidSample: out.rows.filter((r) => r.state !== 'valid' && r.state !== 'duplicate').slice(0, 10).map((r) => ({ raw: r.raw, reason: r.reason })) } };
       } catch (e) { return fail(e.code || 'PREPARE_FAILED', e.message); }
@@ -400,7 +419,7 @@ const TOOLS = {
       const f = await chatUploads.readFile(ctx.tenant, args.fileId).catch(() => null);
       if (!f) return fail('FILE_NOT_FOUND');
       try {
-        const out = await campaignService.prepareRecipients(ctx.tenant, { image: f.buffer }, { ocr: ctx.ocr || ocrProvider, defaultCountryCode: args.defaultCountryCode });
+        const out = await campaignService.prepareRecipients(ctx.tenant, { image: f.buffer }, { ocr: ctx.ocr || ocrProvider, defaultCountryCode: args.defaultCountryCode, allowedModules: ctx.allowedModules });
         const c = out.counts;
         return { ok: true, result: { recipientsDraftId: out.recipientsId, report: { parsed: c.total, duplicates: c.duplicate, invalid: c.invalid, uncertain: c.uncertain, valid: c.valid }, needsReview: out.rows.filter((r) => r.state === 'uncertain').map((r) => r.number) } };
       } catch (e) { return fail(e.code || 'OCR_FAILED', e.message); }
@@ -448,7 +467,7 @@ const TOOLS = {
     inputSchema: { draftId: { type: 'string', required: true }, at: { type: 'string', required: true, description: 'Date/heure ISO 8601 (ex. 2026-09-21T18:00:00Z).' } },
     async execute(args, ctx) {
       try {
-        const c = await campaignService.schedule(ctx.tenant, args.draftId, args.at);
+        const c = await campaignService.schedule(ctx.tenant, args.draftId, args.at, ctx.allowedModules);
         return { ok: true, result: { taskId: c.taskId, runAt: c.runAt, deduplicated: c.deduplicated } };
       } catch (e) { return fail(e.code === 'NOT_FOUND' ? 'DRAFT_NOT_FOUND' : (e.code || 'SCHEDULE_FAILED'), e.message); }
     },
@@ -457,7 +476,10 @@ const TOOLS = {
     description: 'Suivi réel d’une campagne : état (en cours, protection détectée, mode continuité...), progression, tableau des destinataires.',
     permission: null, risk: 'READ', inputSchema: { campaignId: { type: 'string', required: true } },
     async execute(args, ctx) {
-      try { return { ok: true, result: await campaignService.get(ctx.tenant, args.campaignId, ctx.runtime, { limit: 20 }) }; }
+      try {
+        const campaign = await campaignService.get(ctx.tenant, args.campaignId, ctx.runtime, { limit: 20 }, ctx.allowedModules);
+        return { ok: true, result: campaign };
+      }
       catch (e) { return fail(e.code || 'NOT_FOUND', e.message); }
     },
   },
@@ -465,20 +487,21 @@ const TOOLS = {
     description: 'Progression chiffrée d’une campagne (total, envoyés, en attente, échecs, pourcentage).',
     permission: null, risk: 'READ', inputSchema: { campaignId: { type: 'string', required: true } },
     async execute(args, ctx) {
-      try { const c = await campaignService.get(ctx.tenant, args.campaignId, ctx.runtime, { limit: 1 }); return { ok: true, result: { state: c.state, progress: c.progress } }; }
+      try { const c = await campaignService.get(ctx.tenant, args.campaignId, ctx.runtime, { limit: 1 }, ctx.allowedModules); return { ok: true, result: { state: c.state, progress: c.progress } }; }
       catch (e) { return fail(e.code || 'NOT_FOUND', e.message); }
     },
   },
   listCampaigns: {
     description: 'Liste toutes les campagnes (brouillons, programmées, en cours, terminées) avec leur état réel.',
     permission: null, risk: 'READ', inputSchema: {},
-    async execute(args, ctx) { const list = await campaignService.list(ctx.tenant, ctx.runtime); return { ok: true, result: { count: list.length, campaigns: list.slice(0, 50).map((c) => ({ id: c.id, name: c.name, channel: c.channel, state: c.state, progress: c.progress || null })) } }; },
+    async execute(args, ctx) { const list = await campaignService.list(ctx.tenant, ctx.runtime, ctx.allowedModules); return { ok: true, result: { count: list.length, campaigns: list.slice(0, 50).map((c) => ({ id: c.id, name: c.name, channel: c.channel, state: c.state, progress: c.progress || null })) } }; },
   },
   pauseCampaign: {
     description: 'Met en pause une campagne en cours.', permission: 'messages:send', risk: 'LOW_WRITE',
     inputSchema: { channel: { type: 'string' }, campaignId: { type: 'string' } },
     async execute(args, ctx) {
       if (!ctx.runtime || !ctx.runtime.pauseCampaign) return fail('RUNTIME_MISSING');
+      if (!channelPermitted(args.channel, ctx)) return fail('MODULE_NOT_ALLOWED');
       const out = await ctx.runtime.pauseCampaign({ channel: chan(args.channel), campaignId: args.campaignId, tenantId: ctx.tenant });
       return out.ok ? { ok: true, result: { paused: true } } : fail('PAUSE_FAILED', out.error);
     },
@@ -488,6 +511,7 @@ const TOOLS = {
     inputSchema: { channel: { type: 'string' }, campaignId: { type: 'string' } },
     async execute(args, ctx) {
       if (!ctx.runtime || !ctx.runtime.resumeCampaign) return fail('RUNTIME_MISSING');
+      if (!channelPermitted(args.channel, ctx)) return fail('MODULE_NOT_ALLOWED');
       const out = await ctx.runtime.resumeCampaign({ channel: chan(args.channel), campaignId: args.campaignId, tenantId: ctx.tenant });
       return out.ok ? { ok: true, result: { resumed: true } } : fail('RESUME_FAILED', out.error);
     },
@@ -497,6 +521,7 @@ const TOOLS = {
     inputSchema: { channel: { type: 'string' }, campaignId: { type: 'string' } },
     async execute(args, ctx) {
       if (!ctx.runtime || !ctx.runtime.stopCampaign) return fail('RUNTIME_MISSING');
+      if (!channelPermitted(args.channel, ctx)) return fail('MODULE_NOT_ALLOWED');
       const out = await ctx.runtime.stopCampaign({ channel: chan(args.channel), campaignId: args.campaignId, tenantId: ctx.tenant });
       return out.ok ? { ok: true, result: { cancelled: true } } : fail('CANCEL_FAILED', out.error);
     },
@@ -507,6 +532,7 @@ const TOOLS = {
     inputSchema: { channel: { type: 'string' }, campaignId: { type: 'string' } },
     async execute(args, ctx) {
       if (!ctx.runtime || !ctx.runtime.getCampaignStatus) return fail('RUNTIME_MISSING');
+      if (!channelPermitted(args.channel, ctx)) return fail('MODULE_NOT_ALLOWED');
       const out = await ctx.runtime.getCampaignStatus({ channel: chan(args.channel), campaignId: args.campaignId, tenantId: ctx.tenant });
       return out.ok ? { ok: true, result: out.result } : fail('STATUS_FAILED', out.error);
     },
@@ -516,7 +542,7 @@ const TOOLS = {
     permission: null, risk: 'READ',
     inputSchema: { campaignId: { type: 'string', required: true } },
     async execute(args, ctx) {
-      try { return { ok: true, result: await campaignService.report(ctx.tenant, args.campaignId, ctx.runtime) }; }
+      try { const result = await campaignService.report(ctx.tenant, args.campaignId, ctx.runtime, ctx.allowedModules); return { ok: true, result }; }
       catch (e) { return fail(e.code || 'REPORT_FAILED', e.message); }
     },
   },
@@ -626,7 +652,7 @@ const TOOLS = {
     async execute(args, ctx) {
       const conn = ctx.runtime && ctx.runtime.getConnectionStatus ? await ctx.runtime.getConnectionStatus({ tenantId: ctx.tenant }) : null;
       const queue = await taskQueue.status(ctx.tenant);
-      const act = await activityStore.summary(null, 60);
+      const act = await activityStore.summary(null, 60, ctx.tenant);
       const errors = (act.events || []).filter((a) => a.status === 'error' && (!a.tenant || a.tenant === ctx.tenant)).slice(0, 5);
       const problems = [];
       if (conn && conn.ok) {
@@ -684,7 +710,7 @@ const TOOLS = {
   generateStatistics: {
     description: 'Statistiques réelles du jour (messages, réponses automatiques, outils, erreurs) et du CRM (contacts par étiquette).', permission: null, risk: 'READ', inputSchema: {},
     async execute(args, ctx) {
-      const act = await activityStore.summary(null, 1);
+      const act = await activityStore.summary(null, 1, ctx.tenant);
       const crm = await contactCrm.counts(ctx.tenant);
       return { ok: true, result: { date: act.date, activity: act.counts, contacts: crm } };
     },
@@ -748,6 +774,7 @@ const TOOLS = {
 
   // ================= CAMPAGNES DE GROUPES ADMINISTRÉS (Service Métier + scheduler) =================
   createGroupCampaign: {
+    requiredModule: 'whatsapp',
     description: 'Crée une campagne programmée qui cible TOUS les groupes WhatsApp dont le nom contient un mot-clé ET où le compte connecté est réellement administrateur : durée, horaires multiples, messages fournis, service/produit concerné, objectif. La liste des groupes est figée avec leurs vrais noms. Les membres intéressés reçoivent en privé l\'offre du Service métier.',
     permission: null, risk: 'WRITE',
     inputSchema: {
@@ -780,15 +807,18 @@ const TOOLS = {
     async execute(args, ctx) { const all = await require('./groupCampaigns').list(ctx.tenant); return { ok: true, result: { count: all.length, campaigns: all.map((c) => ({ id: c.id, name: c.name, status: c.status, groups: c.groups.map((g) => g.name), slots: c.slots.map((s) => s.time), endAt: c.endAt, sent: c.sends.filter((x) => x.ok).length })) } }; },
   },
   stopGroupCampaign: {
+    requiredModule: 'whatsapp',
     description: 'Arrête une campagne de groupes (par nom ou identifiant).', permission: null, risk: 'LOW_WRITE', inputSchema: { campaign: { type: 'string' } },
     async execute(args, ctx) { return require('./groupCampaigns').stop(ctx.tenant, args.campaign); },
   },
   setGroupCampaignGoal: {
+    requiredModule: 'whatsapp',
     description: 'Définit l\'objectif commercial d\'une campagne de groupes (ex. 1 000 000 FCFA sur le mois).', permission: null, risk: 'LOW_WRITE',
     inputSchema: { amount: { type: 'number', required: true }, currency: { type: 'string' }, period: { type: 'string' }, campaign: { type: 'string' } },
     async execute(args, ctx) { return require('./groupCampaigns').setGoal(ctx.tenant, args.campaign, { amount: Number(args.amount), currency: args.currency || 'FCFA', period: args.period || null }); },
   },
   getGroupCampaignReport: {
+    requiredModule: 'whatsapp',
     description: 'Rapport RÉEL d\'une campagne de groupes : messages envoyés par créneau, prospects, preuves reçues, paiements confirmés, progression vers l\'objectif.', permission: null, risk: 'READ',
     inputSchema: { campaign: { type: 'string' } },
     async execute(args, ctx) { return require('./groupCampaigns').report(ctx.tenant, args.campaign); },

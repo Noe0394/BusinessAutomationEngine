@@ -76,7 +76,7 @@ async function collect(tenant, f) {
   const act = require('./activityStore');
   for (let d = 0; d < 7; d += 1) {
     const day = new Date(Date.now() - d * DAY).toISOString().slice(0, 10);
-    const s = await safe(() => act.summary(day, 300), { events: [] });
+    const s = await safe(() => act.summary(day, 300, tenant), { events: [] });
     for (const e of s.events) {
       if (String(e.tenant) !== String(tenant)) continue;
       if (e.type === 'follow_up') continue; // évite le doublon avec la relance elle-même

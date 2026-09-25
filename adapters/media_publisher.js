@@ -19,7 +19,9 @@ function readJsonFile(filePath) {
 }
 
 function writeJsonFile(filePath, data) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(filePath, 0o600); } catch (err) { /* ACLs can differ on Windows. */ }
 }
 
 const YOUTUBE_TOKEN_PATH = process.env.YOUTUBE_TOKEN_PATH || path.join(__dirname, '..', 'youtube_token.json');
@@ -52,7 +54,13 @@ const FACEBOOK_TOKEN_PATH = process.env.FB_TOKEN_PATH || path.join(__dirname, '.
  * (l'URL HTTPS publique de ce serveur, ex: https://mon-app.onrender.com).
  */
 class MediaPublisherAdapter {
-  constructor() {
+  constructor({ tenantId = '__admin__' } = {}) {
+    this.tenantId = String(tenantId || '__admin__');
+    this.allowEnvTokens = this.tenantId === '__admin__';
+    const tenantHash = crypto.createHash('sha256').update(this.tenantId).digest('hex');
+    this.youtubeTokenPath = this.allowEnvTokens ? YOUTUBE_TOKEN_PATH : path.join(path.dirname(YOUTUBE_TOKEN_PATH), 'tenant-data', tenantHash, 'youtube-token.json');
+    this.tiktokTokenPath = this.allowEnvTokens ? TIKTOK_TOKEN_PATH : path.join(path.dirname(TIKTOK_TOKEN_PATH), 'tenant-data', tenantHash, 'tiktok-token.json');
+    this.facebookTokenPath = this.allowEnvTokens ? FACEBOOK_TOKEN_PATH : path.join(path.dirname(FACEBOOK_TOKEN_PATH), 'tenant-data', tenantHash, 'facebook-token.json');
     // Même valeur de repli que PUBLIC_BASE_URL dans index.js (pas un secret,
     // juste l'URL publique du déploiement) — sans ça, ce module ignorait le
     // repli défini côté index.js et bloquait à tort isYoutubeConnectAvailable/
@@ -105,28 +113,28 @@ class MediaPublisherAdapter {
   }
 
   isYoutubeConfigured() {
-    return Boolean(process.env.YOUTUBE_REFRESH_TOKEN || readJsonFile(YOUTUBE_TOKEN_PATH)?.refresh_token);
+    return Boolean((this.allowEnvTokens && process.env.YOUTUBE_REFRESH_TOKEN) || readJsonFile(this.youtubeTokenPath)?.refresh_token);
   }
 
   isInstagramConfigured() {
-    if (process.env.IG_ACCESS_TOKEN && process.env.IG_USER_ID) return true;
-    const stored = readJsonFile(FACEBOOK_TOKEN_PATH);
+    if (this.allowEnvTokens && process.env.IG_ACCESS_TOKEN && process.env.IG_USER_ID) return true;
+    const stored = readJsonFile(this.facebookTokenPath);
     return Boolean(stored?.pageAccessToken && stored?.igUserId);
   }
 
   isTikTokConfigured() {
-    return Boolean(process.env.TIKTOK_ACCESS_TOKEN || readJsonFile(TIKTOK_TOKEN_PATH)?.access_token);
+    return Boolean((this.allowEnvTokens && process.env.TIKTOK_ACCESS_TOKEN) || readJsonFile(this.tiktokTokenPath)?.access_token);
   }
 
   getYoutubeRefreshToken() {
-    return process.env.YOUTUBE_REFRESH_TOKEN || readJsonFile(YOUTUBE_TOKEN_PATH)?.refresh_token || null;
+    return (this.allowEnvTokens && process.env.YOUTUBE_REFRESH_TOKEN) || readJsonFile(this.youtubeTokenPath)?.refresh_token || null;
   }
 
   getInstagramCredentials() {
-    if (process.env.IG_ACCESS_TOKEN && process.env.IG_USER_ID) {
+    if (this.allowEnvTokens && process.env.IG_ACCESS_TOKEN && process.env.IG_USER_ID) {
       return { accessToken: process.env.IG_ACCESS_TOKEN, userId: process.env.IG_USER_ID };
     }
-    const stored = readJsonFile(FACEBOOK_TOKEN_PATH);
+    const stored = readJsonFile(this.facebookTokenPath);
     if (stored?.pageAccessToken && stored?.igUserId) {
       return { accessToken: stored.pageAccessToken, userId: stored.igUserId };
     }
@@ -134,8 +142,8 @@ class MediaPublisherAdapter {
   }
 
   getTikTokAccessToken() {
-    if (process.env.TIKTOK_ACCESS_TOKEN) return process.env.TIKTOK_ACCESS_TOKEN;
-    return readJsonFile(TIKTOK_TOKEN_PATH)?.access_token || null;
+    if (this.allowEnvTokens && process.env.TIKTOK_ACCESS_TOKEN) return process.env.TIKTOK_ACCESS_TOKEN;
+    return readJsonFile(this.tiktokTokenPath)?.access_token || null;
   }
 
   // ---------- Connexion Google/YouTube (OAuth officiel, bouton "Se connecter") ----------
@@ -166,7 +174,8 @@ class MediaPublisherAdapter {
       // on ne peut pas publier hors ligne plus tard.
       throw new Error('NO_REFRESH_TOKEN_RETURNED');
     }
-    writeJsonFile(YOUTUBE_TOKEN_PATH, { refresh_token: tokens.refresh_token, connectedAt: new Date().toISOString() });
+    fs.mkdirSync(path.dirname(this.youtubeTokenPath), { recursive: true });
+    writeJsonFile(this.youtubeTokenPath, { refresh_token: tokens.refresh_token, connectedAt: new Date().toISOString() });
   }
 
   // ---------- Connexion TikTok (OAuth officiel Login Kit) ----------
@@ -199,7 +208,8 @@ class MediaPublisherAdapter {
     });
 
     const { access_token: accessToken, refresh_token: refreshToken, expires_in: expiresIn } = res.data;
-    writeJsonFile(TIKTOK_TOKEN_PATH, {
+    fs.mkdirSync(path.dirname(this.tiktokTokenPath), { recursive: true });
+    writeJsonFile(this.tiktokTokenPath, {
       access_token: accessToken,
       refresh_token: refreshToken,
       expiresAt: Date.now() + (expiresIn || 0) * 1000,

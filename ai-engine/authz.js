@@ -25,12 +25,17 @@ const issued = new WeakSet();
 const als = new AsyncLocalStorage();
 
 // Émet un principal. À n'appeler que depuis du code serveur qui a RÉELLEMENT authentifié l'appelant.
-function issuePrincipal({ tenant, role, userId, channel, via }) {
+function issuePrincipal({ tenant, role, userId, channel, via, allowedModules }) {
   const r = String(role || '').toUpperCase();
   if (!ROLES[r]) throw new Error(`Rôle inconnu : ${role}`);
   const t = String(tenant || '').trim();
   if (!t) throw new Error('Un principal exige un tenant.');
-  const p = Object.freeze({ tenant: t, role: r, userId: userId ? String(userId) : t, channel: channel ? String(channel).toUpperCase() : 'WEB', via: via || 'unknown' });
+  // Only ADMIN may have an unrestricted module set. Missing license modules on
+  // every other role must deny access rather than silently grant all features.
+  const modules = Array.isArray(allowedModules)
+    ? Object.freeze([...new Set(allowedModules.map((m) => String(m).trim()).filter(Boolean))])
+    : (r === ROLES.ADMIN ? null : Object.freeze([]));
+  const p = Object.freeze({ tenant: t, role: r, userId: userId ? String(userId) : t, channel: channel ? String(channel).toUpperCase() : 'WEB', via: via || 'unknown', allowedModules: modules });
   issued.add(p);
   return p;
 }
@@ -54,12 +59,17 @@ const isTainted = () => { const s = als.getStore(); return !!(s && s.tainted); }
 
 // Décision d'autorisation pour un outil. Renvoie { allowed:true } ou { allowed:false, code, message }.
 //   principal : celui du contexte (jamais un argument) ; `tenant` : le compte visé par l'appel.
-function authorizeTool({ tool, toolName, tenant, principal }) {
+function authorizeTool({ tool, toolName, tenant, principal, requiredModule }) {
   if (!isPrincipal(principal)) return { allowed: false, code: 'NOT_AUTHENTICATED', message: `Identité de l'appelant absente pour « ${toolName} ».` };
   const roles = (tool && Array.isArray(tool.roles) && tool.roles.length) ? tool.roles : DEFAULT_TOOL_ROLES;
   if (!roles.includes(principal.role)) return { allowed: false, code: 'ROLE_FORBIDDEN', message: `Le rôle ${principal.role} n'a pas accès à « ${toolName} ».` };
   // Un compte n'opère que sur lui-même ; seul un ADMIN peut cibler explicitement un autre compte (fonction d'administration existante).
   if (String(tenant) !== principal.tenant && principal.role !== ROLES.ADMIN) return { allowed: false, code: 'TENANT_MISMATCH', message: 'Ressource d\'un autre compte.' };
+  const module = requiredModule || (tool && tool.requiredModule);
+  if (module && principal.role !== ROLES.ADMIN && principal.allowedModules !== null
+      && !principal.allowedModules.includes(module)) {
+    return { allowed: false, code: 'MODULE_NOT_ALLOWED', message: `La licence n'autorise pas le module « ${module} ».` };
+  }
   return { allowed: true };
 }
 

@@ -220,7 +220,11 @@ async function tick(tenant, deps, nowDate) {
 async function tickAll(deps, nowDate) {
   const out = [];
   for (const id of storageAdapter.listIds(NS)) {
-    try { const r = await tick(id, deps, nowDate); if (r.length) out.push({ tenant: id, actions: r }); } catch (e) { console.error(`groupCampaigns.tick (tenant "${id}") :`, e.message); }
+    try {
+      if (!deps || typeof deps.tenantAllowed !== 'function' || !(await deps.tenantAllowed(id))) continue;
+      const r = await tick(id, deps, nowDate);
+      if (r.length) out.push({ tenant: id, actions: r });
+    } catch (e) { console.error(`groupCampaigns.tick (tenant "${id}") :`, e.message); }
   }
   return out;
 }

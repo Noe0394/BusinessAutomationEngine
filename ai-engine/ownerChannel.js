@@ -244,7 +244,10 @@ async function handleOwnerMessage(input, deps) {
     if (!adapter.isOwnerContext(session, msg, input)) return { ignored: 'NOT_OWNER' };
     const settings = d.getSettings ? await d.getSettings(tenantId) : null;
     if (!isEnabled(settings, adapter.channel)) return { ignored: 'OWNER_CHANNEL_DISABLED' };
-    const principal = authz.issuePrincipal({ tenant: tenantId, role: authz.ROLES.OWNER, userId: tenantId, channel: adapter.channel, via: input.configuredOwner ? 'configured_owner' : 'self_chat' });
+    const allowedModules = typeof d.getAllowedModules === 'function'
+      ? await d.getAllowedModules(tenantId)
+      : (tenantId === '__admin__' ? null : []);
+    const principal = authz.issuePrincipal({ tenant: tenantId, role: authz.ROLES.OWNER, userId: tenantId, channel: adapter.channel, via: input.configuredOwner ? 'configured_owner' : 'self_chat', allowedModules });
 
     let text = adapter.text(msg);
     const mediaInfo = adapter.media(msg);

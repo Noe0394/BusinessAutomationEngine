@@ -19,10 +19,8 @@ const NAMESPACE = 'secret_vault';
 
 function keyMaterial() {
   const s = process.env.SECRET_VAULT_KEY || process.env.ADMIN_PASSWORD || '';
-  if (!s) {
-    console.warn('secretVault: ni SECRET_VAULT_KEY ni ADMIN_PASSWORD définis — chiffrement avec une clé par défaut (À CONFIGURER en production).');
-  }
-  return crypto.createHash('sha256').update(`cyrus-vault::${s || 'default-insecure'}`).digest();
+  if (!s) throw new Error('SECRET_VAULT_KEY_NOT_CONFIGURED');
+  return crypto.createHash('sha256').update(`cyrus-vault::${s}`).digest();
 }
 
 function isEncryptionConfigured() {
@@ -56,6 +54,7 @@ async function load(tenant) {
 // seulement des métadonnées, JAMAIS la valeur.
 async function setSecret(tenant, ref, value) {
   if (!ref || value == null || value === '') return { ok: false, error: 'MISSING_REF_OR_VALUE' };
+  if (!isEncryptionConfigured()) throw new Error('SECRET_VAULT_KEY_NOT_CONFIGURED');
   const doc = await load(tenant);
   doc.secrets = doc.secrets || {};
   doc.secrets[sanitize(ref)] = Object.assign({ updatedAt: new Date().toISOString() }, encrypt(value));

@@ -18,6 +18,10 @@ dotenv.config({ path: require('path').join(__dirname, 'secrets', 'providers.env'
 dotenv.config({ quiet: true });
 
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
+const dns = require('dns').promises;
+const net = require('net');
+const https = require('https');
 if (!globalThis.crypto) {
   globalThis.crypto = crypto.webcrypto || crypto;
 }
@@ -77,8 +81,8 @@ const oauthConfig = require('./oauth_config');
 const scheduledMessages = require('./queues/scheduled_messages');
 const campaignEngineModule = require('./queues/campaignEngine');
 const telegramCampaignEngineModule = require('./queues/telegramCampaignEngine');
-const contactsStore = require('./models/contact');
-const keywordRules = require('./models/keyword_rules');
+const contactsStoreModule = require('./models/contact');
+const keywordRulesModule = require('./models/keyword_rules');
 const scrapedNumbers = require('./models/scrapedNumbers');
 const groupScraper = require('./lib/groupScraper');
 const { replaceVariables, normalizeJid, jidToE164 } = require('./lib/whatsappRecipients');
@@ -113,8 +117,41 @@ const voiceProcessor = require('./ai-engine/voiceProcessor');
 let intelligenceBridge = null;
 
 const app = express();
+app.set('trust proxy', 1);
+const authAttemptBuckets = new Map();
+function authBucketKey(req) { return `${req.ip || req.socket?.remoteAddress || 'unknown'}`; }
+function tooManyAuthAttempts(req) {
+  const key = authBucketKey(req);
+  const current = authAttemptBuckets.get(key);
+  if (!current || current.resetAt <= Date.now()) {
+    authAttemptBuckets.set(key, { failures: 0, resetAt: Date.now() + 15 * 60 * 1000 });
+    return false;
+  }
+  return current.failures >= 12;
+}
+function recordAuthFailure(req, success = false) {
+  const key = authBucketKey(req);
+  if (success) { authAttemptBuckets.delete(key); return; }
+  const bucket = authAttemptBuckets.get(key) || { failures: 0, resetAt: Date.now() + 15 * 60 * 1000 };
+  bucket.failures += 1;
+  authAttemptBuckets.set(key, bucket);
+}
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
 const PORT = process.env.PORT || 10000;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '@CYRUS2026';
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '').trim();
+function adminPasswordMatches(candidate) {
+  if (!ADMIN_PASSWORD || typeof candidate !== 'string') return false;
+  const supplied = Buffer.from(candidate, 'utf8');
+  const expected = Buffer.from(ADMIN_PASSWORD, 'utf8');
+  return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+}
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
 // Une campagne WhatsApp peut joindre une vidéo bien plus lourde que 16 Mo
 // (compressée automatiquement avant l'envoi, voir buildWhatsappMediaStep) :
@@ -148,8 +185,37 @@ const ADMIN_PORTAL_PATH = path.join(__dirname, 'public', 'admin.html');
 const PRIVACY_POLICY_PATH = path.join(__dirname, 'public', 'legal', 'privacy.html');
 const TERMS_OF_SERVICE_PATH = path.join(__dirname, 'public', 'legal', 'terms.html');
 const DATA_DELETION_PATH = path.join(__dirname, 'public', 'legal', 'data-deletion.html');
-const facebook = new FacebookMessengerAdapter();
-const mediaPublisher = new MediaPublisherAdapter();
+const facebookTenantContext = new AsyncLocalStorage();
+const facebookAdapters = new Map();
+const mediaPublisherAdapters = new Map();
+function facebookForTenant(tenantId) {
+  const tenant = String(tenantId || '');
+  if (!tenant) throw new Error('TENANT_REQUIRED');
+  if (!facebookAdapters.has(tenant)) facebookAdapters.set(tenant, new FacebookMessengerAdapter({ tenantId: tenant }));
+  return facebookAdapters.get(tenant);
+}
+function mediaPublisherForTenant(tenantId) {
+  const tenant = String(tenantId || '');
+  if (!tenant) throw new Error('TENANT_REQUIRED');
+  if (!mediaPublisherAdapters.has(tenant)) mediaPublisherAdapters.set(tenant, new MediaPublisherAdapter({ tenantId: tenant }));
+  return mediaPublisherAdapters.get(tenant);
+}
+function currentTenantId() {
+  return facebookTenantContext.getStore()?.tenantId || '__admin__';
+}
+function tenantScopedProxy(factory) {
+  return new Proxy({}, {
+    get(_target, property) {
+      const service = factory(currentTenantId());
+      const value = service[property];
+      return typeof value === 'function' ? value.bind(service) : value;
+    },
+  });
+}
+const facebook = tenantScopedProxy(facebookForTenant);
+const mediaPublisher = tenantScopedProxy(mediaPublisherForTenant);
+const contactsStore = tenantScopedProxy((tenantId) => contactsStoreModule.forTenant(tenantId));
+const keywordRules = tenantScopedProxy((tenantId) => keywordRulesModule.forTenant(tenantId));
 
 // Fichiers média joints à une programmation multi-canal (module Programmation
 // / Planning) : sauvegardés ici plutôt que gardés en mémoire, puisqu'une
@@ -164,10 +230,14 @@ fs.mkdirSync(SCHEDULED_MEDIA_DIR, { recursive: true });
 // handleFacebookMessagingEvent).
 const KEYWORD_MEDIA_DIR = process.env.KEYWORD_MEDIA_DIR || path.join(__dirname, 'keyword_media');
 fs.mkdirSync(KEYWORD_MEDIA_DIR, { recursive: true });
-
-if (!process.env.ADMIN_PASSWORD) {
-  console.warn('ADMIN_PASSWORD non défini : utilisation du mot de passe par défaut codé en dur. Définissez cette variable d\'environnement avant tout déploiement public.');
+function tenantMediaDirectory(basePath, tenantId) {
+  const tenant = String(tenantId || '__admin__');
+  if (tenant === '__admin__') return basePath;
+  const tenantHash = crypto.createHash('sha256').update(tenant).digest('hex');
+  return path.join(path.dirname(basePath), 'tenant-data', tenantHash, path.basename(basePath));
 }
+
+if (!ADMIN_PASSWORD) console.error('ADMIN_PASSWORD absent : les routes administratives sont désactivées.');
 
 // ---------- Portail admin : instructions d'accès (console + fichier) ----------
 // Pas un secret (juste l'URL publique de ce déploiement) : valeur de repli
@@ -178,56 +248,7 @@ const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://business-automa
 const ADMIN_PORTAL_URL = `${PUBLIC_BASE_URL}/admin-secret-portal`;
 
 function printAndWriteAdminAccessInstructions() {
-  const banner = [
-    '========================================================================',
-    '  ACCES ADMINISTRATEUR — CYRUS SUPER ASSISTANT',
-    '========================================================================',
-    `  URL du portail secret : ${ADMIN_PORTAL_URL}`,
-    `  Mot de passe           : ${ADMIN_PASSWORD}`,
-    '',
-    '  Depuis ce portail : générer des clés de licence (durée + modules),',
-    '  activer/désactiver des clés, consulter la consommation et le nombre',
-    "  d'utilisateurs actuellement connectés.",
-    '',
-    '  SECURITE :',
-    '  - Ne partagez cette URL et ce mot de passe avec personne.',
-    "  - Changez ADMIN_PASSWORD en variable d'environnement dès que possible",
-    '    (la valeur ci-dessus est le mot de passe par défaut codé en dur si',
-    '    ADMIN_PASSWORD n\'est pas définie).',
-    '  - Le fichier ADMIN_ACCESS.md généré à la racine du projet contient ces',
-    '    informations en clair : ne le committez jamais (déjà exclu via',
-    '    .gitignore) et supprimez-le si vous partagez ce dossier.',
-    '========================================================================',
-  ].join('\n');
-
-  console.log(banner);
-
-  const fileContent = `# Accès administrateur
-
-**Généré automatiquement au démarrage du serveur — ne pas committer ce fichier.**
-
-- **URL du portail secret :** ${ADMIN_PORTAL_URL}
-- **Mot de passe :** \`${ADMIN_PASSWORD}\`
-
-## Fonctionnalités du portail
-
-- Génération de clés de licence (durée d'expiration + modules autorisés parmi WhatsApp, Facebook, Telegram, Studio Auto-Publication).
-- Vue d'ensemble des clés actives/désactivées.
-- Surveillance de la consommation (nombre de requêtes) et du nombre d'utilisateurs actuellement connectés.
-
-## Sécurité
-
-- Ne partagez cette URL et ce mot de passe avec personne.
-- Changez \`ADMIN_PASSWORD\` en variable d'environnement dès que possible — la valeur ci-dessus est un mot de passe par défaut codé en dur si \`ADMIN_PASSWORD\` n'est pas définie côté serveur.
-- Ce fichier est exclu de Git via \`.gitignore\`. Supprimez-le si vous partagez ce dossier avec quelqu'un d'autre.
-- Si \`PUBLIC_BASE_URL\` n'est pas définie, l'URL ci-dessus pointe vers \`localhost\` et ne sera valide que sur cette machine.
-`;
-
-  try {
-    fs.writeFileSync(path.join(__dirname, 'ADMIN_ACCESS.md'), fileContent, 'utf8');
-  } catch (err) {
-    console.error('Impossible d\'écrire ADMIN_ACCESS.md :', err.message);
-  }
+  console.log(`Portail administrateur disponible : ${ADMIN_PORTAL_URL}. Les identifiants ne sont jamais journalisés ni écrits dans un fichier.`);
 }
 
 // ---------- Verrouillage CORS (protection de l'API / de la propriété intellectuelle) ----------
@@ -290,13 +311,16 @@ app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // Accès admin strict : réservé au panneau de gestion des licences.
 function requireAdmin(req, res, next) {
-  const provided = req.get('x-admin-password') || req.query.password;
-
-  if (provided && provided === ADMIN_PASSWORD) {
+  if (tooManyAuthAttempts(req)) return res.status(429).json({ error: 'Too many attempts. Retry in 15 minutes.' });
+  const provided = req.get('x-admin-password');
+  if (adminPasswordMatches(provided)) {
+    recordAuthFailure(req, true);
     req.isAdmin = true;
-    return next();
+    req.tenantId = '__admin__';
+    return facebookTenantContext.run({ tenantId: '__admin__' }, next);
   }
 
+  recordAuthFailure(req);
   return res.status(401).json({ error: 'Accès administrateur requis.' });
 }
 
@@ -306,33 +330,39 @@ function requireAdmin(req, res, next) {
 // expirée — dans ce cas req.allowedModules porte la liste des modules
 // autorisés pour cette clé, vérifiée ensuite par requireModule().
 async function requireAccess(req, res, next) {
-  const providedPassword = req.get('x-admin-password') || req.query.password;
-
-  if (providedPassword && providedPassword === ADMIN_PASSWORD) {
+  if (tooManyAuthAttempts(req)) return res.status(429).json({ error: 'Too many attempts. Retry in 15 minutes.' });
+  const providedPassword = req.get('x-admin-password');
+  if (adminPasswordMatches(providedPassword)) {
+    recordAuthFailure(req, true);
     req.isAdmin = true;
     req.allowedModules = null; // null = pas de restriction (admin)
-    return next();
+    req.tenantId = '__admin__';
+    return facebookTenantContext.run({ tenantId: '__admin__' }, next);
   }
 
-  const providedKey = req.get('x-license-key') || req.query.licenseKey;
-  const deviceId = req.get('x-device-id') || req.query.deviceId;
+  const providedKey = req.get('x-license-key');
+  const deviceId = req.get('x-device-id');
 
   if (providedKey) {
     const result = await licenses.verifyKey(providedKey, deviceId);
     if (result.valid) {
+      recordAuthFailure(req, true);
       req.isAdmin = false;
-      req.licenseKey = providedKey;
+      req.licenseKey = String(result.license.key || providedKey).trim().toUpperCase();
+      req.tenantId = req.licenseKey;
       req.allowedModules = result.license.allowedModules;
       licenses.recordUsage(providedKey);
-      return next();
+      return facebookTenantContext.run({ tenantId: req.tenantId }, next);
     }
     if (result.reason === 'DEVICE_MISMATCH') {
+      recordAuthFailure(req);
       return res.status(403).json({
         error: 'Cette clé de licence est déjà utilisée sur un autre appareil. Chaque appareil nécessite sa propre clé.',
       });
     }
   }
 
+  recordAuthFailure(req);
   return res.status(401).json({
     error: 'Authentification requise (mot de passe administrateur ou clé de licence valide).',
   });
@@ -420,16 +450,18 @@ function attachTelegram(req, res, next) {
 const oauthStates = new Map(); // state -> expiresAt (ms)
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-function createOAuthState() {
+function createOAuthState(tenantId = '__admin__', provider = 'unknown') {
+  const now = Date.now();
+  for (const [key, value] of oauthStates) if (value.expiresAt <= now) oauthStates.delete(key);
   const state = crypto.randomBytes(16).toString('hex');
-  oauthStates.set(state, Date.now() + OAUTH_STATE_TTL_MS);
+  oauthStates.set(state, { expiresAt: now + OAUTH_STATE_TTL_MS, tenantId: String(tenantId || ''), provider });
   return state;
 }
 
-function consumeOAuthState(state) {
-  const expiresAt = oauthStates.get(state);
+function consumeOAuthState(state, provider) {
+  const record = oauthStates.get(state);
   oauthStates.delete(state);
-  return Boolean(expiresAt) && expiresAt > Date.now();
+  return record && record.expiresAt > Date.now() && (!provider || record.provider === provider) ? record : null;
 }
 
 // replaceVariables/normalizeJid/jidToE164 : voir lib/whatsappRecipients.js
@@ -506,7 +538,10 @@ async function resolveMediaReference(ref, mediaDir) {
 
   if (ref.mediaUrl.startsWith('local:')) {
     const fileName = ref.mediaUrl.slice('local:'.length);
-    const filePath = path.join(mediaDir, fileName);
+    if (!/^[A-Za-z0-9._-]{1,240}$/.test(fileName) || fileName === '.' || fileName === '..') throw new Error('INVALID_LOCAL_MEDIA_REFERENCE');
+    const filePath = path.resolve(mediaDir, fileName);
+    const normalizedDir = path.resolve(mediaDir) + path.sep;
+    if (!filePath.startsWith(normalizedDir)) throw new Error('INVALID_LOCAL_MEDIA_REFERENCE');
     const buffer = fs.readFileSync(filePath);
     return {
       buffer,
@@ -515,10 +550,25 @@ async function resolveMediaReference(ref, mediaDir) {
     };
   }
 
-  const res = await axios.get(ref.mediaUrl, {
+  const url = new URL(ref.mediaUrl);
+  if (url.protocol !== 'https:' || url.username || url.password || url.href.length > 2048) throw new Error('UNSAFE_MEDIA_URL');
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  const addresses = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await dns.lookup(host, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some((entry) => !isPublicAddress(entry.address))) throw new Error('UNSAFE_MEDIA_URL');
+  const pinnedAddress = addresses[0];
+  const pinnedAgent = new https.Agent({
+    lookup: (_hostname, options, callback) => {
+      if (options && options.all) return callback(null, addresses);
+      return callback(null, pinnedAddress.address, pinnedAddress.family);
+    },
+  });
+  const res = await axios.get(url.href, {
     responseType: 'arraybuffer',
     maxContentLength: 200 * 1024 * 1024,
     timeout: 30000,
+    httpsAgent: pinnedAgent,
+    proxy: false,
+    maxRedirects: 0,
   });
   const mimetype = res.headers['content-type'] || ref.mediaMimetype || 'application/octet-stream';
   let filename = ref.mediaFilename;
@@ -543,14 +593,14 @@ async function resolveScheduledMediaList(entry) {
 
   const resolved = [];
   for (const item of items) {
-    const media = await resolveMediaReference(item, SCHEDULED_MEDIA_DIR);
+    const media = await resolveMediaReference(item, tenantMediaDirectory(SCHEDULED_MEDIA_DIR, entry.tenantId));
     if (media) resolved.push({ ...media, forceDocument: Boolean(item.forceDocument) });
   }
   return resolved;
 }
 
 function resolveKeywordRuleMedia(rule) {
-  return resolveMediaReference(rule, KEYWORD_MEDIA_DIR);
+  return resolveMediaReference(rule, tenantMediaDirectory(KEYWORD_MEDIA_DIR, currentTenantId()));
 }
 
 // entry.sequence (tableau, voir queues/scheduled_messages.js et
@@ -566,7 +616,7 @@ async function resolveScheduledSequence(entry) {
   const resolved = [];
   for (const step of entry.sequence) {
     if (step.type === 'media') {
-      const media = await resolveMediaReference(step, SCHEDULED_MEDIA_DIR);
+      const media = await resolveMediaReference(step, tenantMediaDirectory(SCHEDULED_MEDIA_DIR, entry.tenantId));
       if (media) resolved.push({ ...media, type: 'media', forceDocument: Boolean(step.forceDocument) });
     } else {
       resolved.push({ type: 'text', text: step.text });
@@ -666,7 +716,8 @@ function waitForCampaignCompletion(engine) {
 }
 
 async function dispatchScheduledFacebookPage(entry, media) {
-  const pageResult = await facebook.publishPost({
+  const scheduledFacebook = facebookForTenant(entry.tenantId);
+  const pageResult = await scheduledFacebook.publishPost({
     message: entry.message,
     mediaBuffer: media ? media.buffer : null,
     mediaMimetype: media ? media.mimetype : null,
@@ -677,7 +728,7 @@ async function dispatchScheduledFacebookPage(entry, media) {
   const groupIds = Array.isArray(entry.recipients) ? entry.recipients : [];
   for (let i = 0; i < groupIds.length; i += 1) {
     try {
-      await facebook.publishToGroup(groupIds[i], {
+      await scheduledFacebook.publishToGroup(groupIds[i], {
         message: entry.message,
         mediaBuffer: media ? media.buffer : null,
         mediaMimetype: media ? media.mimetype : null,
@@ -890,10 +941,10 @@ async function runCampaign(session, contacts, minDelayMs, maxDelayMs) {
   console.log('Campagne: terminée.');
 }
 
-let currentPublishJob = null;
+const currentPublishJobs = new Map();
 
-function createPublishJob(platforms) {
-  currentPublishJob = {
+function createPublishJob(tenantId, platforms) {
+  const job = {
     startedAt: new Date().toISOString(),
     finishedAt: null,
     platforms: platforms.reduce((acc, p) => {
@@ -901,7 +952,8 @@ function createPublishJob(platforms) {
       return acc;
     }, {}),
   };
-  return currentPublishJob;
+  currentPublishJobs.set(tenantId, job);
+  return job;
 }
 
 function isPublishJobActive(job) {
@@ -925,25 +977,25 @@ async function runPublishTask(job, platform, taskFn) {
   }
 }
 
-async function runPublishJob(job, { buffer, mimetype, title, caption, scheduleAt }, platforms) {
+async function runPublishJob(job, { buffer, mimetype, title, caption, scheduleAt }, platforms, mediaAdapter) {
   const tasks = [];
 
   if (platforms.includes('youtube')) {
     tasks.push(runPublishTask(job, 'youtube', (onStatus) => (
-      mediaPublisher.publishYouTubeShort({ buffer, title, description: caption, scheduleAt }, onStatus)
+      mediaAdapter.publishYouTubeShort({ buffer, title, description: caption, scheduleAt }, onStatus)
     )));
   }
 
   if (platforms.includes('instagram')) {
     tasks.push(runPublishTask(job, 'instagram', (onStatus) => {
-      const token = mediaPublisher.registerTempVideo(buffer, mimetype);
-      return mediaPublisher.publishInstagramReel({ token, caption, scheduleAt }, onStatus);
+      const token = mediaAdapter.registerTempVideo(buffer, mimetype);
+      return mediaAdapter.publishInstagramReel({ token, caption, scheduleAt }, onStatus);
     }));
   }
 
   if (platforms.includes('tiktok')) {
     tasks.push(runPublishTask(job, 'tiktok', (onStatus) => (
-      mediaPublisher.publishTikTokVideo({ buffer, title, scheduleAt }, onStatus)
+      mediaAdapter.publishTikTokVideo({ buffer, title, scheduleAt }, onStatus)
     )));
   }
 
@@ -1013,7 +1065,7 @@ app.get(['/admin-secret-portal', '/admin'], (req, res) => {
 app.post('/api/login', (req, res) => {
   const { password } = req.body || {};
 
-  if (password && password === ADMIN_PASSWORD) {
+  if (adminPasswordMatches(password)) {
     return res.status(200).json({ success: true, role: 'admin', allowedModules: null });
   }
 
@@ -1025,7 +1077,7 @@ app.post('/api/login', (req, res) => {
 app.post('/api/admin/login', (req, res) => {
   const { password } = req.body || {};
 
-  if (password && password === ADMIN_PASSWORD) {
+  if (adminPasswordMatches(password)) {
     return res.status(200).json({ success: true });
   }
 
@@ -1095,6 +1147,32 @@ function adminContactQuery(query) {
     if (value !== undefined && value !== null && String(value).trim() !== '') params.set(key, String(value).trim());
   }
   return params.toString();
+}
+
+function isPublicAddress(address) {
+  const version = net.isIP(address);
+  if (version === 4) {
+    const parts = address.split('.').map(Number);
+    const value = parts.reduce((acc, octet) => (acc << 8n) + BigInt(octet), 0n);
+    const inRange = (network, prefix) => {
+      const base = network.split('.').map(Number).reduce((acc, octet) => (acc << 8n) + BigInt(octet), 0n);
+      const mask = (0xffffffffn << BigInt(32 - prefix)) & 0xffffffffn;
+      return (value & mask) === (base & mask);
+    };
+    const blocked = [['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],['172.16.0.0',12],['192.0.0.0',24],['192.0.2.0',24],['192.168.0.0',16],['198.18.0.0',15],['198.51.100.0',24],['203.0.113.0',24],['224.0.0.0',4],['240.0.0.0',4]];
+    return !blocked.some(([network, prefix]) => inRange(network, prefix));
+  }
+  if (version === 6) {
+    const normalized = address.toLowerCase().split('%')[0];
+    const mapped = normalized.match(/::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+    if (mapped) return isPublicAddress(mapped[1]);
+    // Accept only global unicast 2000::/3; exclude transition/documentation ranges.
+    return /^[23]/.test(normalized)
+      && !normalized.startsWith('2001:db8:')
+      && !normalized.startsWith('2001:0:')
+      && !normalized.startsWith('2002:');
+  }
+  return false;
 }
 
 app.get('/api/admin/contacts/status', requireAdmin, async (_req, res) => {
@@ -2124,6 +2202,30 @@ app.post('/api/campaign/excel', requireAccess, requireModule('whatsapp'), attach
 // /api/media/status, juste regroupés. N'importe quel utilisateur authentifié
 // (admin ou licence) peut la lire : ce ne sont que des booléens de
 // disponibilité, jamais les identifiants eux-mêmes.
+app.post('/api/oauth/start', requireAccess, (req, res) => {
+  const provider = String(req.body?.provider || '').toLowerCase();
+  const tenantId = resolveTenantId(req);
+  if (provider !== 'facebook' && req.allowedModules !== null && !(Array.isArray(req.allowedModules) && req.allowedModules.includes('studio_video'))) {
+    return res.status(403).json({ error: 'Votre licence ne permet pas cette connexion.' });
+  }
+  if (provider === 'facebook') {
+    const adapter = facebookForTenant(tenantId);
+    if (!adapter.isConnectAvailable()) return res.status(503).json({ error: 'Connexion Facebook indisponible.' });
+    const state = createOAuthState(tenantId, 'facebook');
+    const redirectUri = `${PUBLIC_BASE_URL}/api/facebook/callback`;
+    return res.json({ url: adapter.getAuthUrl(redirectUri, state) });
+  }
+  const adapter = mediaPublisherForTenant(tenantId);
+  const state = createOAuthState(tenantId, provider);
+  if (provider === 'youtube' && adapter.isYoutubeConnectAvailable()) {
+    return res.json({ url: adapter.getYoutubeAuthUrl(`${PUBLIC_BASE_URL}/api/media/youtube/callback`, state) });
+  }
+  if (provider === 'tiktok' && adapter.isTikTokConnectAvailable()) {
+    return res.json({ url: adapter.getTiktokAuthUrl(`${PUBLIC_BASE_URL}/api/media/tiktok/callback`, state) });
+  }
+  return res.status(provider === 'youtube' || provider === 'tiktok' ? 503 : 400).json({ error: 'Fournisseur OAuth indisponible ou inconnu.' });
+});
+
 app.get('/api/oauth/status', requireAccess, (req, res) => {
   res.status(200).json({
     facebook: { configured: facebook.isConfigured(), connectAvailable: facebook.isConnectAvailable() },
@@ -2159,7 +2261,7 @@ app.get('/api/facebook/connect', requireAccess, requireModule('facebook'), (req,
     });
   }
   const redirectUri = `${PUBLIC_BASE_URL}/api/facebook/callback`;
-  const state = createOAuthState();
+  const state = createOAuthState(resolveTenantId(req), 'facebook');
   res.redirect(facebook.getAuthUrl(redirectUri, state));
 });
 
@@ -2169,16 +2271,17 @@ app.get('/api/facebook/connect', requireAccess, requireModule('facebook'), (req,
 app.get('/api/facebook/callback', async (req, res) => {
   const { code, state, error } = req.query;
 
-  if (error || !code || !state || !consumeOAuthState(state)) {
+  const oauthState = state ? consumeOAuthState(state, 'facebook') : null;
+  if (error || !code || !oauthState || !oauthState.tenantId) {
     return res.redirect('/dashboard?fbConnect=error');
   }
 
   try {
     const redirectUri = `${PUBLIC_BASE_URL}/api/facebook/callback`;
-    await facebook.handleOAuthCallback(code, redirectUri);
+    await facebookForTenant(oauthState.tenantId).handleOAuthCallback(code, redirectUri);
     res.redirect('/dashboard?fbConnect=success');
   } catch (err) {
-    console.error('Erreur lors de la connexion Facebook (callback OAuth):', err?.response?.data || err.message);
+    console.error('Erreur lors de la connexion Facebook (callback OAuth):', err?.response?.data?.error?.code || err.code || err.message);
     res.redirect('/dashboard?fbConnect=error');
   }
 });
@@ -2541,33 +2644,41 @@ async function handleFacebookMessagingEvent(event) {
 // global (voir plus haut) qui capture aussi req.rawBody pour la vérification
 // de signature HMAC — indispensable ici puisque cette route est publique par
 // nature (appelée par les serveurs de Meta, sans notre authentification).
+async function resolveFacebookTenantForPage(pageId) {
+  if (!pageId) return null;
+  const tenantIds = [...new Set(['__admin__', ...licenses.listLicenses().map((license) => String(license.key || '').trim().toUpperCase()).filter(Boolean)])];
+  for (const tenantId of tenantIds) {
+    try {
+      const adapter = facebookForTenant(tenantId);
+      let storedPageId = adapter.getStoredToken()?.pageId || null;
+      if (!storedPageId && tenantId === '__admin__' && adapter.isConfigured()) storedPageId = await adapter.ensurePageId();
+      if (String(storedPageId || '') === String(pageId)) return tenantId;
+    } catch (err) {
+      // An unavailable account token does not prevent checking the remaining tenants.
+    }
+  }
+  return null;
+}
+
 app.post('/api/facebook/webhook', (req, res) => {
   const signature = req.get('x-hub-signature-256');
-  if (!facebook.verifyWebhookSignature(req.rawBody, signature)) {
-    return res.sendStatus(403);
-  }
-
-  // Accusé de réception immédiat (Meta exige une réponse rapide) : le
-  // traitement de la capture/réponse automatique continue en arrière-plan.
+  if (!facebookForTenant('__admin__').verifyWebhookSignature(req.rawBody, signature)) return res.sendStatus(403);
   res.sendStatus(200);
 
   (req.body.entry || []).forEach((entry) => {
-    (entry.changes || []).forEach((change) => {
-      if (change.field === 'feed') {
-        handleFacebookFeedChange(change.value).catch((err) => {
-          console.error('Erreur lors du traitement d\'un évènement feed Facebook:', err);
-        });
-      }
-    });
-
-    (entry.messaging || []).forEach((event) => {
-      handleFacebookMessagingEvent(event).catch((err) => {
-        console.error('Erreur lors du traitement d\'un évènement Messenger:', err);
+    resolveFacebookTenantForPage(entry.id).then((tenantId) => {
+      if (!tenantId) return;
+      return facebookTenantContext.run({ tenantId }, async () => {
+        for (const change of entry.changes || []) {
+          if (change.field === 'feed') await handleFacebookFeedChange(change.value);
+        }
+        for (const event of entry.messaging || []) await handleFacebookMessagingEvent(event);
       });
+    }).catch((err) => {
+      console.error('Facebook webhook processing failed:', err.code || err.message);
     });
   });
 });
-
 // ---------- Règles de mots-clés (réponse automatique aux prospects) ----------
 app.get('/api/facebook/keyword-rules', requireAccess, requireModule('facebook'), (req, res) => {
   res.status(200).json({ rules: keywordRules.list() });
@@ -2588,7 +2699,9 @@ app.post('/api/facebook/keyword-rules', requireAccess, requireModule('facebook')
 
   if (req.file) {
     const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    fs.writeFileSync(path.join(KEYWORD_MEDIA_DIR, safeName), req.file.buffer);
+    const tenantKeywordMediaDir = tenantMediaDirectory(KEYWORD_MEDIA_DIR, resolveTenantId(req));
+    fs.mkdirSync(tenantKeywordMediaDir, { recursive: true });
+    fs.writeFileSync(path.join(tenantKeywordMediaDir, safeName), req.file.buffer);
     storedMediaUrl = `local:${safeName}`;
     mediaMimetype = req.file.mimetype;
     mediaFilename = req.file.originalname;
@@ -3412,13 +3525,20 @@ app.post('/api/telegram/campaign/manual-queue/:index/sent', requireAccess, requi
 // de protection : personne ne peut deviner l'URL sans l'avoir reçue, et elle
 // expire après 30 minutes (voir MediaPublisherAdapter.registerTempVideo).
 app.get('/api/media/temp/:token', (req, res) => {
-  const entry = mediaPublisher.getTempVideo(req.params.token);
+  const token = String(req.params.token || '');
+  if (!/^[a-f0-9]{32}$/.test(token)) return res.status(404).send('Vidéo introuvable ou expirée.');
+  let entry = null;
+  for (const adapter of mediaPublisherAdapters.values()) {
+    entry = adapter.getTempVideo(token);
+    if (entry) break;
+  }
 
   if (!entry) {
     return res.status(404).send('Vidéo introuvable ou expirée.');
   }
 
   res.set('Content-Type', entry.mimetype || 'video/mp4');
+  res.set('Cache-Control', 'private, no-store');
   res.send(entry.buffer);
 });
 
@@ -3837,20 +3957,21 @@ app.get('/api/media/youtube/connect', requireAccess, requireModule('studio_video
     });
   }
   const redirectUri = `${PUBLIC_BASE_URL}/api/media/youtube/callback`;
-  const state = createOAuthState();
+  const state = createOAuthState(resolveTenantId(req), 'youtube');
   res.redirect(mediaPublisher.getYoutubeAuthUrl(redirectUri, state));
 });
 
 app.get('/api/media/youtube/callback', async (req, res) => {
   const { code, state, error } = req.query;
 
-  if (error || !code || !state || !consumeOAuthState(state)) {
+  const oauthState = state ? consumeOAuthState(state, 'youtube') : null;
+  if (error || !code || !oauthState || !oauthState.tenantId) {
     return res.redirect('/dashboard?youtubeConnect=error');
   }
 
   try {
     const redirectUri = `${PUBLIC_BASE_URL}/api/media/youtube/callback`;
-    await mediaPublisher.handleYoutubeCallback(code, redirectUri);
+    await mediaPublisherForTenant(oauthState.tenantId).handleYoutubeCallback(code, redirectUri);
     res.redirect('/dashboard?youtubeConnect=success');
   } catch (err) {
     console.error('Erreur lors de la connexion YouTube (callback OAuth):', err?.response?.data || err.message);
@@ -3865,20 +3986,21 @@ app.get('/api/media/tiktok/connect', requireAccess, requireModule('studio_video'
     });
   }
   const redirectUri = `${PUBLIC_BASE_URL}/api/media/tiktok/callback`;
-  const state = createOAuthState();
+  const state = createOAuthState(resolveTenantId(req), 'tiktok');
   res.redirect(mediaPublisher.getTiktokAuthUrl(redirectUri, state));
 });
 
 app.get('/api/media/tiktok/callback', async (req, res) => {
   const { code, state, error } = req.query;
 
-  if (error || !code || !state || !consumeOAuthState(state)) {
+  const oauthState = state ? consumeOAuthState(state, 'tiktok') : null;
+  if (error || !code || !oauthState || !oauthState.tenantId) {
     return res.redirect('/dashboard?tiktokConnect=error');
   }
 
   try {
     const redirectUri = `${PUBLIC_BASE_URL}/api/media/tiktok/callback`;
-    await mediaPublisher.handleTiktokCallback(code, redirectUri);
+    await mediaPublisherForTenant(oauthState.tenantId).handleTiktokCallback(code, redirectUri);
     res.redirect('/dashboard?tiktokConnect=success');
   } catch (err) {
     console.error('Erreur lors de la connexion TikTok (callback OAuth):', err?.response?.data || err.message);
@@ -3911,6 +4033,8 @@ app.post('/api/media/publish-all', requireAccess, requireModule('studio_video'),
     });
   }
 
+  const tenantId = resolveTenantId(req);
+  const currentPublishJob = currentPublishJobs.get(tenantId);
   if (isPublishJobActive(currentPublishJob)) {
     return res.status(409).json({
       error: 'Une publication est déjà en cours. Attendez sa fin avant d\'en lancer une nouvelle.',
@@ -3921,7 +4045,7 @@ app.post('/api/media/publish-all', requireAccess, requireModule('studio_video'),
     return res.status(400).json({ error: 'Date de programmation invalide.' });
   }
 
-  const job = createPublishJob(platforms);
+  const job = createPublishJob(tenantId, platforms);
 
   res.status(202).json({ status: 'publish_started', platforms: job.platforms });
 
@@ -3931,12 +4055,13 @@ app.post('/api/media/publish-all', requireAccess, requireModule('studio_video'),
     title: title || '',
     caption: caption || '',
     scheduleAt: scheduleAt || null,
-  }, platforms).catch((err) => {
+  }, platforms, mediaPublisherForTenant(tenantId)).catch((err) => {
     console.error('Erreur pendant la publication multi-plateformes:', err);
   });
 });
 
 app.get('/api/media/publish-status', requireAccess, requireModule('studio_video'), (req, res) => {
+  const currentPublishJob = currentPublishJobs.get(resolveTenantId(req));
   if (!currentPublishJob) {
     return res.status(200).json({ exists: false });
   }
@@ -4039,7 +4164,9 @@ app.post(
           // : compression vidéo automatique avant de persister sur disque.
           const built = await buildWhatsappMediaStep(file);
           const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${built.filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-          fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), built.buffer);
+          const tenantScheduledMediaDir = tenantMediaDirectory(SCHEDULED_MEDIA_DIR, resolveTenantId(req));
+          fs.mkdirSync(tenantScheduledMediaDir, { recursive: true });
+          fs.writeFileSync(path.join(tenantScheduledMediaDir, safeName), built.buffer);
           sequenceItems.push({
             type: 'media',
             mediaUrl: `local:${safeName}`,
@@ -4087,7 +4214,9 @@ app.post(
           const mimetype = built ? built.mimetype : file.mimetype;
           const filename = built ? built.filename : file.originalname;
           const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-          fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), buffer);
+          const tenantScheduledMediaDir = tenantMediaDirectory(SCHEDULED_MEDIA_DIR, resolveTenantId(req));
+          fs.mkdirSync(tenantScheduledMediaDir, { recursive: true });
+          fs.writeFileSync(path.join(tenantScheduledMediaDir, safeName), buffer);
           mediaItems.push({
             mediaUrl: `local:${safeName}`,
             mediaMimetype: mimetype,
@@ -4192,7 +4321,9 @@ app.post('/api/facebook/schedule-post', requireAccess, requireModule('facebook')
 
   if (req.file) {
     const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    fs.writeFileSync(path.join(SCHEDULED_MEDIA_DIR, safeName), req.file.buffer);
+    const tenantScheduledMediaDir = tenantMediaDirectory(SCHEDULED_MEDIA_DIR, resolveTenantId(req));
+    fs.mkdirSync(tenantScheduledMediaDir, { recursive: true });
+    fs.writeFileSync(path.join(tenantScheduledMediaDir, safeName), req.file.buffer);
     storedMediaUrl = `local:${safeName}`;
     mediaMimetype = req.file.mimetype;
     mediaFilename = req.file.originalname;
@@ -4235,7 +4366,7 @@ app.delete('/api/facebook/schedule-post/:id', requireAccess, requireModule('face
 // adapters/whatsappManager.js#getSessionForRequest) : l'admin et chaque clé
 // de licence ont leurs propres discussions, jamais partagées.
 function resolveTenantId(req) {
-  return req.isAdmin ? '__admin__' : req.licenseKey;
+  return req.isAdmin ? '__admin__' : (req.tenantId || (req.licenseKey && String(req.licenseKey).trim().toUpperCase()));
 }
 
 function sleep(ms) {
@@ -4652,7 +4783,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
       sessionId: req.params.id,
       lastAssistantMessage,
       // Identité AUTHENTIFIÉE par requireAccess (jamais déduite du texte) ; tour teinté si un fichier a été joint.
-      principal: require('./ai-engine/authz').issuePrincipal({ tenant: tenantId, role: req.isAdmin ? 'ADMIN' : 'OWNER', userId: tenantId, channel: 'WEB', via: req.isAdmin ? 'web_admin' : 'web_license' }),
+      principal: require('./ai-engine/authz').issuePrincipal({ tenant: tenantId, role: req.isAdmin ? 'ADMIN' : 'OWNER', userId: tenantId, channel: 'WEB', via: req.isAdmin ? 'web_admin' : 'web_license', allowedModules: req.allowedModules }),
       tainted: studioTainted,
     }, {
       runtime: intelligenceBridge.runtime,
@@ -5202,6 +5333,11 @@ intelligenceBridge = createVpsBridge({
   // WhatsApp différente de celle réellement appairée par l'utilisateur sous sa
   // clé de licence — d'où "je ne suis pas connecté" alors que le compte l'est.
   resolveTenant: (req) => resolveTenantId(req),
+  // Les outils du Chat Intelligent partagent les moteurs existants et les
+  // modules autorisés par la licence authentifiée.
+  toolContext: (tenant, req) => Object.assign({}, buildNaturalToolContext(tenant), {
+    allowedModules: req && req.allowedModules,
+  }),
 });
 app.use('/', requireAccess, intelligenceBridge.router);
 
@@ -5247,7 +5383,11 @@ async function runGroupCampaignsTick() {
   if (groupCampaignsTickRunning) return;
   groupCampaignsTickRunning = true;
   try {
-    await groupCampaigns.tickAll({ listGroups: (p) => intelligenceBridge.runtime.listGroups(p), sendToGroups: (p) => intelligenceBridge.runtime.sendToGroups(p) });
+    await groupCampaigns.tickAll({
+      tenantAllowed: (tenantId) => { const modules = allowedModulesForTenant(tenantId); return modules === null || modules.includes('whatsapp'); },
+      listGroups: (p) => intelligenceBridge.runtime.listGroups(p),
+      sendToGroups: (p) => intelligenceBridge.runtime.sendToGroups(p),
+    });
   } catch (err) {
     console.error('Cycle des campagnes de groupes :', err.message);
   } finally {
@@ -5605,11 +5745,13 @@ app.get('/api/reports/ai-usage', requireAccess, async (req, res) => {
 });
 app.get('/api/reports/activity', requireAccess, async (req, res) => {
   try {
-    const a = await activityStore.summary(req.query.date, 200);
-    if (req.isAdmin) return res.json({ ok: true, scope: 'global', activity: a });
+    if (req.isAdmin) {
+      const a = await activityStore.summary(req.query.date, 200);
+      return res.json({ ok: true, scope: 'global', activity: a });
+    }
     const t = resolveTenantId(req);
-    const events = (a.events || []).filter((e) => e.tenant === t).slice(0, 60);
-    res.json({ ok: true, scope: 'tenant', activity: { date: a.date, events, counts: a.counts } });
+    const a = await activityStore.summary(req.query.date, 60, t);
+    res.json({ ok: true, scope: 'tenant', activity: a });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -5678,7 +5820,7 @@ app.post('/api/reports/analysis', requireAccess, async (req, res) => {
   try {
     const b = req.body || {}; const f = {}; for (const k of ['serviceId', 'channel', 'period']) if (b[k]) f[k] = String(b[k]).slice(0, 40);
     const t = resolveTenantId(req);
-    const principal = require('./ai-engine/authz').issuePrincipal({ tenant: t, role: 'OWNER', channel: 'WEB', via: 'dashboard' });
+    const principal = require('./ai-engine/authz').issuePrincipal({ tenant: t, role: 'OWNER', channel: 'WEB', via: 'dashboard', allowedModules: req.allowedModules });
     res.json(await activityIntelligence.analyzeWithAgents(t, f, principal));
   } catch (err) { res.status(500).json({ error: 'Analyse indisponible.' }); }
 });
@@ -6163,25 +6305,30 @@ async function handleHistoricalMessage({ channel, tenantId, session, msg }) {
 
 // Dépendances du Chat Intelligent (chatOrchestrator.handle) — mêmes que celles de l'onglet « Chat Intelligent » du tableau
 // de bord ; réutilisées par le canal propriétaire (WhatsApp) pour que ce soit le MÊME cerveau, pas un second chatbot.
+function allowedModulesForTenant(tenantId) {
+  const tenant = String(tenantId || '').trim().toUpperCase();
+  if (tenant === '__ADMIN__') return null;
+  const license = licenses.listLicenses().find((item) => String(item.key || '').trim().toUpperCase() === tenant);
+  if (!license || !license.active || (license.expiresAt && new Date(license.expiresAt).getTime() < Date.now())) return [];
+  return Array.isArray(license.allowedModules) ? license.allowedModules : licenses.ALL_MODULES.slice();
+}
+
 function buildNaturalToolContext(tenantId) {
-  const license = licenses.listLicenses().find((item) => String(item.key || '').trim().toUpperCase() === String(tenantId || '').trim().toUpperCase());
   return {
     // Shared instances used by the existing Render routes. Tool modules wrap
     // these engines; they must never instantiate a second adapter or engine.
-    facebook, mediaPublisher, imageAiEngine, videoAiEngine, storyboardEngine, videoMixerEngine,
-    contactsStore, keywordRules,
+    facebook: facebookForTenant(tenantId), mediaPublisher: mediaPublisherForTenant(tenantId), imageAiEngine, videoAiEngine, storyboardEngine, videoMixerEngine,
+    contactsStore: contactsStoreModule.forTenant(tenantId), keywordRules: keywordRulesModule.forTenant(tenantId),
     ebookGenerator, scheduledMessages, aiStudioStore, chatUploads,
     publicBaseUrl: PUBLIC_BASE_URL,
-    allowedModules: license
-      ? (Array.isArray(license.allowedModules) ? license.allowedModules : licenses.ALL_MODULES.slice())
-      : null,
+    allowedModules: allowedModulesForTenant(tenantId),
   };
 }
 
 async function notifyMissionProgress({ tenantId, text, status }) {
   const out = [];
   const message = String(text || '').slice(0, 1400);
-  try { await require('./ai-engine/platformOrchestrator').notifyTenantChat(tenantId, message, [{ icon: status === 'error' ? '⚠️' : '🧭', label: 'Avancement mission', status: status === 'error' ? 'error' : 'pending' }]); out.push('chat'); } catch (e) { /* canal optionnel */ }
+  try { await require('./ai-engine/platformOrchestrator').notifyTenantChat(tenantId, message, [{ icon: status === 'error' ? '\u26a0\ufe0f' : '\ud83e\udded', label: 'Avancement mission', status: status === 'error' ? 'error' : 'pending' }]); out.push('chat'); } catch (e) { /* canal optionnel */ }
   let settings = null;
   try { settings = await autoResponder.getSettings(tenantId); } catch (e) { /* réglages optionnels */ }
   const ownerChannel = require('./ai-engine/ownerChannel');
@@ -6260,9 +6407,10 @@ function restoreObjectiveMissionMonitors() {
       try {
         const doc = await storage.get(missions.NS, docId, null);
         const tenantId = String(doc && doc.tenant || docId);
-        const known = licenses.listLicenses().some((item) => String(item.key || '').trim().toUpperCase() === tenantId.toUpperCase());
-        if (!known && tenantId !== whatsappManager.ADMIN_TENANT_ID && tenantId !== telegramManager.ADMIN_TENANT_ID) continue;
-        const principal = authz.issuePrincipal({ tenant: tenantId, role: 'OWNER', userId: tenantId, channel: 'SYSTEM', via: 'mission_recovery' });
+        const license = licenses.listLicenses().find((item) => String(item.key || '').trim().toUpperCase() === tenantId.toUpperCase());
+        if (!license && tenantId !== whatsappManager.ADMIN_TENANT_ID && tenantId !== telegramManager.ADMIN_TENANT_ID) continue;
+        const allowedModules = license ? (Array.isArray(license.allowedModules) ? license.allowedModules : licenses.ALL_MODULES.slice()) : null;
+        const principal = authz.issuePrincipal({ tenant: tenantId, role: 'OWNER', userId: tenantId, channel: 'SYSTEM', via: 'mission_recovery', allowedModules });
         await authz.runAs(principal, async () => {
           const active = await missions.list(tenantId, 50);
           for (const mission of active.filter((m) => m.state === 'monitoring')) {
@@ -6298,7 +6446,7 @@ try { conversationHistory.startMaintenance(); } catch (_) { /* no-op */ }
 try {
   const taskQueue = require('./ai-engine/taskQueue');
   const { queueHandlers } = require('./ai-engine/toolsExtra');
-  taskQueue.startWorker((tenant) => queueHandlers(tenant, intelligenceBridge && intelligenceBridge.runtime), 30000, {
+  taskQueue.startWorker((tenant) => queueHandlers(tenant, intelligenceBridge && intelligenceBridge.runtime, allowedModulesForTenant(tenant)), 30000, {
     concurrency: 4,
     tenantProvider: () => licenses.listLicenses().map((item) => item.key).concat(
       [whatsappManager.ADMIN_TENANT_ID, telegramManager.ADMIN_TENANT_ID], require('./ai-engine/alwaysOn').list()),
@@ -6328,23 +6476,23 @@ try {
       image: isImage ? file.buffer : null,
       file: file && !isImage ? { buffer: file.buffer, name: file.originalname, type: file.mimetype } : null,
       rows: (() => { try { const c = req.body && req.body.contacts; const a = typeof c === 'string' ? JSON.parse(c) : c; return Array.isArray(a) ? a.map((x) => ({ phone: x.telephone || x.phone || x.identifier || '', name: x.nom || x.name || '' })) : undefined; } catch (e) { return undefined; } })(),
-    }, { defaultCountryCode: req.body && req.body.defaultCountryCode });
+    }, { defaultCountryCode: req.body && req.body.defaultCountryCode, allowedModules: req.allowedModules });
   }));
-  app.get('/api/campaigns/recipients/:id', requireAccess, cmpRoute((req, tenant) => campaignService.getRecipientsPage(tenant, req.params.id, req.query)));
+  app.get('/api/campaigns/recipients/:id', requireAccess, cmpRoute((req, tenant) => campaignService.getRecipientsPage(tenant, req.params.id, req.query, req.allowedModules)));
   app.post('/api/campaigns/media', requireAccess, upload.single('file'), cmpRoute(async (req, tenant) => {
     if (!req.file) throw Object.assign(new Error('Aucun fichier fourni (champ "file").'), { http: 400, code: 'NO_FILE' });
     const meta = await chatUploadsStore.save(tenant, req.file);
     return { mediaFileId: meta.id, name: meta.name, type: meta.type, size: meta.size };
   }));
   app.post('/api/campaigns', requireAccess, cmpRoute((req, tenant) => campaignService.createCampaign(tenant, req.body || {}, req.allowedModules)));
-  app.get('/api/campaigns', requireAccess, cmpRoute(async (req, tenant) => ({ campaigns: await campaignService.list(tenant, cmpRuntime()) })));
-  app.get('/api/campaigns/:id', requireAccess, cmpRoute((req, tenant) => campaignService.get(tenant, req.params.id, cmpRuntime(), req.query)));
+  app.get('/api/campaigns', requireAccess, cmpRoute(async (req, tenant) => ({ campaigns: await campaignService.list(tenant, cmpRuntime(), req.allowedModules) })));
+  app.get('/api/campaigns/:id', requireAccess, cmpRoute((req, tenant) => campaignService.get(tenant, req.params.id, cmpRuntime(), req.query, req.allowedModules)));
   app.post('/api/campaigns/:id/launch', requireAccess, cmpRoute((req, tenant) => campaignService.launch(tenant, req.params.id, cmpRuntime(), req.allowedModules)));
-  app.post('/api/campaigns/:id/schedule', requireAccess, cmpRoute((req, tenant) => campaignService.schedule(tenant, req.params.id, req.body && req.body.at)));
-  app.post('/api/campaigns/:id/pause', requireAccess, cmpRoute((req, tenant) => campaignService.control(tenant, req.params.id, 'pause', cmpRuntime())));
-  app.post('/api/campaigns/:id/resume', requireAccess, cmpRoute((req, tenant) => campaignService.control(tenant, req.params.id, 'resume', cmpRuntime())));
-  app.post('/api/campaigns/:id/cancel', requireAccess, cmpRoute((req, tenant) => campaignService.control(tenant, req.params.id, 'cancel', cmpRuntime())));
-  app.get('/api/campaigns/:id/report', requireAccess, cmpRoute((req, tenant) => campaignService.report(tenant, req.params.id, cmpRuntime())));
+  app.post('/api/campaigns/:id/schedule', requireAccess, cmpRoute((req, tenant) => campaignService.schedule(tenant, req.params.id, req.body && req.body.at, req.allowedModules)));
+  app.post('/api/campaigns/:id/pause', requireAccess, cmpRoute((req, tenant) => campaignService.control(tenant, req.params.id, 'pause', cmpRuntime(), req.allowedModules, (req.body && req.body.channel) || req.query.channel)));
+  app.post('/api/campaigns/:id/resume', requireAccess, cmpRoute((req, tenant) => campaignService.control(tenant, req.params.id, 'resume', cmpRuntime(), req.allowedModules, (req.body && req.body.channel) || req.query.channel)));
+  app.post('/api/campaigns/:id/cancel', requireAccess, cmpRoute((req, tenant) => campaignService.control(tenant, req.params.id, 'cancel', cmpRuntime(), req.allowedModules, (req.body && req.body.channel) || req.query.channel)));
+  app.get('/api/campaigns/:id/report', requireAccess, cmpRoute((req, tenant) => campaignService.report(tenant, req.params.id, cmpRuntime(), req.allowedModules)));
 }
 
 // ---------- Communautés : création/invitation de groupes + découverte (onglets WhatsApp et Telegram) ----------
@@ -6385,7 +6533,7 @@ try {
     if (req.file) { if (/^image\//.test(req.file.mimetype || '')) input.image = req.file.buffer; else input.file = { buffer: req.file.buffer, name: req.file.originalname, type: req.file.mimetype }; }
     if (b.recipientsId) input.recipientsId = b.recipientsId;
     if (b.timing) { try { input.timing = typeof b.timing === 'string' ? JSON.parse(b.timing) : b.timing; } catch (e) { /* temporisation ignorée si mal formée : les défauts s'appliquent */ } }
-    return { ok: true, group: await communityService.startGroup(tenant, input) };
+    return { ok: true, group: await communityService.startGroup(tenant, input, req.allowedModules) };
   }));
   // Temporisation de la création/alimentation d'un groupe (taille de lot, délais, pauses…) — voir communityService.TIMING_BOUNDS.
   app.get('/api/communities/timing-bounds', requireAccess, (req, res) => res.json({ ok: true, bounds: communityService.TIMING_BOUNDS }));

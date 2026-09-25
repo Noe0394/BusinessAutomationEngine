@@ -2727,11 +2727,6 @@
     // rediriger le navigateur vers l'écran officiel du fournisseur), les
     // en-têtes fetch ne s'appliquent pas : la clé de licence passe donc en
     // paramètre de requête, déjà supporté par requireAccess côté serveur.
-    function buildAuthedUrl(path) {
-      const { value } = getStoredAuth();
-      const params = new URLSearchParams({ licenseKey: value, deviceId: getDeviceId() });
-      return apiUrl(path) + '?' + params.toString();
-    }
     async function apiFetch(url, options) {
       options = options || {};
       const headers = Object.assign({}, options.headers || {}, authHeaders());
@@ -2741,6 +2736,32 @@
         throw new Error('unauthorized');
       }
       return res;
+    }
+    async function startOAuthConnection(provider) {
+      const res = await apiFetch('/api/oauth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.url) throw new Error(data.error || 'Connexion indisponible.');
+      window.location.assign(data.url);
+    }
+    async function downloadAuthedFile(url, filename) {
+      const res = await apiFetch(url);
+      if (!res.ok) {
+        let message = 'Échec du téléchargement.';
+        try { message = (await res.json()).error || message; } catch (err) { /* réponse non JSON */ }
+        throw new Error(message);
+      }
+      const objectUrl = URL.createObjectURL(await res.blob());
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
     }
 
     function showLogin(errorMessage) {
@@ -5835,7 +5856,7 @@
     });
 
     document.getElementById('fb-groups-export-btn').addEventListener('click', () => {
-      window.location.href = buildAuthedUrl('/api/facebook/groups/export-excel');
+      downloadAuthedFile('/api/facebook/groups/export-excel', 'groupes_facebook.xlsx').catch((err) => fbGroupsShowFeedback(err.message, true));
     });
 
     const fbGroupsMediaDropZone = document.getElementById('fb-groups-media-drop-zone');
@@ -5941,7 +5962,7 @@
     }
 
     document.getElementById('fb-connect-btn').addEventListener('click', () => {
-      window.location.href = buildAuthedUrl('/api/facebook/connect');
+      startOAuthConnection('facebook').catch((err) => { const badge = document.getElementById('fb-status-badge'); if (badge) badge.textContent = err.message; });
     });
 
     document.getElementById('fb-logout-btn').addEventListener('click', async () => {
@@ -6030,10 +6051,10 @@
     }
 
     document.getElementById('yt-connect-btn').addEventListener('click', () => {
-      window.location.href = buildAuthedUrl('/api/media/youtube/connect');
+      startOAuthConnection('youtube').catch((err) => { const el = document.getElementById('youtube-status'); if (el) el.textContent = err.message; });
     });
     document.getElementById('tt-connect-btn').addEventListener('click', () => {
-      window.location.href = buildAuthedUrl('/api/media/tiktok/connect');
+      startOAuthConnection('tiktok').catch((err) => { const el = document.getElementById('tiktok-status'); if (el) el.textContent = err.message; });
     });
 
     // Les callbacks OAuth (Facebook/YouTube/TikTok) redirigent vers /dashboard
@@ -6872,16 +6893,15 @@
     document.getElementById('prospects-refresh-btn').addEventListener('click', prospectsRefreshList);
 
     document.getElementById('prospects-export-btn').addEventListener('click', () => {
-      // Ne réutilise pas buildAuthedUrl() ici : elle ajoute "?licenseKey=..."
-      // sans tenir compte d'une query string déjà présente (voir keyword/
-      // source ci-dessous) — on construit donc l'URL complète nous-mêmes.
+      // Les filtres restent dans l'URL; l'authentification est envoyée en en-tête.
       const keyword = document.getElementById('prospects-filter-keyword').value;
       const source = document.getElementById('prospects-filter-source').value;
-      const { value } = getStoredAuth();
-      const params = new URLSearchParams({ licenseKey: value, deviceId: getDeviceId() });
+      const params = new URLSearchParams();
       if (keyword) params.set('keyword', keyword);
       if (source) params.set('source', source);
-      window.location.href = '/api/facebook/prospects/export-excel?' + params.toString();
+      const query = params.toString();
+      downloadAuthedFile('/api/facebook/prospects/export-excel' + (query ? '?' + query : ''), 'prospects_facebook.xlsx')
+        .catch((err) => prospectsShowFeedback(err.message, true));
     });
 
     // ---------- Nouveaux contacts publicitaires (WhatsApp/Telegram, campagnes d'entrée — ai-engine/adCampaigns.js) ----------
@@ -6918,7 +6938,8 @@
     }
     document.getElementById('ad-new-contacts-refresh-btn').addEventListener('click', adContactsRefreshList);
     document.getElementById('ad-new-contacts-export-btn').addEventListener('click', () => {
-      window.location.href = buildAuthedUrl('/api/ad-campaigns/new-contacts/export-excel');
+      downloadAuthedFile('/api/ad-campaigns/new-contacts/export-excel', 'nouveaux_contacts.xlsx')
+        .catch((err) => adContactsShowFeedback(err.message, true));
     });
 
     // ---------- Groupes / Diffusion (import Excel + partage assisté) ----------
@@ -10857,7 +10878,9 @@
       html += '<div class="rep-section" id="rep-intel"></div>';
       box.innerHTML = html;
       const contactExport = document.getElementById('rep-contacts-export');
-      if (contactExport) contactExport.addEventListener('click', () => { window.location.href = buildAuthedUrl('/api/reports/contacts/export-excel'); });
+      if (contactExport) contactExport.addEventListener('click', () => {
+        downloadAuthedFile('/api/reports/contacts/export-excel', 'contacts.xlsx').catch((err) => console.error(err.message));
+      });
       repIntelLoad();
     }
 

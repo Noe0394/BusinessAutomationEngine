@@ -270,15 +270,16 @@ async function list(tenantId, opts) {
 }
 
 // Compte par tag (pour un aperçu rapide "X prospects, Y clients").
-async function counts(tenantId) {
+async function counts(tenantId, opts) {
   const doc = await load(tenantId);
+  const channel = opts && opts.channel ? String(opts.channel).toUpperCase() : null;
+  const contacts = Object.values(doc.contacts || {}).filter((c) => !channel || c.channel === channel);
   const byTag = {};
   const bySource = {};
-  for (const c of Object.values(doc.contacts || {})) {
+  for (const c of contacts) {
     for (const t of (c.tags || [])) byTag[t] = (byTag[t] || 0) + 1;
     for (const source of (c.sources || (c.source ? [c.source] : []))) bySource[source] = (bySource[source] || 0) + 1;
   }
-  const contacts = Object.values(doc.contacts || {});
   const dayAgo = Date.now() - 86400000;
   const newerThanDay = (value) => value && new Date(value).getTime() >= dayAgo;
   return {

@@ -51,3 +51,4 @@ id_ed25519
 # code. Le VPS/PC les persistent hors dépôt ; ne JAMAIS versionner (secrets
 # chiffrés + conversations réelles). Voir ai-engine/storageAdapter.js.
 ai_engine_data/
+tenant-data/

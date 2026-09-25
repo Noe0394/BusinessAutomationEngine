@@ -41,6 +41,10 @@ function requireAccessLike(req, res, next) {
   // par ADMIN_PASSWORD injecté pour rester hors du .env.
   const pw = req.get('x-admin-password') || req.query.password;
   if (pw && pw === ADMIN_PASSWORD) { req.isAdmin = true; req.allowedModules = null; return next(); }
+  const key = req.get('x-license-key');
+  if (key === 'ACCOUNT_A' || key === 'ACCOUNT_B') {
+    req.isAdmin = false; req.licenseKey = key; req.allowedModules = ['whatsapp']; return next();
+  }
   return res.status(401).json({ error: 'Authentification requise (mot de passe administrateur ou clé de licence valide).' });
 }
 
@@ -48,7 +52,13 @@ function requireAccessLike(req, res, next) {
   const stateFile = path.join(os.tmpdir(), 'intel-bridge-test-' + Date.now() + '.json');
   const app = express();
   app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
-  app.use('/', requireAccessLike, createVpsBridge({ runtime: null, stateFile }).router);
+  const bridge = createVpsBridge({
+    runtime: null,
+    stateFile,
+    resolveTenant: (req) => req.isAdmin ? '__admin__' : req.licenseKey,
+    chatOrchestrator: { handle: async (input) => ({ text: `Réponse privée ${input.tenantId}` }) },
+  });
+  app.use('/', requireAccessLike, bridge.router);
 
   const server = http.createServer(app);
   await new Promise((r) => server.listen(0, r));
@@ -73,6 +83,33 @@ function requireAccessLike(req, res, next) {
     const r = await req('POST', '/api/intelligence/analyze', { message: 'test' }, { 'content-type': 'application/json' });
     assert('401 sans x-admin-password sur /analyze', r.status === 401, 'status=' + r.status);
     assert('andmessage objet erreur explicite', r.json && r.json.error, String(r.json));
+  }
+
+  section('SÉCURITÉ — tenant lié à la licence, payload falsifié refusé');
+  {
+    const r = await req('POST', '/api/intelligence/execute', {
+      action: 'ANALYZE_HUMAN_CONTEXT',
+      tenantId: 'ACCOUNT_B',
+      payload: { text: 'isolated', tenantId: 'ACCOUNT_B' },
+      runId: 'isolation-' + Date.now(),
+    }, { 'x-license-key': 'ACCOUNT_A', 'content-type': 'application/json' });
+    const executionTenant = r.json && r.json.out && r.json.out.results && r.json.out.results[0]
+      && r.json.out.results[0].result && r.json.out.results[0].result.tenantId;
+    assert('ACCOUNT_A ne peut pas choisir ACCOUNT_B dans la requête', r.status === 200 && executionTenant === 'ACCOUNT_A', `status=${r.status}; tenant=${executionTenant}`);
+  }
+
+  section('SÉCURITÉ — historique et sessions goal-chat isolés A/B');
+  {
+    const authA = { 'x-license-key': 'ACCOUNT_A', 'content-type': 'application/json' };
+    const authB = { 'x-license-key': 'ACCOUNT_B', 'content-type': 'application/json' };
+    const a = await req('POST', '/api/intelligence/goal-chat', { message: 'contenu privé A' }, authA);
+    const sessionA = a.json && a.json.sessionId;
+    const bRead = sessionA ? await req('GET', `/api/intelligence/conversations/${encodeURIComponent(sessionA)}`, undefined, authB) : null;
+    assert('ACCOUNT_B ne lit pas l’historique de ACCOUNT_A', !!(bRead && bRead.status === 200 && bRead.json.messages.length === 0 && bRead.json.title === null), JSON.stringify(bRead && bRead.json));
+    const b = sessionA ? await req('POST', '/api/intelligence/goal-chat', { sessionId: sessionA, message: 'contenu privé B' }, authB) : null;
+    const aRead = sessionA ? await req('GET', `/api/intelligence/conversations/${encodeURIComponent(sessionA)}`, undefined, authA) : null;
+    assert('ACCOUNT_B ne reprend pas l’état Goal Chat de ACCOUNT_A', !!(b && b.status === 200 && b.json.sessionId && b.json.sessionId !== sessionA), JSON.stringify(b && b.json));
+    assert('l’historique A reste intact et propre', !!(aRead && aRead.status === 200 && aRead.json.messages.some((m) => m.content === 'contenu privé A') && !aRead.json.messages.some((m) => m.content === 'contenu privé B')), JSON.stringify(aRead && aRead.json.messages));
   }
 
   section('TEST 2 — Analyse émotionnelle (Chat-to-Action + Human Context)');

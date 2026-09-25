@@ -21,6 +21,7 @@ process.env.SECRET_VAULT_KEY = 'test-vault-key-tools';
 const businessServices = require('../ai-engine/businessServices');
 const contactCrm = require('../ai-engine/contactCrm');
 const registry = require('../ai-engine/toolRegistry');
+const authz = require('../ai-engine/authz');
 
 const T = 'tTools';
 
@@ -108,6 +109,34 @@ test('list : filtre par permissions (outils d\'action masqués sans droit)', () 
   assert.ok(withoutSend.includes('getProductPrice'), 'lecture toujours visible');
   const withSend = registry.list({ permissions: ['messages:send'] }).map((t) => t.name);
   assert.ok(withSend.includes('sendWhatsAppMessage'));
+});
+
+test('licence WhatsApp : tools Telegram bloqués et ressources d’un autre tenant refusées', async () => {
+  const principal = authz.issuePrincipal({ tenant: T, role: 'OWNER', allowedModules: ['whatsapp'] });
+  const visible = registry.list({ principal, allowedModules: ['whatsapp'], permissions: ['messages:send'] }).map((x) => x.name);
+  assert.ok(visible.includes('sendWhatsAppMessage'));
+  assert.ok(!visible.includes('sendTelegramMessage'));
+
+  let telegramCalls = 0;
+  const telegram = await authz.runAs(principal, () => registry.execute(T, 'sendTelegramMessage', {
+    to: '@private', text: 'must be blocked',
+  }, { runtime: { sendMessageVerified: async () => { telegramCalls += 1; return { status: 'SUCCESS', confirmationId: 'x' }; } }, permissions: ['messages:send'] }));
+  assert.equal(telegram.state, 'BLOCKED');
+  assert.equal(telegram.error.code, 'MODULE_NOT_ALLOWED');
+  assert.equal(telegramCalls, 0);
+
+  const crossTenant = await authz.runAs(principal, () => registry.execute('ACCOUNT_B', 'getBusinessServices', {}));
+  assert.equal(crossTenant.state, 'BLOCKED');
+  assert.equal(crossTenant.error.code, 'TENANT_MISMATCH');
+});
+
+test('principal propriétaire sans modules explicites : refus par défaut', async () => {
+  const principal = authz.issuePrincipal({ tenant: T, role: 'OWNER' });
+  const result = await authz.runAs(principal, () => registry.execute(T, 'sendWhatsAppMessage', {
+    to: '22600000001', text: 'must be blocked',
+  }, { runtime: { sendMessageVerified: async () => ({ status: 'SUCCESS', confirmationId: 'x' }) }, permissions: ['messages:send'] }));
+  assert.equal(result.state, 'BLOCKED');
+  assert.equal(result.error.code, 'MODULE_NOT_ALLOWED');
 });
 
 test.after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {} });

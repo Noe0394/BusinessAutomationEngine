@@ -292,7 +292,7 @@ function publicJob(job, withMembers) {
 }
 
 // ---------------------------------------------------------------------------- destinataires (pipeline contacts existant)
-async function resolveMembers(tenant, channel, input) {
+async function resolveMembers(tenant, channel, input, allowedModules) {
   const campaignService = require('./campaignService');
   let recipients = null; let usernames = [];
   if (Array.isArray(input.recipients)) {
@@ -322,7 +322,7 @@ async function resolveMembers(tenant, channel, input) {
     if (!recipientsId) {
       const src = {};
       if (input.file) src.file = input.file; else if (input.image) src.image = input.image; else if (input.text) src.text = input.text;
-      const prep = await campaignService.prepareRecipients(tenant, src, { defaultCountryCode: input.defaultCountryCode });
+      const prep = await campaignService.prepareRecipients(tenant, src, { defaultCountryCode: input.defaultCountryCode, allowedModules });
       recipientsId = prep.recipientsId; usernames = prep.usernames || [];
     }
     const draftDoc = await storageAdapter.get('campaign_drafts', sanitize(tenant), { drafts: {} });
@@ -475,9 +475,11 @@ async function runJob(tenant, job) {
 
 // input : { channel, title, description?, inviteMessage?, recipients? | recipientsId? | text? | file? | image?, defaultCountryCode? }
 // Renvoie immédiatement le job (le traitement continue en arrière-plan) — jamais d'attente d'une longue file d'ajouts.
-async function startGroup(tenant, input) {
+async function startGroup(tenant, input, allowedModules) {
   const channel = String(input.channel || 'WHATSAPP').toUpperCase();
   if (!DRIVERS[channel]) { const e = new Error('Canal inconnu (WHATSAPP ou TELEGRAM).'); e.code = 'INVALID_CHANNEL'; throw e; }
+  const moduleName = channel === 'TELEGRAM' ? 'telegram' : 'whatsapp';
+  if (allowedModules !== null && (!Array.isArray(allowedModules) || !allowedModules.includes(moduleName))) { const e = new Error(`Votre clé de licence n'inclut pas le module "${moduleName}".`); e.code = 'MODULE_NOT_ALLOWED'; e.http = 403; throw e; }
   const existingGroupId = String(input.existingGroupId || input.groupId || '').trim();
   const existingGroup = existingGroupId || input.groupName
     ? await resolveExistingGroup(tenant, channel, { groupId: existingGroupId, groupName: input.groupName })
@@ -486,7 +488,7 @@ async function startGroup(tenant, input) {
   if (title.length < 2) { const e = new Error('Un nom de groupe est requis.'); e.code = 'TITLE_REQUIRED'; throw e; }
   const key = `${sanitize(tenant)}:${channel}`;
   if (running.has(key)) { const e = new Error('Un groupe est déjà en cours de création sur ce canal : attendez sa fin.'); e.code = 'JOB_ALREADY_RUNNING'; throw e; }
-  const resolved = await resolveMembers(tenant, channel, input);
+  const resolved = await resolveMembers(tenant, channel, input, allowedModules);
   const duplicateInput = resolved.duplicateInput || 0;
   const members = resolved.slice(0, cfg().maxMembers + 500);
   if (!members.length) { const e = new Error('Aucun contact valide dans la liste.'); e.code = 'NO_VALID_MEMBER'; throw e; }
@@ -553,4 +555,4 @@ async function setTiming(tenant, jobId, patch) {
   await saveJob(tenant, job); return publicJob(job, false);
 }
 
-module.exports = { startGroup, addMembersToGroup: (tenant, input) => startGroup(tenant, Object.assign({}, input, { existingGroupId: input.existingGroupId || input.groupId })), listExistingGroups, listRecipientLists, resolveExistingGroup, resolveMembers, resumeJob, cancelJob, pauseJob, setTiming, resolveTiming, TIMING_BOUNDS, getJob, listJobs, waitFor, renderInvite, DEFAULT_INVITE, DRIVERS, _setSleep: (fn) => { sleepFn = fn; }, _running: running };
+module.exports = { startGroup, addMembersToGroup: (tenant, input, allowedModules) => startGroup(tenant, Object.assign({}, input, { existingGroupId: input.existingGroupId || input.groupId }), allowedModules), listExistingGroups, listRecipientLists, resolveExistingGroup, resolveMembers, resumeJob, cancelJob, pauseJob, setTiming, resolveTiming, TIMING_BOUNDS, getJob, listJobs, waitFor, renderInvite, DEFAULT_INVITE, DRIVERS, _setSleep: (fn) => { sleepFn = fn; }, _running: running };

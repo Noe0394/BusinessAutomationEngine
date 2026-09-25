@@ -51,7 +51,11 @@ function isMirrored(namespace) {
   if (process.env.GITHUB_MIRROR_USER_DATA === 'true') return true;
   return !LOCAL_ONLY_NAMESPACES.has(String(namespace));
 }
-function isEncryptedMirror(namespace) { return ENCRYPTED_MIRROR_NAMESPACES.has(String(namespace)); }
+function isEncryptedMirror(namespace) {
+  const name = String(namespace);
+  return ENCRYPTED_MIRROR_NAMESPACES.has(name)
+    || (process.env.GITHUB_MIRROR_USER_DATA === 'true' && LOCAL_ONLY_NAMESPACES.has(name));
+}
 function vault() { return require('./secretVault'); }
 function canMirrorDurably(namespace) {
   const githubStore = require('../githubStore');

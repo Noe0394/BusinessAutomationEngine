@@ -242,10 +242,18 @@ const TOOLS = {
     description: 'Compte les contacts connus, avec répartition par étiquette (prospect/client/…).',
     permission: null,
     risk: 'READ',
-    inputSchema: {},
+    inputSchema: { channel: { type: 'string', required: false, description: 'Filtrer sur WHATSAPP ou TELEGRAM.' } },
     resultSchema: { total: 'number', byTag: 'object' },
     errorSchema: { code: 'string' },
     async execute(args, ctx) {
+      const allowed = ctx.allowedModules === null ? null : (Array.isArray(ctx.allowedModules) ? ctx.allowedModules : []);
+      const selectedChannel = args.channel ? String(args.channel).toUpperCase() : null;
+      const channels = selectedChannel ? [selectedChannel] : (allowed ? ['WHATSAPP', 'TELEGRAM'].filter((ch) => allowed.includes(ch.toLowerCase())) : null);
+      if (channels && channels.length === 1) {
+        const c = await contactCrm.counts(ctx.tenant, { channel: channels[0] });
+        return { ok: true, result: { total: c.total || 0, byTag: c.byTag || {} } };
+      }
+      if (channels && channels.length === 0) return { ok: true, result: { total: 0, byTag: {} } };
       const c = await contactCrm.counts(ctx.tenant);
       return { ok: true, result: { total: c.total || 0, byTag: c.byTag || {} } };
     },
@@ -485,7 +493,7 @@ loadToolModules();
 // --------------------------------------------------------------------------
 function describe() {
   return Object.entries(TOOLS).map(([name, t]) => ({
-    name, description: t.description, feature: t.feature || inferredFeature(name), capabilities: t.capabilities && t.capabilities.length ? t.capabilities : inferredCapabilities(name), permission: t.permission || null, risk: t.risk || 'READ',
+    name, description: t.description, feature: t.feature || inferredFeature(name), requiredModule: requiredModuleFor(t, name), capabilities: t.capabilities && t.capabilities.length ? t.capabilities : inferredCapabilities(name), permission: t.permission || null, risk: t.risk || 'READ',
     inputSchema: t.inputSchema || {}, resultSchema: t.resultSchema || {}, errorSchema: t.errorSchema || {},
   }));
 }
@@ -530,21 +538,45 @@ function inferredCapabilities(name) {
   return [...new Set(caps)];
 }
 
+function requiredModuleFor(tool, name, args) {
+  if (tool && tool.requiredModule && tool.requiredModule !== 'channel') return tool.requiredModule;
+  const n = String(name || '').toLowerCase();
+  if (/facebook/.test(n)) return null; // Facebook reste hors des modules de licence actuels.
+  if (/telegram/.test(n)) return 'telegram';
+  if (/whatsapp/.test(n)) return 'whatsapp';
+  const channelAware = tool && tool.inputSchema && (tool.inputSchema.channel || tool.inputSchema.platform);
+  if ((channelAware || /community|communities|group|campaign|followup|scheduledmessage|contact|recipient|message|conversation/.test(n))
+      && !/conversationpolicy|groupcampaignpolicy/.test(n)) {
+    const channel = String((args && (args.channel || args.platform)) || '').trim().toUpperCase();
+    if (channel === 'TELEGRAM') return 'telegram';
+    if (channel === 'WHATSAPP' || !channel) return channel ? 'whatsapp' : '__messaging__';
+    return '__invalid_channel__';
+  }
+  return tool && tool.requiredModule || null;
+}
+
+function moduleAllowed(requiredModule, allowedModules) {
+  if (!requiredModule || allowedModules === null) return true;
+  if (!Array.isArray(allowedModules)) return false;
+  return requiredModule === '__messaging__'
+    ? allowedModules.includes('whatsapp') || allowedModules.includes('telegram')
+    : allowedModules.includes(requiredModule);
+}
+
 // Liste des outils réellement UTILISABLES pour ce contexte (permissions).
 function list(ctx) {
   const perms = (ctx && Array.isArray(ctx.permissions)) ? ctx.permissions : null;
   // Deny-by-default : sans identité authentifiée, aucun outil n'est proposé ; sinon seuls ceux que le RÔLE peut utiliser.
   const principal = (ctx && ctx.principal) || authz.currentPrincipal();
   if (!authz.isPrincipal(principal)) return [];
+  const allowedModules = ctx && Object.prototype.hasOwnProperty.call(ctx, 'allowedModules') ? ctx.allowedModules : principal.allowedModules;
   return describe()
     .filter((t) => !TOOLS[t.name].directOnly)
-    .filter((t) => authz.authorizeTool({ tool: TOOLS[t.name], toolName: t.name, tenant: principal.tenant, principal }).allowed)
+    .filter((t) => authz.authorizeTool({ tool: TOOLS[t.name], toolName: t.name, tenant: principal.tenant, principal, requiredModule: requiredModuleFor(TOOLS[t.name], t.name) }).allowed)
     // Masquer dès le catalogue les outils dont le module n'est pas attribué;
     // le même contrôle est répété à l'exécution pour bloquer toute tentative
     // d'appel direct par le modèle.
-    .filter((t) => !TOOLS[t.name].requiredModule
-      || (ctx && ctx.allowedModules === null)
-      || (ctx && Array.isArray(ctx.allowedModules) && ctx.allowedModules.includes(TOOLS[t.name].requiredModule)))
+    .filter((t) => moduleAllowed(requiredModuleFor(TOOLS[t.name], t.name), allowedModules))
     .filter((t) => !t.permission || !perms || perms.includes(t.permission));
 }
 
@@ -588,7 +620,16 @@ async function _execute(tenant, name, args, ctx) {
   //    du LLM) ; le rôle doit figurer dans les rôles de l'outil ; un compte n'opère que sur lui-même.
   const principal = authz.isPrincipal(fullCtx.principal) ? fullCtx.principal : authz.currentPrincipal();
   fullCtx.principal = principal;
-  const verdict = authz.authorizeTool({ tool, toolName: name, tenant, principal });
+  if (!Object.prototype.hasOwnProperty.call(fullCtx, 'allowedModules') && authz.isPrincipal(principal)) fullCtx.allowedModules = principal.allowedModules;
+  const effectiveArgs = args && typeof args === 'object' && !Array.isArray(args) ? Object.assign({}, args) : {};
+  const channelField = tool.inputSchema && (tool.inputSchema.channel ? 'channel' : (tool.inputSchema.platform ? 'platform' : null));
+  if (channelField && !effectiveArgs.channel && !effectiveArgs.platform && Array.isArray(fullCtx.allowedModules)) {
+    const channels = ['whatsapp', 'telegram'].filter((module) => fullCtx.allowedModules.includes(module));
+    if (channels.length === 1) effectiveArgs[channelField] = channels[0].toUpperCase();
+  }
+  call.args = effectiveArgs;
+  const requiredModule = requiredModuleFor(tool, name, effectiveArgs);
+  const verdict = authz.authorizeTool({ tool, toolName: name, tenant, principal, requiredModule });
   if (!verdict.allowed) return done({ state: STATE.BLOCKED, error: { code: verdict.code, message: verdict.message } });
 
   // Permission
@@ -598,24 +639,23 @@ async function _execute(tenant, name, args, ctx) {
   // Les outils étendus peuvent déclarer le même module que leur route HTTP.
   // La licence est injectée par le serveur dans toolContext; le LLM ne peut
   // ni la fournir ni l'élargir dans ses arguments.
-  if (tool.requiredModule && fullCtx.allowedModules !== null
-      && (!Array.isArray(fullCtx.allowedModules) || !fullCtx.allowedModules.includes(tool.requiredModule))) {
-    return Object.assign(call, { state: STATE.BLOCKED, error: { code: 'MODULE_NOT_ALLOWED', module: tool.requiredModule }, finishedAt: new Date().toISOString() });
+  if (!moduleAllowed(requiredModule, fullCtx.allowedModules)) {
+    return Object.assign(call, { state: STATE.BLOCKED, error: { code: 'MODULE_NOT_ALLOWED', module: requiredModule }, finishedAt: new Date().toISOString() });
   }
   // Validation des entrées requises
   const missing = Object.entries(tool.inputSchema || {})
-    .filter(([k, s]) => s.required && (args == null || args[k] == null || args[k] === ''))
+    .filter(([k, s]) => s.required && (effectiveArgs[k] == null || effectiveArgs[k] === ''))
     .map(([k]) => k);
   if (missing.length) return Object.assign(call, { state: STATE.FAILED, error: { code: 'MISSING_INPUT', fields: missing }, finishedAt: new Date().toISOString() });
 
   // 3) VALIDER les paramètres (types et bornes déclarés par le contrat) — un argument produit par un LLM n'est pas fiable.
-  const invalid = validateArgs(tool.inputSchema, args);
+  const invalid = validateArgs(tool.inputSchema, effectiveArgs);
   if (invalid.length) return done({ state: STATE.FAILED, error: { code: 'INVALID_INPUT', fields: invalid } });
 
   // 4) PROPRIÉTÉ de la ressource : tout identifiant de fichier doit être bien formé ET appartenir à ce compte.
   for (const k of ['fileId', 'mediaFileId']) {
-    if (args && args[k] != null && args[k] !== '') {
-      if (!authz.isSafeId(String(args[k])) || !(await chatUploads.get(tenant, String(args[k])).catch(() => null))) {
+    if (effectiveArgs[k] != null && effectiveArgs[k] !== '') {
+      if (!authz.isSafeId(String(effectiveArgs[k])) || !(await chatUploads.get(tenant, String(effectiveArgs[k])).catch(() => null))) {
         return done({ state: STATE.BLOCKED, error: { code: 'RESOURCE_NOT_OWNED', message: 'Fichier introuvable pour ce compte.' } });
       }
     }
@@ -624,15 +664,15 @@ async function _execute(tenant, name, args, ctx) {
   // Tour TEINTÉ (fichier, média, transcription, donnée externe dans le message) : une action d'écriture externe ne part jamais
   // sans un « oui » explicite de l'humain, même si un contenu externe « ordonne » de la lancer.
   const taintedGuard = authz.isTainted() && !fullCtx.confirmed
-    && ((RISK[tool.risk] != null ? RISK[tool.risk] : RISK.WRITE) >= RISK.WRITE || (typeof tool.confirmWhenTainted === 'function' && tool.confirmWhenTainted(args || {})));
+    && ((RISK[tool.risk] != null ? RISK[tool.risk] : RISK.WRITE) >= RISK.WRITE || (typeof tool.confirmWhenTainted === 'function' && tool.confirmWhenTainted(effectiveArgs)));
   if ((needsConfirmation(tool.risk, fullCtx) || taintedGuard) && !fullCtx.confirmed) {
-    const prepared = typeof tool.prepare === 'function' ? await tool.prepare(args || {}, fullCtx).catch(() => null) : { ok: true, preview: previewOf(args), warnings: taintedGuard ? ['CONTENU_EXTERNE'] : [] };
+    const prepared = typeof tool.prepare === 'function' ? await tool.prepare(effectiveArgs, fullCtx).catch(() => null) : { ok: true, preview: previewOf(effectiveArgs), warnings: taintedGuard ? ['CONTENU_EXTERNE'] : [] };
     return Object.assign(call, { state: STATE.NEEDS_CONFIRMATION, risk: tool.risk, result: prepared, finishedAt: new Date().toISOString() });
   }
 
   call.state = STATE.RUNNING;
   let out;
-  try { out = await tool.execute(args || {}, fullCtx); }
+  try { out = await tool.execute(effectiveArgs, fullCtx); }
   catch (err) { return Object.assign(call, { state: STATE.FAILED, error: { code: 'EXECUTION_ERROR', message: String((err && err.message) || err) }, finishedAt: new Date().toISOString() }); }
 
   if (!out || out.ok === false) {
@@ -641,7 +681,7 @@ async function _execute(tenant, name, args, ctx) {
   // Vérification réelle (outils d'action) — sinon SUCCESS direct (lectures).
   if (typeof tool.verify === 'function') {
     let v;
-    try { v = await tool.verify(out.result, args || {}, fullCtx); } catch (e) { v = { verified: false }; }
+    try { v = await tool.verify(out.result, effectiveArgs, fullCtx); } catch (e) { v = { verified: false }; }
     return Object.assign(call, { state: v && v.verified ? STATE.SUCCESS : STATE.UNCONFIRMED, verified: !!(v && v.verified), result: out.result, verification: v, finishedAt: new Date().toISOString() });
   }
   return Object.assign(call, { state: STATE.SUCCESS, verified: (tool.risk || 'READ') === 'READ', result: out.result, finishedAt: new Date().toISOString() });

@@ -33,7 +33,7 @@ function section(title) { console.log('\n■ ' + title); }
 
 // --- Stubs des moteurs existants (même contrat public que les vrais) --------
 function makeManagers() {
-  const calls = { sent: [], waStarted: [], tgStarted: [], paused: [], resumed: [], licences: [] };
+  const calls = { sent: [], waStarted: [], tgStarted: [], paused: [], resumed: [], licences: [], sessionTenants: [] };
   const session = {
     tenantId: 'stub',
     sendMessage: async (to, text) => { calls.sent.push({ to, text }); return {}; },
@@ -65,11 +65,11 @@ function makeManagers() {
   };
   const whatsappManager = {
     ADMIN_TENANT_ID: '__admin__',
-    getOrCreate: () => ({ session, campaignEngine }),
+    getOrCreate: (tenantId) => { calls.sessionTenants.push(tenantId); return { session, campaignEngine }; },
   };
   const telegramManager = {
     ADMIN_TENANT_ID: '__admin__',
-    getOrCreate: () => ({ session: tgSession, campaignEngine: tgCampaignEngine }),
+    getOrCreate: (tenantId) => { calls.sessionTenants.push(tenantId); return { session: tgSession, campaignEngine: tgCampaignEngine }; },
   };
   const licenses = {
     createLicense: async (opts) => { calls.licences.push(opts); return { key: 'KEY-TEST-2026', createdAt: new Date().toISOString() }; },
@@ -92,7 +92,7 @@ function makeManagers() {
   {
     const r1 = await runtime.execute('ANALYZE_HUMAN_CONTEXT', { text: 'Je vais réfléchir' });
     assert('ANALYZE_HUMAN_CONTEXT passe par le registre (ok, sentiment)', r1.ok === true && r1.result && typeof r1.result.sentiment === 'string', JSON.stringify(r1));
-    const r2 = await runtime.execute('FOLLOW_UP', { channel: 'WHATSAPP', to: '+2250700000000', text: 'Rappel' });
+    const r2 = await runtime.execute('FOLLOW_UP', { channel: 'WHATSAPP', to: '+2250700000000', text: 'Rappel', tenantId: 't1' });
     assert('FOLLOW_UP envoie via runtime.sendMessage', r2.ok === true && calls.sent.some((s) => s.text === 'Rappel' || (s.text && s.text.length > 3)), JSON.stringify(r2));
     const r3 = await runtime.execute('NO_SUCH_ACTION', {});
     assert('action inconnue : erreur explicite', r3.ok === false && /UNKNOWN_ACTION/.test(r3.error || ''), JSON.stringify(r3));
@@ -107,6 +107,20 @@ function makeManagers() {
     assert('SEND_CAMPAIGN ok', s.ok === true, JSON.stringify(s));
     assert('le moteur WA a reçu les membres extraits', calls.waStarted.length === 1 && calls.waStarted[0].recipients.includes('2250700000000@s.whatsapp.net'), JSON.stringify(calls.waStarted[0] && calls.waStarted[0].recipients));
     assert('séquence texte construite', calls.waStarted[0].options && calls.waStarted[0].options.sequence && calls.waStarted[0].options.sequence[0].text === 'Offre', JSON.stringify(calls.waStarted[0] && calls.waStarted[0].options));
+  }
+
+  section('Isolation des contacts extraits et du tenant de session');
+  {
+    await runtime.execute('EXTRACT_MEMBERS', { channel: 'WHATSAPP', groupId: 'g1', tenantId: 'ACCOUNT_A' });
+    const before = calls.waStarted.length;
+    const other = await runtime.execute('SEND_CAMPAIGN', {
+      channel: 'WHATSAPP', recipientsSource: 'extract', tenantId: 'ACCOUNT_B', text: 'Ne pas réutiliser A',
+    }, { tenantId: 'ACCOUNT_B' });
+    assert('ACCOUNT_B ne réutilise pas les contacts extraits par ACCOUNT_A', other.ok === false && calls.waStarted.length === before, JSON.stringify(other));
+    await runtime.execute('FOLLOW_UP', {
+      channel: 'WHATSAPP', to: '+2250700000099', text: 'Tenant méta prioritaire', tenantId: 'ACCOUNT_B',
+    }, { tenantId: 'ACCOUNT_A' });
+    assert('les métadonnées de tâche empêchent un payload B de rediriger vers B', calls.sessionTenants[calls.sessionTenants.length - 1] === 'ACCOUNT_A', JSON.stringify(calls.sessionTenants.slice(-3)));
   }
 
   section('SEND_CAMPAIGN Telegram (recipientType contacts)');
@@ -125,14 +139,19 @@ function makeManagers() {
 
   section('GENERATE_ACCESS_KEY — vraie licence (stub licenses)');
   {
-    const r = await runtime.execute('GENERATE_ACCESS_KEY', { sku: 'formation-01' });
+    const authz = require('../ai-engine/authz');
+    const admin = authz.issuePrincipal({ tenant: '__test__', role: 'ADMIN' });
+    const r = await authz.runAs(admin, () => runtime.execute('GENERATE_ACCESS_KEY', { sku: 'formation-01', tenantId: '__test__' }));
     assert('ok + clé licence', r.ok === true && r.result && r.result.accessKey === 'KEY-TEST-2026', JSON.stringify(r));
     assert('licence créée avec le bon sku', calls.licences.length === 1 && calls.licences[0].note.includes('formation-01'));
+    const owner = require('../ai-engine/authz').issuePrincipal({ tenant: 't1', role: 'OWNER', allowedModules: ['whatsapp'] });
+    const denied = await authz.runAs(owner, () => runtime.execute('GENERATE_ACCESS_KEY', { sku: 'forbidden', tenantId: 't1' }));
+    assert('un propriétaire de licence ne peut pas créer une licence Cyrus', denied.ok === false && denied.error === 'ADMIN_REQUIRED' && calls.licences.length === 1, JSON.stringify(denied));
   }
 
   section('CREATE_USER_ACCOUNT — repli local (jamais d’échec)');
   {
-    const r = await runtime.execute('CREATE_USER_ACCOUNT', { studentName: 'Ada', email: 'ada@ex.com', sku: 'formation-default' });
+    const r = await runtime.execute('CREATE_USER_ACCOUNT', { studentName: 'Ada', email: 'ada@ex.com', sku: 'formation-default', tenantId: '__test__' });
     assert('ok + clé générée localement en attente de sync', r.ok === true && r.result.status === 'CREATED_LOCALLY_AWAITING_SYNC' && r.result.accessKey, JSON.stringify(r));
     assert('clé 24 caractères en 6 groupes de 4', /^([A-Za-z0-9]{4}-){5}[A-Za-z0-9]{4}$/.test(r.result.accessKey), r.result.accessKey);
   }
@@ -146,15 +165,15 @@ function makeManagers() {
   section('Runtime sans moteur injecté — zéro-effet garanti');
   {
     const bare = createVpsRuntime({ http: async () => { throw new Error('no'); } });
-    const r = await bare.execute('EXTRACT_MEMBERS', { channel: 'WHATSAPP', groupId: 'g' });
+    const r = await bare.execute('EXTRACT_MEMBERS', { channel: 'WHATSAPP', groupId: 'g', tenantId: 't1' });
     assert('EXTRACT_MEMBERS ok avec 0 membre (pas de throw)', r.ok === true && r.result.count === 0, JSON.stringify(r));
-    const c = await bare.execute('SEND_CAMPAIGN', { channel: 'WHATSAPP', recipients: ['+2250700000000'], text: 'x' });
+    const c = await bare.execute('SEND_CAMPAIGN', { channel: 'WHATSAPP', recipients: ['+2250700000000'], text: 'x', tenantId: 't1' });
     assert('SEND_CAMPAIGN : erreur honnête (RUNTIME_MISSING)', c.ok === false && /RUNTIME_MISSING/.test(c.error || ''), JSON.stringify(c));
   }
 
   section('SEND_MESSAGE direct via execute');
   {
-    await runtime.execute('FOLLOW_UP', { channel: 'WHATSAPP', to: '+2250700000009', text: 'Message direct' });
+    await runtime.execute('FOLLOW_UP', { channel: 'WHATSAPP', to: '+2250700000009', text: 'Message direct', tenantId: 't1' });
     assert('envoi direct normalisé en JID', calls.sent.some((s) => s.to === '2250700000009@s.whatsapp.net'), JSON.stringify(calls.sent.slice(-1)));
   }
 

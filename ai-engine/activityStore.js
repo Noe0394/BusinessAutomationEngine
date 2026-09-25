@@ -68,14 +68,22 @@ async function record(evt) {
   } catch (err) { return null; }
 }
 
-async function summary(dateStr, limit) {
+async function summary(dateStr, limit, tenantId) {
   const d = dateStr || today();
   let agg;
   if (current && current.date === d) agg = current;
   else { try { agg = await storageAdapter.get(NAMESPACE, d, null); } catch (e) { agg = null; } }
   if (!agg) agg = { date: d, events: [], counts: { byType: {}, byStatus: {}, byChannel: {} } };
   const n = Math.max(1, Math.min(MAX_EVENTS, limit || 60));
-  return { date: agg.date, counts: agg.counts, events: (agg.events || []).slice(0, n) };
+  const events = tenantId == null ? (agg.events || []) : (agg.events || []).filter((e) => String(e.tenant || '') === String(tenantId));
+  if (tenantId == null) return { date: agg.date, counts: agg.counts, events: events.slice(0, n) };
+  const counts = { byType: {}, byStatus: {}, byChannel: {} };
+  for (const e of events) {
+    inc(counts.byType, e.type);
+    inc(counts.byStatus, e.status);
+    if (e.channel) inc(counts.byChannel, e.channel);
+  }
+  return { date: agg.date, counts, events: events.slice(0, n) };
 }
 
 module.exports = { record, summary, NAMESPACE, MAX_EVENTS };
