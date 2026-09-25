@@ -22,6 +22,7 @@ const NAMESPACE = 'ai_usage';
 // approximatives de tarif public, pour visualiser « où part le budget », PAS une
 // facturation exacte. Les fournisseurs gratuits sont à 0.
 const COST_PER_MTOK = {
+  claude: 3.0, // estimation blend only; exact Haiku 4.5 cost uses provider usage below
   groq: 0.30,
   gemini: 0.20,
   'gemini-primary': 0.20,
@@ -34,6 +35,7 @@ const COST_PER_MTOK = {
   unknown: 0.0,
 };
 const MODEL_BY_PROVIDER = {
+  claude: 'claude-haiku-4-5-20251001',
   groq: 'openai/gpt-oss-120b',
   gemini: process.env.GEMINI_MODEL || 'gemini-flash',
   'gemini-primary': process.env.GEMINI_PRIMARY_MODEL || 'gemma-4-31b-it',
@@ -52,6 +54,34 @@ function estimateCost(provider, tokens) {
   return (tokens / 1e6) * rate;
 }
 
+const CLAUDE_HAIKU_45_RATES = { input: 1.0, output: 5.0, cacheWrite5m: 1.25, cacheRead: 0.10 };
+
+function emptyStats() {
+  return {
+    calls: 0, tokens: 0, cost: 0, estimatedTokens: 0, measuredTokens: 0,
+    estimatedCalls: 0, measuredCalls: 0, inputTokens: 0, outputTokens: 0,
+    cacheReadTokens: 0, cacheWriteTokens: 0, cacheHits: 0,
+  };
+}
+
+function normalizeStats(stats) {
+  if (!stats || typeof stats !== 'object') return emptyStats();
+  const legacyTokens = Number(stats.tokens) || 0;
+  const legacyCalls = Number(stats.calls) || 0;
+  if (stats.estimatedTokens == null && stats.measuredTokens == null) {
+    stats.estimatedTokens = legacyTokens;
+    stats.measuredTokens = 0;
+  }
+  if (stats.estimatedTokens == null) stats.estimatedTokens = 0;
+  if (stats.measuredTokens == null) stats.measuredTokens = 0;
+  if (stats.measuredCalls == null) stats.measuredCalls = 0;
+  if (stats.estimatedCalls == null) stats.estimatedCalls = Math.max(0, legacyCalls - stats.measuredCalls);
+  for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'cacheHits']) {
+    if (stats[key] == null) stats[key] = 0;
+  }
+  return stats;
+}
+
 // Agrégat courant (mémoire). Rechargé depuis le disque au premier accès du jour.
 let current = null; // { date, totals:{calls,tokens,cost}, byPurpose, byProvider, byTenant, recent[] }
 
@@ -63,31 +93,63 @@ async function ensureLoaded() {
     const doc = await storageAdapter.get(NAMESPACE, d, null);
     current = (doc && doc.date === d) ? Object.assign(fresh, doc) : fresh;
   } catch (e) { current = fresh; }
+  current.totals = normalizeStats(current.totals);
+  for (const section of ['byPurpose', 'byProvider', 'byTenant']) {
+    for (const key of Object.keys(current[section] || {})) current[section][key] = normalizeStats(current[section][key]);
+  }
   return current;
 }
 
-function bump(map, key, tokens, cost) {
+function bump(map, key, delta) {
   const k = key || 'unknown';
-  if (!map[k]) map[k] = { calls: 0, tokens: 0, cost: 0 };
-  map[k].calls += 1; map[k].tokens += tokens; map[k].cost += cost;
+  map[k] = normalizeStats(map[k] || emptyStats());
+  for (const field of Object.keys(delta)) map[k][field] = (Number(map[k][field]) || 0) + delta[field];
 }
 
 // Enregistre un appel IA réellement effectué. Non bloquant : à envelopper par
 // l'appelant dans un contexte où une exception est ignorée (déjà le cas ici).
-async function record({ provider, model, promptChars, responseChars, purpose, tenant }) {
+async function record({ provider, model, promptChars, responseChars, purpose, tenant, usage }) {
   try {
     const agg = await ensureLoaded();
     const prov = provider || 'unknown';
-    const tokens = estimateTokens(promptChars) + estimateTokens(responseChars);
-    const cost = estimateCost(prov, tokens);
-    agg.totals.calls += 1; agg.totals.tokens += tokens; agg.totals.cost += cost;
-    bump(agg.byPurpose, purpose || 'unknown', tokens, cost);
-    bump(agg.byProvider, prov, tokens, cost);
-    bump(agg.byTenant, tenant || 'unknown', tokens, cost);
+    const measured = usage && Number.isFinite(Number(usage.promptTokens)) && Number.isFinite(Number(usage.completionTokens));
+    const promptTokens = measured ? Math.max(0, Number(usage.promptTokens)) : estimateTokens(promptChars);
+    const outputTokens = measured ? Math.max(0, Number(usage.completionTokens)) : estimateTokens(responseChars);
+    const tokens = promptTokens + outputTokens;
+    const cacheReadTokens = measured ? Math.max(0, Number(usage.cacheReadTokens) || 0) : 0;
+    const cacheWriteTokens = measured ? Math.max(0, Number(usage.cacheWriteTokens) || 0) : 0;
+    const uncachedPromptTokens = measured && Number.isFinite(Number(usage.uncachedPromptTokens))
+      ? Math.max(0, Number(usage.uncachedPromptTokens)) : Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
+    const cost = measured && prov === 'claude'
+      ? (uncachedPromptTokens * CLAUDE_HAIKU_45_RATES.input
+        + cacheWriteTokens * CLAUDE_HAIKU_45_RATES.cacheWrite5m
+        + cacheReadTokens * CLAUDE_HAIKU_45_RATES.cacheRead
+        + outputTokens * CLAUDE_HAIKU_45_RATES.output) / 1e6
+      : estimateCost(prov, tokens);
+    const delta = {
+      calls: 1, tokens, cost,
+      estimatedTokens: measured ? 0 : tokens,
+      measuredTokens: measured ? tokens : 0,
+      estimatedCalls: measured ? 0 : 1,
+      measuredCalls: measured ? 1 : 0,
+      inputTokens: measured ? promptTokens : 0,
+      outputTokens: measured ? outputTokens : 0,
+      cacheReadTokens,
+      cacheWriteTokens,
+      cacheHits: cacheReadTokens > 0 ? 1 : 0,
+    };
+    for (const field of Object.keys(delta)) agg.totals[field] = (Number(agg.totals[field]) || 0) + delta[field];
+    bump(agg.byPurpose, purpose || 'unknown', delta);
+    bump(agg.byProvider, prov, delta);
+    bump(agg.byTenant, tenant || 'unknown', delta);
     agg.recent.unshift({
       ts: new Date().toISOString(), provider: prov,
       model: model || MODEL_BY_PROVIDER[prov] || prov,
       tokens, cost: Number(cost.toFixed(6)), purpose: purpose || 'unknown', tenant: tenant || null,
+      tokenSource: measured ? 'provider' : 'estimated',
+      inputTokens: measured ? promptTokens : null, outputTokens: measured ? outputTokens : null,
+      estimatedTokens: measured ? 0 : tokens,
+      cacheReadTokens, cacheWriteTokens,
     });
     if (agg.recent.length > 100) agg.recent.length = 100;
     storageAdapter.set(NAMESPACE, agg.date, agg); // persistance (miroir GitHub fire-and-forget)

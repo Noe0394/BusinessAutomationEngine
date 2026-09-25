@@ -29,6 +29,7 @@ if (!globalThis.crypto) {
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const compression = require('compression');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const contactExtractor = require('./ai-engine/contactExtractor');
@@ -118,6 +119,7 @@ let intelligenceBridge = null;
 
 const app = express();
 app.set('trust proxy', 1);
+const httpTrafficMetrics = require('./lib/httpTrafficMetrics');
 const authAttemptBuckets = new Map();
 function authBucketKey(req) { return `${req.ip || req.socket?.remoteAddress || 'unknown'}`; }
 function tooManyAuthAttempts(req) {
@@ -144,6 +146,14 @@ app.use((req, res, next) => {
   if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   next();
 });
+// Compte les corps HTTP sans conserver de contenu utilisateur. La couche de
+// mesure est placée avant gzip afin de compter les octets remis au socket.
+app.use(httpTrafficMetrics.middleware);
+app.use(compression({ threshold: 1024, filter: (req, res) => {
+  if (String(res.getHeader('Content-Type') || '').startsWith('text/event-stream')) return false;
+  return compression.filter(req, res);
+} }));
+app.use(httpTrafficMetrics.privateApiRevalidation);
 const PORT = process.env.PORT || 10000;
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '').trim();
 function adminPasswordMatches(candidate) {
@@ -1302,6 +1312,12 @@ app.get('/api/admin/contacts/export', requireAdmin, async (req, res) => {
 
 app.get('/api/admin/overview', requireAdmin, (req, res) => {
   res.status(200).json(licenses.getOverview());
+});
+
+// Compteurs de trafic par route Express (sans IP, tenant, paramètres URL ni
+// corps de requête). Réservé à l'administrateur; remis à zéro au redémarrage.
+app.get('/api/admin/performance-metrics', requireAdmin, (_req, res) => {
+  res.status(200).json(httpTrafficMetrics.snapshot());
 });
 
 // Permet à l'exploitant de renseigner les identifiants d'application OAuth
@@ -4865,7 +4881,10 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
       // message d'erreur clair) plutôt que de faire croire à une vraie
       // réponse IA. generateSessionTitle (ci-dessus) reste local — c'est un
       // simple intitulé de discussion, pas une réponse fournie à l'utilisateur.
-      const { text: replyText } = await llmFallbackEngine.generateAIResponse(text, existing.messages);
+      const { text: replyText } = await llmFallbackEngine.generateAIResponse(text, existing.messages, null, undefined, null, {
+        tenant: tenantId,
+        cacheScope: `${tenantId}:${req.params.id}`,
+      });
 
       // Rattrapage (voir looksLikeRawMarkupDump ci-dessus) : la demande a été
       // classée 'chat' par detectStudioIntent mais la réponse générique
