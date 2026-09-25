@@ -182,6 +182,7 @@ class TelegramCampaignEngine {
     // (même principe, adapté à une pièce jointe unique au lieu d'une
     // séquence de plusieurs étapes).
     this.campaigns = new Map();
+    this.startPromisesByKey = new Map();
     this.resolvedMediaById = new Map();
     this.activeCampaignId = null;
     this.remoteStore = githubStore.createStore(remoteFilePath(tenantId));
@@ -713,13 +714,25 @@ class TelegramCampaignEngine {
   // cette option (appelants historiques : programmation multi-canal),
   // comportement inchangé.
   async start(recipients, message, options = {}) {
+    const key = String(options.idempotencyKey || '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 120);
+    if (!key) return this._start(recipients, message, options);
+    const existing = this.campaigns.get(key);
+    if (existing) return this._publicStatus(existing);
+    if (this.startPromisesByKey.has(key)) return this.startPromisesByKey.get(key);
+    const pending = this._start(recipients, message, Object.assign({}, options, { idempotencyKey: key }));
+    this.startPromisesByKey.set(key, pending);
+    try { return await pending; }
+    finally { this.startPromisesByKey.delete(key); }
+  }
+
+  async _start(recipients, message, options = {}) {
     const activeCampaign = this.activeCampaignId ? this.campaigns.get(this.activeCampaignId) : null;
     const busy = Boolean(activeCampaign) && activeCampaign.status === 'running';
     if (busy && !options.enqueueIfBusy) {
       throw new Error('CAMPAIGN_IN_PROGRESS');
     }
 
-    const id = crypto.randomUUID();
+    const id = options.idempotencyKey || crypto.randomUUID();
     const name = (options.name && String(options.name).trim()) || `Campagne du ${new Date().toLocaleString('fr-FR')}`;
     const willRunImmediately = !busy;
 

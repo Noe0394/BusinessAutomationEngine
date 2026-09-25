@@ -132,6 +132,47 @@ test('après redémarrage une campagne en pause reste en pause jusqu’à une de
   } finally { registry.execute = previousExecute; }
 });
 
+test('une étape interrompue d’une mission n’est jamais rejouée automatiquement', async () => {
+  const id = 'mission-restart-uncertain'; let toolCalls = 0;
+  const previousExecute = registry.execute;
+  storage.set(missions.NS, TENANT, { tenant: TENANT, missions: { [id]: {
+    id, tenant: TENANT, sessionId: 'restart-chat', channel: 'WHATSAPP', objective: 'Lancer une campagne',
+    state: 'running', steps: [{ id: 'send', tool: 'launchCampaign', label: 'Lancer la campagne', state: 'RUNNING',
+      args: { draftId: 'draft-safe' }, executedArgs: { draftId: 'draft-safe' } }],
+    createdAt: Date.now(), updatedAt: Date.now(),
+  } } });
+  registry.execute = async () => { toolCalls += 1; return { state: 'SUCCESS', result: { campaignId: 'duplicate' } }; };
+  try {
+    await authz.runAs(principal, () => missions.recoverPending(TENANT, id, { permissions: ['messages:send'] }));
+    const recovered = await missions.get(TENANT, id);
+    assert.equal(toolCalls, 0);
+    assert.equal(recovered.state, 'needs_review');
+    assert.equal(recovered.status, 'VERIFYING');
+    assert.equal(recovered.steps[0].state, 'UNCONFIRMED');
+    assert.equal(recovered.error.code, 'INTERRUPTED_DURING_EXECUTION');
+  } finally { registry.execute = previousExecute; }
+});
+
+test('une mission redémarrée reprend les étapes en attente sans rejouer les succès', async () => {
+  const id = 'mission-restart-pending';
+  storage.set(missions.NS, TENANT, { tenant: TENANT, missions: { [id]: {
+    id, tenant: TENANT, sessionId: 'restart-chat-2', channel: 'WEB', objective: 'Lire le prix de la Formation Cuisine',
+    state: 'running', steps: [
+      { id: 'done', tool: 'getProductPrice', label: 'Prix déjà vérifié', state: 'SUCCESS', args: { query: 'Formation Cuisine' }, result: { price: 12500 } },
+      { id: 'next', tool: 'getProductPrice', label: 'Relire le prix', state: 'PENDING', args: { query: 'Formation Cuisine' } },
+    ], createdAt: Date.now(), updatedAt: Date.now(),
+  } } });
+  await authz.runAs(principal, () => missions.recoverPending(TENANT, id, { permissions: ['messages:send'] }));
+  const recovered = await missions.get(TENANT, id);
+  assert.equal(recovered.state, 'completed');
+  assert.equal(recovered.status, 'COMPLETED');
+  assert.equal(recovered.taskId, id);
+  assert.equal(recovered.ownerConversationId, 'restart-chat-2');
+  assert.equal(recovered.progressPercent, 100);
+  assert.equal(recovered.result.verifiedSteps, 2);
+  assert.deepEqual(recovered.steps.map((step) => step.state), ['SUCCESS', 'SUCCESS']);
+});
+
 test('Chat Intelligent envoie un objectif explicite au planificateur persistant partagé', async () => {
   assert.equal(chatOrchestrator.detectIntent('Aujourd’hui, je veux vendre 10 accès à ma formation Cuisine.'), 'goal');
   let aiCalls = 0;

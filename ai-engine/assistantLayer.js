@@ -55,7 +55,7 @@ function create(d) {
   }
 
   // Retourne { handled: boolean }. handled=false -> le flux existant (autoResponder/Jarvis) continue.
-  async function route({ tenantId, channel, session, msg, text, from, messageId, hasAttachment, identity }) {
+  async function route({ tenantId, channel, session, msg, text, from, messageId, hasAttachment, identity, responseTrace }) {
     const settings = await d.autoResponder.getSettings(tenantId);
     if (!d.autoResponder.isEnabled(settings, channel)) return { handled: false, reason: 'DISABLED' };
     if (settings.assistant === false) return { handled: false, reason: 'ASSISTANT_OFF' };
@@ -79,24 +79,38 @@ function create(d) {
     }
 
     const debounceMs = settings.debounceMs != null ? settings.debounceMs : DEFAULT_DEBOUNCE_MS;
+    if (responseTrace) responseTrace.mark('message_routed', { method: 'private_conversation' });
     conversationQueue.submit(`priv:${sanitize(tenantId)}:${channel}:${from}`, { text, messageId },
       async (items) => {
+        let traceStatus = 'NO_ACTION';
+        if (responseTrace) responseTrace.mark('context_started');
+        try {
         // Conversation privée d'un contact : chaque lot est un ÉCHANGE IA client (limite 10/heure, voir clientAiQuota).
         const out = await require('./clientLimitGuard').guardExchange(
           { tenantId, channel, from, identity, exchangeId: items[items.length - 1].messageId, isGroup: false },
           () => conversationRouter.processBatch({ tenantId, channel, from, identity, items, hasAttachment }, {
-            send: (reply) => sendVia(tenantId, channel, from, reply), settings, llm: d.llm, llmReasoning: d.llmReasoning,
+            send: async (reply) => {
+              if (responseTrace) responseTrace.mark('send_started');
+              const sent = await sendVia(tenantId, channel, from, reply);
+              if (responseTrace) responseTrace.mark(sent && sent.status === 'SUCCESS' ? 'send_confirmed' : 'send_failed', { status: sent && sent.status || 'UNKNOWN' });
+              return sent;
+            }, settings, llm: d.llm, llmReasoning: d.llmReasoning,
           }),
         );
+        if (responseTrace) responseTrace.mark('conversation_processed', { method: out.mode || out.category || 'unknown' });
         if (out && out.skipped === 'AI_LIMIT') return out;
         // Le lot pris ensemble ressemble à une demande métier : on laisse le moteur existant répondre.
         if (out.mode === 'BUSINESS') {
-          await d.autoResponder.handleIncoming({ tenantId, channel, from, name: identity && identity.displayName, text: items.map((i) => i.text).join('\n'), messageId: items[items.length - 1].messageId }, { runtime: d.getRuntime && d.getRuntime() }).catch(() => {});
+          await d.autoResponder.handleIncoming({ tenantId, channel, from, name: identity && identity.displayName, text: items.map((i) => i.text).join('\n'), messageId: items[items.length - 1].messageId }, { runtime: d.getRuntime && d.getRuntime(), identity, responseTrace }).catch(() => {});
         }
         try {
           require('./activityStore').record({ type: 'private_route', action: `Conversation ${out.mode}`, channel, tenant: tenantId, target: identity ? identity.label : 'contact', status: 'ok', detail: `${out.category || '-'}${out.replied ? ' · réponse envoyée' : ''}${out.alerted ? ' · propriétaire prévenu' : ''}` });
         } catch (e) { /* non bloquant */ }
+        traceStatus = out && out.replied ? 'SENT' : (out && out.skipped) || 'NO_ACTION';
         return out;
+        } finally {
+          if (responseTrace) await responseTrace.finish({ status: traceStatus });
+        }
       }, { debounceMs }).catch((err) => console.error(`conversationRouter (tenant "${tenantId}", ${channel}) :`, err.message));
     return { handled: true };
   }

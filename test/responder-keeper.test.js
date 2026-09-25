@@ -19,6 +19,7 @@ const alwaysOn = require('../ai-engine/alwaysOn');
 const keeper = require('../ai-engine/responderKeeper');
 const toolRegistry = require('../ai-engine/toolRegistry');
 const storageAdapter = require('../ai-engine/storageAdapter');
+const businessServices = require('../ai-engine/businessServices');
 
 const runtime = (rec) => ({ sendMessageVerified: async (p) => { rec.push(p); return { status: 'SUCCESS', confirmationId: 'W' + rec.length }; } });
 
@@ -26,10 +27,29 @@ test('compte toujours actif : répond sur WhatsApp ET Telegram même si un ancie
   storageAdapter.set('auto_settings', 'tPerm', { tenant: 'tPerm', whatsapp: false, telegram: false });
   const s = await autoResponder.getSettings('tPerm');
   assert.equal(s.whatsapp, true); assert.equal(s.telegram, true); assert.equal(s.alwaysOn, true);
+  assert.equal(s.groupReplies, true, 'le mode permanent active aussi la voie des groupes');
   const rec = [];
   const out = await autoResponder.handleIncoming({ tenantId: 'tPerm', channel: 'TELEGRAM', from: '555', text: 'Combien coûte la formation ?', messageId: 'k1' }, { runtime: runtime(rec), llm: async () => 'Je vous renseigne.', debounceMs: 0, notify: async () => {} });
   assert.notEqual(out.skipped, 'DISABLED');
   assert.equal(rec.length, 1);
+});
+
+test('compte toujours actif : le répondeur de groupe reste contextuel et cite le prix configuré', async () => {
+  const tenant = 'tPerm'; const group = '120363000000@g.us'; const rec = [];
+  const service = await businessServices.create(tenant, {
+    name: 'Formation Cuisine', aliases: ['cours cuisine'],
+    products: [{ name: 'Formation Cuisine', price: 12500 }], commercial: { currency: 'FCFA' },
+  });
+  await businessServices.update(tenant, service.id, { groups: [{ channel: 'WHATSAPP', id: group, name: 'Cuisine', verified: { admin: true } }] });
+  const settings = await autoResponder.getSettings(tenant);
+  assert.equal(settings.conversationPolicy.group, 'topic');
+  assert.equal(settings.conversationPolicy.openGroups, undefined, 'le mode permanent ne transforme pas tous les groupes en groupes commerciaux');
+  const out = await autoResponder.handleIncoming({ tenantId: tenant, channel: 'WHATSAPP', from: group,
+    senderId: '225070000000@s.whatsapp.net', text: 'Quel est le prix de la Formation Cuisine ?', messageId: 'group-always-on-1' },
+  { runtime: runtime(rec), llm: async () => 'Réponse IA non nécessaire.', debounceMs: 0, notify: async () => {} });
+  assert.notEqual(out.skipped, 'DISABLED');
+  assert.equal(rec.length, 1);
+  assert.match(rec[0].text, /12\s?500\s?FCFA/i);
 });
 
 test('compte ordinaire : inchangé (désactivé par défaut) ; pause explicite respectée pour un compte permanent', async () => {
@@ -41,6 +61,7 @@ test('compte ordinaire : inchangé (désactivé par défaut) ; pause explicite r
   assert.equal((await autoResponder.handleIncoming({ tenantId: 'tPerm2', channel: 'WHATSAPP', from: '1', text: 'salut', messageId: 'p1' }, { runtime: runtime([]) })).skipped, 'DISABLED');
   await autoResponder.setSettings('tPerm2', { paused: false });
   assert.equal((await autoResponder.getSettings('tPerm2')).whatsapp, true);
+  assert.equal((await autoResponder.getSettings('tPerm2')).groupReplies, true);
 });
 
 test('réglage alwaysOn persisté : le compte devient permanent et survit à un redémarrage (rechargement)', async () => {

@@ -81,6 +81,8 @@ function normalizeService(data) {
     name: String(d.name || suggestName(commercial.memo)).slice(0, 120),
     type: d.type || 'autre',
     project: d.project || null,
+    aliases: Array.isArray(d.aliases) ? d.aliases.map(String).filter(Boolean).slice(0, 30) : [],
+    keywords: Array.isArray(d.keywords) ? d.keywords.map(String).filter(Boolean).slice(0, 60) : [],
     connection: {
       kind: conn.kind || 'none', // 'api' | 'account' | 'none'
       connectorType: conn.connectorType || null, // platform_gateway | systemio | accounting | generic
@@ -412,7 +414,7 @@ function summary(service) {
 async function getEngineContext(tenant) {
   const doc = await load(tenant);
   return (doc.services || []).map((s) => ({
-    name: s.name, type: s.type, project: s.project,
+    name: s.name, type: s.type, project: s.project, aliases: s.aliases || [], keywords: s.keywords || [], groups: s.groups || [],
     products: s.products || [], commercial: Object.assign({}, s.commercial, {}),
     rules: s.rules || [], objectives: s.objectives || [], scopes: s.scopes || [],
     connected: s.status === STATUS.CONNECTED,
@@ -429,7 +431,10 @@ async function getEngineContext(tenant) {
 // une chaîne vide s'il n'y a aucun service (le chat le dit alors franchement).
 async function getEngineContextText(tenant) {
   const ctx = await getEngineContext(tenant);
-  if (!ctx.length) return '';
+  return getEngineContextTextFromServices(ctx);
+}
+function getEngineContextTextFromServices(ctx) {
+  if (!Array.isArray(ctx) || !ctx.length) return '';
   return ctx.map(renderService).join('\n\n');
 }
 
@@ -438,6 +443,8 @@ function renderService(s) {
     const c = s.commercial || {};
     const cur = c.currency || '';
     const lines = [`• Service « ${s.name} » (${s.type}${s.project ? `, projet : ${s.project}` : ''})${s.connected ? ' — plateforme connectée' : ''}`];
+    if ((s.aliases || []).length) lines.push(`  Autres noms : ${s.aliases.join(', ')}`);
+    if ((s.keywords || []).length) lines.push(`  Mots-clés : ${s.keywords.join(', ')}`);
     // Mémoire métier en texte libre : SOURCE BRUTE écrite par le vendeur — à consulter pour tout détail non
     // repris explicitement dans les champs structurés ci-dessous (une extraction automatique imparfaite ne fait
     // jamais perdre une information, elle reste lisible ici telle quelle).
@@ -481,32 +488,36 @@ function renderService(s) {
 //      le plus RÉCENT ;
 //   2. les autres services actifs ne sont donnés qu'en SUGGESTIONS COMPLÉMENTAIRES (résumé court) ;
 //   3. tout vient des données configurées : rien n'est inventé. Renvoie { text, priority, others, count }.
-const SEARCH_STOP_WORDS = new Set(['les', 'des', 'une', 'mon', 'ma', 'mes', 'pour', 'dans', 'avec', 'chez', 'est', 'sont', 'qui', 'que', 'quoi', 'quel', 'quelle', 'quels', 'combien', 'prix', 'tarif', 'offre', 'service', 'services', 'formation', 'formations', 'montrer', 'donner', 'rappeler', 'activité', 'activite']);
+const SEARCH_STOP_WORDS = new Set(['les', 'des', 'une', 'un', 'mon', 'ma', 'mes', 'pour', 'dans', 'avec', 'chez', 'est', 'sont', 'qui', 'que', 'quoi', 'quel', 'quelle', 'quels', 'combien', 'prix', 'tarif', 'tarifs', 'offre', 'offres', 'service', 'services', 'formation', 'formations', 'cours', 'produit', 'produits', 'montrer', 'donner', 'rappeler', 'activité', 'activite', 'cout', 'coût', 'coute', 'coûte']);
 function searchWords(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]+/g) || [];
 }
 
 function matchService(services, hint) {
-  const h = searchWords(hint).filter((x) => x.length > 2 && !SEARCH_STOP_WORDS.has(x));
+  const h = [...new Set(searchWords(hint).filter((x) => x.length > 2 && !SEARCH_STOP_WORDS.has(x)))];
   const phrase = h.join(' ');
-  if (!phrase || !services.length) return null;
-  const exactName = services.find((s) => searchWords(s.name).join(' ') === phrase);
-  if (exactName) return exactName;
+  if (!phrase || !Array.isArray(services) || !services.length) return null;
+  const exact = services.find((s) => {
+    const terms = [s.name, ...(s.aliases || []), ...(s.keywords || [])].map((x) => searchWords(x).join(' ')).filter(Boolean);
+    return terms.includes(phrase) || terms.some((x) => x.length > 3 && phrase.includes(x));
+  });
+  if (exact) return exact;
   const scored = services.map((s) => {
     const c = s.commercial || {};
-    const name = searchWords(s.name).join(' ');
-    const products = (s.products || []).map((p) => searchWords(p && (p.name || p)).join(' '));
-    const detailText = [s.type, s.project, c.description, c.memo, c.target, c.period, c.paymentTerms, c.hours, c.location, c.delivery]
-      .concat(s.rules || [], s.objectives || [], products).join(' ');
+    const products = (s.products || []).map((p) => [p && (p.name || p), p && p.category, p && p.type, ...(p && Array.isArray(p.aliases) ? p.aliases : []), ...(p && Array.isArray(p.keywords) ? p.keywords : [])].filter(Boolean).join(' '));
+    const faq = (c.faq || []).map((item) => `${item && item.question || ''} ${item && item.answer || ''}`);
+    const detailText = [s.name, s.type, s.project, ...(s.aliases || []), ...(s.keywords || []), c.description, c.memo, c.target, c.audience, c.period, c.paymentTerms, c.hours, c.location, c.delivery, c.advantages, c.knowledge]
+      .concat(s.rules || [], s.objectives || [], s.capabilities || [], products, faq).join(' ');
     const detail = new Set(searchWords(detailText).filter((x) => x.length > 2 && !SEARCH_STOP_WORDS.has(x)));
+    const primary = [s.name, ...(s.aliases || []), ...(s.keywords || []), ...products].map((x) => searchWords(x));
     let score = 0;
-    if (name && phrase.includes(name)) score += 100 + name.length;
-    for (const product of products) if (product && phrase.includes(product)) score = Math.max(score, 90 + product.length);
     for (const word of new Set(h)) {
-      if (detail.has(word)) score += word.length >= 6 ? 3 : 1;
-      if (name.split(' ').includes(word)) score += 6;
-      if (products.some((product) => product.split(' ').includes(word))) score += 5;
+      const matches = primary.map((terms) => terms.includes(word));
+      if (matches.some(Boolean)) score += 8 + Math.min(word.length, 10);
+      else if (detail.has(word)) score += word.length >= 6 ? 3 : 1;
     }
+    const coverage = h.length ? new Set(h.filter((word) => detail.has(word))).size / h.length : 0;
+    if (coverage < 0.34 && score < 14) score = 0;
     return { service: s, score };
   }).sort((a, b) => b.score - a.score);
   if (!scored.length || scored[0].score <= 0) return null;
@@ -523,15 +534,67 @@ function pickPriority(services, hint, currentHint) {
   if (contextMatch) return contextMatch;
   return pool.slice().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0] || null;
 }
-async function getPrioritizedContext(tenant, opts) {
-  const services = await getEngineContext(tenant);
-  if (!services.length) return { text: '', priority: null, others: [], count: 0, recommendedSpecialists: [] };
+function getPrioritizedContextFromServices(services, opts) {
+  services = Array.isArray(services) ? services : [];
+  if (!services.length) return { text: '', priority: null, priorityService: null, services: [], others: [], count: 0, recommendedSpecialists: [] };
   const prio = pickPriority(services, opts && opts.hint, opts && opts.currentHint);
   const others = services.filter((s) => s !== prio && s.active !== false);
   const brief = (s) => { const c = s.commercial || {}; return `• ${s.name}${c.price != null ? ` — ${c.price} ${c.currency || ''}`.trimEnd() : ''}${c.description ? ` : ${String(c.description).slice(0, 140)}` : ''}`; };
   const parts = [`SERVICE PRIORITAIRE À PRÉSENTER (le plus pertinent pour ce contact — présente-le en premier et réponds à toutes ses questions dessus) :\n${renderService(prio)}`];
   if (others.length) parts.push(`AUTRES OFFRES DU VENDEUR (à proposer UNIQUEMENT comme suggestions complémentaires, quand c'est pertinent — jamais avant d'avoir répondu au sujet du service prioritaire) :\n${others.map(brief).join('\n')}`);
-  return { text: parts.join('\n\n'), priority: prio.name, others: others.map((s) => s.name), count: services.length, recommendedSpecialists: prio.specialists || [] };
+  return { text: parts.join('\n\n'), priority: prio.name, priorityService: prio, services, others: others.map((s) => s.name), count: services.length, recommendedSpecialists: prio.specialists || [] };
+}
+async function getPrioritizedContext(tenant, opts) {
+  return getPrioritizedContextFromServices(await getEngineContext(tenant), opts);
+}
+
+// Réponse déterministe aux questions de prix : les tarifs sont des faits
+// configurés et ne nécessitent ni appel IA ni interprétation créative.
+function answerExplicitPriceQuestion(services, text, hint) {
+  const source = Array.isArray(services) ? services.filter((s) => s && s.active !== false) : [];
+  if (!source.length || !/(?:\bprix\b|\btarif\w*\b|\bcombien\b|\bco[uû]t\w*\b|\bcoute\w*\b|\bmontant\b|\bfrais\b)/i.test(String(text || ''))) return null;
+  const normalizedQuestion = searchWords(text).join(' ');
+  const prioritized = matchService(source, text) || matchService(source, hint);
+  if (!prioritized && source.length > 1) {
+    const names = source.map((s) => `« ${String(s.name || 'offre').trim()} »`).slice(0, 5);
+    return `J'ai plusieurs offres configurées (${names.join(', ')}). De laquelle veux-tu connaître le prix ?`;
+  }
+  const service = prioritized || source[0];
+  if (!service) return null;
+
+  const products = (service.products || []).filter((p) => p && typeof p === 'object' && String(p.name || '').trim());
+  const exact = products.filter((p) => {
+    const name = searchWords(p.name).join(' ');
+    return name.length > 0 && normalizedQuestion.includes(name);
+  });
+  let product = exact.length === 1 ? exact[0] : null;
+  if (!product) {
+    const queryWords = new Set(searchWords(text).filter((w) => w.length > 3 && !SEARCH_STOP_WORDS.has(w)));
+    const scored = products.map((p) => {
+      const words = searchWords(p.name).filter((w) => w.length > 3 && !SEARCH_STOP_WORDS.has(w));
+      return { product: p, score: words.filter((w) => queryWords.has(w)).length };
+    }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+    if (scored.length && (!scored[1] || scored[0].score > scored[1].score)) product = scored[0].product;
+  }
+
+  const currency = String((service.commercial && service.commercial.currency) || '').trim();
+  const amount = (value) => {
+    const n = Number(value);
+    const formatted = Number.isFinite(n) ? n.toLocaleString('fr-FR') : String(value);
+    return `${formatted}${currency ? ` ${currency}` : ''}`;
+  };
+  if (product) {
+    if (product.price == null) return null;
+    return `La formation « ${String(product.name).trim()} » coûte ${amount(product.price)}.`;
+  }
+
+  const pricedProducts = products.filter((p) => p.price != null);
+  if (pricedProducts.length > 1) {
+    return `Voici les tarifs configurés pour « ${service.name} » : ${pricedProducts.map((p) => `${String(p.name).trim()} : ${amount(p.price)}`).join(' ; ')}.`;
+  }
+  if (pricedProducts.length === 1) return `La formation « ${String(pricedProducts[0].name).trim()} » coûte ${amount(pricedProducts[0].price)}.`;
+  if (service.commercial && service.commercial.price != null) return `Le tarif configuré pour « ${service.name} » est de ${amount(service.commercial.price)}.`;
+  return null;
 }
 
 // Miroir des infos commerciales vers le profil business persistant que le
@@ -592,5 +655,5 @@ async function syncToConnectors(tenant) {
 
 module.exports = {
   STATUS, list, get, create, update, remove, connectApi, testConnection,
-  setPermissions, summary, getEngineContext, getEngineContextText, getPrioritizedContext, syncOffersToProfile, syncToConnectors, NAMESPACE, suggestName, stripPaymentUrls, memoForAssistant, matchService,
+  setPermissions, summary, getEngineContext, getEngineContextText, getEngineContextTextFromServices, getPrioritizedContext, getPrioritizedContextFromServices, answerExplicitPriceQuestion, syncOffersToProfile, syncToConnectors, NAMESPACE, suggestName, stripPaymentUrls, memoForAssistant, matchService,
 };

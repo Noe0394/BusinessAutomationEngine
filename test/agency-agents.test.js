@@ -262,7 +262,7 @@ test('CONVERSATION CLIENT : le spécialiste rend un avis, CYRUS écrit la répon
   try {
     const cs = require('../ai-engine/jarvis/conversationState'); const from = '22670999111@s.whatsapp.net';
     const st = await cs.get(T, 'WHATSAPP', from); st.recentTs = []; await cs.save(st);
-    const out = await autoResponder.handleIncoming({ tenantId: T, channel: 'WHATSAPP', from, name: 'Awa', text: 'Je suis intéressé, c\'est combien ?', messageId: 'sp-1' }, { runtime, settings: { whatsapp: true, debounceMs: 0 }, identity: { contactId: 'ct_sp', label: 'Awa', phoneNumber: '22670999111' } });
+    const out = await autoResponder.handleIncoming({ tenantId: T, channel: 'WHATSAPP', from, name: 'Awa', text: "Je suis intéressé, mais c'est trop cher pour moi.", messageId: 'sp-1' }, { runtime, settings: { whatsapp: true, debounceMs: 0 }, identity: { contactId: 'ct_sp', label: 'Awa', phoneNumber: '22670999111' } });
     assert.equal(out.sent, true, JSON.stringify(out));
     assert.equal(sent.length, 1, 'UN seul message part vers le client (jamais un message par spécialiste)');
     const finalPrompt = prompts[prompts.length - 1];
@@ -293,7 +293,7 @@ test('LIMITE 10 ÉCHANGES/H : les appels de spécialiste comptent DANS le même 
   try {
     for (let i = 1; i <= 10; i++) {
       const st = await cs.get(T, 'WHATSAPP', from); st.recentTs = []; await cs.save(st);
-      await autoResponder.handleIncoming({ tenantId: T, channel: 'WHATSAPP', from, name: 'Awa', text: `C'est combien la formation ? (${i})`, messageId: 'q-' + i }, { runtime, settings: { whatsapp: true, debounceMs: 0 }, identity: { contactId: 'ct_q', label: 'Awa', phoneNumber: '22670444333' } });
+      await autoResponder.handleIncoming({ tenantId: T, channel: 'WHATSAPP', from, name: 'Awa', text: `La formation m'intéresse, mais le budget me freine. Quelles sont les options ? (${i})`, messageId: 'q-' + i }, { runtime, settings: { whatsapp: true, debounceMs: 0 }, identity: { contactId: 'ct_q', label: 'Awa', phoneNumber: '22670444333' } });
     }
     const key = clientAiQuota.clientKeyFor({ channel: 'WHATSAPP', from, identity: { contactId: 'ct_q' } });
     const s = await clientAiQuota.status(T, key);

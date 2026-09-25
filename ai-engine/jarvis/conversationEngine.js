@@ -129,8 +129,10 @@ function decide(state, cls, ctx) {
     return { action: 'REPLY', kind: 'ANSWER', reason: 'LEARNING', reopen: false, escalate: !!c.learning.escalate, noPromo: false, directives: base.concat(c.learning.directives || []) };
   }
   const d = decideCore(state, cls, c);
+  const explicitlyRequestedBusinessInfo = !!(c.engagement
+    && ['BUSINESS_ANSWER', 'PRESENT_SERVICE', 'GROUP_ANSWER'].includes(c.engagement.register));
   if (d.action === 'REPLY' && intent === 'GREETING' && cls.intents.length === 1 && !flags.smalltalk && !d.template && !(c.engagement && c.engagement.register === 'NATURAL_CONTINUITY')) { d.variants = 'GREET'; d.kind = 'COURTESY'; }
-  if (d.action === 'REPLY' && !commercial && !['CLOSE', 'SUPPORT'].includes(d.kind)) {
+  if (d.action === 'REPLY' && !commercial && !explicitlyRequestedBusinessInfo && !['CLOSE', 'SUPPORT'].includes(d.kind)) {
     d.noPromo = true;
     d.directives = d.directives.concat(['Conversation NON commerciale : réponds naturellement à ce que dit le client. AUCUNE promotion non sollicitée : ne cite ni prix, ni formation, ni offre, ni produit.']);
     if (flags.smalltalk && !d.template) d.template = 'SMALLTALK';
@@ -143,7 +145,7 @@ function decide(state, cls, ctx) {
     // A natural register prevents Cyrus from inserting unsolicited selling
     // language. It must not suppress an answer the customer explicitly asked
     // for (price, payment, delivery, dates, offer details, etc.).
-    if (['NATURAL', 'NATURAL_CONTINUITY'].includes(e.register) && !commercial && !['CLOSE', 'SUPPORT'].includes(d.kind)) d.noPromo = true;
+    if (['NATURAL', 'NATURAL_CONTINUITY'].includes(e.register) && !commercial && !explicitlyRequestedBusinessInfo && !['CLOSE', 'SUPPORT'].includes(d.kind)) d.noPromo = true;
     d.engagement = { code: e.code, why: e.why, register: e.register };
   }
   return d;

@@ -13,18 +13,37 @@ const NS = 'objective_missions';
 const MAX_STEPS = 10;
 const MAX_MISSIONS = 100;
 const monitorTimers = new Map();
+const activeMissionIds = new Set();
 const uid = () => 'mis_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex');
 const safeTenant = (v) => String(v || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'default';
+
+function publicStatus(state) {
+  return ({ planning: 'QUEUED', running: 'RUNNING', monitoring: 'VERIFYING', awaiting_outcome: 'WAITING_EXTERNAL',
+    waiting_input: 'WAITING_EXTERNAL', needs_confirmation: 'WAITING_EXTERNAL', paused: 'PAUSED', stopped: 'CANCELLED',
+    completed: 'COMPLETED', failed: 'FAILED', needs_review: 'VERIFYING' })[String(state || '')] || 'QUEUED';
+}
+function stampMission(mission) {
+  mission.taskId = mission.taskId || mission.id;
+  mission.ownerConversationId = mission.ownerConversationId || mission.sessionId || null;
+  mission.startedAt = mission.startedAt || mission.createdAt || Date.now();
+  mission.status = publicStatus(mission.state);
+  const total = Array.isArray(mission.steps) ? mission.steps.length : 0;
+  const done = total ? mission.steps.filter((step) => step.state === 'SUCCESS').length : 0;
+  mission.progressPercent = total ? Math.round((done / total) * 100) : 0;
+  if (mission.state === 'completed' && mission.result == null) mission.result = { verifiedSteps: done, totalSteps: total };
+  return mission;
+}
 
 async function readDoc(tenant) {
   return storage.get(NS, safeTenant(tenant), { tenant: safeTenant(tenant), missions: {} });
 }
 async function saveMission(tenant, mission) {
+  stampMission(mission);
   const doc = await readDoc(tenant);
   doc.missions[mission.id] = mission;
   const ordered = Object.values(doc.missions).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   doc.missions = Object.fromEntries(ordered.slice(0, MAX_MISSIONS).map((m) => [m.id, m]));
-  storage.set(NS, safeTenant(tenant), doc);
+  await storage.setDurable(NS, safeTenant(tenant), doc);
   return mission;
 }
 async function get(tenant, id) {
@@ -127,11 +146,22 @@ async function makePlan(mission, deps, priorPlan) {
 
 async function event(mission, type, status, detail, deps) {
   mission.updatedAt = Date.now();
+  stampMission(mission);
   await saveMission(mission.tenant, mission);
   await activityStore.record({ type: 'objective_mission', action: type, status, tenant: mission.tenant, target: mission.id, detail: detail || mission.objective.slice(0, 250) });
-  if (deps && typeof deps.notifyMission === 'function') {
+  const milestone = /mission créée|campagne\(s\) lancée|progression réelle mise à jour|campagnes terminées/i.test(String(type || ''));
+  const recent = Date.now() - Number(mission.lastNotificationAt || 0) < 30000;
+  const notify = status !== 'pending' || milestone;
+  if (notify && !(status === 'pending' && recent) && deps && typeof deps.notifyMission === 'function') {
     const message = 'Mission ' + mission.id + ' — ' + type + '\nObjectif : ' + mission.objective.slice(0, 300) + (detail ? '\n' + detail : '');
-    await deps.notifyMission({ tenantId: mission.tenant, missionId: mission.id, text: message, status }).catch(() => {});
+    try {
+      const delivered = await deps.notifyMission({ tenantId: mission.tenant, missionId: mission.id, text: message, status });
+      if (Array.isArray(delivered) ? delivered.length > 0 : delivered !== false) {
+        mission.lastNotificationAt = Date.now();
+        mission.updatedAt = Date.now();
+        await saveMission(mission.tenant, mission);
+      }
+    } catch (_) { /* les notifications ne doivent pas arrêter une mission */ }
   }
 }
 function missingFields(tool, args) {
@@ -209,6 +239,46 @@ async function recoverMonitoring(tenantId, id, deps) {
   return monitorMission(tenantId, id, deps);
 }
 
+async function recoverPending(tenantId, id, deps) {
+  const key = String(id || '');
+  if (activeMissionIds.has(key)) return get(tenantId, key);
+  const mission = await get(tenantId, key);
+  if (!mission || !['planning', 'running'].includes(mission.state)) return mission;
+  activeMissionIds.add(key);
+  try {
+    if (mission.state === 'planning' && (!Array.isArray(mission.steps) || mission.steps.length === 0)) {
+      let plan;
+      try { plan = await makePlan(mission, deps); }
+      catch (err) {
+        mission.state = 'failed'; mission.error = String(err.message || err).slice(0, 300);
+        await event(mission, 'reprise de planification échouée', 'error', mission.error, deps);
+        return mission;
+      }
+      if (plan.needsInput) {
+        mission.state = 'waiting_input'; mission.question = plan.question;
+        await event(mission, 'information nécessaire après redémarrage', 'warning', plan.question, deps);
+        return mission;
+      }
+      mission.steps = plan.steps;
+    }
+    const interrupted = (mission.steps || []).find((step) => step.state === 'RUNNING');
+    if (interrupted) {
+      interrupted.state = 'UNCONFIRMED';
+      interrupted.error = { code: 'INTERRUPTED_DURING_EXECUTION' };
+      mission.state = 'needs_review';
+      mission.currentStep = interrupted.id;
+      mission.error = { code: 'INTERRUPTED_DURING_EXECUTION', stepId: interrupted.id };
+      await event(mission, 'étape interrompue — vérification requise', 'warning', interrupted.label || interrupted.tool, deps);
+      return mission;
+    }
+    mission.state = 'running';
+    mission.error = null;
+    await saveMission(mission.tenant, mission);
+    await executePlan(mission, deps);
+    return mission;
+  } finally { activeMissionIds.delete(key); }
+}
+
 async function executePlan(mission, deps) {
   const principal = authz.currentPrincipal();
   const ctx = Object.assign({}, deps.toolContext || {}, { tenant: mission.tenant, principal,
@@ -242,13 +312,14 @@ async function executePlan(mission, deps) {
       mission.state = 'waiting_input'; mission.question = 'Il me manque ' + missing.join(', ') + ' pour ' + step.label + '.';
       await event(mission, 'information requise', 'warning', mission.question, deps); return mission;
     }
-    step.state = 'RUNNING'; step.executedArgs = args; mission.state = 'running';
+    step.state = 'RUNNING'; step.executedArgs = args; mission.state = 'running'; mission.currentStep = step.id;
     await event(mission, 'étape démarrée', 'pending', step.label, deps);
     let call;
     try { call = await registry().execute(mission.tenant, step.tool, args, ctx); }
     catch (err) { call = { state: 'FAILED', error: { code: 'EXECUTION_ERROR', message: String(err.message || err) } }; }
     step.state = call.state; step.result = call.result || null; step.error = call.error || null;
     step.verification = call.verification || null; step.finishedAt = Date.now();
+    mission.currentStep = null;
     if (call.state === 'SUCCESS') {
       completedById[step.id] = step;
       await event(mission, 'étape vérifiée', 'ok', step.label + ' — ' + summarizeResult(call.result), deps);
@@ -292,6 +363,7 @@ async function executePlan(mission, deps) {
     return mission;
   }
   mission.state = launched.length ? 'monitoring' : (mission.steps.every((s) => s.state === 'SUCCESS') ? 'completed' : 'failed');
+  if (mission.state === 'completed') mission.result = { verifiedSteps: mission.steps.filter((s) => s.state === 'SUCCESS').length, totalSteps: mission.steps.length };
   await event(mission, mission.state === 'monitoring' ? 'campagne(s) lancée(s) — suivi réel en cours' : (mission.state === 'completed' ? 'plan exécuté et vérifié' : 'mission incomplète'), mission.state === 'failed' ? 'error' : 'ok', mission.steps.filter((s) => s.state === 'SUCCESS').length + '/' + mission.steps.length + ' étapes vérifiées', deps);
   if (mission.state === 'monitoring') scheduleMonitor(mission, deps);
   return mission;
@@ -302,27 +374,33 @@ async function start({ text, tenantId, sessionId, channel }, deps) {
   if (!authz.isPrincipal(principal) || principal.tenant !== String(tenantId) || !['OWNER', 'ADMIN'].includes(principal.role)) return { text: 'La mission ne peut pas démarrer sans une identité propriétaire vérifiée.', blocked: true };
   const mission = { id: uid(), tenant: safeTenant(tenantId), sessionId: String(sessionId || ''),
     channel: String(channel || principal.channel || 'CHAT').toUpperCase(), objective: String(text || '').slice(0, 4000),
-    state: 'planning', question: null, steps: [], createdAt: Date.now(), updatedAt: Date.now() };
-  await event(mission, 'mission créée', 'pending', mission.objective.slice(0, 250), deps);
-  let plan;
-  try { plan = await makePlan(mission, deps); }
-  catch (err) {
-    mission.state = 'failed'; mission.error = String(err.message || err).slice(0, 300);
-    await event(mission, 'planification échouée', 'error', mission.error, deps);
-    return { text: 'Je n’ai pas pu établir un plan d’actions vérifiable (' + mission.error + ').', missionId: mission.id, stopReason: 'PLAN_FAILED' };
-  }
-  if (plan.needsInput) {
-    mission.state = 'waiting_input'; mission.question = plan.question;
-    await event(mission, 'information nécessaire', 'warning', plan.question, deps);
-    return { text: plan.question + '\nMission ' + mission.id + ' enregistrée : répondez ici pour reprendre.', missionId: mission.id, state: mission.state, isPlanningQuestion: true, intent: 'goal' };
-  }
-  mission.steps = plan.steps;
-  await saveMission(mission.tenant, mission);
-  await executePlan(mission, deps);
-  return render(mission);
+    state: 'planning', question: null, steps: [], createdAt: Date.now(), startedAt: Date.now(), updatedAt: Date.now(),
+    taskId: null, currentStep: null, progress: [], lastNotificationAt: null, result: null, error: null,
+    ownerConversationId: String(sessionId || '') };
+  mission.taskId = mission.id;
+  activeMissionIds.add(mission.id);
+  try {
+    await event(mission, 'mission créée', 'pending', mission.objective.slice(0, 250), deps);
+    let plan;
+    try { plan = await makePlan(mission, deps); }
+    catch (err) {
+      mission.state = 'failed'; mission.error = String(err.message || err).slice(0, 300);
+      await event(mission, 'planification échouée', 'error', mission.error, deps);
+      return { text: 'Je n’ai pas pu établir un plan d’actions vérifiable (' + mission.error + ').', missionId: mission.id, stopReason: 'PLAN_FAILED' };
+    }
+    if (plan.needsInput) {
+      mission.state = 'waiting_input'; mission.question = plan.question;
+      await event(mission, 'information nécessaire', 'warning', plan.question, deps);
+      return { text: plan.question + '\nMission ' + mission.id + ' enregistrée : répondez ici pour reprendre.', missionId: mission.id, state: mission.state, isPlanningQuestion: true, intent: 'goal' };
+    }
+    mission.steps = plan.steps;
+    await saveMission(mission.tenant, mission);
+    await executePlan(mission, deps);
+    return render(mission);
+  } finally { activeMissionIds.delete(mission.id); }
 }
 
-async function resume({ tenantId, id, answer }, deps) {
+async function resumeCore({ tenantId, id, answer }, deps) {
   const mission = await get(tenantId, id);
   if (!mission) return { text: 'Mission introuvable pour ce compte.' };
   if (mission.state === 'needs_confirmation' && answer) {
@@ -402,6 +480,17 @@ async function resume({ tenantId, id, answer }, deps) {
   await executePlan(mission, deps); return render(mission);
 }
 
+async function resume(args, deps) {
+  const key = String(args && args.id || '');
+  if (activeMissionIds.has(key)) {
+    const current = await get(args.tenantId, key);
+    return current ? render(current) : { text: 'Mission introuvable.' };
+  }
+  activeMissionIds.add(key);
+  try { return await resumeCore(args, deps); }
+  finally { activeMissionIds.delete(key); }
+}
+
 async function control({ tenantId, id, action }, deps) {
   const mission = await get(tenantId, id);
   if (!mission) return null;
@@ -461,10 +550,14 @@ function render(mission) {
   else if (mission.state === 'stopped') text = 'Mission ' + mission.id + ' arrêtée après ' + done + '/' + mission.steps.length + ' étapes vérifiées.';
   else if (mission.state === 'failed') text = 'Mission ' + mission.id + ' incomplète : ' + done + '/' + mission.steps.length + ' étapes vérifiées' + (failed[0] && failed[0].error ? ', erreur ' + (failed[0].error.code || failed[0].error.message || 'inconnue') : '') + '.';
   else text = 'Mission ' + mission.id + ' en cours : ' + done + '/' + mission.steps.length + ' étapes vérifiées.';
-  return { text, missionId: mission.id, state: mission.state,
+  stampMission(mission);
+  return { text, missionId: mission.id, taskId: mission.taskId, state: mission.state, status: mission.status,
+    objective: mission.objective, currentStep: mission.currentStep || null, progressPercent: mission.progressPercent,
+    startedAt: mission.startedAt, updatedAt: mission.updatedAt, ownerConversationId: mission.ownerConversationId,
+    result: mission.result || null, error: mission.error || null,
     progress: mission.progress || [], outcomeNote: mission.outcomeNote || null,
     steps: mission.steps.map((s) => ({ id: s.id, tool: s.tool, label: s.label, state: s.state })),
     actionLog: mission.steps.map((s) => ({ icon: s.state === 'SUCCESS' ? '✅' : s.state === 'FAILED' || s.state === 'BLOCKED' ? '⚠️' : '⏳', label: s.label + ' — ' + s.state, status: s.state === 'SUCCESS' ? 'done' : s.state === 'FAILED' || s.state === 'BLOCKED' ? 'error' : 'pending' })) };
 }
 
-module.exports = { start, resume, control, get, list, render, monitorMission, recoverMonitoring, NS };
+module.exports = { start, resume, control, get, list, render, monitorMission, recoverMonitoring, recoverPending, NS };

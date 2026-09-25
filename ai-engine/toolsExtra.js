@@ -37,7 +37,7 @@ async function rowsFromUpload(tenant, fileId) {
 
 // ---------- brouillons de campagne (persistés) ----------
 async function loadDrafts(tenant) { return storageAdapter.get('campaign_drafts', sanitize(tenant), { tenant: sanitize(tenant), drafts: {} }); }
-async function saveDrafts(tenant, doc) { return storageAdapter.set('campaign_drafts', sanitize(tenant), doc); }
+async function saveDrafts(tenant, doc) { return storageAdapter.setDurable('campaign_drafts', sanitize(tenant), doc); }
 
 // Gestionnaires de la file durable (utilisés par le worker) : exécutent réellement l'action.
 function queueHandlers(tenant, runtime) {
@@ -60,7 +60,12 @@ function queueHandlers(tenant, runtime) {
       if (!runtime || typeof runtime.sendMessageVerified !== 'function') return { ok: false, error: 'RUNTIME_MISSING', retryable: true };
       const out = await runtime.sendMessageVerified({ channel: task.payload.channel, to: task.payload.to, text: task.payload.text, tenantId: tenant });
       if (out.status === 'SUCCESS') return { ok: true, result: { confirmationId: out.confirmationId } };
-      return { ok: false, error: out.error || out.status, retryable: true };
+      const error = String(out.error || out.status || 'SEND_FAILED');
+      // Retry seulement les refus qui surviennent avant tout envoi. Une
+      // erreur réseau après l'appel de la plateforme est ambiguë; la rejouer
+      // pourrait envoyer deux fois le même message.
+      const definitelyNotSent = error === 'NOT_CONNECTED' || error === 'MISSING_RECIPIENT' || error.startsWith('RUNTIME_MISSING');
+      return { ok: false, error, retryable: definitelyNotSent };
     },
   };
 }
@@ -635,7 +640,7 @@ const TOOLS = {
       } catch (e) { /* non bloquant */ }
       if (queue.stuck) problems.push(`TACHES_BLOQUEES:${queue.stuck}`);
       if (queue.overdue) problems.push(`TACHES_EN_RETARD:${queue.overdue}`);
-      return { ok: true, result: { connections: conn && conn.result, queue, recentErrors: errors.map((e) => ({ action: e.action, detail: e.detail, at: e.ts })), problems } };
+      return { ok: true, result: { connections: conn && conn.result, queue, taskWorker: taskQueue.workerStatus(), recentErrors: errors.map((e) => ({ action: e.action, detail: e.detail, at: e.ts })), problems } };
     },
   },
 

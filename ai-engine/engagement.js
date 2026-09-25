@@ -18,7 +18,7 @@ const BUSINESS_IF_ON_TOPIC = new Set(['QUESTION', 'REQUEST_INFORMATION', 'REQUES
 const ASK_OFFER_RE = /(qu['’]?est[- ]ce que (?:vous|tu) (?:vendez|proposez|faites|offrez)|(?:vous|tu) (?:vendez|proposez|faites) quoi|quels? (?:sont )?(?:vos|tes|les) (?:services?|produits?|offres?|formations?|prestations?)|que proposez[- ]vous|votre catalogue|vos tarifs|c['’]est quoi (?:votre|ton) (?:activit|service|offre))/i;
 
 const R = (o) => Object.assign({ respond: true, present: false, register: 'NATURAL', directives: [] }, o);
-const NATURAL_RULE = 'Discussion NATURELLE : réponds comme une personne, avec chaleur et simplicité, à ce que dit la personne. Ne cite aucun prix, aucune offre, aucun service : ils ne sont pas le sujet.';
+const NATURAL_RULE = 'Discussion NATURELLE : réponds comme une personne, avec chaleur et simplicité. Pas de promotion spontanée ; si la personne demande explicitement un prix, un service ou une offre, réponds avec les faits configurés.';
 
 // input : { policy (résolue pour cette discussion), ctx (analyze), cls (intentClassifier), isGroup, addressing:{mentioned,quotedFromBot,named}, text, state, learning }
 function decide(input) {
@@ -65,9 +65,29 @@ function decide(input) {
   }
 
   // ------------------------------------------------------------------ DISCUSSIONS PRIVÉES
-  if (policy.mode === 'natural') return R({ code: 'PRIVATE_NATURAL_POLICY', why: 'Politique « toujours naturel » pour cette discussion.', directives: brief.concat([NATURAL_RULE]) });
   const refused = !!(state.refusal && state.refusal.active) || state.optOut === true;
   if (refused) return R({ code: 'PRIVATE_AFTER_REFUSAL', why: 'La personne a décliné : je reste naturel, sans rien proposer.', directives: brief.concat([NATURAL_RULE]) });
+
+  // « Naturel » interdit la vente non sollicitée ; il ne doit jamais empêcher
+  // de répondre à une question explicite sur l'offre, le service ou son prix.
+  // L'ancienne sortie anticipée renvoyait NATURAL même pour « combien coûte la
+  // formation ? », ce qui masquait ensuite les faits au rédacteur.
+  if (policy.mode === 'natural') {
+    if (businessAsk && !flags.smalltalk) {
+      const askedForCatalog = asksOffer && !!svc;
+      const instructions = askedForCatalog && ctx.serviceNames && ctx.serviceNames.length > 1
+        ? `La personne demande explicitement vos offres : présente brièvement les services configurés (${ctx.serviceNames.join(', ')}) avec les seuls faits disponibles, puis demande ce qui l'intéresse. Pas de pression.`
+        : `La personne pose une question explicite sur votre activité : réponds directement avec les faits configurés et uniquement ceux-ci. N'ajoute aucune promotion ni relance non demandée.`;
+      return R({
+        code: askedForCatalog ? 'PRIVATE_ASKED_OFFER' : 'PRIVATE_NATURAL_BUSINESS_QUESTION',
+        why: 'La personne demande une information métier : je réponds précisément sans promotion spontanée.',
+        register: askedForCatalog ? 'PRESENT_SERVICE' : 'BUSINESS_ANSWER',
+        present: askedForCatalog,
+        directives: brief.concat([instructions]),
+      });
+    }
+    return R({ code: 'PRIVATE_NATURAL_POLICY', why: 'Politique « toujours naturel » : aucune promotion spontanée.', directives: brief.concat([NATURAL_RULE]) });
+  }
 
   if (businessAsk || policy.mode === 'business') {
     const wantsPresentation = canPresent && policy.presentServices !== 'on-request' ? (!presentedRecently || asksOffer || intent === 'INTEREST') : (canPresent && asksOffer);

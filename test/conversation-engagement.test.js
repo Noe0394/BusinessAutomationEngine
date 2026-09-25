@@ -82,7 +82,8 @@ test('PRIVÉ : discussion courante = NATURELLE (aucune offre dans le prompt) ; q
   let r = await say(T, from, 'Salut, ça va ? Tu as vu le match hier ?');
   assert.ok(r.replied); assert.equal(r.out.engagement.register, 'NATURAL'); assert.match(r.prompt, /n'est PAS le sujet/); assert.doesNotMatch(r.prompt, /5000|SERVICE PRIORITAIRE/);
   r = await say(T, from, 'Combien coûte le cours de grillade ?');
-  assert.ok(r.replied); assert.match(r.out.engagement.register, /BUSINESS_ANSWER|PRESENT_SERVICE/); assert.match(r.prompt, /5000/); assert.match(r.prompt, /CONTEXTE/);
+  assert.ok(r.replied); assert.match(r.out.engagement.register, /BUSINESS_ANSWER|PRESENT_SERVICE/); assert.equal(r.prompt, '');
+  assert.match(sent[sent.length - 1].text, /5\s?000/, 'le prix configuré est répondu sans IA');
   const T2 = 'priv1b'; await seed(T2); const f2 = '22670020002@s.whatsapp.net';
   r = await say(T2, f2, 'Qu\'est-ce que vous vendez exactement ?');
   assert.equal(r.out.engagement.code, 'PRIVATE_ASKED_OFFER'); assert.equal(r.out.engagement.register, 'PRESENT_SERVICE'); assert.match(r.prompt, /Présente le service « Formation Grillade »/);
@@ -95,12 +96,13 @@ test('PRIVÉ : la mémoire 7 jours permet de reprendre le fil (salutation après
   assert.equal(r.out.engagement.code, 'PRIVATE_NATURAL_CONTINUITY'); assert.doesNotMatch(r.prompt, /SERVICE PRIORITAIRE/); assert.match(r.prompt, /rappeler en une courte phrase le sujet/);
 });
 
-test('PRIVÉ : politique « natural » = jamais de business même sur une question de prix ; « présenter : jamais » respecté ; exception par contact', async () => {
+test('PRIVÉ : politique « natural » reste sans promotion, mais répond aux questions métier explicites ; « présenter : jamais » respecté', async () => {
   const T = 'priv3'; await seed(T); const from = '22670020004@s.whatsapp.net';
   await policy.set(T, { override: { channel: 'WHATSAPP', id: from, mode: 'natural' } });
   const s = await require('../ai-engine/autoResponder').getSettings(T);
   const r = await say(T, from, 'Combien coûte le cours de grillade ?', { settings: { conversationPolicy: s.conversationPolicy } });
-  assert.equal(r.out.engagement.code, 'PRIVATE_NATURAL_POLICY'); assert.doesNotMatch(r.prompt, /SERVICE PRIORITAIRE/);
+  assert.equal(r.out.engagement.code, 'PRIVATE_NATURAL_BUSINESS_QUESTION'); assert.equal(r.prompt, '');
+  assert.match(sent[sent.length - 1].text, /5\s?000/);
   const cls = { intent: 'INTEREST', flags: {}, intents: ['INTEREST'] };
   const ctx = { messages: 3, windowDays: 7, themes: [], service: { name: 'X', affinity: 0.9, hits: [] }, business: { temperature: 'hot', presentedRecently: false }, current: {} };
   const e = engagement.decide({ policy: { mode: 'auto', presentServices: 'never' }, ctx, cls, isGroup: false, text: 'ça m\'intéresse', state: {} });
@@ -128,7 +130,8 @@ test('GROUPE lié à l\'activité : répond brièvement à une VRAIE question su
   const T = 'grp2'; await seed(T, { linkGroup: G });
   await hist(T, G, [['in', 'La marinade pour la grillade, combien de temps ?', 'Ben', 50 * MIN]], { group: true });
   let r = await say(T, G, 'Quel est le prix du cours de grillade ?', { senderId: 'Chloé@s.whatsapp.net' });
-  assert.equal(r.replied, true); assert.equal(r.out.engagement.code, 'GROUP_TOPIC_QUESTION'); assert.match(r.prompt, /BRÈVE/);
+  assert.equal(r.replied, true); assert.equal(r.out.engagement.code, 'GROUP_TOPIC_QUESTION'); assert.equal(r.prompt, '');
+  assert.match(sent[sent.length - 1].text, /5\s?000/);
   r = await say(T, G, 'Haha trop drôle 😂', { senderId: 'Chloé@s.whatsapp.net' });
   assert.equal(r.replied, false); assert.equal(r.out.engagement.code, 'GROUP_OFF_TOPIC');
   // échange à deux (4 derniers messages alternés entre 2 membres)
@@ -238,7 +241,7 @@ test('CHAT (site, self WhatsApp/Telegram) : « pourquoi as-tu répondu ? » et �
   const orch = require('../ai-engine/chatOrchestrator'); const T = 'chatpol1'; await seed(T, { linkGroup: G });
   await hist(T, G, [['in', 'La grillade de viande, quelle marinade ?', 'Ben', 20 * MIN]], { group: true });
   await require('../ai-engine/activityStore').record({ type: 'engagement', action: 'Pas de réponse', tenant: T, channel: 'WHATSAPP', target: G, detail: "GROUP_DUO | Deux membres échangent entre eux : je ne les interromps pas." });
-  const P = ownerOf(T); const run = (text) => orch.handle({ text, history: [], tenantId: T, sessionId: 's', principal: P }, {});
+  const P = ownerOf(T); const run = (text) => orch.handle({ text, history: [], tenantId: T, sessionId: 's', principal: P }, { llm: async () => 'Réponse simulée.' });
   assert.equal(orch.detectIntent('Pourquoi as-tu répondu à Grill Club ?'), 'convpolicy'); assert.equal(orch.detectIntent('Dans le groupe Grill Club, réponds seulement si on te mentionne'), 'convpolicy');
   let r = await run('Pourquoi le répondeur n\'a pas répondu dans le groupe Grill Club ?');
   assert.equal(r.intent, 'convpolicy'); assert.match(r.text, /Deux membres échangent entre eux/);

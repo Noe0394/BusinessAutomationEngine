@@ -54,7 +54,7 @@ test('activé -> compose (ancré prix réel) + envoi vérifié', async () => {
   assert.match(out.confirmationId, /WAMID-AUTO-/);
   assert.equal(rec.length, 1);
   assert.equal(rec[0].to, '22600000001');
-  assert.match(rec[0].text, /8000/);
+  assert.match(rec[0].text, /8\s?000/);
 });
 
 test('question commerciale explicite : le registre naturel ne bloque pas la réponse du Service métier', async () => {
@@ -75,6 +75,29 @@ test('question commerciale explicite : le registre naturel ne bloque pas la rép
   assert.equal(out.sent, true, JSON.stringify(out));
   assert.match(sent[0].text, /12\s?500\s?FCFA/i);
   assert.doesNotMatch(sent[0].text, /reviens vers vous très vite avec une réponse précise/i);
+});
+
+test('prix retrouvé par alias : réponse réelle sans appel IA', async () => {
+  const tenant = 'tAutoAliasPrice'; const sent = [];
+  await businessServices.create(tenant, {
+    name: 'Formation Cuisine et Pâtisserie',
+    aliases: ['ma formation cuisine'],
+    products: [{ name: 'Formation Cuisine et Pâtisserie', aliases: ['formation pâtisserie', 'cours de cuisine'], price: 12500 }],
+    commercial: { currency: 'FCFA' },
+  });
+  await autoResponder.setSettings(tenant, { whatsapp: true });
+  let aiCalls = 0;
+  const out = await autoResponder.handleIncoming({
+    tenantId: tenant, channel: 'WHATSAPP', from: '22600000992', name: 'Test',
+    text: 'Quel est le prix de ma formation pâtisserie ?', messageId: 'alias-price-1',
+  }, {
+    runtime: fakeRuntime(sent),
+    llm: async () => { aiCalls += 1; return 'réponse IA non utilisée'; },
+    engagementFn: async () => ({ respond: true, code: 'TEST_BUSINESS', why: 'question sur l’offre', register: 'BUSINESS_ANSWER', directives: [] }),
+  });
+  assert.equal(out.sent, true, JSON.stringify(out));
+  assert.equal(aiCalls, 0, 'un prix configuré est servi sans génération IA');
+  assert.match(sent[0].text, /12\s?500\s?FCFA/i);
 });
 
 test('même messageId -> DUPLICATE (pas de double réponse)', async () => {
@@ -130,7 +153,7 @@ test('un échec d’envoi certain laisse le même message retraitable', async ()
 });
 
 test('composeReply s\'appuie sur le contexte métier réel', async () => {
-  const txt = await autoResponder.composeReply({ tenant: T, channel: 'WHATSAPP', from: '22600000002', name: 'Koffi', text: 'prix ?', llm: async (prompt) => {
+  const txt = await autoResponder.composeReply({ tenant: T, channel: 'WHATSAPP', from: '22600000002', name: 'Koffi', text: 'Parle-moi de cette formation.', llm: async (prompt) => {
     // prouve que le prompt contient bien le contexte métier réel injecté
     assert.match(prompt, /Formation Épicerie et Bouillon/);
     assert.match(prompt, /8000/);

@@ -18,7 +18,7 @@ const chan = (c) => String(c || 'WHATSAPP').toUpperCase();
 const err = (code, message, http) => Object.assign(new Error(message || code), { code, http: http || 400 });
 
 const load = (tenant) => storageAdapter.get('campaign_drafts', sanitize(tenant), { tenant: sanitize(tenant), drafts: {} });
-const save = (tenant, doc) => storageAdapter.set('campaign_drafts', sanitize(tenant), doc);
+const save = (tenant, doc) => storageAdapter.setDurable('campaign_drafts', sanitize(tenant), doc);
 
 function requireChannelModule(allowedModules, channel) {
   if (allowedModules === null || allowedModules === undefined) return;
@@ -34,7 +34,8 @@ async function launchDraft(tenant, draft, runtime) {
   // Les contacts ayant demandé l'arrêt sont exclus PAR DÉFAUT ; l'utilisateur peut décider de les inclure (includeOptOut).
   const recipients = draft.includeOptOut ? draft.recipients : draft.recipients.filter((r) => !optedOut.has(contactCrm.identityOf(r.telephone || r)));
   if (!recipients.length) return fail('EMPTY_RECIPIENTS', 'Tous les destinataires sont exclus (refus) ou la liste est vide.');
-  const payload = { channel: draft.channel, tenantId: tenant, recipients, text: draft.text, name: draft.name };
+  const payload = { channel: draft.channel, tenantId: tenant, recipients, text: draft.text, name: draft.name,
+    idempotencyKey: String(draft.id || '') };
   if (draft.mediaFileId) {
     if (draft.channel !== 'WHATSAPP') return fail('MEDIA_NOT_SUPPORTED_CHANNEL', 'Média de campagne géré uniquement pour WhatsApp.');
     const f = await chatUploads.readFile(tenant, draft.mediaFileId);
@@ -142,7 +143,7 @@ async function schedule(tenant, id, at) {
   const d = doc.drafts[id];
   if (!d || d.kind !== 'campaign') throw err('NOT_FOUND', 'Campagne introuvable.', 404);
   if (!['draft', 'scheduled'].includes(d.status)) throw err('INVALID_STATE', 'Cette campagne est déjà lancée ou terminée.', 409);
-  const { task, deduplicated } = await taskQueue.enqueue(tenant, { type: 'LAUNCH_CAMPAIGN', payload: { draftId: id }, runAt: when, ref: id, dedupeKey: `launch:${id}` });
+  const { task, deduplicated } = await taskQueue.enqueue(tenant, { type: 'LAUNCH_CAMPAIGN', payload: { draftId: id }, runAt: when, priority: -10, ref: id, dedupeKey: `launch:${id}` });
   d.status = 'scheduled'; d.scheduledAt = when; d.taskId = task.id;
   await save(tenant, doc);
   return Object.assign(summaryOf(d, null), { taskId: task.id, runAt: new Date(task.runAt).toISOString(), deduplicated });

@@ -1082,6 +1082,7 @@ app.get('/api/admin/storage-status', requireAdmin, (req, res) => {
     licenses: licenses.getStorageStatus(),
     whatsapp: whatsappManager.getStorageStatus(),
     telegram: telegramManager.getStorageStatus(),
+    aiEngine: require('./ai-engine/storageAdapter').persistenceStatus(),
   });
 });
 
@@ -5293,7 +5294,10 @@ app.post('/api/admin/diag/send-test', requireAccess, async (req, res) => {
   const connected = session && typeof session.isConnected === 'function' && session.isConnected();
   const number = session && typeof session.getConnectedNumber === 'function' ? session.getConnectedNumber() : null;
   if (!connected) return res.json({ status: 'FAILED', reason: 'NOT_CONNECTED', tenantId, channel: ch, number });
-  const to = ch === 'WHATSAPP' ? (number ? `${number}@s.whatsapp.net` : null) : (req.body.to || null);
+  let to = ch === 'WHATSAPP' ? (number ? `${number}@s.whatsapp.net` : null) : (req.body.to || null);
+  if (ch === 'TELEGRAM' && !to && session && typeof session.getSelfId === 'function') {
+    try { to = await session.getSelfId(); } catch (_) { to = null; }
+  }
   if (!to) return res.status(400).json({ error: ch === 'WHATSAPP' ? 'Numéro du compte introuvable.' : 'Pour Telegram, fournir "to" (chatId/username).' });
   const out = await intelligenceBridge.runtime.sendMessageVerified({
     channel: ch, to, text: `✅ Test CYRUS (envoi vérifié) — ${new Date().toISOString()}`, tenantId,
@@ -5315,7 +5319,10 @@ app.post('/api/admin/diag/assistant-check', requireAccess, async (req, res) => {
     out.session = { exists: !!session, connected: !!(session && session.isConnected && session.isConnected()), paired: !!(session && session.isPaired && session.isPaired()) };
     if (session && session.getSelfIds) { const ids = session.getSelfIds(); out.selfIds = { pn: ids.pn ? `…${ids.pn.split('@')[0].slice(-4)}` : null, lid: !!ids.lid }; }
     const settings = await autoResponder.getSettings(tenantId);
-    out.settings = { whatsapp: !!settings.whatsapp, telegram: !!settings.telegram, alwaysOn: !!settings.alwaysOn, ownerChannelEnabled: require('./ai-engine/ownerChannel').isEnabled(settings) };
+    const effectiveGroupPolicy = require('./ai-engine/conversationPolicy').fromSettings(settings);
+    out.settings = { whatsapp: !!settings.whatsapp, telegram: !!settings.telegram, alwaysOn: !!settings.alwaysOn,
+      paused: !!settings.paused, groupReplies: !!settings.groupReplies, groupPolicy: effectiveGroupPolicy.group,
+      ownerChannelEnabled: require('./ai-engine/ownerChannel').isEnabled(settings) };
     const svcs = await require('./ai-engine/businessServices').list(tenantId);
     out.services = svcs.map((s) => {
       const products = Array.isArray(s.products) ? s.products : [];
@@ -5818,7 +5825,30 @@ async function sendCustomerReply(channel, session, msg, text, { asVoice } = {}) 
   }
 }
 
-async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }) {
+async function handleIncomingCustomerMessage(event) {
+  const input = event || {};
+  const trace = require('./ai-engine/responseMetrics').start({
+    tenant: input.tenantId, channel: input.channel,
+    target: extractFromId(input.channel, input.msg), source: 'incoming_message',
+  });
+  let output = null;
+  let failed = false;
+  try {
+    output = await handleIncomingCustomerMessageCore(Object.assign({}, input, { responseTrace: trace }));
+    return output;
+  } catch (err) {
+    failed = true;
+    throw err;
+  } finally {
+    // La couche d'assistance met sa réponse en file et termine elle-même le
+    // traceur après l'envoi réellement confirmé.
+    if (!(output && output.responsePending)) {
+      await trace.finish({ status: failed ? 'ERROR' : (output && output.status) || 'DONE' });
+    }
+  }
+}
+
+async function handleIncomingCustomerMessageCore({ channel, tenantId, session, msg, responseTrace }) {
   let text = extractIncomingText(channel, msg).trim();
   const wasVoice = isVoiceNote(channel, msg);
 
@@ -5838,6 +5868,7 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
   const anyWaMedia = channel === 'WHATSAPP' && !!(msg && msg.message && (msg.message.imageMessage || msg.message.videoMessage || msg.message.audioMessage || msg.message.documentMessage || msg.message.documentWithCaptionMessage || msg.message.ptvMessage));
   const attachOnly = !text && channel === 'WHATSAPP' && (hasIncomingAttachment(channel, msg) || anyWaMedia);
   if (!text && !attachOnly) return;
+  if (responseTrace) responseTrace.mark('detected', { method: wasVoice ? 'voice_transcription' : 'message_parser' });
   // À qui s'adresse le message ? (mention de mon compte, réponse à l'un de mes messages) — utilisé par le moteur d'engagement (ai-engine/engagement.js).
   const addressing = channel === 'WHATSAPP' ? waAddressing(msg, session) : (msg && msg.mentioned === true ? { mentioned: true } : {});
   const isGroupMsg = channel === 'WHATSAPP' && /@g\.us$/i.test(String(extractFromId(channel, msg) || ''));
@@ -5848,6 +5879,7 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     console.error(`contactIdentity (tenant "${tenantId}", ${channel}) :`, err.message);
     return null;
   });
+  if (responseTrace) responseTrace.mark('identity_resolved', { status: identity ? 'ok' : 'unavailable' });
 
   // Numéro PROPRIÉTAIRE explicitement configuré (settings.ownerNumbers — jamais déduit) : ses messages vont au Chat
   // Intelligent, comme ceux de son self-chat. Un client n'atteint jamais ce chemin.
@@ -5984,14 +6016,16 @@ async function handleIncomingCustomerMessage({ channel, tenantId, session, msg }
     // COUCHE D'ASSISTANCE GÉNÉRALE : conversations privées/quotidiennes (réponse sûre, alerte du propriétaire, handoff)
     // avant le moteur commercial. Les conversations métier retombent sur autoResponder/Jarvis, inchangés.
     try {
-      const routed = await assistant.route({ tenantId, channel, session, msg, text, from, messageId, hasAttachment: hasIncomingAttachment(channel, msg), identity });
-      if (routed && routed.handled) return;
+      if (responseTrace) responseTrace.mark('routing_started');
+      const routed = await assistant.route({ tenantId, channel, session, msg, text, from, messageId, hasAttachment: hasIncomingAttachment(channel, msg), identity, responseTrace });
+      if (routed && routed.handled) return { responsePending: true };
+      if (responseTrace) responseTrace.mark('route_selected', { method: routed && routed.reason || 'auto_responder' });
     } catch (err) {
       console.error(`assistantLayer.route (tenant "${tenantId}", ${channel}) :`, err.message);
     }
     const autoOut = await autoResponder.handleIncoming(
       { tenantId, channel, from, name: senderName, text, messageId, addressing, senderId: isGroupMsg && msg && msg.key && msg.key.participant ? String(msg.key.participant) : (channel === 'TELEGRAM' && msg && msg.senderId ? String(msg.senderId) : undefined) },
-      { runtime: intelligenceBridge && intelligenceBridge.runtime, identity },
+      { runtime: intelligenceBridge && intelligenceBridge.runtime, identity, responseTrace },
     ).catch((err) => {
       console.error(`autoResponder (tenant "${tenantId}", ${channel}) :`, err.message);
       return { skipped: 'ERROR' };
@@ -6221,7 +6255,8 @@ function restoreObjectiveMissionMonitors() {
   const storage = require('./ai-engine/storageAdapter');
   const authz = require('./ai-engine/authz');
   const timer = setTimeout(async () => {
-    for (const docId of storage.listIds(missions.NS)) {
+    const missionDocIds = await storage.listIdsAsync(missions.NS).catch(() => storage.listIds(missions.NS));
+    for (const docId of missionDocIds) {
       try {
         const doc = await storage.get(missions.NS, docId, null);
         const tenantId = String(doc && doc.tenant || docId);
@@ -6232,6 +6267,9 @@ function restoreObjectiveMissionMonitors() {
           const active = await missions.list(tenantId, 50);
           for (const mission of active.filter((m) => m.state === 'monitoring')) {
             await missions.recoverMonitoring(tenantId, mission.id, buildChatDeps(tenantId));
+          }
+          for (const mission of active.filter((m) => ['planning', 'running'].includes(m.state))) {
+            await missions.recoverPending(tenantId, mission.id, buildChatDeps(tenantId));
           }
         });
       } catch (err) { console.warn('Reprise du suivi de mission impossible :', err.message); }
@@ -6260,7 +6298,11 @@ try { conversationHistory.startMaintenance(); } catch (_) { /* no-op */ }
 try {
   const taskQueue = require('./ai-engine/taskQueue');
   const { queueHandlers } = require('./ai-engine/toolsExtra');
-  taskQueue.startWorker((tenant) => queueHandlers(tenant, intelligenceBridge && intelligenceBridge.runtime), 30000);
+  taskQueue.startWorker((tenant) => queueHandlers(tenant, intelligenceBridge && intelligenceBridge.runtime), 30000, {
+    concurrency: 4,
+    tenantProvider: () => licenses.listLicenses().map((item) => item.key).concat(
+      [whatsappManager.ADMIN_TENANT_ID, telegramManager.ADMIN_TENANT_ID], require('./ai-engine/alwaysOn').list()),
+  });
 } catch (err) { console.error('taskQueue worker non démarré :', err.message); }
 
 // ---------- Onglet Campagnes unifié (WhatsApp + Telegram) : voir ai-engine/campaignService.js ----------

@@ -33,6 +33,7 @@ async function say(from, text, llm, rec, extra) {
 
 test('setup', async () => {
   await businessServices.create(T, { name: 'Formation Épicerie', type: 'formation', products: [{ name: 'Formation Épicerie', price: 8000 }], commercial: { currency: 'FCFA' } });
+  await businessServices.create(T, { name: 'Formation Couture', type: 'formation', products: [{ name: 'Formation Couture', price: 19000 }], commercial: { currency: 'FCFA' } });
   await autoResponder.setSettings(T, { whatsapp: true, telegram: true });
 });
 
@@ -84,10 +85,12 @@ test('Cas 6 : « je vais réfléchir » -> aucune offre additionnelle', async ()
 test('sujet courant : « combien ça coûte ? » est rattaché à la formation citée avant', async () => {
   const rec = []; const prompts = [];
   await say('9007', 'Je suis intéressé par la Formation Épicerie', async () => 'Très bien, je vous explique.', rec);
-  await say('9007', 'Combien ça coûte ?', async (p) => { prompts.push(p); return 'La Formation Épicerie coûte 8000 FCFA.'; }, rec);
+  await say('9007', 'Combien ça coûte ?', async (p) => { prompts.push(p); return 'Réponse IA non utilisée'; }, rec);
   const st = await conversationState.get(T, 'WHATSAPP', '9007');
   assert.equal(st.memory.subject, 'Formation Épicerie');
-  assert.ok(prompts.some((p) => p.includes('Sujet courant de la conversation : Formation Épicerie')));
+  assert.equal(prompts.length, 0, 'une question de prix déterministe ne déclenche pas d’appel IA');
+  assert.match(rec[1].text, /8\s?000\s?FCFA/);
+  assert.doesNotMatch(rec[1].text, /19\s?000/, 'le contexte de la conversation sélectionne le bon service');
 });
 
 test('groupes : silence par défaut, réponse seulement si configuré ET demande commerciale explicite', async () => {

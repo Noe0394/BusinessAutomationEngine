@@ -120,6 +120,7 @@ test('lancement : moteur appelé avec message + média + destinataires valides, 
   const out = await svc.launch(T, c2.id, rt);
   assert.equal(out.state, 'waiting');
   assert.equal(rt.calls.send.length, 1);
+  assert.equal(rt.calls.send[0].idempotencyKey, c2.id, 'la campagne réutilise une clé stable lors d’une reprise');
   assert.deepEqual(rt.calls.send[0].recipients.map((r) => r.telephone), ['22670123456', '2265012345'.length ? '22650123456' : '']);
   assert.equal(rt.calls.send[0].sequence[0].type, 'media');
   assert.equal(rt.calls.send[0].sequence[0].buffer.length, 512);
@@ -197,6 +198,7 @@ test('programmation : le worker lance la campagne à l\'heure et l\'identifiant 
   assert.equal(done.filter((x) => x.ok).length >= 1, true);
   assert.equal(rt.calls.send.length, 1);
   const d = await svc.get(T, s.id, rt);
+  assert.equal(rt.calls.send[0].idempotencyKey, s.id, 'le worker conserve la même clé après reprise');
   assert.equal(d.state, 'running');
   assert.equal(d.progress.total, 3);
 });

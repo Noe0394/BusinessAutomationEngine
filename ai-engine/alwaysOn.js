@@ -24,9 +24,12 @@ function list() {
 
 // Charge les réglages persistés (au démarrage) : tout compte avec alwaysOn=true est marqué.
 async function loadFromStorage(storageAdapter, namespace) {
-  for (const id of storageAdapter.listIds(namespace || 'auto_settings')) {
+  const ns = namespace || 'auto_settings';
+  const ids = typeof storageAdapter.listIdsAsync === 'function'
+    ? await storageAdapter.listIdsAsync(ns).catch(() => storageAdapter.listIds(ns)) : storageAdapter.listIds(ns);
+  for (const id of ids) {
     try {
-      const doc = await storageAdapter.get(namespace || 'auto_settings', id, null);
+      const doc = await storageAdapter.get(ns, id, null);
       if (doc && doc.alwaysOn === true) dynamic.add(sanitize(id));
     } catch (e) { /* ignoré */ }
   }

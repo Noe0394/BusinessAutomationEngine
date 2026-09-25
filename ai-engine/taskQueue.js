@@ -28,10 +28,10 @@ function withTenant(tenant, fn) {
 }
 
 async function load(tenant) { return storageAdapter.get(NAMESPACE, sanitize(tenant), { tenant: sanitize(tenant), tasks: [] }); }
-function save(tenant, doc) {
+async function save(tenant, doc) {
   const cut = Date.now() - KEEP_FINISHED_MS;
   doc.tasks = doc.tasks.filter((t) => ![STATE.COMPLETED, STATE.FAILED, STATE.CANCELLED].includes(t.state) || (t.finishedAt || 0) >= cut).slice(-MAX_TASKS);
-  return storageAdapter.set(NAMESPACE, sanitize(tenant), doc);
+  return storageAdapter.setDurable(NAMESPACE, sanitize(tenant), doc);
 }
 
 // create_queue est implicite (une file par tenant). Idempotence : `dedupeKey` identique et tâche non terminée => même tâche.
@@ -40,7 +40,10 @@ function enqueue(tenant, { type, payload, runAt, priority, ref, dedupeKey, maxAt
     const doc = await load(tenant);
     if (dedupeKey) {
       const existing = doc.tasks.find((t) => t.dedupeKey === dedupeKey && [STATE.QUEUED, STATE.PROCESSING].includes(t.state));
-      if (existing) return { task: existing, deduplicated: true };
+      if (existing) {
+        scheduleWorker(existing.runAt <= Date.now() ? 0 : existing.runAt - Date.now());
+        return { task: existing, deduplicated: true };
+      }
     }
     const task = {
       id: uid(), type, payload: payload || {}, ref: ref || null, dedupeKey: dedupeKey || null,
@@ -50,6 +53,10 @@ function enqueue(tenant, { type, payload, runAt, priority, ref, dedupeKey, maxAt
     };
     doc.tasks.push(task);
     await save(tenant, doc);
+    // Les tâches dues réveillent immédiatement le worker. Les tâches
+    // programmées sont armées à leur échéance; le balayage périodique ne sert
+    // que de garde-fou en cas d'événement perdu ou après un redémarrage.
+    scheduleWorker(task.runAt <= Date.now() ? 0 : task.runAt - Date.now());
     return { task, deduplicated: false };
   });
 }
@@ -107,12 +114,16 @@ async function setState(tenant, id, state, extra) {
   const doc = await load(tenant);
   const task = doc.tasks.find((t) => t.id === id);
   if (!task || [STATE.COMPLETED, STATE.FAILED, STATE.CANCELLED].includes(task.state)) return null;
-  return finish(tenant, id, Object.assign({ state }, extra || {}));
+  const updatedTask = await finish(tenant, id, Object.assign({ state }, extra || {}));
+  if (updatedTask && state === STATE.QUEUED) scheduleWorker(Math.max(0, Number(updatedTask.runAt || Date.now()) - Date.now()));
+  return updatedTask;
 }
 const pause = (tenant, id) => setState(tenant, id, STATE.PAUSED);
 const resume = (tenant, id) => setState(tenant, id, STATE.QUEUED, { runAt: Date.now() });
 
-// recover_queue : une tâche PROCESSING dont le bail a expiré (crash/redémarrage) est remise en file.
+// recover_queue : reprise automatique uniquement quand l'action est sûre à
+// rejouer. Un envoi ou une relance interrompus peuvent avoir atteint la
+// plateforme avant le crash : ils passent en VERIFYING au lieu d'être renvoyés.
 function recover(tenant, now) {
   const t0 = now == null ? Date.now() : now;
   return withTenant(tenant, async () => {
@@ -120,7 +131,12 @@ function recover(tenant, now) {
     let n = 0;
     for (const t of doc.tasks) {
       if (t.state === STATE.PROCESSING && t.lockedUntil <= t0) {
-        if (t.attempts >= t.maxAttempts) { t.state = STATE.FAILED; t.error = 'LEASE_EXPIRED_MAX_ATTEMPTS'; t.finishedAt = t0; }
+        if (['SEND_MESSAGE', 'FOLLOW_UP'].includes(t.type)) {
+          t.state = STATE.VERIFYING;
+          t.error = 'EXECUTION_UNCONFIRMED_AFTER_RESTART';
+          t.verificationRequiredAt = t0;
+        }
+        else if (t.attempts >= t.maxAttempts) { t.state = STATE.FAILED; t.error = 'LEASE_EXPIRED_MAX_ATTEMPTS'; t.finishedAt = t0; }
         else { t.state = STATE.QUEUED; t.runAt = t0; }
         t.lockedUntil = 0; n += 1;
       }
@@ -165,20 +181,116 @@ async function processTenant(tenant, handlers, opts) {
   return done;
 }
 
-function listTenants() { return storageAdapter.listIds(NAMESPACE); }
+let tenantProvider = null;
+function listTenants() {
+  const local = storageAdapter.listIds(NAMESPACE);
+  let external = [];
+  try { external = typeof tenantProvider === 'function' ? tenantProvider() || [] : []; } catch (_) { external = []; }
+  return Array.from(new Set(local.concat(external.map(sanitize))));
+}
 
 let timer = null;
-function startWorker(handlersFor, intervalMs) {
-  if (timer) return timer;
-  const run = async () => {
-    for (const tenant of listTenants()) {
-      try { await processTenant(tenant, handlersFor(tenant)); } catch (e) { console.error(`taskQueue worker (${tenant}) :`, e.message); }
-    }
-  };
-  timer = setInterval(run, intervalMs || 30000);
+let timerDueAt = 0;
+let handlersForTenant = null;
+let idlePollMs = 60000;
+let maxTenantsInParallel = 4;
+let workerRunning = false;
+let rerunRequested = false;
+let workerStopped = true;
+let activeTenantCount = 0;
+const workerInfo = { lastStartedAt: null, lastCompletedAt: null, lastError: null, ticks: 0, tasksProcessed: 0 };
+
+function scheduleWorker(delayMs) {
+  if (workerStopped || !handlersForTenant) return;
+  const wait = Math.max(0, Number(delayMs) || 0);
+  const dueAt = Date.now() + wait;
+  if (workerRunning) {
+    if (wait === 0) rerunRequested = true;
+    return;
+  }
+  if (timer && timerDueAt <= dueAt) return;
+  if (timer) clearTimeout(timer);
+  timerDueAt = dueAt;
+  timer = setTimeout(() => {
+    timer = null;
+    timerDueAt = 0;
+    runWorker().catch((err) => { workerInfo.lastError = String(err && err.message || err).slice(0, 200); });
+  }, wait);
   if (timer.unref) timer.unref();
+}
+
+async function nextDueDelay(tenants) {
+  let earliest = Infinity;
+  await Promise.all(tenants.map(async (tenant) => {
+    try {
+      const doc = await load(tenant);
+      for (const task of doc.tasks || []) {
+        if (task.state === STATE.QUEUED && Number.isFinite(Number(task.runAt))) earliest = Math.min(earliest, Number(task.runAt));
+      }
+    } catch (_) { /* le prochain balayage réessaiera */ }
+  }));
+  if (earliest === Infinity) return idlePollMs;
+  return Math.min(idlePollMs, Math.max(0, earliest - Date.now()));
+}
+
+async function runWorker() {
+  if (workerStopped || !handlersForTenant) return;
+  if (workerRunning) { rerunRequested = true; return; }
+  workerRunning = true;
+  workerInfo.lastStartedAt = new Date().toISOString();
+  workerInfo.ticks += 1;
+  let processed = 0;
+  let tenants = [];
+  try {
+    tenants = listTenants();
+    let cursor = 0;
+    const drain = async () => {
+      while (cursor < tenants.length && !workerStopped) {
+        const tenant = tenants[cursor++];
+        activeTenantCount += 1;
+        try {
+          const done = await processTenant(tenant, handlersForTenant(tenant), { maxPerTick: 10 });
+          processed += done.length;
+        } catch (err) {
+          workerInfo.lastError = `${tenant}: ${String(err && err.message || err).slice(0, 180)}`;
+          console.error(`taskQueue worker (${tenant}) :`, err.message);
+        } finally { activeTenantCount = Math.max(0, activeTenantCount - 1); }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(maxTenantsInParallel, tenants.length) }, drain));
+    workerInfo.tasksProcessed += processed;
+    workerInfo.lastError = null;
+  } catch (err) {
+    workerInfo.lastError = String(err && err.message || err).slice(0, 200);
+    console.error('taskQueue worker :', err.message);
+  } finally {
+    workerRunning = false;
+    workerInfo.lastCompletedAt = new Date().toISOString();
+    const rerun = rerunRequested || processed > 0;
+    rerunRequested = false;
+    if (!workerStopped) scheduleWorker(rerun ? 0 : await nextDueDelay(tenants));
+  }
+}
+
+function startWorker(handlersFor, intervalMs, options) {
+  if (handlersForTenant) return timer;
+  handlersForTenant = handlersFor;
+  workerStopped = false;
+  const opts = options || {};
+  if (typeof opts.tenantProvider === 'function') tenantProvider = opts.tenantProvider;
+  idlePollMs = Math.max(1000, Number(intervalMs) || 60000);
+  maxTenantsInParallel = Math.max(1, Math.min(16, Number(opts.concurrency) || 4));
+  scheduleWorker(0); // reprise immédiate des tâches dues et des baux expirés
   return timer;
 }
-function stopWorker() { if (timer) { clearInterval(timer); timer = null; } }
+function stopWorker() {
+  workerStopped = true;
+  handlersForTenant = null;
+  rerunRequested = false;
+  if (timer) { clearTimeout(timer); timer = null; timerDueAt = 0; }
+}
+function workerStatus() {
+  return Object.assign({ running: workerRunning, activeTenants: activeTenantCount, idlePollMs, concurrency: maxTenantsInParallel }, workerInfo);
+}
 
-module.exports = { NAMESPACE, STATE, PUBLIC_STATES, normalizeState, setState, pause, resume, enqueue, claimNext, complete, fail, cancel, recover, list, status, processTenant, startWorker, stopWorker, listTenants };
+module.exports = { NAMESPACE, STATE, PUBLIC_STATES, normalizeState, setState, pause, resume, enqueue, claimNext, complete, fail, cancel, recover, list, status, processTenant, startWorker, stopWorker, listTenants, workerStatus };

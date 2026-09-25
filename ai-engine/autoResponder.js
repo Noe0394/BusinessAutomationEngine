@@ -24,11 +24,13 @@ const contactCrm = require('./contactCrm');
 const conversationEngine = require('./jarvis/conversationEngine');
 const { shared: conversationQueue } = require('./jarvis/conversationQueue');
 const alwaysOn = require('./alwaysOn');
+const responseMetrics = require('./responseMetrics');
 
 // Réponse SPONTANÉE : attente minimale pour regrouper deux messages quasi simultanés (0 = aucune attente). Auparavant 1,5 s fixes avant tout traitement.
-const DEFAULT_DEBOUNCE_MS = process.env.AUTO_REPLY_DEBOUNCE_MS !== undefined && process.env.AUTO_REPLY_DEBOUNCE_MS !== '' ? Math.max(0, parseInt(process.env.AUTO_REPLY_DEBOUNCE_MS, 10) || 0) : 500;
+const DEFAULT_DEBOUNCE_MS = process.env.AUTO_REPLY_DEBOUNCE_MS !== undefined && process.env.AUTO_REPLY_DEBOUNCE_MS !== '' ? Math.max(0, parseInt(process.env.AUTO_REPLY_DEBOUNCE_MS, 10) || 0) : 0;
 // L'avis d'un spécialiste ne doit JAMAIS retarder la réponse : passé ce délai, Cyrus répond sans lui (les tâches longues restent sur les voies dédiées).
-const SPECIALIST_BUDGET_MS = Math.max(0, parseInt(process.env.SPECIALIST_CUSTOMER_BUDGET_MS, 10) || 2500);
+const SPECIALIST_BUDGET_MS = process.env.SPECIALIST_CUSTOMER_BUDGET_MS !== undefined && process.env.SPECIALIST_CUSTOMER_BUDGET_MS !== ''
+  ? Math.max(0, parseInt(process.env.SPECIALIST_CUSTOMER_BUDGET_MS, 10) || 0) : 900;
 const withinBudget = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), SPECIALIST_BUDGET_MS))]);
 
 const SETTINGS_NS = 'auto_settings';
@@ -56,6 +58,7 @@ function markProcessed(tenant, id) {
 }
 
 function sanitizeTenant(t) { return String(t || '').trim().replace(/[^A-Za-z0-9_-]/g, '_') || 'unknown'; }
+function dTrace(ctx) { return ctx && ctx.responseTrace || null; }
 
 // Politique de réglage : un compte « toujours actif » (alwaysOn) répond en permanence sur WhatsApp ET Telegram, sauf pause
 // explicite (paused). AUTO_REPLY_DEFAULT_ON=true active aussi le répondeur par défaut des comptes sans réglage.
@@ -64,7 +67,15 @@ function applyPolicy(doc, tenant) {
   const d = Object.assign({}, doc);
   if (d.alwaysOn === true || alwaysOn.isAlwaysOn(tenant)) {
     d.alwaysOn = true;
-    if (d.paused !== true) { d.whatsapp = true; d.telegram = true; }
+    if (d.paused !== true) {
+      d.whatsapp = true;
+      d.telegram = true;
+      // Le mode permanent inclut les groupes. Le moteur d'engagement garde
+      // son filtrage par sujet, mentions, contexte métier et limite de débit.
+      d.groupReplies = true;
+      const currentPolicy = conversationPolicy.fromSettings(d);
+      d.conversationPolicy = conversationPolicy.normalize(Object.assign({}, currentPolicy, { group: 'topic' }));
+    }
   }
   return d;
 }
@@ -78,7 +89,7 @@ async function setSettings(tenant, patch) {
   const cur = await storageAdapter.get(SETTINGS_NS, t, { tenant: t, whatsapp: defaultOn(), telegram: defaultOn() });
   const next = Object.assign({}, cur, patch || {}, { tenant: t, updatedAt: new Date().toISOString() });
   if (typeof next.alwaysOn === 'boolean') alwaysOn.mark(t, next.alwaysOn);
-  storageAdapter.set(SETTINGS_NS, t, next);
+  await storageAdapter.setDurable(SETTINGS_NS, t, next);
   return applyPolicy(next, t);
 }
 function isEnabled(settings, channel) {
@@ -98,16 +109,46 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, meta).then((r) => r.text);
   // Offres classées : SERVICE PRIORITAIRE (celui de la campagne / du sujet déjà évoqué, sinon le service actif le plus récent),
   // puis les autres offres en simples suggestions complémentaires. Source de vérité = Services métiers configurés.
-  let convState = null; try { convState = await require('./jarvis/conversationState').get(tenant, channel, from); } catch (e) { convState = null; }
+  let convState = ctx && ctx.conversationStateSnapshot || null;
+  if (!convState) { try { convState = await require('./jarvis/conversationState').get(tenant, channel, from); } catch (e) { convState = null; } }
   let hint = (convState && ((convState.ad && convState.ad.productName) || (convState.memory && (convState.memory.interestService || convState.memory.subject)))) || '';
   // Un groupe lié (après vérification admin) à un Service métier répond d'abord sur CE service, quel que soit le métier.
-  if (isGroupChat(channel, from)) { try { const linked = (await businessServices.list(tenant)).find((s) => (s.groups || []).some((g) => String(g.id) === String(from) && String(g.channel).toUpperCase() === String(channel).toUpperCase())); if (linked) hint = linked.name; } catch (e) { /* sans lien : comportement habituel */ } }
-  const prio = await businessServices.getPrioritizedContext(tenant, { hint, currentHint: isGroupChat(channel, from) ? '' : text }).catch(() => ({ text: '' }));
-  // Registre NATUREL (discussion courante, salutation, rappel du fil) : l'offre n'est PAS le sujet ; on la garde en tête sans la mettre en avant.
+  const snapshotServices = ctx && ctx.businessContextSnapshot && ctx.businessContextSnapshot.services;
+  if (isGroupChat(channel, from)) {
+    try {
+      const source = Array.isArray(snapshotServices) ? snapshotServices : await businessServices.list(tenant);
+      const linked = source.find((s) => (s.groups || []).some((g) => String(g.id) === String(from) && String(g.channel).toUpperCase() === String(channel).toUpperCase()));
+      if (linked) hint = linked.name;
+    } catch (e) { /* sans lien : comportement habituel */ }
+  }
+  let prio; let businessContextUnavailable = false;
+  try {
+    const priorityOpts = { hint, currentHint: isGroupChat(channel, from) ? '' : text };
+    prio = Array.isArray(snapshotServices)
+      ? businessServices.getPrioritizedContextFromServices(snapshotServices, priorityOpts)
+      : await businessServices.getPrioritizedContext(tenant, priorityOpts);
+  }
+  catch (err) {
+    businessContextUnavailable = true;
+    prio = { text: '' };
+    console.error(`autoResponder : lecture des Services métier impossible (tenant "${tenant}") :`, err && err.message ? err.message : err);
+  }
+  // Le registre naturel ne doit jamais effacer les faits configurés. Il interdit
+  // seulement la promotion spontanée ; une question explicite garde le contexte
+  // complet afin que le modèle puisse répondre avec les prix et détails exacts.
   const registerNow = ctx && ctx.decision && ctx.decision.engagement && ctx.decision.engagement.register;
-  const bizCtx = ['NATURAL', 'NATURAL_CONTINUITY'].includes(registerNow)
-    ? (prio.text ? "Tu connais l'activité du vendeur, mais elle n'est PAS le sujet de cette discussion : n'en parle pas, sauf si la personne t'interroge elle-même dessus." : '')
-    : prio.text;
+  const naturalRegister = ['NATURAL', 'NATURAL_CONTINUITY'].includes(registerNow);
+  const explicitBusinessRequest = !!(
+    businessServices.matchService(prio.services || [], text)
+    || /\b(?:prix|tarifs?|combien|co[uû]t|coute|montant|frais|offres?|services?|formations?|cours|produits?|inscriptions?|inscrire|vendre|vendez|vente)\b/i.test(String(text || ''))
+    || ['BUSINESS_ANSWER', 'PRESENT_SERVICE'].includes(registerNow)
+  );
+  const bizCtx = prio.text && (!naturalRegister || explicitBusinessRequest) ? prio.text : '';
+  const deterministicPrice = businessServices.answerExplicitPriceQuestion(prio.services || [], text, hint);
+  if (deterministicPrice) {
+    if (dTrace(ctx)) dTrace(ctx).mark('generated', { method: 'business_fact' });
+    return deterministicPrice;
+  }
   let history = ''; let convArr = [];
   try {
     const conv = await messageHistory.getConversation(tenant, channel, from, route.maxContextMessages);
@@ -120,7 +161,8 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   let advisory = '';
   try {
     const dec = ctx && ctx.decision;
-    if (ctx && ctx.cls && dec && dec.action === 'REPLY' && !dec.noPromo && !dec.template && !['CLOSE', 'WAIT', 'ACK', 'COURTESY'].includes(dec.kind)) {
+    const needsSpecialist = ctx && ctx.cls && ['PRICE_OBJECTION', 'OBJECTION', 'COMPLAINT', 'SUPPORT'].includes(ctx.cls.intent);
+    if (SPECIALIST_BUDGET_MS > 0 && needsSpecialist && dec && dec.action === 'REPLY' && !dec.noPromo && !dec.template && !['CLOSE', 'WAIT', 'ACK', 'COURTESY'].includes(dec.kind)) {
       const principal = require('./authz').issuePrincipal({ tenant, role: 'CUSTOMER', userId: String(from), channel, via: 'customer_message' });
       const adv = await withinBudget(require('./agents/orchestrationService').advise({
         principal, tenantId: tenant, audience: 'CUSTOMER', channel, conversationKey: `${channel}:${from}`, text: ctx.text, history: convArr, cls: ctx.cls, state: ctx.state && ctx.state.state,
@@ -140,7 +182,16 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
     'Tu réponds DIRECTEMENT à un client/prospect qui vient d\'écrire au vendeur — tu réponds EN SON NOM, comme le vendeur lui-même. Sois chaleureux, humain et utile.',
     bizCtx
       ? `Informations RÉELLES de l'activité (produits, prix, règles — SEULE source autorisée, n'invente jamais au-delà de ceci) :\n${bizCtx}`
-      : 'AUCUNE offre n\'est configurée pour ce vendeur. Tu ne connais donc PAS ses produits, services, prix ni domaine d\'activité.',
+      : (businessContextUnavailable
+        ? 'La lecture du Service métier a échoué temporairement. Ne prétends pas qu’aucune offre n’est configurée et n’invente aucun fait ; indique simplement que tu vérifies l’information.'
+        : (naturalRegister && prio.text
+          ? 'Des offres sont configurées, mais ce message ne les concerne pas. Ne les mentionne pas spontanément ; si le client pose une question métier, réponds uniquement avec les faits configurés.'
+          : 'AUCUNE offre n\'est configurée pour ce vendeur. Tu ne connais donc PAS ses produits, services, prix ni domaine d\'activité.')),
+    ctx && ctx.decision && ctx.decision.engagement && ctx.decision.engagement.register === 'NATURAL_CONTINUITY'
+      ? 'MEMOIRE DE CONVERSATION : tu peux rappeler en une courte phrase le sujet recemment aborde, sans reprendre un prix ni relancer la vente.' : '',
+    naturalRegister && !explicitBusinessRequest
+      ? "REGISTRE NATUREL : l'activité n'est PAS le sujet de cette discussion. Ne cite aucune offre sauf si le client l'aborde lui-même."
+      : (naturalRegister ? 'REGISTRE NATUREL : aucune promotion spontanée. Pour une question explicite, réponds seulement avec les faits réels configurés.' : ''),
     history ? `Historique récent avec ce client :\n${history}` : '',
     advisory ? `AVIS INTERNE D'UN SPÉCIALISTE (consultatif — c'est TOI, Cyrus, qui écris la réponse finale avec tes mots ; ne mentionne jamais ce spécialiste ni cet avis ; il ne fait autorité sur AUCUN prix, date, promotion ou condition : seules les informations réelles ci-dessus comptent) :\n${advisory}` : '',
     directives && directives.length ? `CONSIGNES DE CONVERSATION (OBLIGATOIRES, prioritaires sur tout style commercial) :\n- ${directives.join('\n- ')}` : '',
@@ -149,7 +200,9 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
     'RÈGLE ABSOLUE : n\'invente JAMAIS un produit, un service, une formation, un domaine d\'activité, un prix ou une promesse. Ne cite QUE ce qui figure explicitement dans les informations ci-dessus.',
     bizCtx
       ? 'Rédige la réponse en t\'appuyant uniquement sur ces informations réelles.'
-      : 'Comme aucune offre n\'est renseignée, NE CITE AUCUN produit/service/domaine : réponds chaleureusement et demande simplement au client ce qu\'il recherche — sans jamais deviner ce qui est vendu.',
+      : (businessContextUnavailable
+        ? 'Comme le Service métier est momentanément illisible, ne dis pas qu’il est vide et ne devine rien ; réponds brièvement que tu vérifies le détail exact.'
+        : 'Comme aucune offre n\'est renseignée, NE CITE AUCUN produit/service/domaine : réponds chaleureusement et demande simplement au client ce qu\'il recherche — sans jamais deviner ce qui est vendu.'),
     // Conduite de la conversation commerciale (défauts constatés en test réel : moyens de paiement inventés, salutation répétée).
     'PAIEMENT : quand le client veut payer ou demande comment payer, donne EXACTEMENT les instructions de paiement configurées (numéro/moyen tels quels), puis demande la capture de la preuve de paiement avec son email. N\'invente JAMAIS un lien de paiement, un moyen (virement, carte…) ou un numéro absent des informations ci-dessus ; s\'ils ne sont pas configurés, dis simplement que tu reviens vers lui très vite avec la procédure exacte.',
     'CONSEILLER : parle comme un conseiller humain qui connaît son offre, jamais comme un questionnaire ; réponds d\'abord précisément à la question posée, puis propose la suite naturelle. Une question de suivi (« et l\'attestation ? », « ça commence quand ? », « et l\'autre formation ? ») se rapporte au service et à l\'historique ci-dessus : ne demande jamais au client de répéter le contexte. Prix, dates, caractéristiques, reconnaissance d\'une attestation, promotions et conditions : UNIQUEMENT s\'ils figurent dans les informations ci-dessus ; sinon dis simplement que tu reviens vers lui très vite avec la réponse exacte. Ne propose les autres offres que comme suggestion complémentaire pertinente, après avoir répondu.',
@@ -158,7 +211,9 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
     'INFORMATION ABSENTE : si la question porte sur un fait absent des informations (livraison, zone, délai…), dis-le simplement à la première personne et annonce que tu reviens très vite avec la confirmation exacte — jamais que tu « transmets »/« fais remonter » à quelqu\'un d\'autre, ne mentionne aucun tiers.',
     'Rédige UNIQUEMENT le message à lui envoyer (1 à 4 phrases naturelles, parlées), sans préambule ni guillemets. Ne présente JAMAIS une action (paiement reçu, accès débloqué) comme déjà faite — propose-la.',
   ].filter(Boolean).join('\n');
+  if (dTrace(ctx)) dTrace(ctx).mark('ai_started', { provider: 'cascade' });
   const raw = await gen(prompt);
+  if (dTrace(ctx)) dTrace(ctx).mark('generated', { method: 'ai' });
   return scrubPaymentUrls(String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1500), text);
 }
 
@@ -189,7 +244,7 @@ async function composeLearning({ tenant, channel, from, name, text, llm, directi
 // Point d'entrée : traite un message entrant de bout en bout. Retourne un objet
 // d'état honnête (jamais un faux succès) : { sent, status, confirmationId } ou
 // { skipped: 'DISABLED' | 'DUPLICATE' | 'NO_RUNTIME' | 'EMPTY_REPLY' }.
-async function handleIncoming({ tenantId, channel, from, name, text, messageId, senderId, addressing }, deps) {
+async function handleIncomingCore({ tenantId, channel, from, name, text, messageId, senderId, addressing }, deps) {
   const d = deps || {};
   const settings = d.settings || await getSettings(tenantId);
   if (!isEnabled(settings, channel)) return { skipped: 'DISABLED' };
@@ -224,7 +279,7 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId, 
     return out;
   }
 
-  const debounceMs = d.debounceMs != null ? d.debounceMs : (settings.debounceMs != null ? settings.debounceMs : DEFAULT_DEBOUNCE_MS);
+  const debounceMs = d.debounceMs != null ? d.debounceMs : DEFAULT_DEBOUNCE_MS;
   const out = await conversationQueue.submit(
     `${sanitizeTenant(tenantId)}:${channel}:${from}`,
     { text, messageId, senderId, addressing },
@@ -238,6 +293,29 @@ async function handleIncoming({ tenantId, channel, from, name, text, messageId, 
   }
 }
 
+// Trace toutes les sorties du répondeur (y compris les refus, dédoublons et
+// pannes) sans enregistrer le texte du message. Un appelant plus haut dans le
+// webhook peut fournir son propre trace pour couvrir aussi détection et routage.
+async function handleIncoming(input, deps) {
+  const event = input || {};
+  const upstreamTrace = deps && deps.responseTrace;
+  const trace = upstreamTrace || responseMetrics.start({
+    tenant: event.tenantId, channel: event.channel, target: event.from, source: 'auto_responder',
+  });
+  trace.mark('routed', { method: 'auto_responder' });
+  let outcome = null;
+  let failed = false;
+  try {
+    outcome = await handleIncomingCore(event, Object.assign({}, deps || {}, { responseTrace: trace }));
+    return outcome;
+  } catch (err) {
+    failed = true;
+    throw err;
+  } finally {
+    if (!upstreamTrace) await trace.finish({ status: failed ? 'ERROR' : (outcome && outcome.sent ? 'SENT' : (outcome && outcome.skipped) || 'DONE') });
+  }
+}
+
 function terminalOutcome(out) {
   if (!out) return false;
   if (out.sent === true || out.status === 'PENDING') return true;
@@ -245,8 +323,10 @@ function terminalOutcome(out) {
 }
 
 async function sendAndLog({ tenantId, channel, from, reply }, d) {
+  if (d && d.responseTrace) d.responseTrace.mark('send_started');
   const out = await d.runtime.sendMessageVerified({ channel, to: from, text: require('./botSignature').sign(reply), tenantId });
   const sent = out.status === 'SUCCESS';
+  if (d && d.responseTrace) d.responseTrace.mark(sent ? 'send_confirmed' : 'send_failed', { status: out.status || 'UNKNOWN' });
   try {
     require('./activityStore').record({
       type: 'auto_reply', action: 'Réponse automatique', channel, tenant: tenantId, target: from,
@@ -300,18 +380,34 @@ async function processBatch(args, d) {
 }
 
 async function processBatchInner({ tenantId, channel, from, name, items, settings }, d) {
-  const knownText = await businessServices.getEngineContextText(tenantId).catch(() => '');
-  let history = [];
-  try { history = await messageHistory.getConversation(tenantId, channel, from, 8); } catch (e) { history = []; }
+  const trace = d && d.responseTrace;
+  const batchText = items.map((i) => i.text).join('\n');
+  if (trace) trace.mark('context_started');
+  const [serviceData, history, st] = await Promise.all([
+    businessServices.getEngineContext(tenantId).catch((e) => { console.error(`autoResponder : contexte métier indisponible (${tenantId}) :`, e && e.message); return []; }),
+    messageHistory.getConversation(tenantId, channel, from, 8).catch(() => []),
+    require('./jarvis/conversationState').get(tenantId, channel, from).catch(() => null),
+  ]);
+  const knownText = businessServices.getEngineContextTextFromServices(serviceData);
+  const productNames = [];
+  for (const svc of serviceData) {
+    if (svc.name) productNames.push(svc.name);
+    for (const p of (svc.products || [])) if (p && (p.name || typeof p === 'string')) productNames.push(p.name || String(p));
+  }
+  let serviceHint = (st && st.memory && (st.memory.interestService || st.memory.subject)) || '';
+  if (isGroupChat(channel, from)) {
+    const linked = serviceData.find((svc) => (svc.groups || []).some((g) => String(g.id) === String(from) && String(g.channel).toUpperCase() === String(channel).toUpperCase()));
+    if (linked) serviceHint = linked.name;
+  }
+  const businessContextSnapshot = businessServices.getPrioritizedContextFromServices(serviceData, {
+    hint: serviceHint,
+    currentHint: isGroupChat(channel, from) ? '' : batchText,
+  });
+  if (trace) {
+    trace.mark('business_service_resolved', { status: businessContextSnapshot.priority ? 'matched' : 'none' });
+    trace.mark('context_ready');
+  }
   let lastOut = null;
-  let productNames = [];
-  try {
-    const ctxData = await businessServices.getEngineContext(tenantId);
-    for (const svc of ctxData || []) {
-      if (svc.name) productNames.push(svc.name);
-      for (const p of (svc.products || [])) if (p && (p.name || typeof p === 'string')) productNames.push(p.name || String(p));
-    }
-  } catch (e) { productNames = []; }
   // Arbitrage des intentions AMBIGUËES (refus vs intérêt, hésitation vs paiement…) : décision critique -> niveau raisonnement.
   const arbitrationLlm = d.llm || ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'intent_arbitration', tenant: tenantId, tier: 'reasoning', maxTokens: 300 }).then((r) => r.text));
   // Juge des cas ambigus d'engagement : la cascade d'IA en production (niveau « standard », court, avec doublon parallèle) ; un modèle injecté (tests) n'est utilisé que s'il est
@@ -319,9 +415,7 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
   const judgeLlm = d.engagementLlm || (d.llm ? null : ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'engagement_judgment', tenant: tenantId, tier: 'standard', maxTokens: 120 }).then((r) => r.text)));
   // ACCOMPAGNEMENT D'APPRENANT (privé ou groupe de formation lié) : recherche ciblée dans la base de connaissances de CE compte.
   let learn = null;
-  let st = null; // état de conversation déjà chargé ici pour learnerSupport — réutilisé plus bas pour la sélection du service pertinent (priorityService).
   try {
-    st = await require('./jarvis/conversationState').get(tenantId, channel, from);
     learn = await require('./learnerSupport').prepare({ tenant: tenantId, channel, from, senderId: (items[items.length - 1] || {}).senderId, text: items.map((i) => i.text).join('\n'), isGroup: isGroupChat(channel, from), state: st, settings });
     if (learn) learn.verify = require('./learnerSupport').verify(learn);
   } catch (e) { learn = null; }
@@ -334,10 +428,7 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
     // client, sinon sujet courant de la conversation — voir jarvis/conversationEngine.js#applyState) plutôt que
     // toujours le service le plus récent : un `hint` vide ici faisait retomber getPrioritizedContext sur son seul
     // repli "le plus récent" à CHAQUE message, y compris en pleine conversation sur un autre service.
-    priorityService: (await businessServices.getPrioritizedContext(tenantId, {
-      hint: (st && st.memory && (st.memory.interestService || st.memory.subject)) || '',
-      currentHint: isGroupChat(channel, from) ? '' : items.map((i) => i.text).join('\n'),
-    }).catch(() => ({}))).priority || null,
+    priorityService: businessContextSnapshot.priority || null,
     // Politique du propriétaire + mémoire 7 jours de CETTE discussion → décision d'engagement (répondre ? registre ? présenter un service ?). Sans réseau ni IA.
     engagementFn: typeof d.engagementFn === 'function' ? d.engagementFn : async ({ cls, state, text: batchText, items: batchItems }) => {
       const group = isGroupChat(channel, from);
@@ -356,7 +447,8 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
     settings,
     compose: async (directives, ctx) => {
       if (learn && learn.forcedReply) return learn.forcedReply; // refus/urgence : réponse DÉTERMINISTE, aucun appel IA
-      const reply = await composeReply({ learning: learn || undefined, tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives: (directives || []).concat(identityDirectives(d.identity, name)), ctx });
+      const replyCtx = Object.assign({}, ctx, { businessContextSnapshot, conversationStateSnapshot: st, responseTrace: trace });
+      const reply = await composeReply({ learning: learn || undefined, tenant: tenantId, channel, from, name, text: ctx.text, llm: d.llm, directives: (directives || []).concat(identityDirectives(d.identity, name)), ctx: replyCtx });
       // Le client attend une confirmation du vendeur (fait absent du Service métier) : la promesse est TENUE — le propriétaire est prévenu.
       if (PROMISE_TO_OWNER_RE.test(reply)) {
         require('./alertCenter').triggerAdminNotification(tenantId, {
@@ -370,6 +462,7 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
     // Demande hors périmètre / escalade : triggerAdminNotification (alerte persistante, WhatsApp du propriétaire + tableau de bord).
     notify: d.notify || ((msg) => require('./alertCenter').triggerAdminNotification(tenantId, { reason: msg, contact: d.identity || null, key: `esc:${tenantId}:${channel}:${from}:${Math.floor(Date.now() / 600000)}` })),
   });
+  if (trace) trace.mark('intent_detected', { intent: result.intent || result.reason || 'unknown', method: result.action || 'conversation_engine' });
   // Journal des décisions d'engagement (répond / se tait, et POURQUOI) : alimente l'outil « explainReply ».
   if (result.engagement) { try { require('./activityStore').record({ type: 'engagement', action: result.action === 'NO_ACTION' ? 'Pas de réponse' : `Réponse (${result.engagement.register})`, status: 'ok', channel, tenant: tenantId, target: from, detail: `${result.engagement.code} | ${result.engagement.why}` }); } catch (e) { /* non bloquant */ } }
   if (result.action === 'NO_ACTION') {

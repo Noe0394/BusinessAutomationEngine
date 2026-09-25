@@ -26,7 +26,7 @@ test('personaSystemPrompt(domain, {audience:"customer"}) impose le vouvoiement ;
 test('composeReply (réponse automatique à un client) : le prompt envoyé au modèle impose explicitement le vouvoiement', async () => {
   const T = 'polA'; await businessServices.create(T, { name: 'Boutique', commercial: { price: 5000 } });
   const prompts = []; const llm = async (p) => { prompts.push(String(p)); return 'Bonjour ! Le prix est de 5000 FCFA.'; };
-  await autoResponder.handleIncoming({ tenantId: T, channel: 'WHATSAPP', from: '22670000001@s.whatsapp.net', name: 'Client', text: 'Bonjour, quel est le prix ?', messageId: 'p1' }, { runtime: { sendMessageVerified: async () => ({ status: 'SUCCESS', confirmationId: 'c' }) }, llm, settings: { whatsapp: true } });
+  await autoResponder.handleIncoming({ tenantId: T, channel: 'WHATSAPP', from: '22670000001@s.whatsapp.net', name: 'Client', text: 'Je suis intéressé par la formation, pouvez-vous m’expliquer comment se passe l’inscription ?', messageId: 'p1' }, { runtime: { sendMessageVerified: async () => ({ status: 'SUCCESS', confirmationId: 'c' }) }, llm, settings: { whatsapp: true } });
   assert.ok(prompts.length >= 1); assert.match(prompts[prompts.length - 1], /vouvoies TOUJOURS/);
 });
 

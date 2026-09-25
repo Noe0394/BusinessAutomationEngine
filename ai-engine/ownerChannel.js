@@ -28,7 +28,7 @@ const SESSION_TITLE = 'WhatsApp propriétaire';
 const seen = new Map();        // tenant -> Set(messageId)
 const rate = new Map();        // tenant -> [timestamps]
 const lastSent = new Map();    // tenant -> Map(hash -> ts)
-const chains = new Map();      // tenant -> Promise (exécution en série par tenant)
+const chains = new Map();      // tenant + canal + conversation -> Promise
 const sanitize = (t) => String(t || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'unknown';
 const hash = (s) => require('crypto').createHash('sha1').update(String(s)).digest('hex').slice(0, 16);
 
@@ -338,10 +338,14 @@ async function handleOwnerMessage(input, deps) {
     if (d.history) { try { await d.history.append(tenantId, userTextForHistory || text, answer); } catch (e) { /* non bloquant */ } }
     return { handled: 'CHAT', media: !!mediaInfo };
   };
-  const prev = chains.get(tenant) || Promise.resolve();
+  // Le self WhatsApp et le self Telegram sont des conversations distinctes.
+  // Une mission encore occupée sur un canal ne doit pas retenir les commandes
+  // reçues sur l'autre; l'ordre reste conservé au sein de chaque fil.
+  const chainKey = `${tenant}:${adapter.channel}:${String(msg ? adapter.destination(msg) : '') || 'owner'}`;
+  const prev = chains.get(chainKey) || Promise.resolve();
   const next = prev.catch(() => {}).then(run);
-  chains.set(tenant, next);
-  next.finally(() => { if (chains.get(tenant) === next) chains.delete(tenant); }).catch(() => {});
+  chains.set(chainKey, next);
+  next.finally(() => { if (chains.get(chainKey) === next) chains.delete(chainKey); }).catch(() => {});
   return next;
 }
 

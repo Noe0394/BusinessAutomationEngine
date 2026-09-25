@@ -40,9 +40,22 @@ const LOCAL_ONLY_NAMESPACES = new Set([
   // Numéros de téléphone / clés de clients / contenus de formation : jamais poussés vers le miroir GitHub.
   'community_jobs', 'client_ai_quota', 'course_kb', 'lifecycle', 'improvements', 'guided_setup', 'service_trash',
 ]);
+// Etat operationnel sensible necessaire a la reprise Render. Ces namespaces
+// restent en clair uniquement sur le volume local; leur miroir distant est
+// chiffre avec la cle serveur (SECRET_VAULT_KEY ou ADMIN_PASSWORD).
+const ENCRYPTED_MIRROR_NAMESPACES = new Set([
+  'task_queue', 'objective_missions', 'campaign_drafts', 'auto_settings', 'community_jobs',
+]);
+const remoteStores = new Map();
 function isMirrored(namespace) {
   if (process.env.GITHUB_MIRROR_USER_DATA === 'true') return true;
   return !LOCAL_ONLY_NAMESPACES.has(String(namespace));
+}
+function isEncryptedMirror(namespace) { return ENCRYPTED_MIRROR_NAMESPACES.has(String(namespace)); }
+function vault() { return require('./secretVault'); }
+function canMirrorDurably(namespace) {
+  const githubStore = require('../githubStore');
+  return githubStore.enabled && (isEncryptedMirror(namespace) ? vault().isEncryptionConfigured() : isMirrored(namespace));
 }
 
 function sanitizeId(rawId) {
@@ -68,6 +81,20 @@ function remoteDocPath(namespace, docId) {
   return `${remoteBaseDir(namespace)}/${sanitizeId(docId)}.json`;
 }
 
+function remoteStore(namespace, docId) {
+  const file = remoteDocPath(namespace, docId);
+  if (!remoteStores.has(file)) remoteStores.set(file, { store: githubStore.createStore(file), ready: null, initialized: false });
+  return remoteStores.get(file);
+}
+async function ensureRemoteReady(record) {
+  if (record.initialized) return record.snapshot || null;
+  if (!record.ready) {
+    record.ready = record.store.fetchRemote().then((value) => { record.initialized = true; record.snapshot = value; return value; });
+  }
+  try { return await record.ready; }
+  catch (err) { record.ready = null; throw err; }
+}
+
 // Lit un document {namespace}/{docId} — disque local en premier, puis
 // GitHub si absent (redéploiement Render ayant vidé le disque éphémère,
 // même logique que lib/aiStudioStore.js#loadAll). Retourne `defaultValue`
@@ -80,14 +107,22 @@ async function get(namespace, docId, defaultValue) {
     // Pas de fichier local : tenter GitHub avant d'abandonner.
   }
 
-  if (!isMirrored(namespace)) return defaultValue !== undefined ? defaultValue : null;
-  const store = githubStore.createStore(remoteDocPath(namespace, docId));
-  if (!store.enabled) return defaultValue !== undefined ? defaultValue : null;
+  if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) return defaultValue !== undefined ? defaultValue : null;
+  if (isEncryptedMirror(namespace) && !vault().isEncryptionConfigured()) return defaultValue !== undefined ? defaultValue : null;
+  const remote = remoteStore(namespace, docId);
+  if (!remote.store.enabled) return defaultValue !== undefined ? defaultValue : null;
 
   try {
-    const remote = await store.fetchRemote();
-    if (!remote || !remote.content) return defaultValue !== undefined ? defaultValue : null;
-    return JSON.parse(remote.content);
+    const fetched = await ensureRemoteReady(remote);
+    if (!fetched || !fetched.content) return defaultValue !== undefined ? defaultValue : null;
+    if (isEncryptedMirror(namespace)) {
+      const envelope = JSON.parse(fetched.content);
+      if (!envelope || envelope._cyrusEncrypted !== 1) return defaultValue !== undefined ? defaultValue : null;
+      const plaintext = vault().decrypt(envelope.payload);
+      if (plaintext == null) return defaultValue !== undefined ? defaultValue : null;
+      return JSON.parse(plaintext);
+    }
+    return JSON.parse(fetched.content);
   } catch (err) {
     console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : échec de restauration depuis GitHub :`, err.message);
     return defaultValue !== undefined ? defaultValue : null;
@@ -101,13 +136,44 @@ function set(namespace, docId, data) {
   fs.mkdirSync(baseDir(namespace), { recursive: true });
   const content = JSON.stringify(data, null, 2);
   fs.writeFileSync(docPath(namespace, docId), content, 'utf8');
-  if (!isMirrored(namespace)) return data;
+  if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) return data;
+  if (!githubStore.enabled) return data;
+  if (isEncryptedMirror(namespace) && !vault().isEncryptionConfigured()) {
+    console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : miroir durable ignoré, clé de chiffrement absente.`);
+    return data;
+  }
 
-  const store = githubStore.createStore(remoteDocPath(namespace, docId));
-  store.pushRemote(content).catch((err) => {
+  const remoteContent = isEncryptedMirror(namespace)
+    ? JSON.stringify({ _cyrusEncrypted: 1, payload: vault().encrypt(content) }) : content;
+  const remote = remoteStore(namespace, docId);
+  ensureRemoteReady(remote).then(async () => {
+    await remote.store.pushRemote(remoteContent);
+    remote.initialized = true; remote.snapshot = { content: remoteContent }; remote.ready = Promise.resolve(remote.snapshot);
+  }).catch((err) => {
     console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : échec de sauvegarde GitHub :`, err.message);
   });
 
+  return data;
+}
+
+// Ecriture attendue pour les etats qui doivent survivre a un redemarrage
+// Render. Le fichier local est mis a jour d'abord, puis l'appelant attend la
+// confirmation du miroir GitHub chiffre avant de lancer l'effet externe.
+async function setDurable(namespace, docId, data) {
+  fs.mkdirSync(baseDir(namespace), { recursive: true });
+  const content = JSON.stringify(data, null, 2);
+  fs.writeFileSync(docPath(namespace, docId), content, 'utf8');
+  if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) return data;
+  if (!githubStore.enabled) return data;
+  if (isEncryptedMirror(namespace) && !vault().isEncryptionConfigured()) {
+    throw new Error(`DURABLE_STORAGE_KEY_MISSING:${namespace}`);
+  }
+  const remoteContent = isEncryptedMirror(namespace)
+    ? JSON.stringify({ _cyrusEncrypted: 1, payload: vault().encrypt(content) }) : content;
+  const remote = remoteStore(namespace, docId);
+  await ensureRemoteReady(remote);
+  await remote.store.pushRemote(remoteContent);
+  remote.initialized = true; remote.snapshot = { content: remoteContent }; remote.ready = Promise.resolve(remote.snapshot);
   return data;
 }
 
@@ -125,16 +191,30 @@ function listIds(namespace) {
   }
 }
 
+async function listIdsAsync(namespace) {
+  const local = listIds(namespace);
+  if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) return local;
+  const names = await githubStore.listDirectory(remoteBaseDir(namespace));
+  return Array.from(new Set(local.concat(names.filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -5)))));
+}
+
+function persistenceStatus() {
+  return { githubEnabled: githubStore.enabled,
+    encryptedNamespaces: Array.from(ENCRYPTED_MIRROR_NAMESPACES).map((namespace) => ({ namespace,
+      encryptionConfigured: vault().isEncryptionConfigured(), durableAcrossRestarts: canMirrorDurably(namespace) })) };
+}
+
 // Suppression d'un document (purge des données expirées) — local + miroir GitHub
 // seulement si le namespace est mirroré.
 function remove(namespace, docId) {
   try { fs.unlinkSync(docPath(namespace, docId)); } catch (err) { /* déjà absent */ }
-  if (!isMirrored(namespace)) return true;
-  const store = githubStore.createStore(remoteDocPath(namespace, docId));
-  if (store.enabled && typeof store.deleteRemote === 'function') {
-    store.deleteRemote().catch((err) => console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : échec de suppression GitHub :`, err.message));
+  if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) return true;
+  const remote = remoteStore(namespace, docId);
+  if (remote.store.enabled && typeof remote.store.deleteRemote === 'function') {
+    remote.store.deleteRemote().catch((err) => console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : échec de suppression GitHub :`, err.message));
   }
   return true;
 }
 
-module.exports = { get, set, listIds, remove, isMirrored, LOCAL_ONLY_NAMESPACES };
+module.exports = { get, set, setDurable, listIds, listIdsAsync, remove, isMirrored, isEncryptedMirror,
+  canMirrorDurably, persistenceStatus, LOCAL_ONLY_NAMESPACES, ENCRYPTED_MIRROR_NAMESPACES };

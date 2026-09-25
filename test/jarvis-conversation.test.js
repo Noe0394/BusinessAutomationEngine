@@ -70,9 +70,11 @@ test('classification : les phrases-pièges du cahier des charges', () => {
 
 test('question simple : répond avec le prix réellement configuré', async () => {
   const rec = [];
-  const out = await say('22601', 'Bonjour, combien coûte la formation ?', pushyLlm('La formation est à 8000 FCFA.'), rec);
+  let llmCalls = 0;
+  const out = await say('22601', 'Bonjour, combien coûte la formation ?', async () => { llmCalls += 1; return 'La formation est à 8000 FCFA.'; }, rec);
   assert.equal(out.sent, true);
-  assert.match(rec[0].text, /8000/);
+  assert.match(rec[0].text.replace(/\D/g, ''), /8000/);
+  assert.equal(llmCalls, 0, 'le tarif configuré est servi directement sans appel IA');
 });
 
 test('REFUS : le vendeur IA pressant est neutralisé, puis silence', async () => {
@@ -135,7 +137,7 @@ test('achat reporté : mémorisé, non redemandé', async () => {
 test('anti-répétition : la même réponse n\'est pas renvoyée deux fois', async () => {
   const rec = [];
   const llm = pushyLlm('La formation est à 8000 FCFA, elle dure deux semaines.');
-  await say('22607', 'C\'est combien ?', llm, rec);
+  await say('22607', 'Pouvez-vous me présenter la formation ?', llm, rec);
   const out = await say('22607', 'Et la durée ?', llm, rec);
   assert.equal(rec.length, 2);
   assert.notEqual(rec[1].text, rec[0].text);
@@ -143,12 +145,12 @@ test('anti-répétition : la même réponse n\'est pas renvoyée deux fois', asy
   assert.ok(out.guard || out.sent);
 });
 
-test('anti-hallucination : montant absent des données -> jamais envoyé', async () => {
+test('un tarif configuré prime sur une réponse IA qui tente d\'en inventer un', async () => {
   const rec = [];
   const out = await say('22608', 'Quel est le prix ?', pushyLlm('La formation coûte 15000 FCFA.'), rec);
   assert.equal(out.sent, true);
   assert.doesNotMatch(rec[0].text, /15000/);
-  assert.match(rec[0].text, /vérifier/);
+  assert.match(rec[0].text.replace(/\D/g, ''), /8000/);
 });
 
 test('isolation : le refus de A n\'affecte pas B', async () => {
@@ -171,10 +173,10 @@ test('messages rapides : regroupés en UNE seule réponse', async () => {
     { tenantId: T, channel: 'WHATSAPP', from: '22612', text: t, messageId: 'q' + (++mid) },
     { runtime: runtime(rec), llm, debounceMs: 80, notify: async () => {} },
   );
-  const res = await Promise.all([send('Bonjour'), send('Je voudrais'), send('connaître le prix')]);
+  const res = await Promise.all([send('Bonjour'), send('Je voudrais'), send('en savoir plus')]);
   assert.equal(rec.length, 1, 'une seule réponse');
   assert.equal(res.filter((r) => r.skipped === 'AGGREGATED').length, 2);
-  assert.ok(llmSeen.some((p) => p.includes('Bonjour\nJe voudrais\nconnaître le prix')));
+  assert.ok(llmSeen.some((p) => p.includes('Bonjour\nJe voudrais\nen savoir plus')));
 });
 
 test('concurrence : plusieurs clients simultanés, sans mélange ni double réponse', async () => {
@@ -247,7 +249,9 @@ test('emotionalCloser (chemin AUTO_CLOSE) : même moteur, refus respecté et pas
 test('local-first mesuré : une conversation complète = 0 écriture GitHub, la config métier reste mirrorée', async () => {
   const githubStore = require('../githubStore');
   const origCreate = githubStore.createStore;
+  const origEnabled = githubStore.enabled;
   const pushed = [];
+  githubStore.enabled = true;
   githubStore.createStore = (p) => ({ enabled: true, pushRemote: async () => { pushed.push(p); }, fetchRemote: async () => null });
   try {
     const rec = [];
@@ -256,8 +260,9 @@ test('local-first mesuré : une conversation complète = 0 écriture GitHub, la 
     const convoWrites = pushed.filter((p) => /message_history|conversation_state|conversation_index|closer_sessions|crm_contacts|activity/.test(p));
     assert.equal(convoWrites.length, 0, `écritures GitHub de conversation: ${convoWrites.join(', ')}`);
     storageAdapter.set('business_services', 'tLocalFirst', { ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 0)); // set() persiste le miroir en arrière-plan
     assert.ok(pushed.some((p) => /business_services/.test(p)), 'la configuration métier reste sauvegardée');
-  } finally { githubStore.createStore = origCreate; }
+  } finally { githubStore.createStore = origCreate; githubStore.enabled = origEnabled; }
 });
 
 test('charge : 40 clients × 3 messages rapides -> exactement 1 réponse par client, aucun mélange', async () => {
@@ -267,7 +272,7 @@ test('charge : 40 clients × 3 messages rapides -> exactement 1 réponse par cli
   for (let c = 0; c < N; c += 1) {
     const from = '2270' + String(1000 + c);
     const llm = async (p) => `Réponse pour ${from} ${p.includes(from) ? '' : ''}`.trim() + ` #${c}`;
-    for (const t of ['Bonjour', 'je voudrais', 'connaître le prix']) {
+    for (const t of ['Bonjour', 'je voudrais', 'en savoir plus']) {
       jobs.push(autoResponder.handleIncoming(
         { tenantId: T, channel: 'WHATSAPP', from, text: t + ' ' + c, messageId: `load-${c}-${t}` },
         { runtime: runtime(rec), llm, debounceMs: 30, notify: async () => {} },

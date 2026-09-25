@@ -25,6 +25,10 @@ function keyMaterial() {
   return crypto.createHash('sha256').update(`cyrus-vault::${s || 'default-insecure'}`).digest();
 }
 
+function isEncryptionConfigured() {
+  return Boolean(process.env.SECRET_VAULT_KEY || process.env.ADMIN_PASSWORD);
+}
+
 function encrypt(plain) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', keyMaterial(), iv);
@@ -86,4 +90,4 @@ async function listRefs(tenant) {
   return Object.keys(doc.secrets || {});
 }
 
-module.exports = { setSecret, getSecret, hasSecret, revoke, listRefs, NAMESPACE };
+module.exports = { setSecret, getSecret, hasSecret, revoke, listRefs, encrypt, decrypt, isEncryptionConfigured, NAMESPACE };

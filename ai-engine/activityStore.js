@@ -43,6 +43,20 @@ async function record(evt) {
       status: evt.status || 'ok', channel: evt.channel || null,
       tenant: evt.tenant || null, target: evt.target || null,
       detail: evt.detail != null ? String(evt.detail).slice(0, 300) : null,
+      timings: evt.timings && typeof evt.timings === 'object' ? {
+        receivedAt: evt.timings.receivedAt || null,
+        completedAt: evt.timings.completedAt || null,
+        totalMs: Number.isFinite(Number(evt.timings.totalMs)) ? Math.max(0, Number(evt.timings.totalMs)) : null,
+        stages: Object.fromEntries(Object.entries(evt.timings.stages || {}).slice(0, 20).map(([name, stage]) => [String(name).slice(0, 32), {
+          at: stage && stage.at || null,
+          elapsedMs: Number.isFinite(Number(stage && stage.elapsedMs)) ? Math.max(0, Number(stage.elapsedMs)) : null,
+          sincePreviousMs: Number.isFinite(Number(stage && stage.sincePreviousMs)) ? Math.max(0, Number(stage.sincePreviousMs)) : null,
+          ...(stage && stage.status ? { status: String(stage.status).slice(0, 24) } : {}),
+          ...(stage && stage.intent ? { intent: String(stage.intent).slice(0, 40) } : {}),
+          ...(stage && stage.method ? { method: String(stage.method).slice(0, 24) } : {}),
+          ...(stage && stage.provider ? { provider: String(stage.provider).slice(0, 24) } : {}),
+        }])),
+      } : undefined,
     };
     agg.events.unshift(e);
     if (agg.events.length > MAX_EVENTS) agg.events.length = MAX_EVENTS;
