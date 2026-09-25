@@ -10,7 +10,12 @@
 // quiet: true supprime les "tips" promotionnels que dotenv >= 17 affiche
 // aléatoirement au chargement (fonctionnalité officielle du package, pas un
 // souci de sécurité — juste du bruit dans les logs de production).
-require('dotenv').config({ quiet: true });
+// Les secrets locaux de développement vont dans secrets/providers.env (ignoré
+// par Git). L'environnement injecté par Render garde toujours priorité; le
+// .env racine reste un mécanisme local de compatibilité.
+const dotenv = require('dotenv');
+dotenv.config({ path: require('path').join(__dirname, 'secrets', 'providers.env'), quiet: true });
+dotenv.config({ quiet: true });
 
 const crypto = require('crypto');
 if (!globalThis.crypto) {
@@ -570,13 +575,9 @@ async function resolveScheduledSequence(entry) {
   return resolved;
 }
 
-// La programmation multi-canal (voir queues/scheduled_messages.js) n'a
-// aujourd'hui aucune notion de tenant/propriétaire (accessible via
-// /api/scheduled-messages par n'importe quelle clé valide) : hors du
-// périmètre de cette refonte (isolation de l'instance WhatsApp interactive,
-// des campagnes et de contactNames). En attendant une éventuelle isolation
-// complète de ce module, les envois programmés WhatsApp passent par
-// l'instance du tenant admin plutôt que par une session partagée fantôme.
+// Les nouvelles programmations portent le tenant authentifié et réutilisent
+// ses sessions/campagnes. Les anciennes entrées sans tenant restent
+// rétrocompatibles via la session admin et ne sont visibles qu'à l'admin.
 //
 // L'envoi lui-même est désormais injecté directement dans le Queue Engine
 // principal (queues/campaignEngine.js) plutôt que dans une boucle d'envoi
@@ -589,7 +590,7 @@ async function resolveScheduledSequence(entry) {
 // remontée telle quelle par runScheduledMessagesTick, qui retentera cette
 // programmation au cycle suivant).
 async function dispatchScheduledWhatsapp(entry, mediaList) {
-  const { session, campaignEngine } = whatsappManager.getOrCreate(whatsappManager.ADMIN_TENANT_ID);
+  const { session, campaignEngine } = whatsappManager.getOrCreate(entry.tenantId || whatsappManager.ADMIN_TENANT_ID);
   let recipients = entry.recipients;
 
   if (entry.recipientType === 'groups') {
@@ -627,14 +628,9 @@ async function dispatchScheduledWhatsapp(entry, mediaList) {
   return (finalStatus && finalStatus.results) || [];
 }
 
-// Comme dispatchScheduledWhatsapp ci-dessus : la programmation multi-canal
-// n'a aujourd'hui aucune notion de tenant/propriétaire, donc les envois
-// programmés Telegram passent par l'instance du tenant admin plutôt que par
-// une session partagée fantôme — et sont désormais injectés dans le Queue
-// Engine Telegram (queues/telegramCampaignEngine.js) pour les mêmes raisons
-// que côté WhatsApp ci-dessus.
+// La campagne programmée utilise le moteur Telegram partagé de son tenant.
 async function dispatchScheduledTelegram(entry, media) {
-  const { campaignEngine } = telegramManager.getOrCreate(telegramManager.ADMIN_TENANT_ID);
+  const { campaignEngine } = telegramManager.getOrCreate(entry.tenantId || telegramManager.ADMIN_TENANT_ID);
 
   await campaignEngine.start(entry.recipients, entry.message, {
     media,
@@ -3960,7 +3956,7 @@ function channelAllowed(req, channel) {
 }
 
 app.get('/api/scheduled-messages', requireAccess, (req, res) => {
-  const all = scheduledMessages.list();
+  const all = scheduledMessages.list({ tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
   const visible = req.allowedModules === null || req.allowedModules === undefined
     ? all
     : all.filter((m) => channelAllowed(req, m.channel));
@@ -4104,6 +4100,7 @@ app.post(
     }
 
     const entry = scheduledMessages.create({
+      tenantId: resolveTenantId(req),
       channel,
       recipientType: recipientType || null,
       recipients: Array.isArray(recipients) ? recipients : [],
@@ -4120,7 +4117,7 @@ app.post(
 );
 
 app.delete('/api/scheduled-messages/:id', requireAccess, (req, res) => {
-  const entry = scheduledMessages.get(req.params.id);
+  const entry = scheduledMessages.get(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
   if (!entry) {
     return res.status(404).json({ error: 'Programmation introuvable.' });
   }
@@ -4129,7 +4126,7 @@ app.delete('/api/scheduled-messages/:id', requireAccess, (req, res) => {
   }
 
   try {
-    const cancelled = scheduledMessages.cancel(req.params.id);
+    const cancelled = scheduledMessages.cancel(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
     res.status(200).json({ message: cancelled });
   } catch (err) {
     if (err.message === 'ONLY_PENDING_CAN_BE_CANCELLED') {
@@ -4160,7 +4157,7 @@ app.delete('/api/scheduled-messages/:id', requireAccess, (req, res) => {
 // récapitulatif unifié, l'étiquette mot-clé, et la diffusion combinée vers
 // des Groupes au même moment que la Page.
 app.get('/api/facebook/schedule-post', requireAccess, requireModule('facebook'), (req, res) => {
-  res.status(200).json({ posts: scheduledMessages.list({ channel: 'facebook_page' }) });
+  res.status(200).json({ posts: scheduledMessages.list({ channel: 'facebook_page', tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin }) });
 });
 
 app.post('/api/facebook/schedule-post', requireAccess, requireModule('facebook'), upload.single('media'), (req, res) => {
@@ -4201,6 +4198,7 @@ app.post('/api/facebook/schedule-post', requireAccess, requireModule('facebook')
   }
 
   const entry = scheduledMessages.create({
+    tenantId: resolveTenantId(req),
     channel: 'facebook_page',
     recipients: Array.isArray(recipients) ? recipients : [],
     message,
@@ -4215,13 +4213,13 @@ app.post('/api/facebook/schedule-post', requireAccess, requireModule('facebook')
 });
 
 app.delete('/api/facebook/schedule-post/:id', requireAccess, requireModule('facebook'), (req, res) => {
-  const entry = scheduledMessages.get(req.params.id);
+  const entry = scheduledMessages.get(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
   if (!entry || entry.channel !== 'facebook_page') {
     return res.status(404).json({ error: 'Publication programmée introuvable.' });
   }
 
   try {
-    const cancelled = scheduledMessages.cancel(req.params.id);
+    const cancelled = scheduledMessages.cancel(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
     res.status(200).json({ post: cancelled });
   } catch (err) {
     if (err.message === 'ONLY_PENDING_CAN_BE_CANCELLED') {
@@ -4669,6 +4667,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
       // Secrets (clés de plateforme) lus depuis l'environnement du serveur,
       // jamais depuis la config committée ni la conversation.
       executeOptions: { env: process.env },
+      toolContext: buildNaturalToolContext(tenantId),
       // Génération de visuel à la volée pour "génère une affiche et poste-la
       // dans le groupe X" (voir chatOrchestrator#handleGroupPost). Renvoie un
       // buffer en mémoire, jamais un fichier persistant.
@@ -6116,6 +6115,21 @@ async function handleHistoricalMessage({ channel, tenantId, session, msg }) {
 
 // Dépendances du Chat Intelligent (chatOrchestrator.handle) — mêmes que celles de l'onglet « Chat Intelligent » du tableau
 // de bord ; réutilisées par le canal propriétaire (WhatsApp) pour que ce soit le MÊME cerveau, pas un second chatbot.
+function buildNaturalToolContext(tenantId) {
+  const license = licenses.listLicenses().find((item) => String(item.key || '').trim().toUpperCase() === String(tenantId || '').trim().toUpperCase());
+  return {
+    // Shared instances used by the existing Render routes. Tool modules wrap
+    // these engines; they must never instantiate a second adapter or engine.
+    facebook, mediaPublisher, imageAiEngine, videoAiEngine, storyboardEngine, videoMixerEngine,
+    contactsStore, keywordRules,
+    ebookGenerator, scheduledMessages, aiStudioStore, chatUploads,
+    publicBaseUrl: PUBLIC_BASE_URL,
+    allowedModules: license
+      ? (Array.isArray(license.allowedModules) ? license.allowedModules : licenses.ALL_MODULES.slice())
+      : null,
+  };
+}
+
 function buildChatDeps(tenantId) {
   return {
     runtime: intelligenceBridge && intelligenceBridge.runtime,
@@ -6132,6 +6146,7 @@ function buildChatDeps(tenantId) {
       }
     },
     executeOptions: { env: process.env },
+    toolContext: buildNaturalToolContext(tenantId),
     generateImage: async (prompt) => {
       const r = await imageAiEngine.generateImage({ prompt: String(prompt || '').slice(0, 600), width: 1024, height: 1024 });
       return { buffer: r.buffer, mimetype: r.mimetype };

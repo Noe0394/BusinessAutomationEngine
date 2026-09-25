@@ -30,6 +30,9 @@ public/webapp/
 public/cyrus-extension.zip
 .vercel
 .env*
+/secrets/*
+!/secrets/README.md
+!/secrets/providers.env.example
 firebase-service-account.json
 .claude/settings.local.json
 

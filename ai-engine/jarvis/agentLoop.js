@@ -42,7 +42,11 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
   const d = deps || {};
   const limits = Object.assign({}, LIMITS, d.limits || {});
   const llm = typeof d.llm === 'function' ? d.llm : defaultLlm;
-  const ctx = { runtime: d.runtime || null, permissions: d.permissions || ['messages:send'], generateImage: d.generateImage || null, confirmFrom: d.confirmFrom || process.env.JARVIS_CONFIRM_FROM || null, autonomous: d.autonomous === true };
+  // Les modules de fonctionnalités reçoivent les moteurs déjà instanciés par
+  // le serveur; ils restent ainsi communs au Chat et aux deux canaux self.
+  // Les champs d'identité, de runtime et de confirmation sont réécrits après
+  // toolContext et ne peuvent donc pas être remplacés par un module.
+  const ctx = Object.assign({}, d.toolContext || {}, { runtime: d.runtime || null, permissions: d.permissions || ['messages:send'], generateImage: d.generateImage || null, confirmFrom: d.confirmFrom || process.env.JARVIS_CONFIRM_FROM || null, autonomous: d.autonomous === true });
   const tools = toolRegistry.list(ctx);
   const taskId = `agent:${tenantId}:${sessionId || 'x'}:${Date.now()}`;
   const started = Date.now();

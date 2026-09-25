@@ -29,13 +29,12 @@ function mockAxios(handler) {
 test('état des connexions : ordre par niveau, modèles forts manquants signalés', () => {
   withKeys(['GROQ_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'HUGGINGFACE_API_KEY']);
   const s = llm.getProviderStatus();
-  // Consigne produit : la famille Gemini (Gemma 4 31B → Gemma 4 → Flash) passe avant tous les fournisseurs externes.
   assert.deepEqual(s.reasoning.slice(0, 5), ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq', 'openrouter']);
   assert.deepEqual(s.standard.slice(0, 4), ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq']);
-  assert.deepEqual(s.missingStrongModels, ['claude', 'openai']);
+  assert.deepEqual(s.missingStrongModels, ['claude']);
   withKeys(['GROQ_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']);
   const s2 = llm.getProviderStatus();
-  assert.deepEqual(s2.reasoning.slice(0, 3), ['claude', 'openai', 'groq'], 'les modèles les plus forts passent en premier au niveau raisonnement');
+  assert.deepEqual(s2.reasoning.slice(0, 2), ['claude', 'groq'], 'Claude Haiku passe avant les replis gratuits');
   assert.deepEqual(s2.missingStrongModels, []);
 });
 
@@ -52,7 +51,7 @@ test('niveau RAISONNEMENT : Groq gpt-oss-120b en effort « high », marge de tok
   } finally { m.restore(); }
 });
 
-test('niveau STANDARD : Gemma 4 31B en premier ; si toute la famille Gemini échoue, Groq (effort « low », délai court) prend le relais', async () => {
+test('sans clé Anthropic, niveau STANDARD : Gemma 4 31B en premier ; si Gemini échoue, Groq prend le relais', async () => {
   withKeys(['GROQ_API_KEY', 'GEMINI_API_KEY']);
   process.env.AI_RETRY_BASE_MS = '0';
   const m = mockAxios((url) => { if (/generativelanguage/.test(url)) throw Object.assign(new Error('400'), { response: { status: 400, data: {} } }); return okGroq('réponse rapide'); });
@@ -78,19 +77,46 @@ test('RAISONNEMENT : Gemma 4 31B en premier avec un délai étendu ; jamais de G
   } finally { m.restore(); }
 });
 
-test('RAISONNEMENT : un modèle fort configuré (Claude) est appelé EN PREMIER, avec son modèle de raisonnement', async () => {
+test('Claude passe en premier pour tous les paliers et n’appelle que Haiku 4.5', async () => {
   withKeys(['GROQ_API_KEY', 'ANTHROPIC_API_KEY']);
   const m = mockAxios((url) => (/anthropic/.test(url) ? okClaude('réponse Claude') : okGroq('groq')));
   try {
     const r = await llm.generateAIResponse('Décision critique', [], null, undefined, null, { tier: 'reasoning' });
     assert.equal(r.provider, 'claude');
-    assert.equal(m.calls[0].body.model, 'claude-sonnet-5');
+    assert.equal(m.calls[0].body.model, 'claude-haiku-4-5-20251001');
     assert.equal(m.calls.length, 1);
-    // au niveau standard, la cascade économique reste en tête (Groq avant Claude)
+    // Le palier standard appelle lui aussi Haiku en premier.
     m.calls.length = 0;
     const s = await llm.generateAIResponse('Salut', [], null);
-    assert.equal(s.provider, 'groq');
+    assert.equal(s.provider, 'claude');
+    assert.equal(m.calls[0].body.model, 'claude-haiku-4-5-20251001');
   } finally { m.restore(); }
+});
+
+test('le repli gratuit attend la réponse ou le timeout de Claude, puis prend le relais', async () => {
+  withKeys(['ANTHROPIC_API_KEY', 'GEMINI_API_KEY']);
+  const oldHedge = process.env.AI_HEDGE_MS;
+  process.env.AI_HEDGE_MS = '1';
+  const events = [];
+  const m = mockAxios(async (url, body) => {
+    if (/anthropic/.test(url)) {
+      events.push('claude:start:' + body.model);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      events.push('claude:failed');
+      throw Object.assign(new Error('401'), { response: { status: 401, data: { error: { message: 'invalid key' } } } });
+    }
+    events.push('gemini:start');
+    return okGemini('réponse de secours');
+  });
+  try {
+    const r = await llm.generateAIResponse('Salut', [], null);
+    assert.equal(r.provider, 'gemini-primary');
+    assert.deepEqual(events, ['claude:start:claude-haiku-4-5-20251001', 'claude:failed', 'gemini:start']);
+  } finally {
+    m.restore();
+    if (oldHedge === undefined) delete process.env.AI_HEDGE_MS;
+    else process.env.AI_HEDGE_MS = oldHedge;
+  }
 });
 
 test('réponse coupée (finish_reason=length) : nouvelle tentative avec plus de marge, jamais une réponse tronquée', async () => {

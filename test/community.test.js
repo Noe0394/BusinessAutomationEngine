@@ -277,6 +277,26 @@ test('un nouveau module tool-modules est découvert automatiquement et supporte 
   }
 });
 
+test('les outils du Studio IA sont filtrés par licence et bloqués aussi à l’exécution; Facebook reste accessible comme module libre', async () => {
+  const T = 'tModuleGate';
+  const principal = owner(T);
+  const allowedModules = ['whatsapp', 'telegram'];
+  const visible = toolRegistry.list({ principal, allowedModules }).map((t) => t.name);
+  assert.ok(!visible.includes('listAiStudioSessions'));
+  assert.ok(!visible.includes('generateImage'));
+  assert.ok(visible.includes('getFacebookConnectionStatus'));
+  const result = await authz.runAs(principal, () => toolRegistry.execute(T, 'listAiStudioSessions', {}, {
+    allowedModules,
+    aiStudioStore: { async listSessions() { throw new Error('ne doit pas être appelé'); } },
+  }));
+  assert.equal(result.state, 'BLOCKED');
+  assert.equal(result.error.code, 'MODULE_NOT_ALLOWED');
+  const image = await authz.runAs(principal, () => toolRegistry.execute(T, 'generateImage', { prompt: 'test' }, {
+    allowedModules, generateImage() { throw new Error('ne doit pas être appelé'); },
+  }));
+  assert.equal(image.error.code, 'MODULE_NOT_ALLOWED');
+});
+
 test('TOOL REGISTRY : createCommunityGroup — identité obligatoire, rôle client refusé, tour teinté (fichier) → confirmation, puis exécution vérifiée', async () => {
   const T = 'tTool1'; const wa = fakeWa(); useWa(wa);
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Nom', 'Telephone'], ['Awa', '22670777001'], ['Issa', '22670777002']]), 'S');

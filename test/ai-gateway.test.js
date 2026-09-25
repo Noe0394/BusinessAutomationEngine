@@ -30,7 +30,7 @@ function mockAxios(handler) {
 }
 const model = (url) => (String(url).match(/models\/([^:]+):/) || [])[1];
 
-test('ordre de priorité : Gemma 4 31B IT en premier, la clé Gemini passe en EN-TÊTE (jamais dans l\'URL)', async () => {
+test('sans clé Anthropic : Gemma 4 31B IT en premier, clé Gemini en EN-TÊTE (jamais dans l\'URL)', async () => {
   withKeys(['GEMINI_API_KEY', 'GROQ_API_KEY']);
   const m = mockAxios(() => gem('bonjour'));
   try {
@@ -43,19 +43,21 @@ test('ordre de priorité : Gemma 4 31B IT en premier, la clé Gemini passe en EN
   } finally { m.restore(); }
 });
 
-test('chaîne interne : Gemma 31B indisponible → autre Gemma 4 → Gemini Flash → Groq → OpenRouter → Hugging Face', async () => {
-  withKeys(['GEMINI_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'HUGGINGFACE_API_KEY']);
+test('après Gemini gratuit et Groq, seul le modèle gratuit OpenRouter précède le repli public', async () => {
+  withKeys(['GEMINI_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY']);
   const seen = [];
   const m = mockAxios((url) => {
-    const id = /generativelanguage/.test(url) ? model(url) : (/groq/.test(url) ? 'groq' : (/openrouter/.test(url) ? 'openrouter' : 'hf'));
+    const id = /generativelanguage/.test(url) ? model(url) : (/groq/.test(url) ? 'groq' : 'openrouter');
     if (!seen.includes(id)) seen.push(id);
-    if (id === 'hf') return oai('réponse HF');
+    if (id === 'openrouter') return oai('réponse OpenRouter gratuite');
     throw httpErr(400, 'refus définitif de ' + id); // erreur définitive : aucun retry, on passe au suivant
   });
   try {
     const r = await llm.generateAIResponse('Salut', [], null);
-    assert.equal(r.text, 'réponse HF');
-    assert.deepEqual(seen, ['gemma-4-31b-it', 'gemma-4-26b-a4b-it', 'gemini-flash-latest', 'groq', 'openrouter', 'hf']);
+    assert.equal(r.text, 'réponse OpenRouter gratuite');
+    assert.equal(r.provider, 'openrouter');
+    assert.deepEqual(seen, ['gemma-4-31b-it', 'gemma-4-26b-a4b-it', 'gemini-flash-latest', 'groq', 'openrouter']);
+    assert.equal(m.calls.at(-1).body.model, 'openrouter/free');
   } finally { m.restore(); }
 });
 
@@ -208,12 +210,12 @@ test('redaction : clés Google (AIza…, AQ.…), Groq, OpenAI, Hugging Face, Be
 test('état des connexions : ordre par niveau, capacités déclarées, modèles forts manquants signalés', () => {
   withKeys(['GEMINI_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'HUGGINGFACE_API_KEY']);
   const s = llm.getProviderStatus();
-  assert.deepEqual(s.standard, ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq', 'openrouter', 'huggingface', 'pollinations']);
+  assert.deepEqual(s.standard, ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq', 'openrouter', 'pollinations']);
   assert.deepEqual(s.reasoning.slice(0, 4), ['gemini-primary', 'gemini-secondary', 'gemini-flash', 'groq']);
   assert.deepEqual(s.capabilities['gemini-flash'].sort(), ['audio', 'complex', 'document', 'image', 'search', 'text', 'tools', 'video']);
   assert.ok(!s.capabilities['gemini-primary'].includes('audio'));
   assert.ok(!s.capabilities.groq.includes('image'));
-  assert.deepEqual(s.missingStrongModels, ['claude', 'openai']);
+  assert.deepEqual(s.missingStrongModels, ['claude']);
 });
 
 test('le Chat intelligent ne dépend d\'aucun nom de modèle : aucun module métier ne cite un modèle Gemini/Gemma', () => {

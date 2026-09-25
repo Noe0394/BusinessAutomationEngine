@@ -1,12 +1,13 @@
 # Tests réels Jarvis (ÉTAPES 9 et 10)
 
 ## Compte de test — RÈGLE PROJET
-**Tous les tests réels (WhatsApp, Telegram, IA, licences) se font avec le compte rattaché à la clé de
-licence de test** (indiqué par l'utilisateur le 2026-09-20 ; clé dans `.env`, variable `CYRUS_TEST_LICENSE_KEY` — le dépôt est public, ne jamais la commiter). Ne pas tester sur un autre compte,
-ne pas générer de clé de test supplémentaire pour cet usage.
+**Compte unique pour tout test d'intégration sur Render : `KEY-B4403774-2026`.** Configurer
+`.env` (`CYRUS_TEST_LICENSE_KEY`) avec cette valeur avant les essais live. Ne jamais utiliser
+une autre licence ni créer une autre licence pour ces tests. Les tests unitaires restent isolés,
+avec des moteurs simulés, et ne doivent pas appeler le compte Render.
 
 ## Prérequis (une seule fois, données mobiles : regrouper)
-1. Déployer la branche `feat/jarvis-engine` sur la VM (procédure de `CLAUDE.md`), variables `.env` : `AUTO_REPLY_DEBOUNCE_MS`, `JARVIS_CONFIRM_FROM`.
+1. Vérifier que le commit testé est déployé sur Render (`https://business-automation-engine.onrender.com/health`) et utiliser exclusivement la licence `KEY-B4403774-2026`.
 2. Activer l'auto-réponse du compte de test (WhatsApp et/ou Telegram) dans les réglages, avec un Service Métier ayant **un prix configuré et aucune date de session**.
 3. Un second téléphone (ou deux) pour jouer les clients.
 
@@ -34,7 +35,7 @@ Après les scénarios : `node scripts/jarvis-inspect.js <tenant>` (dans le conte
 ### Passage du 2026-09-20 — vrai modèle IA, transport SIMULÉ (`node scripts/jarvis-live-scenarios.js`)
 13/13 conformes après correction d'un défaut réel (un message d'erreur « crédits insuffisants » de Pollinations
 était envoyé comme réponse client ; désormais rejeté, repli sur un message d'attente honnête).
-Restent à exécuter en conditions réelles (WhatsApp/Telegram, VM) : scénarios 1 à 12 ci-dessus.
+Restent à exécuter en conditions réelles (WhatsApp/Telegram, Render) : scénarios 1 à 12 ci-dessus.
 
 ## ⚠️ Piège appris le 2026-09-20 : ne JAMAIS tester la vérification d'une clé avec un faux appareil
 `/api/auth/verify-key` (VPS) et `/verify` (Cloudflare) **lient la clé au premier appareil qui se présente** si elle n'est pas encore
@@ -44,7 +45,7 @@ Restauration si cela arrive : `licenses.unbindDevice(clé)` puis `licenses.verif
 `POST /admin/unbind` + `POST /admin/sync` sur Cloudflare, et corriger la copie GitHub de `licenses.json`.
 
 ## Passage réel — couche d'assistance générale (à exécuter EN UNE FOIS après déploiement)
-Prérequis : branche déployée sur la VM (procédure CLAUDE.md), répondeur WhatsApp activé sur le compte de test, un second téléphone
+Prérequis : branche déployée sur Render, répondeur WhatsApp activé sur le compte de test, un second téléphone
 (« contact »), le téléphone du compte de test pour son self-chat. Ne rien pousser vers RIEA/Firebase.
 
 | # | Action | Attendu |

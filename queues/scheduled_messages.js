@@ -24,16 +24,22 @@ function writeAll(list) {
   fs.writeFileSync(STORE_PATH, JSON.stringify(list, null, 2), 'utf8');
 }
 
-function list({ channel } = {}) {
+function list({ channel, tenantId, includeLegacy = false } = {}) {
   let all = readAll().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   if (channel) {
     all = all.filter((m) => m.channel === channel);
   }
+  if (tenantId != null) {
+    const tenant = String(tenantId);
+    all = all.filter((m) => String(m.tenantId || '') === tenant || (includeLegacy && !m.tenantId));
+  }
   return all;
 }
 
-function get(id) {
-  return readAll().find((m) => m.id === id) || null;
+function get(id, { tenantId, includeLegacy = false } = {}) {
+  const entry = readAll().find((m) => m.id === id) || null;
+  if (!entry || tenantId == null) return entry;
+  return String(entry.tenantId || '') === String(tenantId) || (includeLegacy && !entry.tenantId) ? entry : null;
 }
 
 /**
@@ -66,7 +72,7 @@ function get(id) {
  * fonctionner sans traitement spécial.
  */
 function create({
-  channel, recipientType, recipients, message, mediaUrl, mediaMimetype, mediaFilename, media,
+  tenantId, channel, recipientType, recipients, message, mediaUrl, mediaMimetype, mediaFilename, media,
   sequence, sequenceDelayMinSeconds, sequenceDelayMaxSeconds, scheduledAt, keyword,
 }) {
   const normalizedSequence = Array.isArray(sequence) && sequence.length > 0 ? sequence : null;
@@ -89,6 +95,7 @@ function create({
 
   const entry = {
     id: `sched_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    tenantId: tenantId == null ? null : String(tenantId),
     channel,
     recipientType: recipientType || null,
     recipients: Array.isArray(recipients) ? recipients : [],
@@ -129,8 +136,8 @@ function update(id, patch) {
   return all[idx];
 }
 
-function cancel(id) {
-  const entry = get(id);
+function cancel(id, opts) {
+  const entry = get(id, opts);
   if (!entry) return null;
   if (entry.status !== 'pending') {
     throw new Error('ONLY_PENDING_CAN_BE_CANCELLED');

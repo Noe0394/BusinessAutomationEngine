@@ -212,6 +212,7 @@ const TOOLS = {
   },
 
   generateImage: {
+    requiredModule: 'studio_video',
     description: 'Génère une image / affiche à partir d\'une description, et la renvoie TÉLÉCHARGEABLE dans la discussion. À utiliser quand l\'utilisateur demande de générer/créer une image, une affiche ou un visuel.',
     permission: null,
     risk: 'LOW_WRITE',
@@ -528,6 +529,12 @@ function list(ctx) {
   if (!authz.isPrincipal(principal)) return [];
   return describe()
     .filter((t) => authz.authorizeTool({ tool: TOOLS[t.name], toolName: t.name, tenant: principal.tenant, principal }).allowed)
+    // Masquer dès le catalogue les outils dont le module n'est pas attribué;
+    // le même contrôle est répété à l'exécution pour bloquer toute tentative
+    // d'appel direct par le modèle.
+    .filter((t) => !TOOLS[t.name].requiredModule
+      || (ctx && ctx.allowedModules === null)
+      || (ctx && Array.isArray(ctx.allowedModules) && ctx.allowedModules.includes(TOOLS[t.name].requiredModule)))
     .filter((t) => !t.permission || !perms || perms.includes(t.permission));
 }
 
@@ -573,6 +580,13 @@ async function _execute(tenant, name, args, ctx) {
   // Permission
   if (tool.permission && Array.isArray(fullCtx.permissions) && !fullCtx.permissions.includes(tool.permission)) {
     return Object.assign(call, { state: STATE.BLOCKED, error: { code: 'PERMISSION_DENIED', permission: tool.permission }, finishedAt: new Date().toISOString() });
+  }
+  // Les outils étendus peuvent déclarer le même module que leur route HTTP.
+  // La licence est injectée par le serveur dans toolContext; le LLM ne peut
+  // ni la fournir ni l'élargir dans ses arguments.
+  if (tool.requiredModule && fullCtx.allowedModules !== null
+      && (!Array.isArray(fullCtx.allowedModules) || !fullCtx.allowedModules.includes(tool.requiredModule))) {
+    return Object.assign(call, { state: STATE.BLOCKED, error: { code: 'MODULE_NOT_ALLOWED', module: tool.requiredModule }, finishedAt: new Date().toISOString() });
   }
   // Validation des entrées requises
   const missing = Object.entries(tool.inputSchema || {})
