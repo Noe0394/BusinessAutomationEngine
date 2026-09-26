@@ -37,6 +37,7 @@ test('mission complexe : un appel de planification puis outils déterministes v�
   let aiCalls = 0;
   const llm = async () => {
     aiCalls += 1;
+    if (aiCalls > 1) return JSON.stringify({ complete: true, steps: [] });
     return JSON.stringify({ needsInput: false, steps: [
       { id: 'prix_cuisine', tool: 'getProductPrice', args: { query: 'Formation Cuisine' }, label: 'Vérifier le prix Cuisine' },
       { id: 'prix_patisserie', tool: 'getProductPrice', args: { query: 'Formation Pâtisserie' }, label: 'Vérifier le prix Pâtisserie' },
@@ -46,7 +47,7 @@ test('mission complexe : un appel de planification puis outils déterministes v�
     text: 'Organise la vérification des tarifs des deux formations.',
     tenantId: TENANT, sessionId: 'mission-test-session', channel: 'CHAT',
   }, { llm, permissions: ['messages:send'] }));
-  assert.equal(aiCalls, 1);
+  assert.equal(aiCalls, 2);
   assert.equal(result.state, 'completed');
   const persisted = await missions.get(TENANT, result.missionId);
   assert.equal(persisted.steps.length, 2);
@@ -62,7 +63,7 @@ test('mission : attend seulement les informations manquantes puis reprend sans r
     ] }),
   ];
   let calls = 0;
-  const deps = { llm: async () => { calls += 1; return answers.shift(); }, permissions: ['messages:send'] };
+  const deps = { llm: async () => { calls += 1; return answers.shift() || JSON.stringify({ complete: true, steps: [] }); }, permissions: ['messages:send'] };
   const first = await authz.runAs(principal, () => missions.start({
     text: 'Organise cette mission commerciale.',
     tenantId: TENANT, sessionId: 'mission-input-session', channel: 'TELEGRAM',
@@ -73,7 +74,7 @@ test('mission : attend seulement les informations manquantes puis reprend sans r
   const resumed = await authz.runAs(principal, () => missions.resume({
     tenantId: TENANT, id: first.missionId, answer: 'WhatsApp', sessionId: 'mission-input-session',
   }, deps));
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   assert.equal(resumed.state, 'completed');
   const persisted = await missions.get(TENANT, first.missionId);
   assert.equal(persisted.steps.filter((s) => s.state === 'SUCCESS').length, 1);
@@ -162,7 +163,10 @@ test('une mission redémarrée reprend les étapes en attente sans rejouer les s
       { id: 'next', tool: 'getProductPrice', label: 'Relire le prix', state: 'PENDING', args: { query: 'Formation Cuisine' } },
     ], createdAt: Date.now(), updatedAt: Date.now(),
   } } });
-  await authz.runAs(principal, () => missions.recoverPending(TENANT, id, { permissions: ['messages:send'] }));
+  await authz.runAs(principal, () => missions.recoverPending(TENANT, id, {
+    permissions: ['messages:send'],
+    llm: async () => JSON.stringify({ complete: true, steps: [] }),
+  }));
   const recovered = await missions.get(TENANT, id);
   assert.equal(recovered.state, 'completed');
   assert.equal(recovered.status, 'COMPLETED');

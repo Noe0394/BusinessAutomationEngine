@@ -121,9 +121,12 @@ async function makePlan(mission, deps, priorPlan) {
     runtime: deps.runtime || null, permissions: deps.permissions || ['messages:send'],
     generateImage: deps.generateImage || null, autonomous: true });
   const priorNames = mission.steps.filter((s) => s.state === 'SUCCESS').slice(-12).map((s) => s.tool).join(' ');
-  const tools = await availableTools(ctx, [mission.objective, priorNames].filter(Boolean).join('\n'));
   let businessContext = '';
   try { businessContext = await businessServices.getEngineContextText(mission.tenant); } catch (e) { businessContext = ''; }
+  // Include real catalog/context terms in discovery. Otherwise a clarification
+  // such as "WhatsApp" can narrow the registry so much that the next planner
+  // turn cannot select a tool already justified by the account's business data.
+  const tools = await availableTools(ctx, [mission.objective, priorNames, businessContext].filter(Boolean).join('\n'));
   const prompt = plannerPrompt({ objective: mission.objective, tools, completed: mission.steps.filter((s) => s.state === 'SUCCESS'), previousPlan: priorPlan, businessContext,
     conversationContext: mission.context && mission.context.lastRelevantMessages });
   const llm = deps.planLlm || deps.llm;
@@ -474,6 +477,8 @@ async function processNewMission(mission, deps) {
     if (mission.context) mission.context.pendingTask = { missionId: mission.id, state: 'running' };
     ensureUniqueStepIds(next, completed);
     mission.steps = completed.concat(next);
+    mission.state = 'running';
+    mission.nextStep = next[0].id;
     await saveMission(mission.tenant, mission);
     await executePlan(mission, deps);
     return render(mission);

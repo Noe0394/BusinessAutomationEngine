@@ -234,7 +234,9 @@ async function setDurable(namespace, docId, data) {
     throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${namespace}:REMOTE_MIRROR_NOT_READY`);
   }
   if (isEncryptedMirror(namespace) && !vault().isEncryptionConfigured()) {
-    throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${namespace}:ENCRYPTION_KEY_NOT_CONFIGURED`);
+    throw new Error(isProductionRuntime()
+      ? `DURABLE_STORAGE_UNAVAILABLE:${namespace}:ENCRYPTION_KEY_NOT_CONFIGURED`
+      : 'DURABLE_STORAGE_KEY_MISSING');
   }
   fs.mkdirSync(baseDir(namespace), { recursive: true });
   const content = JSON.stringify(data, null, 2);
