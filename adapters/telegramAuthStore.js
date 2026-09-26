@@ -37,20 +37,38 @@ function createAuthStore(rawTenantId) {
         status.lastFetchError = null;
         return false;
       }
-      const envelope = JSON.parse(remote.content);
-      if (!envelope || envelope._cyrusEncrypted !== 1 || envelope.format !== 'telegram-string-session-v1') {
-        status.lastFetchOk = false;
-        status.lastFetchError = 'LEGACY_UNENCRYPTED_SESSION_UNSUPPORTED';
-        return false;
+      let parsed = null;
+      let isJson = false;
+      try { parsed = JSON.parse(remote.content); isJson = true; } catch (err) { /* ancienne StringSession en texte brut */ }
+      let session;
+      let migrateLegacy = false;
+      if (isJson) {
+        if (!parsed || parsed._cyrusEncrypted !== 1 || parsed.format !== 'telegram-string-session-v1') {
+          status.lastFetchOk = false;
+          status.lastFetchError = 'TELEGRAM_SESSION_FORMAT_UNSUPPORTED';
+          return false;
+        }
+        session = secretVault.decrypt(parsed.payload);
+      } else {
+        // Les sauvegardes précédant le chiffrement contiennent directement la
+        // StringSession GramJS. La restaurer, puis la réécrire immédiatement
+        // avec le format chiffré pour que le prochain démarrage la retrouve.
+        session = remote.content;
+        migrateLegacy = true;
       }
-      const session = secretVault.decrypt(envelope.payload);
       if (session == null || !session.trim()) throw new Error('TELEGRAM_SESSION_DECRYPT_FAILED');
+      if (/\s/.test(session)) throw new Error('TELEGRAM_SESSION_FORMAT_INVALID');
       fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
       fs.writeFileSync(sessionPath, session, 'utf8');
-      lastPushedContent = session;
+      lastPushedContent = migrateLegacy ? null : session;
       status.lastFetchOk = true;
       status.lastFetchError = null;
-      console.log(`Session Telegram restaurée depuis le stockage privé pour le tenant "${tenantId}".`);
+      if (migrateLegacy) {
+        console.log(`Ancienne session Telegram restaurée pour le tenant "${tenantId}"; migration chiffrée en cours.`);
+        await pushSnapshot(sessionPath);
+      } else {
+        console.log(`Session Telegram restaurée depuis le stockage privé pour le tenant "${tenantId}".`);
+      }
       return true;
     } catch (err) {
       status.lastFetchAt = new Date().toISOString();
