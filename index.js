@@ -4930,10 +4930,17 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
       // message d'erreur clair) plutôt que de faire croire à une vraie
       // réponse IA. generateSessionTitle (ci-dessus) reste local — c'est un
       // simple intitulé de discussion, pas une réponse fournie à l'utilisateur.
-      const { text: replyText } = await llmFallbackEngine.generateAIResponse(text, existing.messages, null, undefined, null, {
+      const generatedReply = await llmFallbackEngine.generateAIResponse(text, existing.messages, null, undefined, null, {
         tenant: tenantId,
         cacheScope: `${tenantId}:${req.params.id}`,
       });
+      const replyText = generatedReply.text;
+      if (generatedReply.timings) {
+        const safeDuration = (value) => Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 0;
+        res.setHeader('Server-Timing', 'cyrus_ai_gateway;dur=' + safeDuration(generatedReply.timings.gatewayMs)
+          + ', cyrus_provider_chain;dur=' + safeDuration(generatedReply.timings.providerChainMs)
+          + ', cyrus_provider;dur=' + safeDuration(generatedReply.timings.providerMs));
+      }
 
       // Rattrapage (voir looksLikeRawMarkupDump ci-dessus) : la demande a été
       // classée 'chat' par detectStudioIntent mais la réponse générique

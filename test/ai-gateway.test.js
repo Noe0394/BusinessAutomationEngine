@@ -247,5 +247,8 @@ test('RÉPONSE SPONTANÉE : un fournisseur lent est doublé en parallèle après
     const r = await gw.generateAIResponse('bonjour', [], null, undefined, null, { tier: 'standard' });
     assert.ok(Date.now() - t0 < 1200, `réponse en ${Date.now() - t0} ms : le doublon parallèle doit gagner`);
     assert.ok(r.text);
+    assert.ok(r.timings && r.timings.gatewayMs >= 0);
+    assert.ok(r.timings.providerChainMs >= 0);
+    assert.ok(r.timings.providerMs >= 0);
   } finally { delete process.env.AI_HEDGE_MS; if (m && m.restore) m.restore(); }
 });
