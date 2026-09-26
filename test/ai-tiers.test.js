@@ -119,6 +119,32 @@ test('le repli gratuit attend la réponse ou le timeout de Claude, puis prend le
   }
 });
 
+test('un tour interactif garde Claude en premier, supprime le retry et borne la cascade gratuite', async () => {
+  withKeys(['ANTHROPIC_API_KEY', 'GEMINI_API_KEY']);
+  llm._resetHealth();
+  const oldBudget = process.env.AI_INTERACTIVE_BUDGET_MS;
+  const oldProviderTimeout = process.env.AI_INTERACTIVE_PROVIDER_TIMEOUT_MS;
+  process.env.AI_INTERACTIVE_BUDGET_MS = '1200';
+  process.env.AI_INTERACTIVE_PROVIDER_TIMEOUT_MS = '700';
+  const m = mockAxios((url) => {
+    if (/anthropic/.test(url)) throw Object.assign(new Error('503'), { response: { status: 503, data: { error: { message: 'temporary overload' } } } });
+    return okGemini('réponse rapide de secours');
+  });
+  try {
+    const r = await llm.generateAIResponse('Salut', [], null, undefined, null, { interactive: true, tier: 'reasoning' });
+    assert.equal(r.provider, 'gemini-primary');
+    assert.equal(m.calls.length, 2, 'Claude n’est pas relancé avant le repli');
+    assert.equal(m.calls[0].body.model, 'claude-haiku-4-5-20251001');
+    assert.ok(m.calls[0].timeout <= 700);
+    assert.ok(m.calls[1].timeout <= 1200);
+  } finally {
+    m.restore();
+    llm._resetHealth();
+    if (oldBudget === undefined) delete process.env.AI_INTERACTIVE_BUDGET_MS; else process.env.AI_INTERACTIVE_BUDGET_MS = oldBudget;
+    if (oldProviderTimeout === undefined) delete process.env.AI_INTERACTIVE_PROVIDER_TIMEOUT_MS; else process.env.AI_INTERACTIVE_PROVIDER_TIMEOUT_MS = oldProviderTimeout;
+  }
+});
+
 test('réponse coupée (finish_reason=length) : nouvelle tentative avec plus de marge, jamais une réponse tronquée', async () => {
   withKeys(['GROQ_API_KEY']);
   const m = mockAxios((url, body, n) => (n === 1 ? okGroq('Vous pouvez régler par Orange Money au 07 00', 'length') : okGroq('Vous pouvez régler par Orange Money au 07 00 00 00 00.', 'stop')));

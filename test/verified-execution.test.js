@@ -77,12 +77,12 @@ test("GARDE : une LECTURE ne prouve pas une écriture ; le mauvais outil non plu
   assert.equal(claimGuard.guard(claim, { toolCalls: [{ name: 'deleteBusinessService', state: 'SUCCESS', risk: 'LOW_WRITE' }] }, { request: req }).blocked, false, 'bon outil, vérifié');
   const g = claimGuard.guard(claim, null, { request: req }); assert.equal(g.blocked, true); assert.match(g.text, /deleteBusinessService/, 'dit quelle fonction existe');
   const noTool = claimGuard.guard("C'est fait, le compte comptable est synchronisé et validé.", null, { request: 'Synchronise mon compte comptable Sage' });
-  assert.equal(noTool.blocked, true); assert.match(noTool.text, /ne fait pas partie de mes fonctions|n'ai pas de fonction/);
+  assert.equal(noTool.blocked, true); assert.match(noTool.text, /ne fait pas partie de mes fonctions|n'ai pas de fonction|correspond à ma fonction/);
 });
 
 test("AGENT : plan avec une seule LECTURE puis « c'est fait » du modèle = bloqué ; aucune fonction pour l'action = dit clairement ; simple conversation = rendue à la discussion ; outil correct = confirmé avec preuve", async () => {
   const T = 'v4'; const { P } = mk(T); await businessServices.create(T, { name: 'Formation Grillade' });
-  const scripted = (plans, answer) => { let i = 0; return async (prompt) => (/Réponds UNIQUEMENT en JSON/.test(prompt) ? plans[Math.min(i++, plans.length - 1)] : answer); };
+  const scripted = (plans, answer) => { let i = 0; return async (prompt) => (prompt.includes('Outils disponibles') ? plans[Math.min(i++, plans.length - 1)] : answer); };
   const run = (text, llm) => authz.runAs(P, () => agentLoop.runAgentLoop({ text, history: [], tenantId: T, sessionId: 's' }, { llm, rawText: text }));
   let r = await run('Supprime le service Formation Grillade', scripted(['{"tool":"getBusinessServices","args":{}}', '{"done":true}'], "C'est fait, le service Formation Grillade est supprimé."));
   assert.doesNotMatch(r.text, /c'est fait, le service/i); assert.match(r.text, /Je n'ai rien exécuté/); assert.ok((await names(T)).includes('Formation Grillade'));

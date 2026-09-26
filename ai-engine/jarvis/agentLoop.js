@@ -4,7 +4,6 @@
 const llmFallbackEngine = require('../../lib/ai/llmFallbackEngine');
 const personaManager = require('../personaManager');
 const toolRegistry = require('../toolRegistry');
-const loopGuard = require('../loopGuard');
 const authz = require('../authz');
 const { describeTools } = require('../toolAgent');
 const capabilityGap = require('../capabilityGap');
@@ -12,9 +11,10 @@ const claimGuard = require('../claimGuard');
 const pendingToolActions = require('../pendingToolActions');
 const verbatimPayload = require('../verbatimPayload');
 
-// Une boucle de chat reste courte et interactive. Les missions longues passent
-// par missionOrchestrator, qui persiste le plan et exécute les étapes en fond.
-const LIMITS = { maxSteps: 12, totalTimeoutMs: 90000, toolTimeoutMs: 25000, maxAiCalls: 26 };
+// Aucun plafond de nombre d'outils ou d'appels IA : chaque outil réussi nourrit
+// la planification suivante. Le délai interactif transfère les longues missions
+// à missionOrchestrator, qui conserve les résultats et poursuit en arrière-plan.
+const LIMITS = { maxSteps: Infinity, totalTimeoutMs: 90000, toolTimeoutMs: 25000, maxAiCalls: Infinity };
 const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 
 function extractJson(raw) {
@@ -33,8 +33,11 @@ function withTimeout(promise, ms, label) {
 function sig(name, args) { return `${name}:${JSON.stringify(args || {})}`; }
 function brief(v) { const s = JSON.stringify(v == null ? {} : v); return s.length > 1500 ? s.slice(0, 1500) + '…' : s; }
 
-async function defaultLlm(prompt, history) {
-  const r = await llmFallbackEngine.generateAIResponse(prompt, history || [], null, undefined, null, { purpose: 'jarvis_agent', tier: 'reasoning' });
+async function defaultLlm(prompt, history, options) {
+  const r = await llmFallbackEngine.generateAIResponse(prompt, history || [], null, undefined, null, {
+    purpose: 'jarvis_agent', tier: 'reasoning', interactive: true,
+    interactiveBudgetMs: options && options.interactiveBudgetMs,
+  });
   return r.text;
 }
 
@@ -68,14 +71,14 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
       : [],
   }) : '';
   const tools = await toolRegistry.discover(contextual ? `${text}\n${previousRequests}\n${previousResults}` : text, ctx, { limit: Number.MAX_SAFE_INTEGER });
-  const taskId = `agent:${tenantId}:${sessionId || 'x'}:${Date.now()}`;
   const started = Date.now();
   let aiCalls = 0;
   const ai = async (prompt) => {
     aiCalls += 1;
     if (aiCalls > limits.maxAiCalls) throw new Error('AI_BUDGET');
-    loopGuard.countAiCall(taskId);
-    return llm(prompt, history || []);
+    const remaining = Math.max(0, limits.totalTimeoutMs - (Date.now() - started));
+    if (!remaining) throw new Error('TIMEOUT interactive_agent');
+    return withTimeout(Promise.resolve().then(() => llm(prompt, history || [], { interactiveBudgetMs: remaining })), remaining, 'interactive_agent');
   };
 
   const steps = Array.isArray(d.resumeSteps) ? d.resumeSteps.map((s) => Object.assign({}, s)) : [];
@@ -100,7 +103,10 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
       'N\'invente jamais un outil. Ne répète jamais un appel identique. Exécute la demande telle que formulée, sans la contredire ni ajouter d\'étape qu\'elle ne demande pas.',
     ].join('\n');
     let plan;
-    try { plan = extractJson(await ai(planPrompt)); } catch (e) { stopReason = e.message === 'AI_BUDGET' ? 'AI_BUDGET' : 'PLAN_ERROR'; break; }
+    try { plan = extractJson(await ai(planPrompt)); } catch (e) {
+      stopReason = e.message === 'AI_BUDGET' ? 'AI_BUDGET' : (/^TIMEOUT\b/.test(String(e && e.message || '')) ? 'TIMEOUT' : 'PLAN_ERROR');
+      break;
+    }
     if (!plan || plan.done || !plan.tool) { stopReason = (plan && plan.impossible) ? 'IMPOSSIBLE' : 'DONE'; break; }
     if (!tools.some((t) => t.name === plan.tool)) { stopReason = 'UNKNOWN_TOOL'; break; }
     const exactArgs = verbatimPayload.applyVerbatimText(plan.tool, plan.args || {}, text);
@@ -108,9 +114,11 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
     if (seen.has(key)) { stopReason = 'LOOP_DETECTED'; break; }
     seen.add(key);
 
+    const remainingMs = limits.totalTimeoutMs - (Date.now() - started);
+    if (remainingMs <= 0) { stopReason = 'TIMEOUT'; break; }
     let call;
     try {
-      call = await withTimeout(toolRegistry.execute(tenantId, plan.tool, exactArgs, ctx), limits.toolTimeoutMs, plan.tool);
+      call = await withTimeout(toolRegistry.execute(tenantId, plan.tool, exactArgs, ctx), Math.max(1, Math.min(limits.toolTimeoutMs, remainingMs)), plan.tool);
     } catch (e) {
       const timedOut = /^TIMEOUT\b/.test(String(e && e.message || ''));
       call = { name: plan.tool, args: exactArgs, state: timedOut ? 'UNCONFIRMED' : 'FAILED',
@@ -197,6 +205,10 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
 
   const requestText = d.rawText || text;
   if (!steps.length) {
+    if (stopReason === 'TIMEOUT') {
+      return { text: 'La passerelle IA n’a pas répondu dans le délai interactif. Aucune action n’a été exécutée; réessaie dans un instant.',
+        steps: [], stopReason: 'INTERACTIVE_TIMEOUT', toolCalls: [], actionLog: [{ icon: '⚠️', label: 'Aucune action exécutée — délai IA dépassé', status: 'warning' }] };
+    }
     if (d.returnGap === false) return null;
     // Une demande d'ACTION qu'aucun outil ne permet ne retombe JAMAIS sur la conversation libre (qui pourrait prétendre l'avoir faite) : réponse claire sur ce qui est / n'est pas possible.
     if (stopReason === 'IMPOSSIBLE' || capabilityGap.isActionRequest(requestText)) {

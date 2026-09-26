@@ -236,7 +236,7 @@ function create(d) {
         'Réponds directement, de façon naturelle et brève. Si la demande exige de LIRE ou de MODIFIER des données réelles du compte (contacts, messages, campagnes, groupes…), n\'invente AUCUN chiffre ni résultat : dis ce que tu vas vérifier et invite à formuler un ordre précis.',
         `Message du vendeur : "${text}"`,
       ].filter(Boolean).join('\n\n');
-      return (await d.llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'owner_chat', tenant: tenantId, tier: 'standard', maxTokens: 500 })).text;
+      return (await d.llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'owner_chat', tenant: tenantId, tier: 'standard', maxTokens: 500, interactive: true })).text;
     },
     paymentDeps: (tenantId, session) => {
       const cd = d.chatDeps(tenantId);

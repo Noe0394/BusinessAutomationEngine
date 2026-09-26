@@ -521,7 +521,7 @@ async function handleAdCampaign(text, history, tenantId, deps, last) {
         `Date du jour : ${today}. Ne remplis que ce qui est explicitement dit ; sinon chaîne vide.`,
         `Instruction : "${String(text).slice(0, 1500)}"`,
       ].join('\n');
-      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'ad_campaign_parse', tier: 'reasoning', tenant: tenantId }).then((r) => r.text));
+      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'ad_campaign_parse', tier: 'reasoning', tenant: tenantId, interactive: true }).then((r) => r.text));
       extra = extractJsonBlock(String(await llm(prompt) || '').trim()) || {};
     } catch (e) { extra = {}; }
     const per = parser.detectPeriod(text);
@@ -624,7 +624,7 @@ async function handleGroupCampaign(text, history, tenantId, deps, last) {
     // Service / produit : IA optionnelle (jamais les messages). Échec -> l'existant décide (service unique) ou on demande.
     try {
       const prompt = ['Extrais de cette instruction de campagne le nom du produit ou service vendu et du service métier si nommé. Réponds UNIQUEMENT en JSON : {"productName":"","serviceName":""}. Vide si non dit.', `Instruction : "${String(text).slice(0, 1200)}"`].join('\n');
-      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'group_campaign_parse', tier: 'reasoning', tenant: tenantId }).then((r) => r.text));
+      const llm = d.llm || ((pr) => llmFallbackEngine.generateAIResponse(pr, [], null, undefined, null, { purpose: 'group_campaign_parse', tier: 'reasoning', tenant: tenantId, interactive: true }).then((r) => r.text));
       const ex = extractJsonBlock(String(await llm(prompt) || '').trim()) || {};
       if (ex.productName) args.productName = ex.productName; if (ex.serviceName) args.serviceName = ex.serviceName;
     } catch (e) { /* facultatif */ }

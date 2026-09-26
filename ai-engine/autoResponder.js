@@ -105,7 +105,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   // Appel IA tagué (AI Cost Guard) : purpose 'client_conversation' + tenant +
   // maxTokens (routeur) + taskId (protection anti-boucle par conversation).
   // Toujours le niveau « standard » de la cascade pour un client qui attend : réponse spontanée (le doublon parallèle du fournisseur lent s'applique). Le niveau « raisonnement » (lent) reste réservé aux tâches longues.
-  const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}`, tier: 'standard' };
+  const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}`, tier: 'standard', interactive: true };
   const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, meta).then((r) => r.text);
   // Offres classées : SERVICE PRIORITAIRE (celui de la campagne / du sujet déjà évoqué, sinon le service actif le plus récent),
   // puis les autres offres en simples suggestions complémentaires. Source de vérité = Services métiers configurés.

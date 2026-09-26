@@ -4933,6 +4933,7 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
       const generatedReply = await llmFallbackEngine.generateAIResponse(text, existing.messages, null, undefined, null, {
         tenant: tenantId,
         cacheScope: `${tenantId}:${req.params.id}`,
+        interactive: true,
       });
       const replyText = generatedReply.text;
       if (generatedReply.timings) {
@@ -6452,9 +6453,9 @@ const assistant = require('./ai-engine/assistantLayer').create({
   getRuntime: () => intelligenceBridge && intelligenceBridge.runtime,
   // IA conversationnelle : rédige les réponses privées (accusés, réponses d'attente) et arbitre les cas ambigus. Les gabarits ne servent
   // que de secours si aucune IA ne répond.
-  llm: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_conversation', maxTokens: 250, tier: 'fast' }).then((r) => r.text),
+  llm: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_conversation', maxTokens: 250, tier: 'fast', interactive: true }).then((r) => r.text),
   // Décisions critiques (arbitrage de classification) : niveau raisonnement.
-  llmReasoning: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_arbitration', maxTokens: 300, tier: 'reasoning' }).then((r) => r.text),
+  llmReasoning: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_arbitration', maxTokens: 300, tier: 'reasoning', interactive: true }).then((r) => r.text),
   chatOrchestrator,
   aiStudioStore,
   llmFallbackEngine,

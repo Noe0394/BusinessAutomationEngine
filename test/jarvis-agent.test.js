@@ -24,7 +24,7 @@ const T = 'tAgent';
 function scripted(planSteps, finalText) {
   let i = 0;
   return async (prompt) => {
-    if (prompt.includes('Réponds UNIQUEMENT en JSON')) return JSON.stringify(planSteps[Math.min(i++, planSteps.length - 1)]);
+    if (prompt.includes('Outils disponibles')) return JSON.stringify(planSteps[Math.min(i++, planSteps.length - 1)]);
     return finalText || 'Terminé.';
   };
 }
@@ -96,20 +96,27 @@ test('opt-out : un contact qui a refusé ne reçoit rien, même confirmé', asyn
 
 test('détection de boucle : le même appel répété est stoppé', async () => {
   const llm = scripted([{ tool: 'countContacts', args: {} }, { tool: 'countContacts', args: {} }, { tool: 'countContacts', args: {} }]);
-  const out = await agentLoop.runAgentLoop({ text: 'compte', tenantId: T, sessionId: 's6' }, { llm });
+  const out = await agentLoop.runAgentLoop({ text: 'Compte mes contacts', tenantId: T, sessionId: 's6' }, { llm });
   assert.equal(out.stopReason, 'LOOP_DETECTED');
   assert.equal(out.steps.length, 1);
 });
 
-test('budget IA et nombre d\'étapes bornés', async () => {
-  let n = 0;
-  const llm = async (p) => {
-    if (p.includes('Réponds UNIQUEMENT en JSON')) { n += 1; return JSON.stringify({ tool: 'searchContacts', args: { query: 'x' + n } }); }
-    return 'ok';
+test('aucune limite par défaut : une instruction enchaîne plus de 12 outils', async () => {
+  let planned = 0;
+  const orig = toolRegistry.execute;
+  toolRegistry.execute = async (tenantId, name, args) => ({ name, args, state: 'SUCCESS', risk: 'READ', result: { query: args.query } });
+  const llm = async (prompt) => {
+    if (prompt.includes('Outils disponibles')) {
+      planned += 1;
+      return planned <= 15 ? JSON.stringify({ tool: 'searchContacts', args: { query: 'q' + planned } }) : '{"done":true}';
+    }
+    return 'Terminé.';
   };
-  const out = await agentLoop.runAgentLoop({ text: 'cherche', tenantId: T, sessionId: 's7' }, { llm, limits: { maxSteps: 3 } });
-  assert.ok(out.steps.length <= 3);
-  assert.equal(out.stopReason, 'MAX_STEPS');
+  try {
+    const out = await agentLoop.runAgentLoop({ text: 'cherche dans mes contacts', tenantId: T, sessionId: 's7b' }, { llm });
+    assert.equal(out.steps.length, 15);
+    assert.equal(out.stopReason, 'DONE');
+  } finally { toolRegistry.execute = orig; }
 });
 
 test('outil inventé ou aucun outil : jamais exécuté', async () => {
@@ -123,7 +130,7 @@ test('timeout par outil : échec honnête, pas de blocage', async () => {
   const orig = toolRegistry.execute;
   toolRegistry.execute = () => new Promise(() => {});
   try {
-    const out = await agentLoop.runAgentLoop({ text: 'compte', tenantId: T, sessionId: 's10' }, { llm: scripted([{ tool: 'countContacts', args: {} }]), limits: { toolTimeoutMs: 50 } });
+    const out = await agentLoop.runAgentLoop({ text: 'Compte mes contacts', tenantId: T, sessionId: 's10' }, { llm: scripted([{ tool: 'countContacts', args: {} }]), limits: { toolTimeoutMs: 50 } });
     assert.equal(out.steps[0].state, 'UNCONFIRMED');
     assert.equal(out.steps[0].error.code, 'TOOL_TIMEOUT');
   } finally { toolRegistry.execute = orig; }
