@@ -4444,10 +4444,6 @@ function resolveTenantId(req) {
   return req.isAdmin ? '__admin__' : (req.tenantId || (req.licenseKey && String(req.licenseKey).trim().toUpperCase()));
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 app.get('/api/ai-studio/sessions', requireAccess, requireModule('studio_video'), async (req, res) => {
   const sessions = await aiStudioStore.listSessions(resolveTenantId(req));
   res.json({ sessions });
@@ -4744,15 +4740,9 @@ async function executeGenerateBook(payload) {
   return { text: '✅ Livre généré.', media: { kind: 'book', url: `${PUBLIC_BASE_URL}/v/${id}`, downloadUrl: `${PUBLIC_BASE_URL}/v/${id}/raw`, title: payload.title } };
 }
 
-// Compose la réponse de l'assistant. Un délai artificiel de 1.5 à 3
-// secondes (voir sleep ci-dessus) simule le temps de réflexion "naturel"
-// demandé par la feuille de route CYRUS SUPER ASSISTANT — le moteur répond
-// instantanément, un temps de réponse à 0ms romprait l'illusion
-// conversationnelle recherchée (voir aussi l'effet de dactylographie côté
-// client, public/dashboard.html#studioStartTypewriter). N'ajoute ce délai
-// QUE pour la conversation générale : les flux image/vidéo/livre ont déjà
-// un temps de réponse réel (appels réseau), un délai artificiel de plus
-// serait pénalisant sans aucun bénéfice.
+// Compose la réponse de l'assistant sans ajouter d'attente artificielle.
+// L'animation de saisie reste gérée côté client; les tâches média ont leur
+// propre durée réelle liée aux appels réseau.
 app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('studio_video'), upload.single('attachment'), async (req, res) => {
   const tenantId = resolveTenantId(req);
   let text = String((req.body || {}).text || '').trim();
@@ -4975,7 +4965,6 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
           assistantMessage = { role: 'assistant', text: raw, createdAt: new Date().toISOString(), isPlanningQuestion: true, intent: 'image' };
         }
       } else {
-        await sleep(1500 + Math.floor(Math.random() * 1500));
         assistantMessage = { role: 'assistant', text: require('./ai-engine/claimGuard').guard(replyText, null, { request: text }).text, createdAt: new Date().toISOString() };
       }
     }
