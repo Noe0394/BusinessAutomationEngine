@@ -81,7 +81,7 @@ function create(d) {
       if (hasBusiness) return { handled: false, reason: 'FIRST_CONTACT_BUSINESS' };
     }
 
-    const debounceMs = settings.debounceMs != null ? settings.debounceMs : DEFAULT_DEBOUNCE_MS;
+    const debounceMs = Math.min(DEFAULT_DEBOUNCE_MS, Math.max(0, Number(settings.debounceMs != null ? settings.debounceMs : DEFAULT_DEBOUNCE_MS) || 0));
     if (responseTrace) responseTrace.mark('message_routed', { method: 'private_conversation' });
     conversationQueue.submit(`priv:${sanitize(tenantId)}:${channel}:${from}`, { text, messageId },
       async (items) => {

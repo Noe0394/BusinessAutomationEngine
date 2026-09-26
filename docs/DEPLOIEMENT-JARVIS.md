@@ -28,7 +28,7 @@ Variables nécessaires au backend et à ses fonctions activées :
   de données déjà configuré sur Render)
 - Réplication des licences : `CLOUDFLARE_LICENSE_URL` et
   `CLOUDFLARE_ADMIN_SECRET`
-- Réglages Jarvis du déploiement : `AUTO_REPLY_DEBOUNCE_MS=1500` et
+- Réglages Jarvis du déploiement : `AUTO_REPLY_DEBOUNCE_MS=0` et
   `JARVIS_CONFIRM_FROM=WRITE`
 
 Ne pas recopier `RENDER_API_KEY`, `VERCEL_TOKEN` ou les clés de déploiement

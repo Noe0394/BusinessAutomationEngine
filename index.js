@@ -4934,6 +4934,8 @@ app.post('/api/ai-studio/sessions/:id/messages', requireAccess, requireModule('s
         tenant: tenantId,
         cacheScope: `${tenantId}:${req.params.id}`,
         interactive: true,
+        interactiveBudgetMs: 2800,
+        interactiveProviderTimeoutMs: 1800,
       });
       const replyText = generatedReply.text;
       if (generatedReply.timings) {
@@ -6455,7 +6457,7 @@ const assistant = require('./ai-engine/assistantLayer').create({
   // que de secours si aucune IA ne répond.
   llm: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_conversation', maxTokens: 250, tier: 'fast', interactive: true }).then((r) => r.text),
   // Décisions critiques (arbitrage de classification) : niveau raisonnement.
-  llmReasoning: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_arbitration', maxTokens: 300, tier: 'reasoning', interactive: true }).then((r) => r.text),
+  llmReasoning: (prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'private_arbitration', maxTokens: 300, tier: 'reasoning', interactive: true, interactiveBudgetMs: 800, interactiveProviderTimeoutMs: 650 }).then((r) => r.text),
   chatOrchestrator,
   aiStudioStore,
   llmFallbackEngine,

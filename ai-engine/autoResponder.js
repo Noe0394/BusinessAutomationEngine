@@ -105,7 +105,7 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
   // Appel IA tagué (AI Cost Guard) : purpose 'client_conversation' + tenant +
   // maxTokens (routeur) + taskId (protection anti-boucle par conversation).
   // Toujours le niveau « standard » de la cascade pour un client qui attend : réponse spontanée (le doublon parallèle du fournisseur lent s'applique). Le niveau « raisonnement » (lent) reste réservé aux tâches longues.
-  const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}`, tier: 'standard', interactive: true };
+  const meta = { purpose: 'client_conversation', tenant, maxTokens: route.maxTokens, taskId: `autoreply:${tenant}:${from}`, tier: 'standard', interactive: true, interactiveBudgetMs: 2800, interactiveProviderTimeoutMs: 1800 };
   const gen = typeof llm === 'function' ? llm : (p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, meta).then((r) => r.text);
   // Offres classées : SERVICE PRIORITAIRE (celui de la campagne / du sujet déjà évoqué, sinon le service actif le plus récent),
   // puis les autres offres en simples suggestions complémentaires. Source de vérité = Services métiers configurés.
@@ -212,7 +212,13 @@ async function composeReply({ tenant, channel, from, name, text, llm, directives
     'Rédige UNIQUEMENT le message à lui envoyer (1 à 4 phrases naturelles, parlées), sans préambule ni guillemets. Ne présente JAMAIS une action (paiement reçu, accès débloqué) comme déjà faite — propose-la.',
   ].filter(Boolean).join('\n');
   if (dTrace(ctx)) dTrace(ctx).mark('ai_started', { provider: 'cascade' });
-  const raw = await gen(prompt);
+  let raw;
+  try { raw = await gen(prompt); }
+  catch (err) {
+    if (err && err.code === 'CLIENT_AI_LIMIT') throw err;
+    if (dTrace(ctx)) dTrace(ctx).mark('generated', { method: 'fast_safe_fallback' });
+    return 'Merci pour votre message. Je vérifie ce point et reviens vers vous rapidement avec une réponse précise.';
+  }
   if (dTrace(ctx)) dTrace(ctx).mark('generated', { method: 'ai' });
   return scrubPaymentUrls(String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1500), text);
 }
@@ -223,17 +229,25 @@ async function composeLearning({ tenant, channel, from, name, text, llm, directi
   const learnerSupport = require('./learnerSupport');
   const svc = prio && prio.text ? String(prio.text).slice(0, 1500) : '';
   const prompt = learnerSupport.buildPrompt(learning, { persona: personaManager.personaSystemPrompt('default', { audience: 'customer' }), name, text, history, directives, businessCtx: svc });
-  const meta = { purpose: 'learner_support', tenant, maxTokens: 700, taskId: `autoreply:${tenant}:${from}`, tier: 'standard' };
+  const meta = { purpose: 'learner_support', tenant, maxTokens: 700, taskId: `autoreply:${tenant}:${from}`, tier: 'standard', interactive: true, interactiveBudgetMs: 2800, interactiveProviderTimeoutMs: 1800 };
+  const responseDeadline = Date.now() + 2800;
+  const remainingMeta = () => Object.assign({}, meta, { interactiveBudgetMs: Math.max(1, responseDeadline - Date.now()) });
   let raw = null; let sources = [];
   if (typeof llm === 'function') raw = await llm(prompt);
   else {
     if (learning.needsWeb) {
       try {
-        const r = await llmFallbackEngine.generateAIResponse(`${prompt}\n\nUne recherche web RÉELLE est activée : appuie-toi sur des sources fiables, présente ce qui en provient sous « Recherche externe : … », distinct du cours et de ta connaissance générale ; signale toute information incertaine ou contradictoire.`, [], null, undefined, null, Object.assign({}, meta, { grounding: true }));
+        const r = await llmFallbackEngine.generateAIResponse(`${prompt}\n\nUne recherche web RÉELLE est activée : appuie-toi sur des sources fiables, présente ce qui en provient sous « Recherche externe : … », distinct du cours et de ta connaissance générale ; signale toute information incertaine ou contradictoire.`, [], null, undefined, null, Object.assign(remainingMeta(), { grounding: true }));
         raw = r.text; sources = r.sources || [];
       } catch (e) { if (e && e.code === 'CLIENT_AI_LIMIT') throw e; raw = null; sources = []; } // recherche indisponible : jamais présentée comme effectuée
     }
-    if (!raw) raw = (await llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, meta)).text;
+    if (!raw) {
+      try {
+        if (Date.now() >= responseDeadline) throw Object.assign(new Error('Interactive response budget exhausted'), { code: 'AI_INTERACTIVE_BUDGET' });
+        raw = (await llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, remainingMeta())).text;
+      }
+      catch (e) { if (e && e.code === 'CLIENT_AI_LIMIT') throw e; raw = 'Je n’ai pas d’information de cours vérifiée sur ce point pour le moment.'; }
+    }
   }
   let reply = String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1600);
   if (sources.length) reply = learnerSupport.withSources(reply, sources);
@@ -279,7 +293,7 @@ async function handleIncomingCore({ tenantId, channel, from, name, text, message
     return out;
   }
 
-  const debounceMs = d.debounceMs != null ? d.debounceMs : DEFAULT_DEBOUNCE_MS;
+  const debounceMs = Math.min(DEFAULT_DEBOUNCE_MS, Math.max(0, Number(d.debounceMs != null ? d.debounceMs : DEFAULT_DEBOUNCE_MS) || 0));
   const out = await conversationQueue.submit(
     `${sanitizeTenant(tenantId)}:${channel}:${from}`,
     { text, messageId, senderId, addressing },
@@ -409,10 +423,10 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
   }
   let lastOut = null;
   // Arbitrage des intentions AMBIGUËES (refus vs intérêt, hésitation vs paiement…) : décision critique -> niveau raisonnement.
-  const arbitrationLlm = d.llm || ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'intent_arbitration', tenant: tenantId, tier: 'reasoning', maxTokens: 300 }).then((r) => r.text));
+  const arbitrationLlm = d.llm || ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'intent_arbitration', tenant: tenantId, tier: 'reasoning', maxTokens: 300, interactive: true, interactiveBudgetMs: 800, interactiveProviderTimeoutMs: 650 }).then((r) => r.text));
   // Juge des cas ambigus d'engagement : la cascade d'IA en production (niveau « standard », court, avec doublon parallèle) ; un modèle injecté (tests) n'est utilisé que s'il est
   // fourni explicitement (engagementLlm) — jamais le modèle de rédaction simulé.
-  const judgeLlm = d.engagementLlm || (d.llm ? null : ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'engagement_judgment', tenant: tenantId, tier: 'standard', maxTokens: 120 }).then((r) => r.text)));
+  const judgeLlm = d.engagementLlm || (d.llm ? null : ((p) => llmFallbackEngine.generateAIResponse(p, [], null, undefined, null, { purpose: 'engagement_judgment', tenant: tenantId, tier: 'standard', maxTokens: 120, interactive: true, interactiveBudgetMs: 700, interactiveProviderTimeoutMs: 550 }).then((r) => r.text)));
   // ACCOMPAGNEMENT D'APPRENANT (privé ou groupe de formation lié) : recherche ciblée dans la base de connaissances de CE compte.
   let learn = null;
   try {
@@ -438,7 +452,9 @@ async function processBatchInner({ tenantId, channel, from, name, items, setting
       const addressing = Object.assign({ named: /\bcyrus\b/i.test(batchText) }, lastItem.addressing || {});
       const base = engagement.decide({ policy: pol, ctx, cls, isGroup: group, addressing, text: batchText, state, learning: learn });
       // Cas ambigus : la cascade d'IA tranche (budget 1,8 s) ; sinon la décision par règles s'applique. Les règles dures ne sont jamais contournées.
-      return engagement.arbitrate({ policy: pol, ctx, cls, isGroup: group, text: batchText, briefDirectives: base.directives }, base, judgeLlm, parseInt(process.env.ENGAGEMENT_AI_BUDGET_MS, 10) || 1800);
+      const configuredBudget = Number(process.env.ENGAGEMENT_AI_BUDGET_MS);
+      const engagementBudget = Number.isFinite(configuredBudget) ? Math.max(0, Math.min(900, configuredBudget)) : 800;
+      return engagement.arbitrate({ policy: pol, ctx, cls, isGroup: group, text: batchText, briefDirectives: base.directives }, base, judgeLlm, engagementBudget);
     },
     llm: arbitrationLlm,
     crm: d.crm || contactCrm,

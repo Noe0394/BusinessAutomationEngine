@@ -14,7 +14,7 @@ const verbatimPayload = require('../verbatimPayload');
 // Aucun plafond de nombre d'outils ou d'appels IA : chaque outil réussi nourrit
 // la planification suivante. Le délai interactif transfère les longues missions
 // à missionOrchestrator, qui conserve les résultats et poursuit en arrière-plan.
-const LIMITS = { maxSteps: Infinity, totalTimeoutMs: 90000, toolTimeoutMs: 25000, maxAiCalls: Infinity };
+const LIMITS = { maxSteps: Infinity, totalTimeoutMs: 15000, toolTimeoutMs: 12000, maxAiCalls: Infinity };
 const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 
 function extractJson(raw) {

@@ -23,6 +23,16 @@ const alertCenter = require('./alertCenter');
 const contactIdentity = require('./contactIdentity');
 const missionOrchestrator = require('./missionOrchestrator');
 
+// Tous les modèles appelés pendant un tour du Chat Intelligent ou du Self
+// WhatsApp/Telegram ont un budget court. Les missions longues sont transférées
+// au moteur de missions persistant et poursuivies en arrière-plan.
+function generateInteractive(prompt, history, meta) {
+  return llmFallbackEngine.generateAIResponse(prompt, history || [], null, undefined, null, Object.assign({
+    purpose: 'owner_chat', tier: 'standard', interactive: true,
+    interactiveBudgetMs: 2800, interactiveProviderTimeoutMs: 1800,
+  }, meta || {}));
+}
+
 // CHAT-DRIVEN AGENT ORCHESTRATOR — ai-engine/chatOrchestrator.js
 // ---------------------------------------------------------------------------
 // Point d'entrée UNIQUE demandé par le cahier des charges : chaque message
@@ -708,7 +718,7 @@ async function handleOwnerQueue(text, tenantId) {
 }
 
 async function handleMemory(text, tenantId, deps) {
-  const llm = deps.llm || ((prompt) => llmFallbackEngine.generateAIResponse(prompt, [], null, undefined, null, { purpose: 'memory_summary', tier: 'reasoning', tenant: tenantId }).then((r) => r.text));
+  const llm = deps.llm || ((prompt) => generateInteractive(prompt, [], { purpose: 'memory_summary', tier: 'reasoning', tenant: tenantId }).then((r) => r.text));
   try {
     const out = await memoryQuery.answer(tenantId, text, { llm });
     return { text: out.text, actionLog: out.actionLog };
@@ -799,7 +809,7 @@ async function composeReplyText(instruction, last, tenantId, domain) {
     `Le vendeur te demande : "${instruction}"`,
     'Rédige UNIQUEMENT le message EXACT à envoyer au client, dans le style habituel du vendeur, sans guillemets ni préambule ni explication. Si le vendeur dicte le contenu (ex : "réponds-lui que je vais bien"), reformule fidèlement (ex : "Je vais bien.").',
   ].filter(Boolean).join('\n');
-  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, []);
+  const { text: raw } = await generateInteractive(prompt, []);
   return String(raw || '').trim().replace(/^["'«»\s]+|["'«»\s]+$/g, '').slice(0, 1500);
 }
 
@@ -964,7 +974,7 @@ async function planGroupPost(text, history, domain) {
     "message : le texte à publier (rédige-le proprement si l'ordre est vague mais l'intention claire).",
     'Réponds UNIQUEMENT avec cet objet JSON (aucun texte autour) : {"target":{"kind":"...","value":"..."},"message":"...","wantsVisual":false,"visualPrompt":""}',
   ].join('\n');
-  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history);
+  const { text: raw } = await generateInteractive(prompt, history);
   const parsed = extractJsonBlock(String(raw || '').trim());
   return parsed || { raw: String(raw || '').trim() };
 }
@@ -1051,7 +1061,7 @@ async function planRecurring(text, history, tenantId) {
     "Si l'heure OU le message OU la cible manque vraiment, réponds UNIQUEMENT par une question courte (texte, jamais de JSON).",
     'Sinon réponds UNIQUEMENT avec cet objet JSON : {"ready":true,"channel":"WHATSAPP","target":{"kind":"...","value":"..."},"message":"...","hour":7,"minute":0}',
   ].join('\n');
-  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history);
+  const { text: raw } = await generateInteractive(prompt, history);
   const parsed = extractJsonBlock(String(raw || '').trim());
   return parsed || { ready: false, raw: String(raw || '').trim() };
 }
@@ -1142,7 +1152,7 @@ async function planPayment(text, history, domain) {
     'Si des informations manquent, réponds UNIQUEMENT par 1 à 2 questions courtes (texte simple, jamais de JSON).',
     'Si tu as assez d\'informations, réponds UNIQUEMENT avec cet objet JSON (aucun texte avant/après) : {"ready":true,"kind":"payment"|"discount","amount":15000,"currency":"FCFA","product":"nom du produit ou chaîne vide","price":15000,"requestedPercent":10}',
   ].join('\n');
-  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history);
+  const { text: raw } = await generateInteractive(prompt, history);
   const trimmed = raw.trim();
   return { raw: trimmed, parsed: extractJsonBlock(trimmed) };
 }
@@ -1196,7 +1206,7 @@ async function planAccount(text, history, domain) {
     'Si des informations manquent, réponds UNIQUEMENT par 1 à 2 questions courtes (texte simple, jamais de JSON).',
     'Si tu as assez d\'informations, réponds UNIQUEMENT avec cet objet JSON (aucun texte avant/après) : {"ready":true,"action":"create_account"|"grant_module","phone":"+225...","email":"","studentName":"","sku":"nom de la formation ou chaîne vide","moduleKey":"identifiant du module ou chaîne vide (grant_module uniquement)"}',
   ].join('\n');
-  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history);
+  const { text: raw } = await generateInteractive(prompt, history);
   const trimmed = raw.trim();
   return { raw: trimmed, parsed: extractJsonBlock(trimmed) };
 }
@@ -1308,7 +1318,7 @@ async function handleConnector(text, history, tenantId, deps, sessionId) {
     'Sinon réponds UNIQUEMENT avec cet objet JSON (aucun texte avant/après) : {"tool":"nom_exact_de_l_outil","args":{ ... }}',
   ].join('\n');
 
-  const { text: raw } = await llmFallbackEngine.generateAIResponse(prompt, history);
+  const { text: raw } = await generateInteractive(prompt, history);
   const trimmed = String(raw || '').trim();
   const parsed = extractJsonBlock(trimmed);
 
@@ -1358,7 +1368,7 @@ async function handleBusinessInfo(text, history, tenantId, deps) {
   try {
     const raw = deps && typeof deps.llm === 'function'
       ? await deps.llm(prompt, history || [])
-      : (await llmFallbackEngine.generateAIResponse(prompt, history || [])).text;
+      : (await generateInteractive(prompt, history || [])).text;
     const answer = String(raw || '').trim();
     return {
       text: answer || "Je n'ai pas trouvé cette information dans ta configuration actuelle.",
@@ -1422,7 +1432,7 @@ async function handleConfigSvc(text, history, tenantId, deps, lastAssistantMessa
       'Réponds en JSON strict : {"name":"nom fourni ou vide","baseUrl":"URL fournie ou vide","apiKey":"clé explicitement fournie ou vide","authHeader":"X-API-Key","connectorType":"platform_gateway|systemio|generic","scopes":"permissions explicitement demandées"}. Aucun champ métier ne doit être inventé.',
     ].join('\n');
     let raw;
-    try { raw = deps && typeof deps.llm === 'function' ? await deps.llm(prompt, history || []) : (await llmFallbackEngine.generateAIResponse(prompt, history || [])).text; }
+    try { raw = deps && typeof deps.llm === 'function' ? await deps.llm(prompt, history || []) : (await generateInteractive(prompt, history || [])).text; }
     catch (e) { raw = ''; }
     const parsed = extractJsonBlock(String(raw || '').trim()) || {};
     const apiArgs = Object.assign({}, parsed, { name: parsed.name || name, memo });
@@ -1777,7 +1787,7 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
   if (intent === 'goal' && ADVISORY_RE.test(String(text).split(/PIÈCES JOINTES reçues/)[0])) {
     let adv = null;
     try {
-      adv = await Promise.race([specialists.advise({ principal: authz.currentPrincipal(), tenantId, audience: 'OWNER', channel: 'CHAT', text, history: (history || []).slice(-6).map((m) => ({ who: m.role === 'assistant' ? 'Cyrus' : 'Propriétaire', text: m.text })), conversationKey: sessionId, exchangeId: require('crypto').createHash('sha1').update(String(text)).digest('hex').slice(0, 12), llm: d.specialistLlm }), new Promise((res) => setTimeout(() => res(null), 25000))]); // demande d'analyse explicite : plus long mais borné
+      adv = await Promise.race([specialists.advise({ principal: authz.currentPrincipal(), tenantId, audience: 'OWNER', channel: 'CHAT', text, history: (history || []).slice(-6).map((m) => ({ who: m.role === 'assistant' ? 'Cyrus' : 'Propriétaire', text: m.text })), conversationKey: sessionId, exchangeId: require('crypto').createHash('sha1').update(String(text)).digest('hex').slice(0, 12), llm: d.specialistLlm }), new Promise((res) => setTimeout(() => res(null), 15000))]); // demande d'analyse explicite : délai maximum des tâches longues
     } catch (err) { adv = null; }
     if (adv && adv.synthesis) {
       return { text: adv.synthesis, specialists: adv.used.map((u) => u.agentId), proposedActions: adv.proposedActions || [], actionLog: [{ icon: '🧠', label: `Avis interne : ${adv.used.map((u) => u.name).join(', ')}`, status: 'done' }] };
