@@ -66,8 +66,10 @@ function authorizeTool({ tool, toolName, tenant, principal, requiredModule }) {
   // Un compte n'opère que sur lui-même ; seul un ADMIN peut cibler explicitement un autre compte (fonction d'administration existante).
   if (String(tenant) !== principal.tenant && principal.role !== ROLES.ADMIN) return { allowed: false, code: 'TENANT_MISMATCH', message: 'Ressource d\'un autre compte.' };
   const module = requiredModule || (tool && tool.requiredModule);
-  if (module && principal.role !== ROLES.ADMIN && principal.allowedModules !== null
-      && !principal.allowedModules.includes(module)) {
+  const hasModule = module === '__messaging__'
+    ? principal.allowedModules && (principal.allowedModules.includes('whatsapp') || principal.allowedModules.includes('telegram'))
+    : principal.allowedModules && principal.allowedModules.includes(module);
+  if (module && principal.role !== ROLES.ADMIN && principal.allowedModules !== null && !hasModule) {
     return { allowed: false, code: 'MODULE_NOT_ALLOWED', message: `La licence n'autorise pas le module « ${module} ».` };
   }
   return { allowed: true };

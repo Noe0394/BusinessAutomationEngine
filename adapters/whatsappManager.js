@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const githubStore = require('../githubStore');
 const whatsapp = require('./whatsapp');
 const sessionRegulator = require('./sessionRegulator');
 const { CampaignEngine, listTenantsWithPendingCampaigns } = require('../queues/campaignEngine');
@@ -156,7 +155,7 @@ function ensureConnected(entry) {
   entry.session
     .restoreSessionFromRemote()
     .catch((err) => {
-      console.error(`Erreur lors de la restauration de la session WhatsApp (tenant "${entry.session.tenantId}") depuis GitHub :`, err.message);
+      console.error(`Erreur lors de la v?rification du stockage de la session WhatsApp (tenant "${entry.session.tenantId}") :`, err.message);
     })
     .finally(() => {
       entry.session.connect().catch((err) => {
@@ -206,23 +205,9 @@ async function migrateLegacyLocalAuth() {
 }
 
 async function migrateLegacyRemoteAuth() {
-  const legacyStore = githubStore.createStore(process.env.GITHUB_WHATSAPP_AUTH_PATH || 'whatsapp_auth.json');
-  if (!legacyStore.enabled) return;
-
-  try {
-    const remote = await legacyStore.fetchRemote();
-    if (!remote || !remote.content) return;
-
-    const remoteDir = process.env.GITHUB_WHATSAPP_AUTH_DIR || 'whatsapp_auth';
-    const adminStore = githubStore.createStore(`${remoteDir}/${ADMIN_TENANT_ID}.json`);
-    const existing = await adminStore.fetchRemote();
-    if (existing && existing.content) return; // le tenant admin a déjà sa propre session
-
-    await adminStore.pushRemote(remote.content);
-    console.log(`Session WhatsApp distante historique (partagée) migrée vers ${remoteDir}/${ADMIN_TENANT_ID}.json.`);
-  } catch (err) {
-    console.error('Migration distante de la session WhatsApp historique échouée :', err.message);
-  }
+  // Les anciens fichiers GitHub ne contiennent que creds.json. Ils n'incluent
+  // pas les cl?s Signal et ne peuvent pas restaurer une session Baileys s?re.
+  // Ne jamais les migrer vers un tenant ni les utiliser pour reconnecter.
 }
 
 // À appeler une fois au démarrage du serveur : préserve le comportement
@@ -255,8 +240,6 @@ async function bootResumePendingCampaigns() {
   }
 }
 
-const GITHUB_WHATSAPP_AUTH_DIR = process.env.GITHUB_WHATSAPP_AUTH_DIR || 'whatsapp_auth';
-
 // Liste tous les tenants ayant déjà une session WhatsApp appairée (creds.json
 // non vide, en local et/ou sur GitHub) — contrairement à
 // listTenantsWithPendingCampaigns() ci-dessus, aucune condition sur une
@@ -264,50 +247,26 @@ const GITHUB_WHATSAPP_AUTH_DIR = process.env.GITHUB_WHATSAPP_AUTH_DIR || 'whatsa
 // déjà appairée, pas seulement celles avec un envoi actif (voir
 // bootReconnectAllPairedTenants juste en dessous).
 async function listTenantsWithSavedSession() {
-  const tenantsFromLocal = [];
-  let localEntries = [];
+  const tenantIds = [];
+  let entries = [];
   try {
-    localEntries = fs.readdirSync(whatsapp.AUTH_DIR_BASE, { withFileTypes: true });
+    entries = fs.readdirSync(whatsapp.AUTH_DIR_BASE, { withFileTypes: true });
   } catch (err) {
-    // Dossier absent : rien en local, on continue quand même vers GitHub.
+    return tenantIds;
   }
 
-  for (const entry of localEntries) {
+  // Seuls les dossiers de session qui existent sur le stockage AUTH_DIR sont
+  // des candidats de reconnexion. A remote creds.json without its Signal keys is not a usable session.
+  for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    const credsPath = path.join(whatsapp.AUTH_DIR_BASE, entry.name, 'creds.json');
     try {
-      if (fs.statSync(path.join(whatsapp.AUTH_DIR_BASE, entry.name, 'creds.json')).size > 0) {
-        tenantsFromLocal.push(entry.name);
-      }
+      if (fs.statSync(credsPath).size > 0) tenantIds.push(entry.name);
     } catch (err) {
-      // Pas de creds.json dans ce dossier : tenant jamais appairé avec succès.
+      // No local state exists for this tenant.
     }
   }
-
-  if (!githubStore.enabled) {
-    return tenantsFromLocal;
-  }
-
-  const knownLocally = new Set(tenantsFromLocal);
-  const remoteFiles = await githubStore.listDirectory(GITHUB_WHATSAPP_AUTH_DIR);
-  const tenantsFromRemote = [];
-
-  for (const filename of remoteFiles) {
-    if (!filename.endsWith('.json')) continue;
-    const tenantId = filename.replace(/\.json$/, '');
-    if (knownLocally.has(tenantId)) continue; // déjà couvert par le disque local
-
-    try {
-      const store = githubStore.createStore(`${GITHUB_WHATSAPP_AUTH_DIR}/${filename}`);
-      const remote = await store.fetchRemote();
-      if (remote && remote.content) {
-        tenantsFromRemote.push(tenantId);
-      }
-    } catch (err) {
-      console.error(`Session WhatsApp distante illisible pour le tenant "${tenantId}" :`, err.message);
-    }
-  }
-
-  return [...tenantsFromLocal, ...tenantsFromRemote];
+  return tenantIds;
 }
 
 // Reconnecte au démarrage TOUTE clé de licence ayant déjà une session
@@ -369,21 +328,13 @@ function getStorageStatus() {
   for (const [tenantId, entry] of tenants.entries()) {
     list.push({ tenantId, ...entry.session.getStorageStatus() });
   }
-
-  const first = list[0] || {};
-  const failing = list.find((t) => t.lastPushOk === false);
-  const mostRecentPush = list.reduce((latest, t) => {
-    if (!t.lastPushAt) return latest;
-    return (!latest || t.lastPushAt > latest) ? t.lastPushAt : latest;
-  }, null);
-
   return {
-    enabled: githubStore.enabled,
-    repo: first.repo || null,
-    branch: first.branch || null,
-    lastPushOk: failing ? false : (list.length > 0 ? true : null),
-    lastPushError: failing ? `[tenant ${failing.tenantId}] ${failing.lastPushError}` : null,
-    lastPushAt: mostRecentPush,
+    enabled: false,
+    repo: null,
+    branch: null,
+    lastPushOk: null,
+    lastPushError: 'La session WhatsApp exige la persistance du dossier AUTH_DIR complet.',
+    lastPushAt: null,
     activeTenants: list.length,
     tenants: list,
   };

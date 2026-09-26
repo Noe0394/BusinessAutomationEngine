@@ -17,7 +17,6 @@ const {
   downloadMediaMessage,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
-const githubStore = require('../githubStore');
 const whatsappAuthStore = require('./whatsappAuthStore');
 
 // Isolation stricte par tenant (voir adapters/whatsappManager.js) : chaque
@@ -28,24 +27,17 @@ const whatsappAuthStore = require('./whatsappAuthStore');
 // une fois par tenant par le gestionnaire, qui conserve l'instance retournée
 // tant que ce tenant reste actif.
 //
-// Sur Render (et la plupart des PaaS), le disque local est éphémère : sans
-// disque persistant monté sur ce chemin, la session est reperdue à chaque
-// redéploiement/redémarrage et il faut se réappairer. Le chemin est donc
-// configurable via AUTH_DIR pour pointer vers un Render Disk / volume Docker
-// si disponible — chaque tenant obtient un sous-dossier dédié
-// (AUTH_DIR/<tenantId>/). Si GITHUB_TOKEN/GITHUB_DATA_REPO sont définis (voir
-// whatsappAuthStore.js), la session de chaque tenant est aussi sauvegardée
-// dans un fichier dédié du repo GitHub et restaurée au démarrage, sur le même
-// principe que les licences.
+// Baileys credentials and Signal keys form one session and must stay together.
+// AUTH_DIR must point to persistent storage in production; a creds.json-only
+// remote backup cannot restore an encrypted session safely.
 const AUTH_DIR_BASE = process.env.AUTH_DIR || 'auth_info_baileys';
 
-if (!process.env.AUTH_DIR && !githubStore.enabled) {
+if (!process.env.AUTH_DIR) {
   console.warn(
-    `AUTH_DIR non défini et sauvegarde GitHub désactivée : les sessions WhatsApp sont stockées sous "${AUTH_DIR_BASE}/<tenant>" sur le disque local uniquement. ` +
-    'Sur Render/Docker, ce dossier est effacé à chaque redéploiement/redémarrage sauf disque persistant (volume Docker monté) ou GITHUB_TOKEN/GITHUB_DATA_REPO configurés.',
+    `AUTH_DIR is not set: WhatsApp sessions use "${AUTH_DIR_BASE}/<tenant>" on local disk. ` +
+    'Configure persistent storage or Signal keys will be lost on restart.',
   );
 }
-
 // HEARTBEAT_INTERVAL_MS : signal de présence périodique. Sans trafic,
 // certains réseaux/proxies intermédiaires (et parfois WhatsApp lui-même)
 // peuvent considérer la connexion inactive et la couper.

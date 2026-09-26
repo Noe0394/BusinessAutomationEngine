@@ -1,6 +1,5 @@
 const storageAdapter = require('./storageAdapter');
 const platformOrchestrator = require('./platformOrchestrator');
-const connectorManager = require('./connectors/connectorManager');
 const contactCrm = require('./contactCrm');
 const pendingActions = require('./pendingActions');
 const alertCenter = require('./alertCenter');
@@ -299,7 +298,17 @@ async function applyDecision(tenantId, record, decision, opts) {
   }
   await pendingActions.transition(tenantId, action.pendingActionId, 'APPROVED', 'EXECUTING');
 
-  const exec = await connectorManager.executeTool(tenantId, 'creer_compte_eleve', { email: record.email, course_id: courseId }, d.executeOptions || {});
+  const connectorCtx = Object.assign({}, d.executeOptions || {}, {
+    principal: require('./authz').currentPrincipal(),
+    confirmed: true,
+  });
+  const connectorCall = await require('./toolRegistry').execute(tenantId, 'creer_compte_eleve',
+    { email: record.email, course_id: courseId }, connectorCtx);
+  const exec = {
+    ok: connectorCall && ['SUCCESS', 'UNCONFIRMED'].includes(connectorCall.state),
+    result: connectorCall && connectorCall.result || null,
+    error: connectorCall && (connectorCall.error && (connectorCall.error.code || connectorCall.error.message) || connectorCall.state) || 'CONNECTOR_FAILED',
+  };
   const check = verifyEnrollment(exec, courseId);
 
   if (!check.verified) {

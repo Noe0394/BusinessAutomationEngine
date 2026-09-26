@@ -124,7 +124,7 @@ test('timeout par outil : échec honnête, pas de blocage', async () => {
   toolRegistry.execute = () => new Promise(() => {});
   try {
     const out = await agentLoop.runAgentLoop({ text: 'compte', tenantId: T, sessionId: 's10' }, { llm: scripted([{ tool: 'countContacts', args: {} }]), limits: { toolTimeoutMs: 50 } });
-    assert.equal(out.steps[0].state, 'FAILED');
+    assert.equal(out.steps[0].state, 'UNCONFIRMED');
     assert.equal(out.steps[0].error.code, 'TOOL_TIMEOUT');
   } finally { toolRegistry.execute = orig; }
 });
@@ -148,7 +148,9 @@ test('ordre d\u2019envoi à un contact ayant demandé l\u2019arrêt : exécuté,
 });
 
 test('confirmation configurable : cancelCampaign et deleteCustomer ne demandent rien par défaut, et demandent si configuré', async () => {
-  const rt = { stopCampaign: async () => ({ ok: true }) };
-  assert.equal((await toolRegistry.execute(T, 'cancelCampaign', { campaignId: 'c' }, { runtime: rt })).state, 'SUCCESS');
+  let stops = 0;
+  const rt = { stopCampaign: async () => { stops += 1; return { ok: true }; } };
+  assert.equal((await toolRegistry.execute(T, 'cancelCampaign', { campaignId: 'c' }, { runtime: rt })).state, 'UNCONFIRMED', 'sans lecture de retour, le succès n’est pas affirmé');
+  assert.equal(stops, 1, 'l’ordre a été exécuté');
   assert.equal((await toolRegistry.execute(T, 'cancelCampaign', { campaignId: 'c' }, { runtime: rt, confirmFrom: 'SENSITIVE' })).state, 'NEEDS_CONFIRMATION');
 });

@@ -6380,6 +6380,7 @@ function buildChatDeps(tenantId) {
     },
     executeOptions: { env: process.env },
     toolContext: buildNaturalToolContext(tenantId),
+    toolPermissions: ['messages:send'],
     notifyMission: notifyMissionProgress,
     generateImage: async (prompt) => {
       const r = await imageAiEngine.generateImage({ prompt: String(prompt || '').slice(0, 600), width: 1024, height: 1024 });

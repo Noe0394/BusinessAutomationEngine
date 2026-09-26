@@ -133,9 +133,9 @@ async function createCampaign(tenant, input, allowedModules) {
   if (!CHANNELS.includes(channel)) throw err('INVALID_CHANNEL');
   requireChannelModule(allowedModules, channel);
   const name = String(input.name || '').trim();
-  const text = String(input.text || '').trim();
+  const text = String(input.text == null ? '' : input.text);
   if (!name) throw err('NAME_REQUIRED', 'Nom de campagne requis.');
-  if (!text) throw err('MESSAGE_REQUIRED', 'Message requis.');
+  if (!text.trim()) throw err('MESSAGE_REQUIRED', 'Message requis.');
   const doc = await load(tenant);
   const src = doc.drafts[input.recipientsId];
   if (!src || src.kind !== 'recipients') throw err('RECIPIENTS_NOT_FOUND', 'Liste de destinataires introuvable.', 404);

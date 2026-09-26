@@ -9,10 +9,13 @@ const authz = require('../authz');
 const { describeTools } = require('../toolAgent');
 const capabilityGap = require('../capabilityGap');
 const claimGuard = require('../claimGuard');
+const pendingToolActions = require('../pendingToolActions');
+const verbatimPayload = require('../verbatimPayload');
 
-const LIMITS = { maxSteps: 5, totalTimeoutMs: 60000, toolTimeoutMs: 25000, maxAiCalls: 8 };
-const PENDING_TTL_MS = 10 * 60 * 1000;
-const pending = new Map(); // tenant:session -> { call, ctx, expires }
+// Une boucle de chat reste courte et interactive. Les missions longues passent
+// par missionOrchestrator, qui persiste le plan et exécute les étapes en fond.
+const LIMITS = { maxSteps: 12, totalTimeoutMs: 90000, toolTimeoutMs: 25000, maxAiCalls: 26 };
+const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 
 function extractJson(raw) {
   const s = String(raw || '');
@@ -46,8 +49,12 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
   // le serveur; ils restent ainsi communs au Chat et aux deux canaux self.
   // Les champs d'identité, de runtime et de confirmation sont réécrits après
   // toolContext et ne peuvent donc pas être remplacés par un module.
-  const ctx = Object.assign({}, d.toolContext || {}, { runtime: d.runtime || null, permissions: d.permissions || ['messages:send'], generateImage: d.generateImage || null, confirmFrom: d.confirmFrom || process.env.JARVIS_CONFIRM_FROM || null, autonomous: d.autonomous === true });
-  const tools = toolRegistry.list(ctx);
+  const principal = authz.currentPrincipal();
+  const ctx = Object.assign({}, d.toolContext || {}, { principal, runtime: d.runtime || null, permissions: d.permissions || ['messages:send'], generateImage: d.generateImage || null, confirmFrom: d.confirmFrom || process.env.JARVIS_CONFIRM_FROM || null, autonomous: d.autonomous === true });
+  // Le registre sélectionne les outils pertinents à partir de leurs
+  // métadonnées. La limite borne le contexte du modèle sans plafonner le
+  // catalogue ni le nombre d'outils disponibles.
+  const tools = await toolRegistry.discover(text, ctx, { limit: 50 });
   const taskId = `agent:${tenantId}:${sessionId || 'x'}:${Date.now()}`;
   const started = Date.now();
   let aiCalls = 0;
@@ -58,11 +65,12 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
     return llm(prompt, history || []);
   };
 
-  const steps = [];
-  const seen = new Set();
+  const steps = Array.isArray(d.resumeSteps) ? d.resumeSteps.map((s) => Object.assign({}, s)) : [];
+  const seen = new Set(steps.map((s) => sig(s.name, s.args)));
   let stopReason = 'DONE';
+  let pendingActionId = null;
 
-  for (let i = 0; i < limits.maxSteps; i += 1) {
+  for (let i = steps.length; i < limits.maxSteps; i += 1) {
     if (Date.now() - started > limits.totalTimeoutMs) { stopReason = 'TIMEOUT'; break; }
     const prior = steps.map((s, k) => `Étape ${k + 1} — ${s.name}(${JSON.stringify(s.args)}) => ${s.state} ${brief(s.result || s.error)}`).join('\n');
     const planPrompt = [
@@ -79,25 +87,54 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
     try { plan = extractJson(await ai(planPrompt)); } catch (e) { stopReason = e.message === 'AI_BUDGET' ? 'AI_BUDGET' : 'PLAN_ERROR'; break; }
     if (!plan || plan.done || !plan.tool) { stopReason = (plan && plan.impossible) ? 'IMPOSSIBLE' : 'DONE'; break; }
     if (!tools.some((t) => t.name === plan.tool)) { stopReason = 'UNKNOWN_TOOL'; break; }
-    const key = sig(plan.tool, plan.args);
+    const exactArgs = verbatimPayload.applyVerbatimText(plan.tool, plan.args || {}, text);
+    const key = sig(plan.tool, exactArgs);
     if (seen.has(key)) { stopReason = 'LOOP_DETECTED'; break; }
     seen.add(key);
 
     let call;
     try {
-      call = await withTimeout(toolRegistry.execute(tenantId, plan.tool, plan.args || {}, ctx), limits.toolTimeoutMs, plan.tool);
+      call = await withTimeout(toolRegistry.execute(tenantId, plan.tool, exactArgs, ctx), limits.toolTimeoutMs, plan.tool);
     } catch (e) {
-      call = { name: plan.tool, args: plan.args || {}, state: 'FAILED', error: { code: 'TOOL_TIMEOUT', message: e.message } };
+      const timedOut = /^TIMEOUT\b/.test(String(e && e.message || ''));
+      call = { name: plan.tool, args: exactArgs, state: timedOut ? 'UNCONFIRMED' : 'FAILED',
+        error: { code: timedOut ? 'TOOL_TIMEOUT' : 'EXECUTION_ERROR', message: e.message },
+        verification: timedOut ? { verified: false, source: 'agent_timeout' } : undefined };
     }
-    steps.push({ name: plan.tool, args: plan.args || {}, state: call.state, risk: call.risk || null, result: call.result || null, error: call.error || null, verification: call.verification || null });
+    steps.push({ name: plan.tool, args: exactArgs, state: call.state, risk: call.risk || null, result: call.result || null, error: call.error || null, verification: call.verification || null });
 
     if (call.state === 'NEEDS_CONFIRMATION') {
-      // L'action préparée reste liée à l'identité qui l'a demandée : seul le même principal peut la confirmer.
-      pending.set(`${tenantId}:${sessionId || 'x'}`, { name: plan.tool, args: plan.args || {}, ctx, principal: authz.currentPrincipal(), expires: Date.now() + PENDING_TTL_MS });
+      // La décision humaine est durable et porte les arguments exacts préparés.
+      // Le runtime et les permissions seront reconstruits puis revérifiés à la confirmation.
+      try {
+        const action = await pendingToolActions.create(tenantId, {
+          userId: principal && principal.userId,
+          role: principal && principal.role,
+          sessionId,
+          conversationId: sessionId,
+          serviceId: (d.toolContext && d.toolContext.serviceId) || (d.toolContext && d.toolContext.activeService && d.toolContext.activeService.id) || null,
+          tool: plan.tool,
+          riskLevel: call.risk || 'WRITE',
+          ttlMs: PENDING_TTL_MS,
+          payload: { request: text, history: (history || []).slice(-12), steps, pendingArgs: exactArgs },
+        });
+        pendingActionId = action.pendingActionId;
+      } catch (err) {
+        const lastStep = steps[steps.length - 1];
+        if (lastStep) {
+          lastStep.state = 'BLOCKED';
+          lastStep.error = { code: 'PENDING_ACTION_PERSIST_FAILED', message: String(err.message || err) };
+        }
+        stopReason = 'PENDING_ACTION_PERSIST_FAILED';
+        break;
+      }
       stopReason = 'NEEDS_CONFIRMATION';
       break;
     }
-    if (call.state !== 'SUCCESS') { stopReason = call.state; break; }
+    if (call.state !== 'SUCCESS') {
+      stopReason = call.state === 'FAILED' && call.error && call.error.code === 'MISSING_INPUT' ? 'NEEDS_INPUT' : call.state;
+      break;
+    }
     if (i === limits.maxSteps - 1) stopReason = 'MAX_STEPS';
   }
 
@@ -112,21 +149,38 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
   }
 
   const results = steps.map((s, k) => `Étape ${k + 1} ${s.name} : ${s.state} — ${brief(s.result || s.error)}`).join('\n');
+  const last = steps[steps.length - 1];
   const ansPrompt = [
     personaManager.personaSystemPrompt('default'),
     `Demande du vendeur : "${text}"`,
     `Résultats RÉELS des outils (n'invente rien au-delà) :\n${results}`,
     `Fin de la boucle : ${stopReason}.`,
     stopReason === 'NEEDS_CONFIRMATION'
-      ? 'Une confirmation a été configurée pour cette action : présente l\'aperçu (destinataire, contenu) et attends un oui/non.'
+      ? `Une confirmation est requise pour l'action préparée ${pendingActionId || ''} : présente l'aperçu (destinataire, contenu) et attends un oui/non. N'affirme pas que l'action a été exécutée.`
       : (steps.every((s) => s.state === 'SUCCESS') ? 'Réponds naturellement en citant les faits réels.' : 'Explique honnêtement ce qui a réussi, échoué ou n\'est pas confirmé — ne prétends JAMAIS qu\'une action est faite si elle ne l\'est pas.'),
   ].join('\n');
   let answer = '';
-  try { answer = String(await ai(ansPrompt) || '').trim(); } catch (e) { answer = ''; }
-  if (!answer) {
-    answer = stopReason === 'NEEDS_CONFIRMATION' ? 'Action préparée, en attente de votre confirmation (oui/non).' : (steps.every((s) => s.state === 'SUCCESS') ? 'C\'est fait.' : `Je n'ai pas pu tout finaliser (${stopReason}).`);
+  if (stopReason === 'NEEDS_INPUT') {
+    const missing = Array.isArray(last.error && last.error.fields) ? last.error.fields : [];
+    const descriptor = tools.find((t) => t.name === last.name);
+    const labels = missing.map((field) => {
+      const spec = descriptor && descriptor.inputSchema && descriptor.inputSchema[field];
+      return spec && spec.description ? `${field} (${spec.description})` : String(field);
+    });
+    answer = `Il me manque ${labels.length ? labels.join(', ') : 'une information obligatoire'} pour ${last.name}. Rien n’a été exécuté.`;
+  } else {
+    try { answer = String(await ai(ansPrompt) || '').trim(); } catch (e) { answer = ''; }
   }
-  const last = steps[steps.length - 1];
+  if (!answer) {
+    answer = stopReason === 'NEEDS_CONFIRMATION' ? `Action préparée, en attente de votre confirmation (oui/non) — référence ${pendingActionId}.` : (steps.every((s) => s.state === 'SUCCESS') ? 'C\'est fait.' : `Je n'ai pas pu tout finaliser (${stopReason}).`);
+  }
+  if (steps.length && steps.every((s) => s.state === 'SUCCESS') && last.result && typeof last.result === 'object') {
+    const reference = ['confirmationId', 'messageId', 'campaignId', 'invoiceNumber', 'reference', 'id']
+      .map((key) => last.result[key]).find((value) => value != null && String(value).trim());
+    if (reference && !answer.includes(String(reference))) answer += `\nRéférence confirmée : ${String(reference)}`;
+  }
+  if (stopReason === 'NEEDS_CONFIRMATION' && pendingActionId) answer += `\nRéférence de confirmation : ${pendingActionId}.`;
+  if (stopReason === 'PENDING_ACTION_PERSIST_FAILED') answer = 'Je ne peux pas enregistrer cette confirmation de façon fiable. Rien n’a été exécuté. Réessayez plus tard.';
   const toolCalls = steps.map((s) => ({ name: s.name, state: s.state, risk: s.risk }));
   // Preuve affichée à l'utilisateur : ce qui a RÉELLEMENT été exécuté / vérifié dans ce tour (jamais une simple parole du modèle).
   const proof = steps.filter((s) => s.risk && s.risk !== 'READ').map((s) => `${s.state === 'SUCCESS' ? '✔ Vérifié' : (s.state === 'UNCONFIRMED' ? '⚠ Exécuté mais non confirmé' : (s.state === 'NEEDS_CONFIRMATION' ? '⏸ En attente de votre confirmation' : '✖ Échec'))} : ${s.name}`);
@@ -138,30 +192,112 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
     toolCalls,
     stopReason,
     toolCall: { name: last.name, state: last.state, result: last.result, error: last.error, confirmationId: (last.verification && last.verification.confirmationId) || null },
+    pendingActionId,
     actionLog: steps.map((s) => ({ icon: icon(s.state), label: `${s.name} → ${s.state}`, status: status(s.state) })),
   };
 }
 
 // Réponse de l'utilisateur à une confirmation en attente ("oui" -> EXECUTE + VERIFY).
-async function resolvePending({ tenantId, sessionId, text }, deps) {
-  const key = `${tenantId}:${sessionId || 'x'}`;
-  const p = pending.get(key);
-  if (!p) return null;
-  if (Date.now() > p.expires) { pending.delete(key); return null; }
-  const who = authz.currentPrincipal();
-  if (p.principal && (!who || who.tenant !== p.principal.tenant || who.role !== p.principal.role)) return null; // pas le même appelant : jamais de confirmation par un autre
-  if (personaManager.detectDecline(text)) {
-    pending.delete(key);
-    return { text: 'D\'accord, j\'annule : rien n\'a été exécuté.', actionLog: [{ icon: '🚫', label: `${p.name} annulé`, status: 'warning' }] };
+async function resolvePending({ tenantId, sessionId, conversationId, text, history }, deps) {
+  const principal = authz.currentPrincipal();
+  if (!authz.isPrincipal(principal)
+    || (principal.tenant !== String(tenantId) && principal.role !== 'ADMIN')) return null;
+  const idMatch = String(text || '').match(/\bACT-[A-F0-9]{12}\b/i);
+  const decline = personaManager.detectDecline(text);
+  const affirmative = personaManager.detectAffirmative(text);
+  if (!idMatch && !decline && !affirmative) return null;
+  const identity = { tenant: tenantId, userId: principal.userId, role: principal.role, sessionId, conversationId: conversationId || sessionId };
+  const actions = await pendingToolActions.listForIdentity(tenantId, identity);
+  const active = actions.filter((a) => ['PENDING', 'EXECUTING'].includes(a.status));
+  const selected = idMatch
+    ? actions.find((a) => a.pendingActionId === idMatch[0].toUpperCase())
+    : active.length === 1 ? active[0] : null;
+  if (!selected) return null;
+  if (active.length > 1 && !idMatch) {
+    return { text: 'Plusieurs actions attendent une confirmation ou une vérification. Répondez avec la référence affichée pour l’action voulue.', pendingActions: active.map((a) => ({ pendingActionId: a.pendingActionId, tool: a.tool, status: a.status })) };
   }
-  if (!personaManager.detectAffirmative(text)) return null;
-  pending.delete(key);
-  const call = await toolRegistry.execute(tenantId, p.name, p.args, Object.assign({}, p.ctx, (deps && deps.ctx) || {}, { confirmed: true }));
-  const ok = call.state === 'SUCCESS';
-  const txt = ok
-    ? `C'est fait et vérifié (${p.name}${call.verification && call.verification.confirmationId ? ', réf. ' + call.verification.confirmationId : ''}).`
-    : `Je n'ai pas pu finaliser : ${call.state}${call.error && call.error.code ? ' — ' + call.error.code : ''}.`;
-  return { text: txt, toolCall: { name: p.name, state: call.state, result: call.result || null, error: call.error || null }, actionLog: [{ icon: icon(call.state), label: `${p.name} → ${call.state}`, status: status(call.state) }] };
+  if (selected.status === 'EXECUTING') {
+    return { text: `L’action ${selected.pendingActionId} avait commencé avant l’interruption. Son résultat doit être vérifié avant toute nouvelle tentative.`, pendingActionId: selected.pendingActionId, stopReason: 'NEEDS_REVIEW' };
+  }
+  if (selected.status === 'DONE') {
+    const payload = await pendingToolActions.readPayload(selected);
+    const call = payload.completedCall || {};
+    return { text: `Cette action a déjà été exécutée et vérifiée (${selected.tool}, référence ${selected.pendingActionId}).`, pendingActionId: selected.pendingActionId,
+      toolCall: { name: selected.tool, state: call.state || 'SUCCESS', result: call.result || null, error: call.error || null } };
+  }
+  if (selected.status !== 'PENDING') return null;
+  if (decline) {
+    const rejected = await pendingToolActions.transition(tenantId, selected.pendingActionId, 'PENDING', 'REJECTED');
+    if (!rejected.ok) return { text: 'Cette action a déjà été traitée ; rien n’a été relancé.' };
+    return { text: 'D’accord, j’annule l’action préparée. Rien n’a été exécuté.', pendingActionId: selected.pendingActionId,
+      actionLog: [{ icon: '🚫', label: `${selected.tool} annulé`, status: 'warning' }] };
+  }
+  if (!affirmative) return null;
+
+  let payload;
+  try { payload = await pendingToolActions.readPayload(selected); }
+  catch (err) { return { text: 'Je ne peux pas relire en sécurité les arguments préparés. Rien n’a été exécuté.', pendingActionId: selected.pendingActionId, stopReason: 'PENDING_PAYLOAD_UNAVAILABLE' }; }
+  const claimed = await pendingToolActions.transition(tenantId, selected.pendingActionId, 'PENDING', 'EXECUTING');
+  if (!claimed.ok) return { text: 'Cette action a déjà été prise en charge ou a expiré ; rien n’a été relancé.', pendingActionId: selected.pendingActionId };
+
+  const ctx = Object.assign({}, (deps && deps.ctx) || {}, { principal, confirmed: true,
+    runtime: (deps && deps.ctx && deps.ctx.runtime) || null,
+    permissions: (deps && deps.ctx && deps.ctx.permissions) || ['messages:send'],
+    generateImage: (deps && deps.ctx && deps.ctx.generateImage) || null });
+  let call;
+  try { call = await toolRegistry.execute(tenantId, selected.tool, payload.pendingArgs || {}, ctx); }
+  catch (err) { call = { name: selected.tool, state: 'FAILED', error: { code: 'EXECUTION_ERROR', message: String(err.message || err) } }; }
+  const completedSteps = Array.isArray(payload.steps) ? payload.steps.map((s) => Object.assign({}, s)) : [];
+  const pendingStep = completedSteps.findLast ? completedSteps.findLast((s) => s.name === selected.tool && s.state === 'NEEDS_CONFIRMATION') : completedSteps.slice().reverse().find((s) => s.name === selected.tool && s.state === 'NEEDS_CONFIRMATION');
+  if (pendingStep) {
+    pendingStep.state = call.state; pendingStep.result = call.result || null; pendingStep.error = call.error || null;
+    pendingStep.verification = call.verification || null;
+  } else completedSteps.push({ name: selected.tool, args: payload.pendingArgs || {}, state: call.state, risk: call.risk || selected.riskLevel, result: call.result || null, error: call.error || null, verification: call.verification || null });
+
+  if (call.state !== 'SUCCESS') {
+    const failedStatus = call.state === 'UNCONFIRMED' ? 'NEEDS_REVIEW' : 'FAILED';
+    await pendingToolActions.transition(tenantId, selected.pendingActionId, 'EXECUTING', failedStatus,
+      { payload: Object.assign({}, payload, { completedCall: call, steps: completedSteps }) });
+    const txt = call.state === 'UNCONFIRMED'
+      ? `L’action ${selected.tool} a été tentée, mais son résultat n’est pas confirmé. Je ne la relance pas automatiquement.`
+      : `Je n’ai pas pu exécuter l’action préparée : ${call.state}${call.error && call.error.code ? ' — ' + call.error.code : ''}.`;
+    return { text: txt, pendingActionId: selected.pendingActionId,
+      toolCall: { name: selected.tool, state: call.state, result: call.result || null, error: call.error || null },
+      actionLog: [{ icon: icon(call.state), label: `${selected.tool} → ${call.state}`, status: status(call.state) }] };
+  }
+
+  const finished = await pendingToolActions.transition(tenantId, selected.pendingActionId, 'EXECUTING', 'DONE',
+    { payload: Object.assign({}, payload, { completedCall: call, steps: completedSteps }) });
+  if (!finished.ok) return { text: 'L’action a été exécutée, mais son état persistant n’a pas pu être confirmé. Je ne la relance pas.', pendingActionId: selected.pendingActionId, stopReason: 'NEEDS_REVIEW' };
+
+  // Continue an explicit composition from its next step. The confirmed call
+  // and previous results are carried forward, so none are planned twice.
+  const confirmedStepIndex = completedSteps.findIndex((step) => step.name === selected.tool
+    && JSON.stringify(step.args || {}) === JSON.stringify(payload.pendingArgs || {}) && step.state === 'SUCCESS');
+  const hasPriorResult = completedSteps.slice(0, Math.max(0, confirmedStepIndex)).some((step) => step.state === 'SUCCESS');
+  const requestIsComposite = /\b(?:puis|ensuite|apr[eè]s|d'abord)\b|\bet\s+(?:envoi|envoy|extrait|ajout|inscri|relanc|cr[eé]e|cherche|list|r[eé]cup[eè]re|pr[eé]pare|fais)\w*/i.test(payload.request || '');
+  if (hasPriorResult || requestIsComposite) {
+    const continuationCtx = Object.assign({}, (deps && deps.ctx) || {});
+    const continuation = await runAgentLoop({ text: payload.request, history: history || payload.history || [], tenantId, sessionId }, {
+      toolContext: continuationCtx, runtime: continuationCtx.runtime || null,
+      permissions: continuationCtx.permissions || ['messages:send'],
+      generateImage: continuationCtx.generateImage || null,
+      confirmFrom: continuationCtx.confirmFrom || null,
+      llm: deps && typeof deps.llm === 'function' ? deps.llm : undefined,
+      resumeSteps: completedSteps, rawText: payload.request,
+    });
+    if (continuation) {
+      continuation.pendingActionId = null;
+      continuation.confirmedActionId = selected.pendingActionId;
+      return continuation;
+    }
+  }
+  const resultReference = call.result && typeof call.result === 'object'
+    ? ['confirmationId', 'messageId', 'campaignId', 'invoiceNumber', 'reference', 'id'].map((key) => call.result[key]).find((value) => value != null && String(value).trim())
+    : null;
+  return { text: `Action exécutée et vérifiée (${selected.tool}, référence ${selected.pendingActionId}).${resultReference ? ` Référence plateforme : ${resultReference}.` : ''}`, pendingActionId: selected.pendingActionId, confirmedActionId: selected.pendingActionId,
+    toolCall: { name: selected.tool, state: call.state, result: call.result || null, error: null },
+    actionLog: [{ icon: icon(call.state), label: `${selected.tool} → ${call.state}`, status: status(call.state) }] };
 }
 
 module.exports = { runAgentLoop, resolvePending, LIMITS };

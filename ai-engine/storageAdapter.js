@@ -37,6 +37,7 @@ const LOCAL_ONLY_NAMESPACES = new Set([
   'contact_import_jobs',
   'contact_sync_status',
   'objective_missions',
+  'pending_tool_actions',
   // Numéros de téléphone / clés de clients / contenus de formation : jamais poussés vers le miroir GitHub.
   'community_jobs', 'client_ai_quota', 'course_kb', 'lifecycle', 'improvements', 'guided_setup', 'service_trash',
 ]);
@@ -44,7 +45,7 @@ const LOCAL_ONLY_NAMESPACES = new Set([
 // restent en clair uniquement sur le volume local; leur miroir distant est
 // chiffre avec la cle serveur (SECRET_VAULT_KEY ou ADMIN_PASSWORD).
 const ENCRYPTED_MIRROR_NAMESPACES = new Set([
-  'task_queue', 'objective_missions', 'campaign_drafts', 'auto_settings', 'community_jobs',
+  'task_queue', 'objective_missions', 'pending_tool_actions', 'campaign_drafts', 'auto_settings', 'community_jobs',
 ]);
 const remoteStores = new Map();
 function isMirrored(namespace) {

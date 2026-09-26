@@ -14,6 +14,7 @@
 
 const personaManager = require('./personaManager');
 const toolRegistry = require('./toolRegistry');
+const verbatimPayload = require('./verbatimPayload');
 
 function extractJson(raw) {
   const m = String(raw || '').match(/\{[\s\S]*\}/);
@@ -47,7 +48,8 @@ async function runToolAgent({ text, history, tenantId }, deps) {
   const d = deps || {};
   const llm = typeof d.llm === 'function' ? d.llm : defaultLlm;
   const ctx = { runtime: d.runtime || null, permissions: d.permissions || ['messages:send'], generateImage: d.generateImage || null };
-  const tools = toolRegistry.list(ctx);
+  ctx.principal = require('./authz').currentPrincipal();
+  const tools = await toolRegistry.discover(text, ctx, { limit: 50 });
 
   const selPrompt = [
     personaManager.personaSystemPrompt('default'),
@@ -64,7 +66,7 @@ async function runToolAgent({ text, history, tenantId }, deps) {
   if (!parsed || !('tool' in parsed) || !parsed.tool) return null;
   if (!tools.some((t) => t.name === parsed.tool)) return null;
 
-  const call = await toolRegistry.execute(tenantId, parsed.tool, parsed.args || {}, ctx);
+  const call = await toolRegistry.execute(tenantId, parsed.tool, verbatimPayload.applyVerbatimText(parsed.tool, parsed.args || {}, text), ctx);
 
   const ansPrompt = [
     personaManager.personaSystemPrompt('default'),

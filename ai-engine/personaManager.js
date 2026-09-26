@@ -128,8 +128,8 @@ async function rephrase({ kind, rawText, facts, domain, history }) {
 // (l'utilisateur ne doit jamais avoir à répéter un "oui" formel) et
 // PRUDENTE côté négatif (en cas de doute, on continue d'attendre plutôt que
 // d'annuler une mission par erreur).
-const AFFIRMATIVE_RE = /^(oui|ouais|ok|okay|d'accord|dac|vas-?y|vas y|go|lance|c'est parti|allons-y|confirm[ée]?|parfait|top|nickel|carr[ée]ment)\b/i;
-const DECLINE_RE = /^(non|annule|annulation|attends?|pas\s+maintenant|stop|laisse\s+tomber|plus\s+tard)\b/i;
+const AFFIRMATIVE_RE = /^(?:(?:oui|ouais|ok|okay|d'accord|dac|yes)(?:[, ]+(?:vas-?y|lance(?:z)?|fais-(?:le|la|les|ça)|faites-(?:le|la|les)|commence(?:z)?|d[ée]marre(?:z)?|ex[ée]cute(?:z)?|tu peux (?:lancer|commencer|le faire|y aller)|c'est bon|c'est parti|merci|stp|s'il te pla[iî]t))*|vas-?y|go|lance(?:z)?|c'est parti|allons-y|confirm[ée]?|parfait|top|nickel|carr[ée]ment|fais-(?:le|la|les|ça)|faites-(?:le|la|les)|tu peux (?:lancer|commencer|le faire|y aller)|commence(?:z)?|d[ée]marre(?:z)?|ex[ée]cute(?:z)?|c'est bon|je confirme)(?:\s+(?:ACT-[A-F0-9]{12}|mis_[a-z0-9_]+))?[.!…\s]*$/i;
+const DECLINE_RE = /^(?:non(?:[, ]+(?:merci|pas maintenant|plus tard))?|annule(?:r)?|annulation|attends?|pas\s+maintenant|stop|laisse\s+tomber|plus\s+tard)[.!…\s]*$/i;
 
 function detectAffirmative(text) {
   return AFFIRMATIVE_RE.test(String(text || '').trim());

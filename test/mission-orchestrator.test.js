@@ -71,7 +71,7 @@ test('mission : attend seulement les informations manquantes puis reprend sans r
   assert.equal(first.isPlanningQuestion, true);
   assert.match(first.text, /Quel canal/);
   const resumed = await authz.runAs(principal, () => missions.resume({
-    tenantId: TENANT, id: first.missionId, answer: 'WhatsApp',
+    tenantId: TENANT, id: first.missionId, answer: 'WhatsApp', sessionId: 'mission-input-session',
   }, deps));
   assert.equal(calls, 2);
   assert.equal(resumed.state, 'completed');
@@ -180,7 +180,16 @@ test('Chat Intelligent envoie un objectif explicite au planificateur persistant 
     text: 'Aujourd’hui, je veux vendre 10 accès à ma formation Cuisine.',
     tenantId: TENANT, sessionId: 'chat-objective-session', principal,
   }, { llm: async () => { aiCalls += 1; return JSON.stringify({ needsInput: true, question: 'Quelle liste dois-je cibler ?', steps: [] }); } }));
+  assert.equal(result.state, 'planning', JSON.stringify(result));
+  assert.equal(result.status, 'QUEUED');
+  for (let i = 0; i < 50 && aiCalls === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(aiCalls, 1);
-  assert.equal(result.state, 'waiting_input', JSON.stringify(result));
-  assert.match(result.text, /Quelle liste/);
+  let persisted;
+  for (let i = 0; i < 50; i += 1) {
+    persisted = await missions.get(TENANT, result.missionId);
+    if (persisted && persisted.state === 'waiting_input') break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(persisted.state, 'waiting_input');
+  assert.match(persisted.question, /Quelle liste/);
 });

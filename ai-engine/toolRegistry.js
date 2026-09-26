@@ -35,7 +35,7 @@ function needsConfirmation(risk, ctx) {
 const STATE = {
   NEEDS_CONFIRMATION: 'NEEDS_CONFIRMATION',
   PENDING: 'PENDING', RUNNING: 'RUNNING', SUCCESS: 'SUCCESS',
-  FAILED: 'FAILED', BLOCKED: 'BLOCKED', UNCONFIRMED: 'UNCONFIRMED',
+  PARTIAL_SUCCESS: 'PARTIAL_SUCCESS', FAILED: 'FAILED', BLOCKED: 'BLOCKED', UNCONFIRMED: 'UNCONFIRMED',
 };
 
 function norm(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
@@ -450,7 +450,84 @@ const TOOLS = {
     },
     async verify(result) { return { verified: result && result.status === 'SUCCESS' && !!result.confirmationId, confirmationId: result && result.confirmationId }; },
   },
+
+  sendWhatsAppMessageBatch: {
+    requiredModule: 'whatsapp', permission: 'messages:send', risk: 'WRITE',
+    description: 'Envoie le même texte exact à une liste WhatsApp de contacts. Accepte la liste de membres retournée par l’extraction de groupe ou une liste CRM. Déduplique les identifiants, respecte les refus enregistrés et rapporte chaque résultat confirmé, échoué ou incertain. Pour les gros envois, préfère le moteur de campagne durable.',
+    inputSchema: {
+      recipients: { type: 'array', required: true, maxItems: 1000, description: 'Numéros ou objets de contacts réels provenant d’une lecture/extraction précédente.' },
+      text: { type: 'string', required: true, maxLength: 4000, description: 'Texte exact à envoyer, sans reformulation.' },
+    },
+    resultSchema: { total: 'number', verified: 'number', failed: 'number', unconfirmed: 'number', results: 'array' },
+    async execute(args, ctx) { return executeBatchSend('WHATSAPP', args, ctx); },
+    async verify(result) {
+      return { verified: !!result && result.total > 0 && result.verified === result.total,
+        source: 'per_recipient_message_acknowledgements', confirmationIds: result && result.confirmationIds || [] };
+    },
+  },
+
+  sendTelegramMessageBatch: {
+    requiredModule: 'telegram', permission: 'messages:send', risk: 'WRITE',
+    description: 'Envoie le même texte exact à une liste Telegram de contacts. Accepte une liste de membres extraite ou une liste CRM. Déduplique les identifiants, respecte les refus enregistrés et rapporte chaque résultat confirmé, échoué ou incertain. Pour les gros envois, préfère le moteur de campagne durable.',
+    inputSchema: {
+      recipients: { type: 'array', required: true, maxItems: 1000, description: 'Identifiants @username ou objets de contacts réels provenant d’une lecture/extraction précédente.' },
+      text: { type: 'string', required: true, maxLength: 4000, description: 'Texte exact à envoyer, sans reformulation.' },
+    },
+    resultSchema: { total: 'number', verified: 'number', failed: 'number', unconfirmed: 'number', results: 'array' },
+    async execute(args, ctx) { return executeBatchSend('TELEGRAM', args, ctx); },
+    async verify(result) {
+      return { verified: !!result && result.total > 0 && result.verified === result.total,
+        source: 'per_recipient_message_acknowledgements', confirmationIds: result && result.confirmationIds || [] };
+    },
+  },
 };
+
+function batchRecipientId(value, channel) {
+  const raw = typeof value === 'string' ? value : value && (value.phone || value.number || value.telephone || value.id || value.username || value.userId);
+  if (raw == null) return '';
+  let id = String(raw).trim();
+  if (channel === 'WHATSAPP') {
+    if (/@g\.us$/i.test(id) || /@broadcast$/i.test(id) || /@lid$/i.test(id)) return '';
+    if (/^\d{6,15}(?::\d+)?@s\.whatsapp\.net$/i.test(id)) return id;
+    const digits = id.replace(/\D/g, '');
+    return /^\d{6,15}$/.test(digits) ? `${digits}@s.whatsapp.net` : '';
+  }
+  return /^@[A-Za-z0-9_]{4,32}$/.test(id) || /^-?\d{4,20}$/.test(id) ? id : '';
+}
+
+async function executeBatchSend(channel, args, ctx) {
+  if (!ctx.runtime || typeof ctx.runtime.sendMessageVerified !== 'function') return { ok: false, error: { code: 'RUNTIME_MISSING' } };
+  const source = Array.isArray(args.recipients) ? args.recipients : [];
+  const seen = new Set(); const recipients = [];
+  for (const row of source) {
+    const to = batchRecipientId(row, channel);
+    if (to && !seen.has(to)) { seen.add(to); recipients.push(to); }
+  }
+  if (!recipients.length) return { ok: false, error: { code: 'NO_VALID_RECIPIENTS', message: 'Aucun identifiant de destinataire exploitable.' } };
+  const outcomes = [];
+  for (const to of recipients) {
+    if (ctx.autonomous === true && await contactCrm.isOptedOut(ctx.tenant, channel, to).catch(() => false)) {
+      outcomes.push({ to, status: 'SKIPPED', reason: 'RECIPIENT_OPTED_OUT' });
+      continue;
+    }
+    try {
+      const out = await ctx.runtime.sendMessageVerified({ channel, to, text: args.text, tenantId: ctx.tenant });
+      const verified = !!out && out.status === 'SUCCESS' && !!out.confirmationId;
+      outcomes.push({ to, status: verified ? 'SUCCESS' : (out && out.status || 'UNCONFIRMED'), confirmationId: out && out.confirmationId || null, error: out && out.error || null });
+    } catch (err) {
+      outcomes.push({ to, status: 'FAILED', error: String(err.message || err).slice(0, 240) });
+    }
+  }
+  const verified = outcomes.filter((x) => x.status === 'SUCCESS').length;
+  const failed = outcomes.filter((x) => x.status === 'FAILED' || x.status === 'SKIPPED').length;
+  const unconfirmed = outcomes.filter((x) => !['SUCCESS', 'FAILED', 'SKIPPED'].includes(x.status)).length;
+  const result = { total: recipients.length, verified, failed, unconfirmed,
+    confirmationIds: outcomes.filter((x) => x.confirmationId).map((x) => x.confirmationId), results: outcomes };
+  if (verified === recipients.length) return { ok: true, result };
+  if (verified > 0) return { ok: true, state: STATE.PARTIAL_SUCCESS, result };
+  if (unconfirmed > 0) return { ok: true, result };
+  return { ok: false, error: { code: 'BATCH_SEND_FAILED' }, result };
+}
 
 // Outils étendus (contacts, campagnes, file, CRM, diagnostic, notifications) — voir toolsExtra.js
 for (const [name, tool] of Object.entries(require('./toolsExtra').TOOLS)) TOOLS[name] = Object.assign({ resultSchema: {}, errorSchema: { code: 'string' } }, tool);
@@ -493,9 +570,28 @@ loadToolModules();
 // --------------------------------------------------------------------------
 function describe() {
   return Object.entries(TOOLS).map(([name, t]) => ({
-    name, description: t.description, feature: t.feature || inferredFeature(name), requiredModule: requiredModuleFor(t, name), capabilities: t.capabilities && t.capabilities.length ? t.capabilities : inferredCapabilities(name), permission: t.permission || null, risk: t.risk || 'READ',
-    inputSchema: t.inputSchema || {}, resultSchema: t.resultSchema || {}, errorSchema: t.errorSchema || {},
+    id: t.id || name, name, description: t.description,
+    category: t.category || t.feature || inferredFeature(name), feature: t.feature || inferredFeature(name),
+    keywords: Array.isArray(t.keywords) ? t.keywords : [], aliases: Array.isArray(t.aliases) ? t.aliases : [],
+    requiredModule: requiredModuleFor(t, name),
+    capabilities: t.capabilities && t.capabilities.length ? t.capabilities : inferredCapabilities(name),
+    permission: t.permission || null, permissions: Array.isArray(t.permissions) ? t.permissions : (t.permission ? [t.permission] : []),
+    platforms: platformsFor(t, name), risk: t.risk || 'READ', riskLevel: t.risk || 'READ',
+    timeout: Number(t.timeout || t.timeoutMs) || 30000,
+    retryPolicy: t.retryPolicy || { maxRetries: 0 },
+    availability: t.availability || 'registered', dependencies: Array.isArray(t.dependencies) ? t.dependencies : [],
+    inputSchema: t.inputSchema || {}, outputSchema: t.outputSchema || t.resultSchema || {},
+    resultSchema: t.resultSchema || t.outputSchema || {}, errorSchema: t.errorSchema || {},
   }));
+}
+
+function platformsFor(tool, name) {
+  if (Array.isArray(tool && tool.platforms)) return tool.platforms;
+  const required = requiredModuleFor(tool, name);
+  if (required === 'whatsapp') return ['whatsapp', 'self_whatsapp'];
+  if (required === 'telegram') return ['telegram', 'self_telegram'];
+  if (required === '__messaging__') return ['whatsapp', 'telegram', 'self_whatsapp', 'self_telegram'];
+  return ['web', 'chat', 'whatsapp', 'telegram', 'self_whatsapp', 'self_telegram'];
 }
 
 // Les outils historiques restent utilisables sans réécriture de leurs moteurs.
@@ -580,6 +676,84 @@ function list(ctx) {
     .filter((t) => !t.permission || !perms || perms.includes(t.permission));
 }
 
+// Tenant-aware union of core tools and externally configured connectors. The
+// connector manager remains the authority for enabled state and granted scopes.
+async function listForContext(ctx) {
+  const principal = (ctx && ctx.principal) || authz.currentPrincipal();
+  const base = list(ctx);
+  if (!authz.isPrincipal(principal) || !['OWNER', 'ADMIN'].includes(principal.role)) return base;
+  const tenant = principal.tenant;
+  let connectors = [];
+  try { connectors = await require('./connectors/connectorManager').getToolsForTenant(tenant); }
+  catch (_) { return base; }
+  const known = new Set(base.map((t) => t.name));
+  for (const tool of connectors) {
+    if (known.has(tool.name)) continue;
+    base.push({
+      id: tool.name, name: tool.name, description: tool.description,
+      category: 'external_connectors', feature: 'external_connectors', requiredModule: null,
+      capabilities: inferredCapabilities(tool.name), permission: tool.permission || null,
+      permissions: tool.permission ? [tool.permission] : [], platforms: ['web', 'chat', 'whatsapp', 'telegram', 'self_whatsapp', 'self_telegram'],
+      risk: 'WRITE', riskLevel: 'WRITE', timeout: 30000, retryPolicy: { maxRetries: 0 },
+      availability: 'available', dependencies: [tool.connectorType],
+      inputSchema: tool.parameters || {}, outputSchema: {}, resultSchema: {}, errorSchema: { code: 'string' },
+      connectorType: tool.connectorType,
+    });
+  }
+  return base;
+}
+
+function search(query, ctx, opts) {
+  return rankTools(query, list(ctx), opts);
+}
+
+async function discover(query, ctx, opts) {
+  return rankTools(query, await listForContext(ctx), opts);
+}
+
+function rankTools(query, catalog, opts) {
+  const clean = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const stop = new Set(['les','des','une','dans','pour','avec','sur','par','mes','mon','ma','moi','m\u00eame','que','qui','quoi','est','sont','et','ou','the','and','for','with','from','into','your','my','all','this','that','please','could','would','can','want','today','maintenant']);
+  const stem = (word) => word.replace(/(?:ments?|ations?|ation|euses?|eurs?|trices?|es|s)$/i, '').replace(/(er|ir|re|ez|ons|ent|ant|ait|aient)$/i, '');
+  const expand = {
+    group: ['community','groupe'], groupe: ['group','community'], commun: ['community','group'], memb: ['member','participant','contact'],
+    cree: ['create','new'], creee: ['create','new'], creer: ['create','new'], creation: ['create','new'],
+    prospect: ['lead','contact','client'], contact: ['recipient','member','prospect'],
+    extract: ['read','member','contact','parse'], exra: ['extract'], list: ['search','find','get'],
+    cherche: ['search','find','lookup','get'], cherch: ['search','find','lookup','get'],
+    ecris: ['send','message','write','text'], ecrire: ['send','message','write','text'],
+    envoi: ['send','message'], envoy: ['send','message'],
+    send: ['message','deliver','broadcast'], messag: ['message','send'],
+    campag: ['campaign','schedule','launch'], report: ['activity','statistics','analytics'],
+    vendre: ['sale','sales','campaign','prospect'], vente: ['sale','sales','campaign','prospect'],
+    service: ['business','product','offer'], produit: ['product','price','offer'],
+    pause: ['pause','stop','control'], reprend: ['resume','continue'], relanc: ['followup','campaign','contact'],
+    commande: ['order'], client: ['customer','contact'], facture: ['invoice','accounting'],
+  };
+  const words = (value) => clean(value).split(/[^a-z0-9_]+/).filter((w) => w.length > 2 && !stop.has(w));
+  const terms = words(query);
+  if (!terms.length) return catalog;
+  const expanded = new Set(terms.flatMap((word) => {
+    const s = stem(word);
+    return [word, s, ...(expand[word] || []), ...(expand[s] || [])].filter(Boolean);
+  }));
+  const ranked = catalog.map((tool) => {
+    const title = clean(tool.name);
+    const description = clean(`${tool.description || ''} ${tool.category || ''} ${tool.feature || ''} ${(tool.capabilities || []).join(' ')} ${(tool.keywords || []).join(' ')} ${(tool.aliases || []).join(' ')}`);
+    const titleWords = words(title).map(stem);
+    const bodyWords = new Set(words(description).flatMap((w) => [w, stem(w)]));
+    let score = 0;
+    for (const term of expanded) {
+      if (title.includes(term) || titleWords.some((w) => w && (w.startsWith(term) || term.startsWith(w)))) score += 5;
+      else if (bodyWords.has(term) || [...bodyWords].some((w) => w.length > 3 && (w.startsWith(term) || term.startsWith(w)))) score += 1;
+    }
+    return { tool, score };
+  }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score);
+  if (!ranked.length) return catalog;
+  const limit = Math.max(1, Number(opts && opts.limit) || 50);
+  return ranked.slice(0, limit).map((item) => item.tool);
+}
+
 const MAX_STRING = 200000;
 function validateArgs(schema, args) {
   const bad = [];
@@ -590,6 +764,11 @@ function validateArgs(schema, args) {
     if (t === 'string' && (typeof v === 'object' || (typeof v === 'string' && v.length > MAX_STRING))) bad.push(k);
     else if (t === 'number' && !Number.isFinite(Number(v))) bad.push(k);
     else if (t === 'boolean' && typeof v !== 'boolean' && v !== 'true' && v !== 'false') bad.push(k);
+    else if (t === 'array' && (!Array.isArray(v) || (Number.isFinite(spec.maxItems) && v.length > spec.maxItems))) bad.push(k);
+    else if (t === 'object' && (typeof v !== 'object' || Array.isArray(v))) bad.push(k);
+    if (typeof v === 'string' && ((Number.isFinite(spec.maxLength) && v.length > spec.maxLength)
+      || (Number.isFinite(spec.minLength) && v.length < spec.minLength))) bad.push(k);
+    if (spec.enum && Array.isArray(spec.enum) && !spec.enum.includes(v)) bad.push(k);
   }
   return bad;
 }
@@ -606,7 +785,12 @@ function previewOf(args) {
 async function _execute(tenant, name, args, ctx) {
   const call = { name, args: args || {}, state: STATE.PENDING, startedAt: new Date().toISOString() };
   const tool = TOOLS[name];
-  if (!tool) return Object.assign(call, { state: STATE.FAILED, error: { code: 'UNKNOWN_TOOL', message: `Outil « ${name} » inconnu.` }, finishedAt: new Date().toISOString() });
+  if (!tool) {
+    const knownConnectorTool = Object.values(require('./connectors/connectorManager').DEFINITIONS)
+      .some((definition) => (definition.tools || []).some((item) => item.name === name));
+    return knownConnectorTool ? executeConnectorTool(tenant, name, args, ctx, call)
+      : Object.assign(call, { state: STATE.FAILED, error: { code: 'UNKNOWN_TOOL', message: `Outil « ${name} » inconnu.` }, finishedAt: new Date().toISOString() });
+  }
 
   call.risk = tool.risk || 'READ'; // nature de l'outil, exposée à ceux qui doivent savoir si une action d'ÉCRITURE a réellement eu lieu
   const fullCtx = Object.assign({ tenant }, ctx || {});
@@ -672,11 +856,32 @@ async function _execute(tenant, name, args, ctx) {
 
   call.state = STATE.RUNNING;
   let out;
-  try { out = await tool.execute(effectiveArgs, fullCtx); }
-  catch (err) { return Object.assign(call, { state: STATE.FAILED, error: { code: 'EXECUTION_ERROR', message: String((err && err.message) || err) }, finishedAt: new Date().toISOString() }); }
+  const timeoutMs = Math.max(1, Number(tool.timeout || tool.timeoutMs) || 30000);
+  let timeout;
+  try {
+    out = await Promise.race([
+      Promise.resolve().then(() => tool.execute(effectiveArgs, fullCtx)),
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(Object.assign(new Error('TOOL_TIMEOUT'), { code: 'TOOL_TIMEOUT' })), timeoutMs); }),
+    ]);
+  }
+  catch (err) {
+    const timedOut = err && err.code === 'TOOL_TIMEOUT';
+    return Object.assign(call, {
+      state: timedOut ? STATE.UNCONFIRMED : STATE.FAILED,
+      verified: false,
+      error: { code: timedOut ? 'TOOL_TIMEOUT' : 'EXECUTION_ERROR', message: String((err && err.message) || err) },
+      verification: timedOut ? { verified: false, source: 'execution_timeout' } : undefined,
+      finishedAt: new Date().toISOString(),
+    });
+  }
+  finally { if (timeout) clearTimeout(timeout); }
 
   if (!out || out.ok === false) {
     return Object.assign(call, { state: STATE.FAILED, error: (out && out.error) || { code: 'FAILED' }, result: (out && out.result) || null, finishedAt: new Date().toISOString() });
+  }
+  if (out.state === STATE.PARTIAL_SUCCESS) {
+    return Object.assign(call, { state: STATE.PARTIAL_SUCCESS, verified: false, result: out.result || null,
+      verification: { verified: false, source: 'partial_backend_result' }, finishedAt: new Date().toISOString() });
   }
   // Vérification réelle (outils d'action) — sinon SUCCESS direct (lectures).
   if (typeof tool.verify === 'function') {
@@ -684,7 +889,73 @@ async function _execute(tenant, name, args, ctx) {
     try { v = await tool.verify(out.result, effectiveArgs, fullCtx); } catch (e) { v = { verified: false }; }
     return Object.assign(call, { state: v && v.verified ? STATE.SUCCESS : STATE.UNCONFIRMED, verified: !!(v && v.verified), result: out.result, verification: v, finishedAt: new Date().toISOString() });
   }
-  return Object.assign(call, { state: STATE.SUCCESS, verified: (tool.risk || 'READ') === 'READ', result: out.result, finishedAt: new Date().toISOString() });
+  const explicitlyVerified = !!(out.result && (out.result.verified === true || out.result.confirmed === true));
+  const readOnly = (tool.risk || 'READ') === 'READ';
+  const verified = readOnly || explicitlyVerified;
+  return Object.assign(call, {
+    state: verified ? STATE.SUCCESS : STATE.UNCONFIRMED,
+    verified,
+    result: out.result,
+    verification: { verified, source: readOnly ? 'read_result' : (explicitlyVerified ? 'tool_result' : 'verifier_missing') },
+    finishedAt: new Date().toISOString(),
+  });
+}
+
+async function executeConnectorTool(tenant, name, args, ctx, call) {
+  const fullCtx = Object.assign({ tenant }, ctx || {});
+  const principal = authz.isPrincipal(fullCtx.principal) ? fullCtx.principal : authz.currentPrincipal();
+  if (!authz.isPrincipal(principal)) return Object.assign(call, { state: STATE.BLOCKED, error: { code: 'NOT_AUTHENTICATED' }, finishedAt: new Date().toISOString() });
+  if (String(tenant) !== principal.tenant && principal.role !== 'ADMIN') return Object.assign(call, { state: STATE.BLOCKED, error: { code: 'TENANT_MISMATCH' }, finishedAt: new Date().toISOString() });
+  const auth = authz.authorizeTool({ tool: { roles: ['OWNER', 'ADMIN'] }, toolName: name, tenant, principal });
+  if (!auth.allowed) return Object.assign(call, { state: STATE.BLOCKED, error: { code: auth.code, message: auth.message }, finishedAt: new Date().toISOString() });
+
+  const manager = require('./connectors/connectorManager');
+  let available = [];
+  try { available = await manager.getToolsForTenant(tenant); }
+  catch (err) { return Object.assign(call, { state: STATE.FAILED, error: { code: 'CONNECTOR_CATALOG_UNAVAILABLE' }, finishedAt: new Date().toISOString() }); }
+  const descriptor = available.find((item) => item.name === name);
+  if (!descriptor) return Object.assign(call, { state: STATE.BLOCKED, error: { code: 'TOOL_NOT_AVAILABLE_OR_NOT_PERMITTED', message: `L'outil « ${name} » n'est pas activé pour ce compte ou son scope manque.` }, finishedAt: new Date().toISOString() });
+
+  call.risk = 'WRITE';
+  const effectiveArgs = args && typeof args === 'object' && !Array.isArray(args) ? Object.assign({}, args) : {};
+  call.args = effectiveArgs;
+  const missing = Object.entries(descriptor.parameters || {}).filter(([key, spec]) => spec.required && (effectiveArgs[key] == null || effectiveArgs[key] === '')).map(([key]) => key);
+  if (missing.length) return Object.assign(call, { state: STATE.FAILED, error: { code: 'MISSING_INPUT', fields: missing }, finishedAt: new Date().toISOString() });
+  const invalid = validateArgs(descriptor.parameters || {}, effectiveArgs);
+  if (invalid.length) return Object.assign(call, { state: STATE.FAILED, error: { code: 'INVALID_INPUT', fields: invalid }, finishedAt: new Date().toISOString() });
+  const tainted = authz.isTainted() && !fullCtx.confirmed;
+  if ((needsConfirmation('WRITE', fullCtx) || tainted) && !fullCtx.confirmed) {
+    return Object.assign(call, { state: STATE.NEEDS_CONFIRMATION, result: { ok: true, preview: previewOf(effectiveArgs), warnings: tainted ? ['CONTENU_EXTERNE'] : [] }, finishedAt: new Date().toISOString() });
+  }
+
+  let out;
+  try {
+    out = await manager.executeTool(principal.tenant, name, effectiveArgs, {
+      env: fullCtx.env, http: fullCtx.http, store: fullCtx.store,
+    });
+  } catch (err) {
+    return Object.assign(call, { state: STATE.FAILED, error: { code: 'CONNECTOR_EXECUTION_ERROR', message: String(err.message || err) }, finishedAt: new Date().toISOString() });
+  }
+  if (!out || out.ok !== true) {
+    return Object.assign(call, { state: STATE.FAILED, error: { code: (out && out.error) || 'CONNECTOR_FAILED', detail: out && out.detail || null }, result: out && out.result || null, finishedAt: new Date().toISOString() });
+  }
+
+  const result = out.result || null;
+  if (out.state === STATE.PARTIAL_SUCCESS || out.partial === true || (result && result.partial === true)) {
+    return Object.assign(call, { state: STATE.PARTIAL_SUCCESS, verified: false, result,
+      verification: { verified: false, source: 'partial_connector_result' }, finishedAt: new Date().toISOString() });
+  }
+  let verified = !!(result && (result.verified === true || result.confirmed === true));
+  let verification = { verified, source: verified ? 'connector_result' : 'provider_acknowledgement' };
+  // The local ledger can be checked deterministically after its write.
+  if (!verified && descriptor.connectorType === 'accounting' && result && result.provider === 'ledger-local') {
+    const ledger = await require('./storageAdapter').get('ledger', principal.tenant, { sales: [], invoices: [] }).catch(() => null);
+    const saved = result.entry && Array.isArray(ledger && ledger.sales) && ledger.sales.some((entry) => entry.id === result.entry.id);
+    const invoiced = result.invoice && Array.isArray(ledger && ledger.invoices) && ledger.invoices.some((entry) => entry.number === result.invoice.number);
+    verified = !!(saved || invoiced);
+    verification = { verified, source: 'tenant_ledger_readback' };
+  }
+  return Object.assign(call, { state: verified ? STATE.SUCCESS : STATE.UNCONFIRMED, verified, result, verification, finishedAt: new Date().toISOString() });
 }
 
 // Exécution + journalisation d'activité (déterministe, non bloquante) : chaque
@@ -727,4 +998,4 @@ async function prepare(tenant, name, args, ctx) {
   return { state: 'PREPARED', risk: tool.risk, needsConfirmation: needsConfirmation(tool.risk, fullCtx), prepared };
 }
 
-module.exports = { STATE, RISK, TOOLS, describe, list, execute, prepare, runChain, needsConfirmation, registerTool, loadToolModules };
+module.exports = { STATE, RISK, TOOLS, describe, list, listForContext, search, discover, execute, prepare, runChain, needsConfirmation, registerTool, loadToolModules, validateArgs };

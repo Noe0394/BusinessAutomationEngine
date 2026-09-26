@@ -14,6 +14,10 @@ services:
       # Render/Koyeb, voir README.md), sans conflit puisque PORT est déjà lu
       # dynamiquement par index.js (process.env.PORT || 10000).
       - PORT=3000
+      # Les credentials ET les clés Signal Baileys doivent rester ensemble
+      # sur le volume whatsapp_auth. Un chemin absolu évite qu'un changement
+      # de WORKDIR ne les place sur le disque éphémère du conteneur.
+      - AUTH_DIR=/app/auth_info_baileys
       # Persistance des LICENCES (licenses.json) et de la MÉMOIRE 7 JOURS
       # (ai_engine_data) dans le volume nommé app_data ci-dessous — sinon ces
       # fichiers vivent sur le disque ÉPHÉMÈRE du conteneur et sont effacés à
@@ -28,10 +32,9 @@ services:
       # public de ce VPS) + DASHBOARD_ORIGIN (l'origine Vercel autorisée).
       - .env
     volumes:
-      # Persistance locale entre redémarrages du conteneur (docker-compose
-      # restart, mise à jour d'image) — complète, ne remplace pas, la
-      # sauvegarde GitHub (githubStore.js) qui reste la seule protection en
-      # cas de perte du volume lui-même (VPS recréé, disque changé).
+      # Persistent local storage for the complete Baileys auth folder:
+      # credentials and Signal keys must remain together. A creds.json-only
+      # backup cannot restore this session safely.
       - whatsapp_auth:/app/auth_info_baileys
       - telegram_sessions:/app/telegram_sessions
       # Compte de service Firebase (voir lib/firebaseSync.js) : bind mount

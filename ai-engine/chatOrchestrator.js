@@ -187,16 +187,27 @@ const ACTION_RE = /\b(?:envoi\w*|envoy\w+|cr[ée]e\w*|cr[ée]er|lance\w*|list\w*
 // L'avis des spécialistes ne doit jamais faire attendre : passé ce délai, on continue sans lui.
 const SPECIALIST_BUDGET_MS = Math.max(0, parseInt(process.env.OWNER_SPECIALIST_BUDGET_MS, 10) || 4000);
 const withSpecialistBudget = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), SPECIALIST_BUDGET_MS))]);
+const ADDITIONAL_ACTION_RE = /\b(?:extrait\w*|inscri\w*|enregistr\w*|suspend\w*|factur\w*|fais\w*|analyse\w*|relie\w*|attribu\w*|tagu\w*)\b/i;
+const COMPOSITE_RE = /\b(?:puis|ensuite|apr[eè]s|d'abord|avant de)\b|\bet\s+(?:envoi|envoy|extrait|ajout|inscri|relanc|cre|cherch|list|recuper|prepare|enregistr|gere|fais)\w*/i;
+const REGISTRY_READ_INTENTS = new Set(['report', 'inbox', 'crm', 'activityreport', 'actionsreport', 'lifecycle', 'businessinfo', 'payment', 'account']);
 function isQuickChat(text) {
   const t = String(text || '').trim();
-  return t.length > 0 && t.length <= 280 && !ACTION_RE.test(t) && !/PIÈCES JOINTES reçues|\[id:\s*f_/.test(t);
+  return t.length > 0 && t.length <= 280 && !ACTION_RE.test(t) && !ADDITIONAL_ACTION_RE.test(t) && !/PIÈCES JOINTES reçues|\[id:\s*f_/.test(t);
 }
 
 function detectIntent(text, lastAssistantMessage) {
   const continuation = ['offer', 'payment', 'account', 'connector', 'goal', 'recurring', 'grouppost', 'reply', 'adcampaign', 'groupcampaign', 'configsvc'];
-  if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && continuation.includes(lastAssistantMessage.intent)) {
-    return lastAssistantMessage.intent;
-  }
+  // Une précision courte répond à la question de clarification courante.
+  // Une nouvelle commande ou question repasse d'abord par sa propre intention,
+  // afin qu'un ancien scénario ne capture pas un changement de sujet.
+  const clarification = String(text || '').trim();
+  const canContinuePlanning = lastAssistantMessage && lastAssistantMessage.isPlanningQuestion
+    && continuation.includes(lastAssistantMessage.intent)
+    && clarification.length > 0 && clarification.length <= 160
+    && !/[?!]/.test(clarification)
+    && !ACTION_RE.test(clarification) && !ADDITIONAL_ACTION_RE.test(clarification)
+    && !/^\s*(?:bonjour|salut|coucou|merci|bonne?\s+(?:journ[ée]e|soir[ée]e))\b/i.test(clarification);
+  if (canContinuePlanning) return lastAssistantMessage.intent;
   if (lastAssistantMessage && lastAssistantMessage.intent === 'guide' && GUIDE_STEP_RE.test(text)) return 'guide';
   if (SELF_QUESTION_RE.test(text) && !/\d{6,}/.test(text)) return 'selfknow';
   if (WHY_REPLY_RE.test(text) || CONVPOLICY_RE.test(text)) return 'convpolicy';
@@ -230,7 +241,7 @@ function detectIntent(text, lastAssistantMessage) {
   if (GENMEDIA_RE.test(text) && !/groupe/i.test(text)) return 'genmedia';
   // Une demande de consultation explicite des groupes l'emporte sur la
   // détection de publication ("envoie-moi la liste de mes groupes").
-  if (GROUPS_LOOKUP_RE.test(text) && (GROUPS_RE.test(text) || GROUP_SEARCH_MINE_RE.test(text))) return 'groups';
+  if (GROUPS_LOOKUP_RE.test(text) && (GROUPS_RE.test(text) || GROUP_SEARCH_MINE_RE.test(text)) && !GROUPPOST_RE.test(text)) return 'groups';
   // Ordre important : une programmation récurrente ("chaque matin envoie au
   // groupe…") l'emporte sur une publication ponctuelle ; une publication (verbe
   // poste/partage/…) l'emporte sur la simple LISTE des groupes — sinon
@@ -1245,7 +1256,17 @@ function formatConnectorResult(toolName, result) {
   return { text: '✅ Action effectuée sur la plateforme.', actionLog: [{ icon: '✅', label: `Action « ${toolName} » effectuée`, status: 'done' }] };
 }
 
-async function handleConnector(text, history, tenantId, deps) {
+async function handleConnector(text, history, tenantId, deps, sessionId) {
+  const central = await agentLoop.runAgentLoop({ text, history, tenantId, sessionId }, {
+    rawText: text, returnGap: false, runtime: deps.runtime || null,
+    permissions: deps.toolPermissions || undefined, toolContext: deps.toolContext || undefined,
+    llm: deps.llm || undefined,
+  }).catch((err) => { console.warn('connector registry route:', err.message); return null; });
+  if (central) return central;
+  return handleAccount(text, history, tenantId, deps);
+
+  // Legacy connector-specific planner retained below for migration reference;
+  // all live connector execution now goes through Tool Registry authorization.
   const tools = await connectorManager.getToolsForTenant(tenantId).catch(() => []);
   // Aucun connecteur externe autorisé -> flux compte interne classique.
   if (!tools.length) return handleAccount(text, history, tenantId, deps);
@@ -1562,11 +1583,17 @@ function isComplexObjective(text) {
   return OBJECTIVE_RE.test(value);
 }
 
+function isCompositeAction(text) {
+  const value = String(text || '');
+  return COMPOSITE_RE.test(value) && (ACTION_RE.test(value) || ADDITIONAL_ACTION_RE.test(value));
+}
+
 function missionDeps(d) {
   return {
     runtime: d.runtime || null, permissions: d.toolPermissions || undefined,
     toolContext: d.toolContext || undefined, generateImage: d.generateImage || null,
     llm: d.objectiveLlm || d.llm || undefined, notifyMission: d.notifyMission || undefined,
+    background: true,
   };
 }
 
@@ -1593,25 +1620,73 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
   });
   if (decision) return { text: decision.text, actionLog: decision.actionLog || null };
 
+  // Un « oui » doit désigner une seule action parmi tous les mécanismes de
+  // confirmation persistants du même compte et de la même conversation.
+  const decisionRef = String(text || '').match(/\b(?:ACT-[A-F0-9]{12}|mis_[a-z0-9_]+)\b/i);
+  if (!decisionRef && (require('./personaManager').detectAffirmative(text) || require('./personaManager').detectDecline(text))) {
+    const principal = authz.currentPrincipal();
+    if (authz.isPrincipal(principal) && principal.tenant === String(tenantId)) {
+      const identity = { tenant: tenantId, userId: principal.userId, role: principal.role, sessionId, conversationId: sessionId };
+      const [toolActions, missions] = await Promise.all([
+        require('./pendingToolActions').listForIdentity(tenantId, identity).catch(() => []),
+        missionOrchestrator.list(tenantId, 50).catch(() => []),
+      ]);
+      const openActions = toolActions.filter((item) => ['PENDING', 'EXECUTING'].includes(item.status));
+      const openMissions = missions.filter((item) => String(item.sessionId || '') === String(sessionId || '')
+        && String(item.userId || '') === String(principal.userId || '')
+        && ['waiting_input', 'needs_confirmation'].includes(item.state));
+      if (openActions.length + openMissions.length > 1) {
+        return { text: 'Plusieurs actions ou missions attendent une réponse. Indique la référence ACT-… ou l’identifiant de la mission à reprendre.',
+          pendingActions: openActions.map((item) => ({ pendingActionId: item.pendingActionId, tool: item.tool, status: item.status })),
+          pendingMissions: openMissions.map((item) => ({ missionId: item.id, pendingActionId: item.pendingActionId, state: item.state })) };
+      }
+    }
+  }
+
   // Confirmation d'une action sensible préparée (PREPARE -> oui -> EXECUTE -> VERIFY).
-  const confirmed = await agentLoop.resolvePending({ tenantId, sessionId, text }, { ctx: { runtime: d.runtime || null } }).catch(() => null);
+  const confirmed = await agentLoop.resolvePending({ tenantId, sessionId, conversationId: sessionId, history, text }, {
+    ctx: Object.assign({}, d.toolContext || {}, {
+      runtime: d.runtime || null,
+      permissions: d.toolPermissions || ['messages:send'],
+      generateImage: d.generateImage || null,
+      confirmFrom: d.confirmFrom || null,
+      principal: authz.currentPrincipal(),
+    }),
+    llm: d.llm || undefined,
+  }).catch((err) => { console.warn('tool confirmation recovery:', err.message); return null; });
   if (confirmed) return confirmed;
 
   // Une réponse à une question de mission reprend l'état persistant, aussi
   // depuis un autre canal Self rattaché au même compte.
   try {
     const pendingMissions = await missionOrchestrator.list(tenantId, 20);
-    const pending = pendingMissions.find((m) => String(m.sessionId || '') === String(sessionId || '')
+    const principal = authz.currentPrincipal();
+    const activeMissions = pendingMissions.filter((m) => String(m.sessionId || '') === String(sessionId || '')
+      && (!principal || String(m.userId || '') === String(principal.userId || ''))
       && ['waiting_input', 'needs_confirmation'].includes(m.state));
+    const missionRef = String(text || '').match(/\b(?:ACT-[A-F0-9]{12}|mis_[a-z0-9_]+)\b/i);
+    const pending = missionRef
+      ? activeMissions.find((m) => m.pendingActionId === missionRef[0] || m.id === missionRef[0])
+      : activeMissions.length === 1 ? activeMissions[0] : null;
+    if (!pending && activeMissions.length > 1 && !missionRef
+      && (require('./personaManager').detectAffirmative(text) || require('./personaManager').detectDecline(text))) {
+      return { text: 'Plusieurs missions attendent une réponse. Indique la référence de la mission ou de l’action à reprendre.', pendingMissions: activeMissions.map((m) => ({ missionId: m.id, pendingActionId: m.pendingActionId, state: m.state })) };
+    }
     if (pending) {
       const freshCommand = isComplexObjective(text) && !/^(?:oui|non|ok|d'accord)\b/i.test(String(text).trim());
       if (!freshCommand && (pending.state === 'needs_confirmation'
         ? require('./personaManager').detectAffirmative(text) || require('./personaManager').detectDecline(text)
         : (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion || !detectIntent(text, null) || detectIntent(text, null) === 'goal'))) {
-        return missionOrchestrator.resume({ tenantId, id: pending.id, answer: text }, missionDeps(d));
+        return missionOrchestrator.resume({ tenantId, id: pending.id, answer: text, sessionId }, missionDeps(d));
       }
     }
   } catch (err) { console.warn('missionOrchestrator continuation:', err.message); }
+
+  // Reprend explicitement la fiche de collecte d'une campagne en attente. La
+  // réponse peut être un texte exact (sans verbe d'action ni mot-clé métier).
+  if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion && lastAssistantMessage.intent === 'groupcampaign') {
+    return handleGroupCampaign(text, history, tenantId, d, lastAssistantMessage);
+  }
 
   // « Objectif du mois : 1 000 000 FCFA » : rattaché à la campagne de groupes s'il en existe une (sinon comportement historique).
   if (GROUPGOAL_RE.test(text) && !(lastAssistantMessage && lastAssistantMessage.isPlanningQuestion)) {
@@ -1621,9 +1696,12 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
   const intent = detectIntent(text, lastAssistantMessage);
   if (!intent && isQuickChat(text)) return null; // conversation courante : réponse directe (voir isQuickChat)
   if (intent === 'goal' && isComplexObjective(text) && !ADVISORY_RE.test(String(text))) {
-    return missionOrchestrator.start({ text, tenantId, sessionId, channel: (authz.currentPrincipal() || {}).channel }, missionDeps(d));
+    return missionOrchestrator.start({ text, tenantId, sessionId, channel: (authz.currentPrincipal() || {}).channel, history }, missionDeps(d));
   }
-  if (intent && intent !== 'community' && intent !== 'groups' && ACTION_RE.test(text)) {
+  if (isCompositeAction(text)) {
+    return missionOrchestrator.start({ text, tenantId, sessionId, channel: (authz.currentPrincipal() || {}).channel, history }, missionDeps(d));
+  }
+  if (intent && intent !== 'groupcampaign' && (ACTION_RE.test(text) || ADDITIONAL_ACTION_RE.test(text) || REGISTRY_READ_INTENTS.has(intent))) {
     const genericAgent = await agentLoop.runAgentLoop(
       { text, history, tenantId, sessionId },
       { rawText: text, returnGap: false, runtime: d.runtime || null, permissions: d.toolPermissions || undefined, generateImage: d.generateImage || null, toolContext: d.toolContext || undefined, llm: d.llm || undefined },
@@ -1689,7 +1767,7 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
     case 'recurring': return handleRecurring(text, history, tenantId, d);
     case 'crm': return handleCrm(text, tenantId);
     case 'payment': return handlePayment(text, history, tenantId, d);
-    case 'connector': return handleConnector(text, history, tenantId, d);
+    case 'connector': return handleConnector(text, history, tenantId, d, sessionId);
     case 'businessinfo': return handleBusinessInfo(text, history, tenantId, d);
     case 'configsvc': return handleConfigSvc(text, history, tenantId, d, lastAssistantMessage);
     case 'importcontacts': return handleImportContacts(text, tenantId);

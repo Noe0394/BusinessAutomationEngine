@@ -36,7 +36,7 @@ function fakeOwner(chat, chatFallback, sent) {
   return { run, restore };
 }
 
-test("SELF-CHAT : réponse rapide = aucun accusé ; tâche longue = UN accusé « je m'en occupe » puis le résultat", async () => {
+test("SELF-CHAT : aucun accusé temporisé pendant le raisonnement ; le résultat réel est envoyé une seule fois", async () => {
   process.env.OWNER_ACK_MS = '80'; const sent = [];
   const fast = fakeOwner(async () => null, async () => 'Salut ! Ça va bien.', sent);
   try {
@@ -45,7 +45,7 @@ test("SELF-CHAT : réponse rapide = aucun accusé ; tâche longue = UN accusé �
   sent.length = 0;
   const slow = fakeOwner(async () => { await new Promise((r) => setTimeout(r, 300)); return { text: '✅ Fait.', toolCall: { state: 'SUCCESS' } }; }, null, sent);
   try {
-    await slow.run('Crée le service X'); assert.equal(sent.length, 2, JSON.stringify(sent)); assert.match(sent[0], /Je m'en occupe/); assert.equal(sent[1], '✅ Fait.');
+    await slow.run('Crée le service X'); assert.deepEqual(sent, ['✅ Fait.']);
   } finally { slow.restore(); delete process.env.OWNER_ACK_MS; }
 });
 

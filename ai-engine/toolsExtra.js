@@ -89,6 +89,37 @@ function queueHandlers(tenant, runtime, allowedModules) {
 }
 
 const TOOLS = {
+  getRecentMessages: {
+    feature: 'conversations_messaging', capabilities: ['read', 'search', 'inbox'],
+    description: 'Lit les derniers messages réellement reçus sur WhatsApp ou Telegram avec expéditeur, contenu, date et état de connexion. Outil de consultation; ne répond ni n’envoie de message.',
+    permission: null, risk: 'READ',
+    inputSchema: { channel: { type: 'string', required: true, description: 'WHATSAPP ou TELEGRAM.' }, limit: { type: 'number', description: 'Nombre maximal de messages (1–100).' } },
+    async execute(args, ctx) {
+      const executor = ctx.runtime && ctx.runtime.actionExecutor;
+      if (!executor || typeof executor.execute !== 'function') return fail('RUNTIME_MISSING:READ_RECENT_MESSAGES');
+      const out = await executor.execute('READ_RECENT_MESSAGES', { channel: chan(args.channel), limit: Math.max(1, Math.min(100, Number(args.limit) || 10)), tenantId: ctx.tenant }, { tenantId: ctx.tenant });
+      if (!out || out.ok !== true) return fail(out && out.error || 'READ_RECENT_MESSAGES_FAILED');
+      return { ok: true, result: out.result || null };
+    },
+    async verify(result) { return { verified: !!result && typeof result.connected === 'boolean' && (result.connected === false || Array.isArray(result.messages)) }; },
+  },
+  listMyContacts: {
+    feature: 'contacts_crm', capabilities: ['list', 'search', 'count', 'filter'],
+    description: 'Recherche dans les contacts réels du CRM Cyrus et renvoie leurs noms, numéros, étiquettes et achats enregistrés. Filtres facultatifs par étiquette, canal ou nom/numéro.',
+    permission: null, risk: 'READ',
+    inputSchema: { tag: { type: 'string' }, channel: { type: 'string' }, query: { type: 'string' }, limit: { type: 'number' } },
+    async execute(args, ctx) {
+      const counts = await contactCrm.counts(ctx.tenant);
+      let contacts = await contactCrm.list(ctx.tenant, { tag: args.tag, channel: args.channel && chan(args.channel) });
+      if (args.query) {
+        const q = String(args.query).toLowerCase();
+        contacts = contacts.filter((c) => `${c.name || ''} ${c.from || ''} ${(c.tags || []).join(' ')}`.toLowerCase().includes(q));
+      }
+      const limit = Math.max(1, Math.min(500, Number(args.limit) || 100));
+      return { ok: true, result: { count: contacts.length, totalInCrm: counts.total || 0, byTag: counts.byTag || {}, truncated: contacts.length > limit, contacts: contacts.slice(0, limit) } };
+    },
+    async verify(result) { return { verified: !!result && Array.isArray(result.contacts) && Number.isFinite(result.count) }; },
+  },
   // ================= FORMATIONS : base de connaissances pédagogique (accompagnement des apprenants) =================
   ingestCourse: {
     description: 'Ajoute du contenu à la base de connaissances d\'une FORMATION (créée si nécessaire) à partir d\'un fichier joint (PDF, DOCX, texte, Excel, audio/vidéo transcrits) via fileId, ou d\'un texte : structure module → chapitre → leçon détectée, indexation pour la recherche ciblée. category : official (contenu officiel, défaut), complementary (connaissances complémentaires), faq (questions fréquentes validées), internal (notes internes, jamais montrées aux apprenants). Peut lier la formation à un Service métier (serviceId).',
@@ -281,7 +312,7 @@ const TOOLS = {
       } else if (args.text) input.text = args.text;
       else if (args.source !== 'crm' && args.source !== 'group' && !args.memberSourceGroupId && !args.memberSourceGroupName) return fail('NO_RECIPIENTS', 'Fournissez du texte, une liste préparée, un fichier, les contacts Cyrus ou un groupe source.');
       try {
-        const job = await require('./communityService').addMembersToGroup(ctx.tenant, input);
+        const job = await require('./communityService').addMembersToGroup(ctx.tenant, input, ctx.allowedModules);
         return { ok: true, result: { jobId: job.id, operation: job.operation, status: job.status, channel: job.channel, group: job.group, total: job.counts.total, duplicateInput: job.counts.duplicate_input } };
       } catch (e) { return fail(e.code || 'ADD_MEMBERS_FAILED', e.message); }
     },
@@ -801,6 +832,10 @@ const TOOLS = {
       if (r.ok) r.result.notAdmin = target.notAdmin;
       return r;
     },
+    async verify(result, args, ctx) {
+      const campaign = result && result.campaignId ? await require('./groupCampaigns').get(ctx.tenant, result.campaignId) : null;
+      return { verified: !!campaign && campaign.keyword === args.keyword && campaign.groups.length > 0 && campaign.slots.length > 0 };
+    },
   },
   listGroupCampaigns: {
     description: 'Liste les campagnes de groupes (statut, groupes ciblés, horaires, messages envoyés).', permission: null, risk: 'READ', inputSchema: {},
@@ -810,12 +845,14 @@ const TOOLS = {
     requiredModule: 'whatsapp',
     description: 'Arrête une campagne de groupes (par nom ou identifiant).', permission: null, risk: 'LOW_WRITE', inputSchema: { campaign: { type: 'string' } },
     async execute(args, ctx) { return require('./groupCampaigns').stop(ctx.tenant, args.campaign); },
+    async verify(result, args, ctx) { const c = result && result.campaignId ? await require('./groupCampaigns').get(ctx.tenant, result.campaignId) : null; return { verified: !!c && c.status === 'stopped' }; },
   },
   setGroupCampaignGoal: {
     requiredModule: 'whatsapp',
     description: 'Définit l\'objectif commercial d\'une campagne de groupes (ex. 1 000 000 FCFA sur le mois).', permission: null, risk: 'LOW_WRITE',
     inputSchema: { amount: { type: 'number', required: true }, currency: { type: 'string' }, period: { type: 'string' }, campaign: { type: 'string' } },
     async execute(args, ctx) { return require('./groupCampaigns').setGoal(ctx.tenant, args.campaign, { amount: Number(args.amount), currency: args.currency || 'FCFA', period: args.period || null }); },
+    async verify(result, args, ctx) { const c = result && result.campaignId ? await require('./groupCampaigns').get(ctx.tenant, result.campaignId) : null; return { verified: !!c && !!c.goal && Number(c.goal.amount) === Number(args.amount) && c.goal.currency === (args.currency || 'FCFA') }; },
   },
   getGroupCampaignReport: {
     requiredModule: 'whatsapp',

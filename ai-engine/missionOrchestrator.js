@@ -7,10 +7,11 @@ const storage = require('./storageAdapter');
 const authz = require('./authz');
 const activityStore = require('./activityStore');
 const businessServices = require('./businessServices');
+const verbatimPayload = require('./verbatimPayload');
 const registry = () => require('./toolRegistry');
 
 const NS = 'objective_missions';
-const MAX_STEPS = 10;
+const MAX_STEPS = 100;
 const MAX_MISSIONS = 100;
 const monitorTimers = new Map();
 const activeMissionIds = new Set();
@@ -92,17 +93,21 @@ function resolveRefs(value, prior) {
   for (const [k, v] of Object.entries(value)) out[k] = resolveRefs(v, prior);
   return out;
 }
-function availableTools(ctx) {
-  return registry().list(ctx).filter((t) => t.feature !== 'facebook_marketing' && !/^facebook/i.test(t.name));
+async function availableTools(ctx) {
+  return (await registry().listForContext(ctx)).filter((t) => t.feature !== 'facebook_marketing' && !/^facebook/i.test(t.name));
 }
-function plannerPrompt({ objective, tools, completed, previousPlan, businessContext }) {
+function plannerPrompt({ objective, tools, completed, previousPlan, businessContext, conversationContext }) {
   return [
     'Tu es le planificateur d’objectifs de Cyrus. Tu comprends et choisis; les outils et moteurs exécutent. Réponds en JSON strict uniquement.',
-    'Construis un plan court de 1 à 10 étapes. Utilise uniquement les noms exacts ci-dessous. Fais les lectures nécessaires (Service métier, groupes, contacts, campagnes) avant les actions. N’invente ni groupe, ni contact, ni prix, ni identifiant, ni réussite.',
+    'Construis le plan nécessaire, de 1 à 100 étapes au maximum. Utilise uniquement les noms exacts ci-dessous. Fais les lectures nécessaires (Service métier, groupes, contacts, campagnes) avant les actions. N’invente ni groupe, ni contact, ni prix, ni identifiant, ni réussite.',
     'Les opérations déterministes restent dans les outils. N’ajoute pas de comptage/normalisation si un outil de préparation le fait déjà. Utilise {"$ref":"ID.result.champ"} dans les arguments pour reprendre la sortie réelle d’une étape précédente.',
+    'Quand le vendeur fournit un message « exactement », « mot pour mot » ou « tel quel », copie son contenu à l’identique dans le champ text des outils d’envoi/brouillon. Ne paraphrase, ne corrige et ne tronque jamais ce contenu.',
     'Si une information réellement indispensable manque et n’existe pas dans les résultats, renvoie {"needsInput":true,"question":"...","steps":[]} et ne planifie aucune action externe. Sinon renvoie {"needsInput":false,"steps":[{"id":"s1","tool":"nomExact","args":{},"label":"description courte"}]}.',
     'Pour un objectif de vente, recherche l’offre et les cibles avant de préparer le message. Si le texte, le prix ou un canal indispensable manque des données disponibles, demande uniquement cette information. Ne prétends pas confirmer des conversions sans source de conversion.',
     businessContext ? 'Contexte des Services métier réellement configurés :\n' + businessContext.slice(0, 12000) : 'Aucun contexte Service métier configuré n’est disponible.',
+    conversationContext && conversationContext.length
+      ? 'Contexte conversationnel utile (les réponses courtes peuvent préciser l’objectif précédent) :\n' + conversationContext.slice(-12).map((m) => `${m.who}: ${String(m.text || '').slice(0, 500)}`).join('\n')
+      : '',
     'Objectif utilisateur : ' + JSON.stringify(objective).slice(0, 3000),
     previousPlan ? 'Plan précédent arrêté : ' + compact(previousPlan, 2000) : '',
     completed.length ? 'Étapes déjà réellement vérifiées (ne pas répéter) : ' + compact(completed, 5000) : '',
@@ -116,10 +121,11 @@ async function makePlan(mission, deps, priorPlan) {
   const ctx = Object.assign({}, deps.toolContext || {}, { tenant: mission.tenant, principal,
     runtime: deps.runtime || null, permissions: deps.permissions || ['messages:send'],
     generateImage: deps.generateImage || null, autonomous: true });
-  const tools = availableTools(ctx);
+  const tools = await availableTools(ctx);
   let businessContext = '';
   try { businessContext = await businessServices.getEngineContextText(mission.tenant); } catch (e) { businessContext = ''; }
-  const prompt = plannerPrompt({ objective: mission.objective, tools, completed: mission.steps.filter((s) => s.state === 'SUCCESS'), previousPlan: priorPlan, businessContext });
+  const prompt = plannerPrompt({ objective: mission.objective, tools, completed: mission.steps.filter((s) => s.state === 'SUCCESS'), previousPlan: priorPlan, businessContext,
+    conversationContext: mission.context && mission.context.lastRelevantMessages });
   const llm = deps.planLlm || deps.llm;
   let raw;
   if (typeof llm === 'function') raw = await llm(prompt, []);
@@ -180,8 +186,8 @@ function campaignIsTerminal(status) { return /complete|finished|cancel|stop|fail
 function objectiveRequiresExternalAction(text) {
   return /vend|prospect|campagn|promot|diffus|envoi|envoy|lanc|ajout(?:e|er|ez|ons)?|inscri|convert/i.test(String(text || ''));
 }
-function hasVerifiedExternalAction(mission, ctx) {
-  const risks = new Map(availableTools(ctx).map((t) => [t.name, t.risk]));
+async function hasVerifiedExternalAction(mission, ctx) {
+  const risks = new Map((await availableTools(ctx)).map((t) => [t.name, t.risk]));
   return mission.steps.some((s) => s.state === 'SUCCESS' && ['WRITE', 'SENSITIVE', 'CRITICAL'].includes(risks.get(s.tool)));
 }
 async function monitorMission(tenantId, id, deps) {
@@ -284,7 +290,7 @@ async function executePlan(mission, deps) {
   const ctx = Object.assign({}, deps.toolContext || {}, { tenant: mission.tenant, principal,
     runtime: deps.runtime || null, permissions: deps.permissions || ['messages:send'],
     generateImage: deps.generateImage || null, autonomous: true });
-  const tools = new Map(availableTools(ctx).map((t) => [t.name, t]));
+  const tools = new Map((await availableTools(ctx)).map((t) => [t.name, t]));
   const completedById = Object.fromEntries(mission.steps.filter((s) => s.state === 'SUCCESS').map((s) => [s.id, s]));
   for (const step of mission.steps) {
     if (mission.state === 'paused' || mission.state === 'stopped') break;
@@ -301,7 +307,7 @@ async function executePlan(mission, deps) {
       await event(mission, 'outil indisponible', 'error', step.tool, deps); return mission;
     }
     let args;
-    try { args = resolveRefs(step.args, completedById); }
+    try { args = resolveRefs(step.args, completedById); args = verbatimPayload.applyVerbatimText(step.tool, args, mission.objective); }
     catch (err) {
       step.state = 'BLOCKED'; step.error = { code: err.message.split(':')[0] }; mission.state = 'waiting_input';
       mission.question = 'Je n’ai pas retrouvé une donnée réelle nécessaire à « ' + step.label + ' ». Quelle valeur dois-je utiliser ?';
@@ -312,27 +318,43 @@ async function executePlan(mission, deps) {
       mission.state = 'waiting_input'; mission.question = 'Il me manque ' + missing.join(', ') + ' pour ' + step.label + '.';
       await event(mission, 'information requise', 'warning', mission.question, deps); return mission;
     }
-    step.state = 'RUNNING'; step.executedArgs = args; mission.state = 'running'; mission.currentStep = step.id;
+    step.state = 'RUNNING'; step.executedArgs = args; mission.state = 'running'; mission.currentStep = step.id; mission.nextStep = step.id;
     await event(mission, 'étape démarrée', 'pending', step.label, deps);
     let call;
     try { call = await registry().execute(mission.tenant, step.tool, args, ctx); }
     catch (err) { call = { state: 'FAILED', error: { code: 'EXECUTION_ERROR', message: String(err.message || err) } }; }
     step.state = call.state; step.result = call.result || null; step.error = call.error || null;
     step.verification = call.verification || null; step.finishedAt = Date.now();
+    mission.lastResult = { stepId: step.id, tool: step.tool, state: call.state, result: call.result || null, error: call.error || null, verification: call.verification || null, at: step.finishedAt };
+    if (mission.context) mission.context.lastToolResult = mission.lastResult;
     mission.currentStep = null;
     if (call.state === 'SUCCESS') {
       completedById[step.id] = step;
+      mission.nextStep = mission.steps[mission.steps.indexOf(step) + 1] ? mission.steps[mission.steps.indexOf(step) + 1].id : null;
       await event(mission, 'étape vérifiée', 'ok', step.label + ' — ' + summarizeResult(call.result), deps);
       continue;
     }
-    mission.state = call.state === 'NEEDS_CONFIRMATION' ? 'needs_confirmation' : (call.state === 'UNCONFIRMED' ? 'needs_review' : 'failed');
+    const missingInput = call.state === 'FAILED' && call.error && call.error.code === 'MISSING_INPUT';
+    if (missingInput) step.state = 'BLOCKED';
+    mission.state = call.state === 'NEEDS_CONFIRMATION' ? 'needs_confirmation'
+      : (call.state === 'UNCONFIRMED' ? 'needs_review' : (missingInput ? 'waiting_input' : 'failed'));
+    if (missingInput) {
+      const fields = Array.isArray(call.error.fields) ? call.error.fields.join(', ') : 'une information obligatoire';
+      mission.question = 'Il me manque ' + fields + ' pour ' + step.label + '. Rien n’a été exécuté.';
+    }
+    if (mission.context) mission.context.pendingTask = { missionId: mission.id, state: mission.state, currentStep: step.id };
+    if (call.state === 'NEEDS_CONFIRMATION') {
+      mission.pendingActionId = mission.pendingActionId || 'ACT-' + crypto.randomBytes(6).toString('hex').toUpperCase();
+      mission.confirmationExpiresAt = Date.now() + 24 * 60 * 60 * 1000;
+      if (mission.context) mission.context.pendingAction = { pendingActionId: mission.pendingActionId, missionId: mission.id, stepId: step.id, tool: step.tool, args: args };
+    }
     mission.question = call.state === 'NEEDS_CONFIRMATION' ? 'L’action « ' + step.label + ' » attend une confirmation explicite.' : null;
-    await event(mission, 'étape ' + String(call.state || 'FAILED').toLowerCase(), call.state === 'NEEDS_CONFIRMATION' || call.state === 'UNCONFIRMED' ? 'warning' : 'error', step.label + (call.error && call.error.code ? ' — ' + call.error.code : ''), deps);
+    await event(mission, missingInput ? 'information nécessaire' : ('étape ' + String(call.state || 'FAILED').toLowerCase()), missingInput || call.state === 'NEEDS_CONFIRMATION' || call.state === 'UNCONFIRMED' ? 'warning' : 'error', mission.question || (step.label + (call.error && call.error.code ? ' — ' + call.error.code : '')), deps);
     return mission;
   }
   if (mission.state === 'paused' || mission.state === 'stopped' || mission.state === 'needs_review') return mission;
   const launched = missionCampaigns(mission);
-  if (!launched.length && objectiveRequiresExternalAction(mission.objective) && !hasVerifiedExternalAction(mission, ctx)) {
+  if (!launched.length && objectiveRequiresExternalAction(mission.objective) && !(await hasVerifiedExternalAction(mission, ctx))) {
     if ((mission.replanCount || 0) < 1) {
       mission.replanCount = (mission.replanCount || 0) + 1;
       await event(mission, 'les lectures sont prêtes — décision d’action', 'pending', 'L’IA reprend les résultats réels une seule fois pour déterminer les prochaines étapes.', deps);
@@ -364,23 +386,19 @@ async function executePlan(mission, deps) {
   }
   mission.state = launched.length ? 'monitoring' : (mission.steps.every((s) => s.state === 'SUCCESS') ? 'completed' : 'failed');
   if (mission.state === 'completed') mission.result = { verifiedSteps: mission.steps.filter((s) => s.state === 'SUCCESS').length, totalSteps: mission.steps.length };
+  if (mission.context) {
+    mission.context.pendingTask = { missionId: mission.id, state: mission.state };
+    if (mission.state === 'completed') mission.context.pendingAction = null;
+  }
   await event(mission, mission.state === 'monitoring' ? 'campagne(s) lancée(s) — suivi réel en cours' : (mission.state === 'completed' ? 'plan exécuté et vérifié' : 'mission incomplète'), mission.state === 'failed' ? 'error' : 'ok', mission.steps.filter((s) => s.state === 'SUCCESS').length + '/' + mission.steps.length + ' étapes vérifiées', deps);
   if (mission.state === 'monitoring') scheduleMonitor(mission, deps);
   return mission;
 }
 
-async function start({ text, tenantId, sessionId, channel }, deps) {
-  const principal = authz.currentPrincipal();
-  if (!authz.isPrincipal(principal) || principal.tenant !== String(tenantId) || !['OWNER', 'ADMIN'].includes(principal.role)) return { text: 'La mission ne peut pas démarrer sans une identité propriétaire vérifiée.', blocked: true };
-  const mission = { id: uid(), tenant: safeTenant(tenantId), sessionId: String(sessionId || ''),
-    channel: String(channel || principal.channel || 'CHAT').toUpperCase(), objective: String(text || '').slice(0, 4000),
-    state: 'planning', question: null, steps: [], createdAt: Date.now(), startedAt: Date.now(), updatedAt: Date.now(),
-    taskId: null, currentStep: null, progress: [], lastNotificationAt: null, result: null, error: null,
-    ownerConversationId: String(sessionId || '') };
-  mission.taskId = mission.id;
+async function processNewMission(mission, deps) {
   activeMissionIds.add(mission.id);
   try {
-    await event(mission, 'mission créée', 'pending', mission.objective.slice(0, 250), deps);
+    await event(mission, 'planification démarrée', 'pending', mission.objective.slice(0, 250), deps);
     let plan;
     try { plan = await makePlan(mission, deps); }
     catch (err) {
@@ -390,9 +408,11 @@ async function start({ text, tenantId, sessionId, channel }, deps) {
     }
     if (plan.needsInput) {
       mission.state = 'waiting_input'; mission.question = plan.question;
+      if (mission.context) mission.context.pendingTask = { missionId: mission.id, state: 'waiting_input', question: plan.question };
       await event(mission, 'information nécessaire', 'warning', plan.question, deps);
-      return { text: plan.question + '\nMission ' + mission.id + ' enregistrée : répondez ici pour reprendre.', missionId: mission.id, state: mission.state, isPlanningQuestion: true, intent: 'goal' };
+      return Object.assign(render(mission), { isPlanningQuestion: true, intent: 'goal' });
     }
+    if (mission.context) mission.context.pendingTask = { missionId: mission.id, state: 'running' };
     mission.steps = plan.steps;
     await saveMission(mission.tenant, mission);
     await executePlan(mission, deps);
@@ -400,12 +420,72 @@ async function start({ text, tenantId, sessionId, channel }, deps) {
   } finally { activeMissionIds.delete(mission.id); }
 }
 
-async function resumeCore({ tenantId, id, answer }, deps) {
+async function start({ text, tenantId, sessionId, channel, history }, deps) {
+  const principal = authz.currentPrincipal();
+  if (!authz.isPrincipal(principal) || principal.tenant !== String(tenantId) || !['OWNER', 'ADMIN'].includes(principal.role)) return { text: 'La mission ne peut pas démarrer sans une identité propriétaire vérifiée.', blocked: true };
+  const recent = (Array.isArray(history) ? history : []).slice(-12).map((m) => ({
+    who: m && (m.role === 'assistant' ? 'Cyrus' : 'Propriétaire'), text: String(m && m.text || '').slice(0, 500),
+  }));
+  const mission = { id: uid(), tenant: safeTenant(tenantId), userId: String(principal.userId || ''), sessionId: String(sessionId || ''),
+    channel: String(channel || principal.channel || 'CHAT').toUpperCase(), objective: String(text || '').slice(0, 4000),
+    serviceId: null, pendingActionId: null, context: { conversationId: String(sessionId || ''), userId: String(principal.userId || ''), tenantId: safeTenant(tenantId),
+      currentSubject: null, currentIntent: 'goal', currentGoal: String(text || '').slice(0, 1000), lastRelevantMessages: recent,
+      activeProduct: null, activeService: null, commercialState: null, pendingTask: null, lastToolResult: null, handoffState: null },
+    state: 'planning', question: null, steps: [], createdAt: Date.now(), startedAt: Date.now(), updatedAt: Date.now(),
+    taskId: null, currentStep: null, nextStep: null, lastResult: null, retryCount: 0,
+    progress: [], lastNotificationAt: null, result: null, error: null,
+    ownerConversationId: String(sessionId || '') };
+  mission.taskId = mission.id;
+  try {
+    const services = await businessServices.getEngineContext(tenantId);
+    const matched = businessServices.matchService(services, mission.objective);
+    if (matched) {
+      mission.serviceId = matched.id;
+      mission.context.activeService = { id: matched.id, name: matched.name };
+      mission.context.currentSubject = matched.name;
+    }
+  } catch (_) { /* service context may be unavailable; never invent a match */ }
+  await saveMission(mission.tenant, mission);
+  if (deps && deps.background === true) {
+    setImmediate(() => processNewMission(mission, deps).catch(async (err) => {
+      mission.state = 'failed'; mission.error = String(err.message || err).slice(0, 300);
+      await event(mission, 'exécution de mission interrompue', 'error', mission.error, deps).catch(() => {});
+    }));
+    return { text: 'Mission ' + mission.id + ' enregistrée. La préparation et les étapes démarrent en arrière-plan.',
+      missionId: mission.id, taskId: mission.taskId, state: 'planning', status: 'QUEUED', objective: mission.objective,
+      currentStep: null, nextStep: null, pendingActionId: null, startedAt: mission.startedAt, updatedAt: mission.updatedAt };
+  }
+  return processNewMission(mission, deps || {});
+}
+
+async function resumeCore({ tenantId, id, answer, sessionId, pendingActionId }, deps) {
   const mission = await get(tenantId, id);
   if (!mission) return { text: 'Mission introuvable pour ce compte.' };
+  const caller = authz.currentPrincipal();
+  if (!authz.isPrincipal(caller) || caller.tenant !== mission.tenant || (mission.userId && caller.userId !== mission.userId)) {
+    return { text: 'Cette mission n’est pas rattachée à votre identité ou à votre compte.', blocked: true };
+  }
+  if (sessionId && ['needs_confirmation', 'waiting_input'].includes(mission.state)
+    && String(sessionId) !== String(mission.ownerConversationId || mission.sessionId || '')) {
+    return { text: 'Cette confirmation ou précision appartient à une autre conversation.', blocked: true };
+  }
+  if (mission.state === 'needs_confirmation') {
+    const answerRef = String(answer || '').match(/\bACT-[A-F0-9]{12}\b/i);
+    if ((answerRef && answerRef[0].toUpperCase() !== String(mission.pendingActionId || '').toUpperCase())
+      || (pendingActionId && String(pendingActionId).toUpperCase() !== String(mission.pendingActionId || '').toUpperCase())) {
+      return { text: 'Cette référence ne correspond pas à l’action en attente pour cette mission.', missionId: id, blocked: true };
+    }
+  }
   if (mission.state === 'needs_confirmation' && answer) {
+    if (mission.confirmationExpiresAt && mission.confirmationExpiresAt <= Date.now()) {
+      mission.state = 'needs_review'; mission.error = { code: 'CONFIRMATION_EXPIRED' };
+      await event(mission, 'confirmation expirée — vérification requise', 'warning', mission.pendingActionId || mission.id, deps);
+      return render(mission);
+    }
     if (authz.isPrincipal(authz.currentPrincipal()) && require('./personaManager').detectDecline(answer)) {
       mission.state = 'stopped';
+      mission.pendingActionId = null; mission.confirmationExpiresAt = null;
+      if (mission.context) { mission.context.pendingAction = null; mission.context.pendingTask = { missionId: mission.id, state: 'stopped' }; }
       await event(mission, 'action en attente annulée', 'warning', '', deps);
       return render(mission);
     }
@@ -430,6 +510,7 @@ async function resumeCore({ tenantId, id, answer }, deps) {
         return render(mission);
       }
       mission.pendingControl = null;
+      mission.pendingActionId = null; mission.confirmationExpiresAt = null;
       mission.state = p.action === 'stop' ? 'stopped' : p.action === 'pause' ? 'paused' : 'monitoring';
       await event(mission, 'contrôle confirmé et vérifié', 'ok', p.action, deps);
       if (mission.state === 'monitoring') scheduleMonitor(mission, deps);
@@ -444,11 +525,15 @@ async function resumeCore({ tenantId, id, answer }, deps) {
     const call = await registry().execute(mission.tenant, step.tool, step.executedArgs || step.args, ctx);
     step.state = call.state; step.result = call.result || null; step.error = call.error || null;
     step.verification = call.verification || null; step.finishedAt = Date.now();
+    mission.lastResult = { stepId: step.id, tool: step.tool, state: call.state, result: call.result || null, error: call.error || null, verification: call.verification || null, at: step.finishedAt };
+    if (mission.context) mission.context.lastToolResult = mission.lastResult;
     if (call.state !== 'SUCCESS') {
       mission.state = call.state === 'UNCONFIRMED' ? 'needs_review' : 'failed';
       await event(mission, 'action confirmée mais non vérifiée', 'warning', step.label, deps);
       return render(mission);
     }
+    mission.pendingActionId = null; mission.confirmationExpiresAt = null;
+    if (mission.context) mission.context.pendingAction = null;
     mission.state = 'running';
     await event(mission, 'action confirmée et vérifiée', 'ok', step.label, deps);
     await executePlan(mission, deps);
@@ -456,6 +541,10 @@ async function resumeCore({ tenantId, id, answer }, deps) {
   }
   if (mission.state === 'waiting_input' && answer) {
     mission.objective += '\nPrécision utilisateur : ' + String(answer).slice(0, 1500);
+    if (mission.context) {
+      mission.context.currentGoal = mission.objective.slice(0, 1500);
+      mission.context.lastRelevantMessages = (mission.context.lastRelevantMessages || []).concat([{ who: 'Propriétaire', text: String(answer).slice(0, 500) }]).slice(-12);
+    }
     mission.state = 'planning'; mission.question = null;
     await event(mission, 'information reçue — reprise de planification', 'pending', String(answer).slice(0, 200), deps);
     let plan;
@@ -467,6 +556,7 @@ async function resumeCore({ tenantId, id, answer }, deps) {
     }
     if (plan.needsInput) {
       mission.state = 'waiting_input'; mission.question = plan.question;
+      if (mission.context) mission.context.pendingTask = { missionId: mission.id, state: 'waiting_input', question: plan.question };
       await event(mission, 'information nécessaire', 'warning', plan.question, deps); return render(mission);
     }
     const successful = mission.steps.filter((s) => s.state === 'SUCCESS');
@@ -484,7 +574,13 @@ async function resume(args, deps) {
   const key = String(args && args.id || '');
   if (activeMissionIds.has(key)) {
     const current = await get(args.tenantId, key);
-    return current ? render(current) : { text: 'Mission introuvable.' };
+    if (!current) return { text: 'Mission introuvable.' };
+    const caller = authz.currentPrincipal();
+    if (!authz.isPrincipal(caller) || caller.tenant !== current.tenant
+      || (current.userId && caller.userId !== current.userId)) {
+      return { text: 'Cette mission n’est pas rattachée à votre identité ou à votre compte.', blocked: true };
+    }
+    return render(current);
   }
   activeMissionIds.add(key);
   try { return await resumeCore(args, deps); }
@@ -494,6 +590,11 @@ async function resume(args, deps) {
 async function control({ tenantId, id, action }, deps) {
   const mission = await get(tenantId, id);
   if (!mission) return null;
+  const principal = authz.currentPrincipal();
+  if (!authz.isPrincipal(principal) || principal.tenant !== mission.tenant
+    || (mission.userId && principal.userId !== mission.userId)) {
+    return { text: 'Cette mission n’est pas rattachée à votre identité ou à votre compte.', missionId: id, state: mission.state, blocked: true };
+  }
   const canPause = ['running', 'monitoring'].includes(mission.state);
   const canResume = ['paused', 'monitoring'].includes(mission.state);
   const canStop = !['completed', 'failed', 'stopped', 'awaiting_outcome'].includes(mission.state);
@@ -509,9 +610,11 @@ async function control({ tenantId, id, action }, deps) {
     for (const campaign of campaigns) {
       const call = await registry().execute(tenantId, toolName, campaign, ctx);
       if (call.state !== 'SUCCESS') {
-        if (call.state === 'NEEDS_CONFIRMATION') {
-          mission.pendingControl = { tool: toolName, args: campaign, action };
-          mission.state = 'needs_confirmation'; mission.question = 'Le contrôle de la campagne ' + campaign.campaignId + ' attend une confirmation.';
+      if (call.state === 'NEEDS_CONFIRMATION') {
+        mission.pendingControl = { tool: toolName, args: campaign, action };
+        mission.pendingActionId = mission.pendingActionId || 'ACT-' + crypto.randomBytes(6).toString('hex').toUpperCase();
+        mission.confirmationExpiresAt = Date.now() + 24 * 60 * 60 * 1000;
+        mission.state = 'needs_confirmation'; mission.question = 'Le contrôle de la campagne ' + campaign.campaignId + ' attend une confirmation.';
           await event(mission, 'contrôle de campagne en attente de confirmation', 'warning', action + ' ' + campaign.campaignId, deps);
           return render(mission);
         }
@@ -542,7 +645,7 @@ function render(mission) {
   let text;
   if (mission.state === 'completed') text = 'Mission ' + mission.id + ' terminée : ' + done + '/' + mission.steps.length + ' étapes exécutées et vérifiées.';
   else if (mission.state === 'waiting_input') text = mission.question + '\nMission ' + mission.id + ' en attente de votre réponse.';
-  else if (mission.state === 'needs_confirmation') text = 'Mission ' + mission.id + ' en pause : une action attend votre confirmation explicite.';
+  else if (mission.state === 'needs_confirmation') text = 'Mission ' + mission.id + ' en pause : l’action préparée ' + (mission.pendingActionId || '') + ' attend votre confirmation explicite.';
   else if (mission.state === 'needs_review') text = 'Mission ' + mission.id + ' arrêtée pour contrôle : une étape n’a pas pu être confirmée après interruption.';
   else if (mission.state === 'monitoring') text = 'Mission ' + mission.id + ' — campagnes en cours, suivi réel : ' + (mission.progress || []).map((p) => p.channel + ' ' + p.sent + '/' + p.total + ' (' + p.status + ')').join('; ');
   else if (mission.state === 'awaiting_outcome') text = 'Mission ' + mission.id + ' : les envois sont terminés et mesurés. ' + (mission.outcomeNote || 'Les conversions demandent une preuve commerciale disponible.');
@@ -553,6 +656,9 @@ function render(mission) {
   stampMission(mission);
   return { text, missionId: mission.id, taskId: mission.taskId, state: mission.state, status: mission.status,
     objective: mission.objective, currentStep: mission.currentStep || null, progressPercent: mission.progressPercent,
+    pendingActionId: mission.pendingActionId || null, confirmationExpiresAt: mission.confirmationExpiresAt || null,
+    serviceId: mission.serviceId || null, userId: mission.userId || null, nextStep: mission.nextStep || null,
+    lastResult: mission.lastResult || null,
     startedAt: mission.startedAt, updatedAt: mission.updatedAt, ownerConversationId: mission.ownerConversationId,
     result: mission.result || null, error: mission.error || null,
     progress: mission.progress || [], outcomeNote: mission.outcomeNote || null,

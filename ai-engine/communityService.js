@@ -476,6 +476,11 @@ async function runJob(tenant, job) {
 // input : { channel, title, description?, inviteMessage?, recipients? | recipientsId? | text? | file? | image?, defaultCountryCode? }
 // Renvoie immédiatement le job (le traitement continue en arrière-plan) — jamais d'attente d'une longue file d'ajouts.
 async function startGroup(tenant, input, allowedModules) {
+  if (allowedModules === undefined) {
+    const authz = require('./authz');
+    const principal = authz.currentPrincipal();
+    allowedModules = authz.isPrincipal(principal) ? principal.allowedModules : [];
+  }
   const channel = String(input.channel || 'WHATSAPP').toUpperCase();
   if (!DRIVERS[channel]) { const e = new Error('Canal inconnu (WHATSAPP ou TELEGRAM).'); e.code = 'INVALID_CHANNEL'; throw e; }
   const moduleName = channel === 'TELEGRAM' ? 'telegram' : 'whatsapp';

@@ -29,7 +29,7 @@ const tgManager = require('../adapters/telegramManager');
 const sleeps = []; svc._setSleep(async (ms) => { sleeps.push(ms); }); disc._setSleep(async () => {});
 test.after(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) { /* nettoyage */ } });
 
-const owner = (t) => authz.issuePrincipal({ tenant: t, role: 'OWNER', channel: 'WEB', via: 'test' });
+const owner = (t) => authz.issuePrincipal({ tenant: t, role: 'OWNER', channel: 'WEB', via: 'test', allowedModules: ['whatsapp', 'telegram'] });
 const customer = (t) => authz.issuePrincipal({ tenant: t, role: 'CUSTOMER', channel: 'WHATSAPP', via: 'test' });
 
 // ---- faux moteur WhatsApp (mêmes primitives que adapters/whatsappEngineBaileys.js) ---------------------------------------------------
@@ -327,9 +327,9 @@ test('CHAT INTELLIGENT : « crée un groupe » et « trouve des groupes publics 
   const llm = async (prompt) => (/Réponds UNIQUEMENT en JSON/.test(prompt) ? JSON.stringify(plans[Math.min(step++, 1)]) : 'Le groupe « Promo Chat » est en cours de création.');
   for (const [channelLabel] of [['WEB'], ['WHATSAPP'], ['TELEGRAM']]) {
     step = 0; wa.calls.length = 0; wa.added.length = 0;
-    const p = authz.issuePrincipal({ tenant: T, role: 'OWNER', channel: channelLabel, via: 'test' });
+    const p = authz.issuePrincipal({ tenant: T, role: 'OWNER', channel: channelLabel, via: 'test', allowedModules: ['whatsapp', 'telegram'] });
     const r = await chatOrchestrator.handle({ text: 'Crée un groupe WhatsApp Promo Chat avec 22670888001 et 22670888002', history: [], tenantId: T, sessionId: 's-' + channelLabel, principal: p }, { llm, runtime: null });
-    assert.equal(r.intent, 'community', channelLabel); assert.equal(r.toolCall.name, 'createCommunityGroup'); assert.equal(r.toolCall.state, 'SUCCESS', JSON.stringify(r.toolCall));
+    assert.ok(r && r.toolCall, `${channelLabel}: ${JSON.stringify(r)}`); assert.equal(r.intent, 'community', channelLabel); assert.equal(r.toolCall.name, 'createCommunityGroup'); assert.equal(r.toolCall.state, 'SUCCESS', JSON.stringify(r.toolCall));
     await svc.waitFor(r.toolCall.result.jobId);
     assert.deepEqual(wa.added.sort(), ['22670888001', '22670888002'], `${channelLabel} : même exécution`);
   }
