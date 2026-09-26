@@ -5,6 +5,7 @@ const githubStore = require('../githubStore');
 const { personalizeMessage, buildPersonalizationVars } = require('../lib/personalization');
 const circuitBreaker = require('../lib/circuitBreaker');
 const messageHistory = require('../lib/messageHistory');
+const campaignPersistence = require('./campaignPersistence');
 
 async function isOptedOutRecipient(tenantId, channel, to) {
   try { return await require('../ai-engine/contactCrm').isOptedOut(tenantId, channel, to); } catch (e) { return false; }
@@ -121,7 +122,7 @@ async function persistMedia(tenantId, campaignId, media) {
   let mediaBlobSha = null;
   if (githubStore.enabled) {
     try {
-      mediaBlobSha = await githubStore.pushLargeFile(`${MEDIA_REMOTE_DIR}/${mediaFile}`, media.buffer);
+      mediaBlobSha = await githubStore.pushLargeFile(`${MEDIA_REMOTE_DIR}/${mediaFile}`, campaignPersistence.encodeBuffer(media.buffer));
     } catch (err) {
       console.error(`Échec de la sauvegarde GitHub de la pièce jointe Telegram "${mediaFile}" :`, err.message);
       if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL) throw err;
@@ -142,7 +143,11 @@ async function resolveMedia(persisted) {
     buffer = fs.readFileSync(filePath);
   } else if (persisted.mediaBlobSha && githubStore.enabled) {
     try {
-      buffer = await githubStore.fetchLargeFile(persisted.mediaBlobSha);
+    const remoteBuffer = await githubStore.fetchLargeFile(persisted.mediaBlobSha);
+    buffer = remoteBuffer && campaignPersistence.decodeBuffer(remoteBuffer);
+    if (remoteBuffer && campaignPersistence.encryptionRequired() && !campaignPersistence.isEncryptedBuffer(remoteBuffer)) {
+      persisted.mediaBlobSha = await githubStore.pushLargeFile(`${MEDIA_REMOTE_DIR}/${persisted.mediaFile}`, campaignPersistence.encodeBuffer(buffer));
+    }
     } catch (err) {
       throw new Error(`MEDIA_FILE_MISSING: ${persisted.mediaFile} (échec de restauration GitHub : ${err.message})`);
     }
@@ -264,6 +269,22 @@ class TelegramCampaignEngine {
     });
   }
 
+  _recoverInFlight(campaign) {
+    let recovered = 0;
+    for (let index = 0; index < (campaign.results || []).length; index += 1) {
+      const result = campaign.results[index];
+      if (!result || result.status !== 'sending') continue;
+      result.status = 'unconfirmed';
+      result.error = 'Envoi interrompu avant confirmation; non rejoué pour éviter un doublon.';
+      result.timestamp = result.timestamp || new Date().toISOString();
+      campaign.nextIndex = Math.max(Number(campaign.nextIndex) || 0, index + 1);
+      campaign.sent = (Number(campaign.sent) || 0) + 1;
+      campaign.unconfirmed = (Number(campaign.unconfirmed) || 0) + 1;
+      recovered += 1;
+    }
+    return recovered;
+  }
+
   async _recordHistorySent(contactKey, messageHash) {
     if (!contactKey) return;
     if (!this._historyEntries) {
@@ -319,9 +340,12 @@ class TelegramCampaignEngine {
   _refreshContactIdSets(campaign) {
     const sent = [];
     const pending = [];
+    const unconfirmed = [];
     for (const r of campaign.results || []) {
       const key = messageHistory.normalizeContactKey(r.to) || r.to;
-      if (r.status === 'sent' || r.status === 'sent_manual' || r.status === 'skipped_duplicate' || r.status === 'skipped_optout') {
+      if (r.status === 'unconfirmed') {
+        unconfirmed.push(key);
+      } else if (r.status === 'sent' || r.status === 'sent_manual' || r.status === 'skipped_duplicate' || r.status === 'skipped_optout') {
         sent.push(key);
       } else {
         pending.push(key);
@@ -329,6 +353,7 @@ class TelegramCampaignEngine {
     }
     campaign.sentContactIds = sent;
     campaign.pendingContactIds = pending;
+    campaign.unconfirmedContactIds = unconfirmed;
     campaign.lastProcessedIndex = campaign.nextIndex - 1;
   }
 
@@ -348,7 +373,8 @@ class TelegramCampaignEngine {
     }
     const content = JSON.stringify(this._buildFileRecord(), null, 2);
     fs.writeFileSync(statePath(this.tenantId), content, 'utf8');
-    const persist = this.persistChain.catch(() => {}).then(() => this.remoteStore.pushRemote(content));
+    const remoteContent = campaignPersistence.encodeText(content);
+    const persist = this.persistChain.catch(() => {}).then(() => this.remoteStore.pushRemote(remoteContent));
     this.persistChain = persist;
     persist.catch((err) => {
       console.error(`Échec de la sauvegarde des campagnes Telegram sur GitHub pour le tenant "${this.tenantId}" :`, err.message);
@@ -388,7 +414,7 @@ class TelegramCampaignEngine {
 
   _publicStatus(campaign) {
     const {
-      id, name, total, sent, success, failed, skippedDuplicates, duplicateWindowHours, recipientType,
+      id, name, total, sent, success, failed, skippedDuplicates, unconfirmed, duplicateWindowHours, recipientType,
       status, paused, userPaused, stopRequested, createdAt, startedAt, finishedAt, results,
       resumeError, cancelReason, lastProcessedIndex, sentContactIds, pendingContactIds,
     } = campaign;
@@ -401,6 +427,7 @@ class TelegramCampaignEngine {
       success,
       failed,
       skippedDuplicates,
+      unconfirmed: Number(unconfirmed) || 0,
       duplicateWindowHours,
       // Un seul moteur/verrou de campagne par tenant sert à la fois les
       // messages directs (contacts importés) et la diffusion vers des
@@ -589,7 +616,7 @@ class TelegramCampaignEngine {
         campaign.sent += 1;
         campaign.skippedDuplicates += 1;
         campaign.nextIndex = i + 1;
-        this._persist(campaign);
+        await this._persist(campaign);
         if (this.onActivity) this.onActivity();
         console.log(`Campagne Telegram (tenant "${this.tenantId}", "${campaign.name}"): destinataire ${campaign.results[i].to} ignoré (doublon détecté, ${i + 1}/${recipients.length}).`);
         i += 1;
@@ -599,7 +626,7 @@ class TelegramCampaignEngine {
       if (campaign.results[i].status === 'sent_manual') {
         campaign.sent += 1;
         campaign.nextIndex = i + 1;
-        this._persist(campaign);
+        await this._persist(campaign);
         if (this.onActivity) this.onActivity();
         console.log(`Campagne Telegram (tenant "${this.tenantId}", "${campaign.name}"): destinataire ${campaign.results[i].to} ignoré (déjà relancé manuellement, ${i + 1}/${recipients.length}).`);
         i += 1;
@@ -612,7 +639,7 @@ class TelegramCampaignEngine {
         campaign.sent += 1;
         campaign.skippedOptOut = (campaign.skippedOptOut || 0) + 1;
         campaign.nextIndex = i + 1;
-        this._persist(campaign);
+        await this._persist(campaign);
         if (this.onActivity) this.onActivity();
         console.log(`Campagne Telegram (tenant "${this.tenantId}", "${campaign.name}"): destinataire ignoré (refus enregistré, ${i + 1}/${recipients.length}).`);
         i += 1;
@@ -623,6 +650,10 @@ class TelegramCampaignEngine {
       let status = 'failed';
       let errorReason = null;
       let overloadDetected = false;
+
+      campaign.results[i] = { ...campaign.results[i], to: String(identifier), status: 'sending', timestamp: new Date().toISOString() };
+      campaign.nextIndex = i;
+      await this._persist(campaign);
 
       try {
         const entity = campaign.recipientType === 'groups' ? identifier : await this.session.resolveRecipient(identifier);
@@ -654,7 +685,10 @@ class TelegramCampaignEngine {
           // Voir queues/campaignEngine.js#assistedMode — même patron (FLOOD_WAIT
           // Telegram inclus, voir lib/circuitBreaker.js#getFloodWaitMs).
           if (this.networkHealth.consecutiveOverloadFailures >= 2) campaign.assistedMode = true;
-          if (!shouldAbort()) this._persist(campaign);
+          if (!shouldAbort()) {
+            campaign.results[i] = { ...campaign.results[i], status: 'pending', timestamp: null };
+            await this._persist(campaign);
+          }
           if (this.onNetworkStatusChange) {
             this.onNetworkStatusChange({
               tenantId: this.tenantId, channel: 'TELEGRAM', status: 'circuit_open',
@@ -675,13 +709,30 @@ class TelegramCampaignEngine {
         }
       }
 
-      if (shouldAbort()) return;
+      if (shouldAbort()) {
+        if (overloadDetected) {
+          this._recoverInFlight(campaign);
+          await this._persist(campaign);
+          return;
+        }
+        const previousStatus = campaign.results[i] && campaign.results[i].status;
+        if (previousStatus === 'unconfirmed') {
+          campaign.unconfirmed = Math.max(0, (Number(campaign.unconfirmed) || 0) - 1);
+        } else if (previousStatus === 'sending') {
+          campaign.sent = (Number(campaign.sent) || 0) + 1;
+        }
+        campaign.nextIndex = Math.max(Number(campaign.nextIndex) || 0, i + 1);
+        campaign.results[i] = { to: String(identifier), status, error: errorReason, timestamp: new Date().toISOString() };
+        await this._persist(campaign);
+        if (this.onActivity) this.onActivity();
+        return;
+      }
       if (overloadDetected) continue;
 
       campaign.sent += 1;
       campaign.nextIndex = i + 1;
       campaign.results[i] = { to: String(identifier), status, error: errorReason, timestamp: new Date().toISOString() };
-      this._persist(campaign);
+      await this._persist(campaign);
       if (this.onActivity) this.onActivity();
 
       i += 1;
@@ -705,7 +756,7 @@ class TelegramCampaignEngine {
       campaign.status = 'completed';
       campaign.finishedAt = new Date().toISOString();
       if (this.activeCampaignId === campaign.id) this.activeCampaignId = null;
-      this._persist(campaign);
+      await this._persist(campaign);
       this._pruneOldCampaigns();
     }
 
@@ -800,7 +851,14 @@ class TelegramCampaignEngine {
     };
 
     this.campaigns.set(id, campaign);
-    this._persist(campaign);
+    try { await this._persist(campaign); }
+    catch (err) {
+      campaign.status = 'queued';
+      campaign.paused = true;
+      campaign.persistenceError = 'CAMPAIGN_PERSISTENCE_FAILED';
+      try { await this._persist(campaign); } catch (_) { /* le premier échec est remonté */ }
+      throw Object.assign(new Error('CAMPAIGN_PERSISTENCE_FAILED'), { cause: err });
+    }
     this._pruneOldCampaigns();
 
     if (willRunImmediately) {
@@ -825,7 +883,7 @@ class TelegramCampaignEngine {
       current.paused = true;
       current.superseded = true;
       current.status = 'paused';
-      this._persist(current);
+      await this._persist(current);
       console.log(`Campagne Telegram (tenant "${this.tenantId}"): "${current.name}" mise en PAUSE (bascule vers une autre campagne).`);
     }
 
@@ -836,7 +894,7 @@ class TelegramCampaignEngine {
     this.activeCampaignId = null;
   }
 
-  pause(id) {
+  async pause(id) {
     const campaign = id ? this.campaigns.get(id) : this._resolveDefaultCampaign();
     if (!campaign || campaign.status !== 'running') {
       throw new Error('NO_CAMPAIGN_RUNNING');
@@ -845,8 +903,10 @@ class TelegramCampaignEngine {
     campaign.paused = true;
     campaign.superseded = true;
     campaign.status = 'paused';
+    campaign.resumeAfterRestart = false;
+    this._recoverInFlight(campaign);
     if (this.activeCampaignId === campaign.id) this.activeCampaignId = null;
-    this._persist(campaign);
+    await this._persist(campaign);
     console.log(`Campagne Telegram (tenant "${this.tenantId}"): "${campaign.name}" mise en PAUSE — session disponible pour une autre campagne.`);
   }
 
@@ -865,14 +925,26 @@ class TelegramCampaignEngine {
       await this._releaseActive();
     }
 
+    this._recoverInFlight(campaign);
+    const resumeAfterRestart = campaign.resumeAfterRestart === true;
     campaign.userPaused = false;
     campaign.superseded = false;
     campaign.stopRequested = false;
+    campaign.resumeAfterRestart = false;
     campaign.status = 'running';
     campaign.paused = false;
     if (!campaign.startedAt) campaign.startedAt = new Date().toISOString();
     this.activeCampaignId = campaign.id;
-    this._persist(campaign);
+    try { await this._persist(campaign); }
+    catch (err) {
+      campaign.status = 'paused';
+      campaign.paused = true;
+      campaign.userPaused = !resumeAfterRestart;
+      campaign.resumeAfterRestart = resumeAfterRestart;
+      this.activeCampaignId = null;
+      try { await this._persist(campaign); } catch (_) { /* l'action reste non démarrée */ }
+      throw Object.assign(new Error('CAMPAIGN_PERSISTENCE_FAILED'), { cause: err });
+    }
 
     if (!this._runActive) {
       this._launch(campaign, campaign.nextIndex);
@@ -882,19 +954,21 @@ class TelegramCampaignEngine {
     return this._publicStatus(campaign);
   }
 
-  stop(id) {
+  async stop(id) {
     const campaign = id ? this.campaigns.get(id) : this._resolveDefaultCampaign();
     if (!campaign || (campaign.status !== 'running' && campaign.status !== 'paused' && campaign.status !== 'queued')) {
       throw new Error('NO_CAMPAIGN_RUNNING');
     }
     campaign.stopRequested = true;
     this._markRemainingInterrupted(campaign);
+    campaign.resumeAfterRestart = false;
+    this._recoverInFlight(campaign);
     campaign.superseded = true;
     if (this.activeCampaignId === campaign.id) {
       this.activeCampaignId = null;
       this.networkHealth = new circuitBreaker.CircuitBreakerState();
     }
-    this._persist(campaign);
+    await this._persist(campaign);
     removeMedia(campaign.media);
     this.resolvedMediaById.delete(campaign.id);
   }
@@ -902,10 +976,11 @@ class TelegramCampaignEngine {
   pauseForShutdown() {
     const campaign = this.activeCampaignId ? this.campaigns.get(this.activeCampaignId) : null;
     if (!campaign || campaign.status !== 'running') return;
-    campaign.userPaused = true;
+    campaign.userPaused = false;
     campaign.paused = true;
     campaign.superseded = true;
     campaign.status = 'paused';
+    campaign.resumeAfterRestart = true;
     this.activeCampaignId = null;
     return this._persist(campaign);
     console.log(`Campagne Telegram (tenant "${this.tenantId}"): "${campaign.name}" mise en pause (session libérée) — reprise possible ultérieurement.`);
@@ -948,8 +1023,11 @@ class TelegramCampaignEngine {
 
     try {
       const remote = await this.remoteStore.fetchRemote();
-      const content = await githubStore.fetchRemoteContent(remote);
-      if (!content) return null;
+      const remoteContent = await githubStore.fetchRemoteContent(remote);
+      if (!remoteContent) return null;
+      const decoded = campaignPersistence.decodeText(remoteContent);
+      const content = decoded.text;
+      if (!decoded.encrypted && campaignPersistence.encryptionRequired()) await this.remoteStore.pushRemote(campaignPersistence.encodeText(content));
       fs.writeFileSync(statePath(this.tenantId), content, 'utf8');
       console.log(`Campagne Telegram (tenant "${this.tenantId}"): état restauré depuis GitHub (disque local vidé par un redéploiement).`);
       return JSON.parse(content);
@@ -999,16 +1077,20 @@ class TelegramCampaignEngine {
         continue;
       }
 
+      const resumeAfterRestart = saved.status === 'running' || saved.resumeAfterRestart === true;
       const restoredStatus = saved.status === 'queued' ? 'queued' : 'paused';
-      this.campaigns.set(saved.id, {
+      const restored = {
         ...saved,
         results: migratedResults,
         status: restoredStatus,
         paused: true,
-        userPaused: restoredStatus === 'paused',
+        userPaused: restoredStatus === 'paused' && !resumeAfterRestart,
+        resumeAfterRestart,
         stopRequested: false,
         superseded: false,
-      });
+      };
+      this._recoverInFlight(restored);
+      this.campaigns.set(saved.id, restored);
       if (restoredStatus === 'paused') restoredAny = true;
     }
 
@@ -1016,9 +1098,21 @@ class TelegramCampaignEngine {
     this.networkHealth = record.networkHealth
       ? circuitBreaker.CircuitBreakerState.fromJSON(record.networkHealth)
       : new circuitBreaker.CircuitBreakerState();
-    this._persist();
+    await this._persist();
 
-    if (restoredAny) {
+    const resumeCandidate = Array.from(this.campaigns.values())
+      .filter((campaign) => campaign.resumeAfterRestart && campaign.status === 'paused')
+      .sort((a, b) => {
+        if (a.id === record.activeCampaignId) return -1;
+        if (b.id === record.activeCampaignId) return 1;
+        return new Date(a.createdAt) - new Date(b.createdAt);
+      })[0];
+    if (resumeCandidate) {
+      try { await this.resume(resumeCandidate.id); }
+      catch (err) { console.error(`Campagne Telegram (tenant "${this.tenantId}") : reprise après redémarrage impossible :`, err.message); }
+    }
+
+    if (restoredAny && !resumeCandidate) {
       console.log(`Campagne(s) Telegram (tenant "${this.tenantId}"): restaurée(s) en PAUSE après redémarrage/reconnexion — cliquez "Reprendre" sur la campagne voulue.`);
     }
 
@@ -1071,7 +1165,7 @@ async function listTenantsWithPendingCampaigns() {
       const remote = await store.fetchRemote();
       const content = await githubStore.fetchRemoteContent(remote);
       if (!content) continue;
-      const record = JSON.parse(content);
+      const record = JSON.parse(campaignPersistence.decodeText(content).text);
       if (hasPending(record)) {
         tenantsFromRemote.push(tenantId);
       }
@@ -1143,7 +1237,8 @@ function purgeStaleCampaigns(maxAgeMs = DEFAULT_STALE_MS) {
     }
 
     if (githubStore.enabled) {
-      githubStore.createStore(remoteFilePath(tenantId)).pushRemote(JSON.stringify(record, null, 2)).catch((err) => {
+      const remoteContent = campaignPersistence.encodeText(JSON.stringify(record, null, 2));
+      githubStore.createStore(remoteFilePath(tenantId)).pushRemote(remoteContent).catch((err) => {
         console.error(`Purge campagnes Telegram (tenant "${tenantId}") : échec de synchronisation GitHub —`, err.message);
       });
     }

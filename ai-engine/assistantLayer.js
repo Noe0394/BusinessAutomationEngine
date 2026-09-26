@@ -15,7 +15,10 @@ const contactCrm = require('./contactCrm');
 const adCampaigns = require('./adCampaigns');
 const groupCampaigns = require('./groupCampaigns');
 
-const DEFAULT_DEBOUNCE_MS = Math.max(0, parseInt(process.env.AUTO_REPLY_DEBOUNCE_MS, 10) || 1500);
+const debounceSetting = process.env.AUTO_REPLY_DEBOUNCE_MS;
+const DEFAULT_DEBOUNCE_MS = debounceSetting == null || debounceSetting === ''
+  ? 0
+  : Math.max(0, Number.parseInt(debounceSetting, 10) || 0);
 const sanitize = (t) => String(t || '').trim().replace(/[^A-Za-z0-9_.-]/g, '_') || 'unknown';
 
 // d = { whatsappManager, telegramManager, autoResponder, getRuntime(), chatOrchestrator, aiStudioStore, llmFallbackEngine,
@@ -166,7 +169,7 @@ function create(d) {
       const s = await d.aiStudioStore.getSession(tenantId, id);
       return (s && s.messages ? s.messages : []).slice(-16);
     },
-    append: async (tenantId, userText, answer) => {
+    append: async (tenantId, userText, answer, turnOut) => {
       let id = await ownerSessionId(tenantId);
       let title = null;
       if (!id) { id = (await d.aiStudioStore.createSession(tenantId)).id; title = ownerChannel.SESSION_TITLE; }
@@ -174,9 +177,30 @@ function create(d) {
       const storedUserText = /^\s*(?:\/telegram-(?:code|password)\b|(?:code|otp)\s*telegram\b)/i.test(String(userText || ''))
         ? '[identifiant Telegram masqué]'
         : userText;
+      const assistantMessage = { role: 'assistant', text: answer, createdAt: now, via: 'whatsapp_owner' };
+      if (turnOut && typeof turnOut === 'object') {
+        for (const key of ['intent', 'isPlanningQuestion', 'toolCall', 'toolCalls', 'steps', 'stopReason', 'missionId', 'taskId', 'pendingActionId', 'state', 'data']) {
+          if (turnOut[key] !== undefined) assistantMessage[key] = turnOut[key];
+        }
+        // Garder assez de résultat vérifié pour les références naturelles sans
+        // laisser un export volumineux faire gonfler toute la session.
+        while (JSON.stringify(assistantMessage).length > 120000 && Array.isArray(assistantMessage.steps) && assistantMessage.steps.length) {
+          let largest = 0;
+          for (let i = 1; i < assistantMessage.steps.length; i += 1) {
+            if (JSON.stringify(assistantMessage.steps[i].result || {}).length > JSON.stringify(assistantMessage.steps[largest].result || {}).length) largest = i;
+          }
+          if (JSON.stringify(assistantMessage.steps[largest].result || {}).length < 256) break;
+          assistantMessage.steps[largest] = { name: assistantMessage.steps[largest].name, state: assistantMessage.steps[largest].state, result: { truncated: true } };
+        }
+        if (JSON.stringify(assistantMessage).length > 120000) {
+          delete assistantMessage.steps;
+          delete assistantMessage.toolCall;
+          delete assistantMessage.data;
+        }
+      }
       await d.aiStudioStore.appendMessages(tenantId, id, [
         { role: 'user', text: storedUserText, createdAt: now, via: 'whatsapp_owner' },
-        { role: 'assistant', text: answer, createdAt: now, via: 'whatsapp_owner' },
+        assistantMessage,
       ], title);
     },
   };

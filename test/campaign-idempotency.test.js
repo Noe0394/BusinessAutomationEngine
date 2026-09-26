@@ -33,7 +33,7 @@ test('la même clé de brouillon retourne la campagne déjà créée', async () 
   while (!sent.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(sent.length, 1);
   assert.equal(engine.getStatus(first.id).id, 'draft_' + tenant);
-  try { engine.stop(first.id); } catch (_) { /* une campagne test à un seul contact peut déjà être terminée */ }
+  try { await engine.stop(first.id); } catch (_) { /* une campagne test à un seul contact peut déjà être terminée */ }
 });
 
 test.after(() => {

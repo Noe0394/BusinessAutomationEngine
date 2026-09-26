@@ -1987,9 +1987,9 @@ app.post('/api/groups/broadcast', requireAccess, requireModule('whatsapp'), atta
 // campaignId (body ou query, optionnel) : cible une campagne précise du
 // Gestionnaire Multi-Campagnes — omis, agit sur la campagne "par défaut"
 // (compat avec l'ancien dashboard mono-campagne).
-app.post('/api/messages/pause', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+app.post('/api/messages/pause', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
-    req.campaignEngine.pause(req.body.campaignId || req.query.campaignId);
+    await req.campaignEngine.pause(req.body.campaignId || req.query.campaignId);
     res.status(200).json({ status: 'pause_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -2018,9 +2018,9 @@ app.post('/api/messages/resume', requireAccess, requireModule('whatsapp'), attac
 // CampaignEngine#stop, qui finalise la campagne de façon SYNCHRONE — le
 // verrou est donc déjà libéré au moment où cette réponse part, permettant de
 // lancer une nouvelle campagne sans attendre.
-app.post('/api/messages/stop', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+app.post('/api/messages/stop', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
-    req.campaignEngine.stop(req.body.campaignId || req.query.campaignId);
+    await req.campaignEngine.stop(req.body.campaignId || req.query.campaignId);
     res.status(200).json({ status: 'stop_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -2061,9 +2061,9 @@ app.post('/api/messages/campaigns/:id/play', requireAccess, requireModule('whats
   }
 });
 
-app.post('/api/messages/campaigns/:id/pause', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+app.post('/api/messages/campaigns/:id/pause', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
-    req.campaignEngine.pause(req.params.id);
+    await req.campaignEngine.pause(req.params.id);
     res.status(200).json({ status: 'pause_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -2073,9 +2073,9 @@ app.post('/api/messages/campaigns/:id/pause', requireAccess, requireModule('what
   }
 });
 
-app.post('/api/messages/campaigns/:id/stop', requireAccess, requireModule('whatsapp'), attachWhatsapp, (req, res) => {
+app.post('/api/messages/campaigns/:id/stop', requireAccess, requireModule('whatsapp'), attachWhatsapp, async (req, res) => {
   try {
-    req.campaignEngine.stop(req.params.id);
+    await req.campaignEngine.stop(req.params.id);
     res.status(200).json({ status: 'stop_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -3477,9 +3477,9 @@ app.post('/api/telegram/campaign/send', requireAccess, requireModule('telegram')
 
 // campaignId (body ou query, optionnel) : cible une campagne précise du
 // Gestionnaire Multi-Campagnes — omis, agit sur la campagne "par défaut".
-app.post('/api/telegram/campaign/pause', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+app.post('/api/telegram/campaign/pause', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
   try {
-    req.telegramCampaignEngine.pause(req.body.campaignId || req.query.campaignId);
+    await req.telegramCampaignEngine.pause(req.body.campaignId || req.query.campaignId);
     res.status(200).json({ status: 'pause_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -3503,9 +3503,9 @@ app.post('/api/telegram/campaign/resume', requireAccess, requireModule('telegram
   }
 });
 
-app.post('/api/telegram/campaign/stop', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+app.post('/api/telegram/campaign/stop', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
   try {
-    req.telegramCampaignEngine.stop(req.body.campaignId || req.query.campaignId);
+    await req.telegramCampaignEngine.stop(req.body.campaignId || req.query.campaignId);
     res.status(200).json({ status: 'stop_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -3542,9 +3542,9 @@ app.post('/api/telegram/campaigns/:id/play', requireAccess, requireModule('teleg
   }
 });
 
-app.post('/api/telegram/campaigns/:id/pause', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+app.post('/api/telegram/campaigns/:id/pause', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
   try {
-    req.telegramCampaignEngine.pause(req.params.id);
+    await req.telegramCampaignEngine.pause(req.params.id);
     res.status(200).json({ status: 'pause_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {
@@ -3554,9 +3554,9 @@ app.post('/api/telegram/campaigns/:id/pause', requireAccess, requireModule('tele
   }
 });
 
-app.post('/api/telegram/campaigns/:id/stop', requireAccess, requireModule('telegram'), attachTelegram, (req, res) => {
+app.post('/api/telegram/campaigns/:id/stop', requireAccess, requireModule('telegram'), attachTelegram, async (req, res) => {
   try {
-    req.telegramCampaignEngine.stop(req.params.id);
+    await req.telegramCampaignEngine.stop(req.params.id);
     res.status(200).json({ status: 'stop_requested' });
   } catch (err) {
     if (err.message === 'NO_CAMPAIGN_RUNNING') {

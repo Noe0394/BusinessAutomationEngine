@@ -6,6 +6,7 @@ const { normalizeRecipientEntry, jidToE164 } = require('../lib/whatsappRecipient
 const { personalizeMessage } = require('../lib/personalization');
 const circuitBreaker = require('../lib/circuitBreaker');
 const messageHistory = require('../lib/messageHistory');
+const campaignPersistence = require('./campaignPersistence');
 
 async function isOptedOutRecipient(tenantId, channel, to) {
   try { return await require('../ai-engine/contactCrm').isOptedOut(tenantId, channel, to); } catch (e) { return false; }
@@ -173,7 +174,7 @@ async function persistSequenceMedia(tenantId, campaignId, sequence) {
     let mediaBlobSha = null;
     if (githubStore.enabled) {
       try {
-        mediaBlobSha = await githubStore.pushLargeFile(`${MEDIA_REMOTE_DIR}/${mediaFile}`, step.buffer);
+        mediaBlobSha = await githubStore.pushLargeFile(`${MEDIA_REMOTE_DIR}/${mediaFile}`, campaignPersistence.encodeBuffer(step.buffer));
       } catch (err) {
         console.error(`Échec de la sauvegarde GitHub de la pièce jointe "${mediaFile}" :`, err.message);
         if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL) throw err;
@@ -212,7 +213,11 @@ async function resolveSequenceMedia(sequence) {
       buffer = fs.readFileSync(filePath);
     } else if (step.mediaBlobSha && githubStore.enabled) {
       try {
-        buffer = await githubStore.fetchLargeFile(step.mediaBlobSha);
+        const remoteBuffer = await githubStore.fetchLargeFile(step.mediaBlobSha);
+        buffer = remoteBuffer && campaignPersistence.decodeBuffer(remoteBuffer);
+        if (remoteBuffer && campaignPersistence.encryptionRequired() && !campaignPersistence.isEncryptedBuffer(remoteBuffer)) {
+          step.mediaBlobSha = await githubStore.pushLargeFile(`${MEDIA_REMOTE_DIR}/${step.mediaFile}`, campaignPersistence.encodeBuffer(buffer));
+        }
       } catch (err) {
         throw new Error(`MEDIA_FILE_MISSING: ${step.mediaFile} (échec de restauration GitHub : ${err.message})`);
       }
@@ -368,6 +373,22 @@ class CampaignEngine {
     });
   }
 
+  _recoverInFlight(campaign) {
+    let recovered = 0;
+    for (let index = 0; index < (campaign.results || []).length; index += 1) {
+      const result = campaign.results[index];
+      if (!result || result.status !== 'sending') continue;
+      result.status = 'unconfirmed';
+      result.error = 'Envoi interrompu avant confirmation; non rejoué pour éviter un doublon.';
+      result.timestamp = result.timestamp || new Date().toISOString();
+      campaign.nextIndex = Math.max(Number(campaign.nextIndex) || 0, index + 1);
+      campaign.sent = (Number(campaign.sent) || 0) + 1;
+      campaign.unconfirmed = (Number(campaign.unconfirmed) || 0) + 1;
+      recovered += 1;
+    }
+    return recovered;
+  }
+
   // Enregistre un envoi réellement effectué dans l'historique anti-doublons
   // (voir lib/messageHistory.js) — partagé par toutes les campagnes du
   // tenant (voir this._historyEntries).
@@ -451,9 +472,12 @@ class CampaignEngine {
   _refreshContactIdSets(campaign) {
     const sent = [];
     const pending = [];
+    const unconfirmed = [];
     for (const r of campaign.results || []) {
       const key = messageHistory.normalizeContactKey(r.to) || r.to;
-      if (r.status === 'sent' || r.status === 'sent_manual' || r.status === 'skipped_duplicate') {
+      if (r.status === 'unconfirmed') {
+        unconfirmed.push(key);
+      } else if (r.status === 'sent' || r.status === 'sent_manual' || r.status === 'skipped_duplicate' || r.status === 'skipped_optout') {
         sent.push(key);
       } else {
         pending.push(key);
@@ -461,6 +485,7 @@ class CampaignEngine {
     }
     campaign.sentContactIds = sent;
     campaign.pendingContactIds = pending;
+    campaign.unconfirmedContactIds = unconfirmed;
     campaign.lastProcessedIndex = campaign.nextIndex - 1;
   }
 
@@ -492,7 +517,8 @@ class CampaignEngine {
     fs.writeFileSync(statePath(this.tenantId), content, 'utf8');
     // Sauvegarde GitHub en fire-and-forget : jamais bloquant pour la boucle
     // d'envoi, un échec ponctuel n'interrompt pas la campagne.
-    const persist = this.persistChain.catch(() => {}).then(() => this.remoteStore.pushRemote(content));
+    const remoteContent = campaignPersistence.encodeText(content);
+    const persist = this.persistChain.catch(() => {}).then(() => this.remoteStore.pushRemote(remoteContent));
     this.persistChain = persist;
     persist.catch((err) => {
       console.error(`Échec de la sauvegarde des campagnes sur GitHub pour le tenant "${this.tenantId}" :`, err.message);
@@ -547,7 +573,7 @@ class CampaignEngine {
   // envoie réellement en ce moment).
   _publicStatus(campaign) {
     const {
-      id, name, recipientType, total, sent, success, failed, skippedDuplicates, duplicateWindowHours,
+      id, name, recipientType, total, sent, success, failed, skippedDuplicates, unconfirmed, duplicateWindowHours,
       status, paused, userPaused, stopRequested, createdAt, startedAt, finishedAt, results,
       resumeError, cancelReason, lastProcessedIndex, sentContactIds, pendingContactIds,
     } = campaign;
@@ -561,6 +587,7 @@ class CampaignEngine {
       success,
       failed,
       skippedDuplicates,
+      unconfirmed: Number(unconfirmed) || 0,
       duplicateWindowHours,
       status,
       paused,
@@ -738,7 +765,7 @@ class CampaignEngine {
         campaign.sent += 1;
         campaign.skippedDuplicates += 1;
         campaign.nextIndex = i + 1;
-        this._persist(campaign);
+        await this._persist(campaign);
         if (this.onActivity) this.onActivity();
         console.log(`Campagne (tenant "${this.tenantId}", "${campaign.name}"): destinataire ${campaign.results[i].to} ignoré (doublon détecté, ${i + 1}/${recipients.length}).`);
         i += 1;
@@ -751,7 +778,7 @@ class CampaignEngine {
       if (campaign.results[i].status === 'sent_manual') {
         campaign.sent += 1;
         campaign.nextIndex = i + 1;
-        this._persist(campaign);
+        await this._persist(campaign);
         if (this.onActivity) this.onActivity();
         console.log(`Campagne (tenant "${this.tenantId}", "${campaign.name}"): destinataire ${campaign.results[i].to} ignoré (déjà relancé manuellement, ${i + 1}/${recipients.length}).`);
         i += 1;
@@ -767,7 +794,7 @@ class CampaignEngine {
         campaign.sent += 1;
         campaign.skippedOptOut = (campaign.skippedOptOut || 0) + 1;
         campaign.nextIndex = i + 1;
-        this._persist(campaign);
+        await this._persist(campaign);
         if (this.onActivity) this.onActivity();
         console.log(`Campagne (tenant "${this.tenantId}", "${campaign.name}"): destinataire ignoré (refus enregistré, ${i + 1}/${recipients.length}).`);
         i += 1;
@@ -778,6 +805,10 @@ class CampaignEngine {
       let status = 'failed';
       let failureReason = null;
       let overloadDetected = false;
+
+      campaign.results[i] = { ...campaign.results[i], to, status: 'sending', timestamp: new Date().toISOString() };
+      campaign.nextIndex = i;
+      await this._persist(campaign);
 
       try {
         for (let s = 0; s < sequence.length; s += 1) {
@@ -811,7 +842,10 @@ class CampaignEngine {
           // Manuelle Express" (déjà existant, public/dashboard.html) plutôt
           // que de compter uniquement sur la reprise automatique.
           if (this.networkHealth.consecutiveOverloadFailures >= 2) campaign.assistedMode = true;
-          if (!shouldAbort()) this._persist(campaign);
+          if (!shouldAbort()) {
+            campaign.results[i] = { ...campaign.results[i], status: 'pending', timestamp: null };
+            await this._persist(campaign);
+          }
           if (this.onNetworkStatusChange) {
             this.onNetworkStatusChange({
               tenantId: this.tenantId, channel: 'WHATSAPP', status: 'circuit_open',
@@ -832,7 +866,24 @@ class CampaignEngine {
         }
       }
 
-      if (shouldAbort()) return;
+      if (shouldAbort()) {
+        if (overloadDetected) {
+          this._recoverInFlight(campaign);
+          await this._persist(campaign);
+          return;
+        }
+        const previousStatus = campaign.results[i] && campaign.results[i].status;
+        if (previousStatus === 'unconfirmed') {
+          campaign.unconfirmed = Math.max(0, (Number(campaign.unconfirmed) || 0) - 1);
+        } else if (previousStatus === 'sending') {
+          campaign.sent = (Number(campaign.sent) || 0) + 1;
+        }
+        campaign.nextIndex = Math.max(Number(campaign.nextIndex) || 0, i + 1);
+        campaign.results[i] = { to, status, error: failureReason, timestamp: new Date().toISOString() };
+        await this._persist(campaign);
+        if (this.onActivity) this.onActivity();
+        return;
+      }
 
       if (overloadDetected) {
         continue;
@@ -841,7 +892,7 @@ class CampaignEngine {
       campaign.sent += 1;
       campaign.nextIndex = i + 1;
       campaign.results[i] = { to, status, error: failureReason, timestamp: new Date().toISOString() };
-      this._persist(campaign);
+      await this._persist(campaign);
       if (this.onActivity) this.onActivity();
 
       i += 1;
@@ -865,7 +916,7 @@ class CampaignEngine {
       campaign.status = 'completed';
       campaign.finishedAt = new Date().toISOString();
       if (this.activeCampaignId === campaign.id) this.activeCampaignId = null;
-      this._persist(campaign);
+      await this._persist(campaign);
       this._pruneOldCampaigns();
     }
 
@@ -965,7 +1016,14 @@ class CampaignEngine {
     };
 
     this.campaigns.set(id, campaign);
-    this._persist(campaign);
+    try { await this._persist(campaign); }
+    catch (err) {
+      campaign.status = 'queued';
+      campaign.paused = true;
+      campaign.persistenceError = 'CAMPAIGN_PERSISTENCE_FAILED';
+      try { await this._persist(campaign); } catch (_) { /* le premier échec est remonté */ }
+      throw Object.assign(new Error('CAMPAIGN_PERSISTENCE_FAILED'), { cause: err });
+    }
     this._pruneOldCampaigns();
 
     if (willRunImmediately) {
@@ -995,7 +1053,7 @@ class CampaignEngine {
       current.paused = true;
       current.superseded = true;
       current.status = 'paused';
-      this._persist(current);
+      await this._persist(current);
       console.log(`Campagne (tenant "${this.tenantId}"): "${current.name}" mise en PAUSE (bascule vers une autre campagne).`);
     }
 
@@ -1012,7 +1070,7 @@ class CampaignEngine {
   // resume(). superseded=true fait sortir la boucle d'envoi PROPREMENT,
   // après le message en cours, et libère IMMÉDIATEMENT la session pour
   // qu'une autre campagne puisse démarrer sans attendre.
-  pause(id) {
+  async pause(id) {
     const campaign = id ? this.campaigns.get(id) : this._resolveDefaultCampaign();
     if (!campaign || campaign.status !== 'running') {
       throw new Error('NO_CAMPAIGN_RUNNING');
@@ -1021,8 +1079,10 @@ class CampaignEngine {
     campaign.paused = true;
     campaign.superseded = true;
     campaign.status = 'paused';
+    campaign.resumeAfterRestart = false;
+    this._recoverInFlight(campaign);
     if (this.activeCampaignId === campaign.id) this.activeCampaignId = null;
-    this._persist(campaign);
+    await this._persist(campaign);
     console.log(`Campagne (tenant "${this.tenantId}"): "${campaign.name}" mise en PAUSE — session disponible pour une autre campagne.`);
   }
 
@@ -1049,14 +1109,26 @@ class CampaignEngine {
       await this._releaseActive();
     }
 
+    this._recoverInFlight(campaign);
+    const resumeAfterRestart = campaign.resumeAfterRestart === true;
     campaign.userPaused = false;
     campaign.superseded = false;
     campaign.stopRequested = false;
+    campaign.resumeAfterRestart = false;
     campaign.status = 'running';
     campaign.paused = false;
     if (!campaign.startedAt) campaign.startedAt = new Date().toISOString();
     this.activeCampaignId = campaign.id;
-    this._persist(campaign);
+    try { await this._persist(campaign); }
+    catch (err) {
+      campaign.status = 'paused';
+      campaign.paused = true;
+      campaign.userPaused = !resumeAfterRestart;
+      campaign.resumeAfterRestart = resumeAfterRestart;
+      this.activeCampaignId = null;
+      try { await this._persist(campaign); } catch (_) { /* l'action reste non démarrée */ }
+      throw Object.assign(new Error('CAMPAIGN_PERSISTENCE_FAILED'), { cause: err });
+    }
 
     if (!this._runActive) {
       this._launch(campaign, campaign.nextIndex);
@@ -1069,13 +1141,15 @@ class CampaignEngine {
   // Arrêt DÉFINITIF (id optionnel, voir pause()) : finalise la campagne de
   // façon SYNCHRONE (destinataires restants marqués honnêtement 'pending',
   // statut 'stopped') — le verrou est donc libéré IMMÉDIATEMENT.
-  stop(id) {
+  async stop(id) {
     const campaign = id ? this.campaigns.get(id) : this._resolveDefaultCampaign();
     if (!campaign || (campaign.status !== 'running' && campaign.status !== 'paused' && campaign.status !== 'queued')) {
       throw new Error('NO_CAMPAIGN_RUNNING');
     }
     campaign.stopRequested = true;
     this._markRemainingInterrupted(campaign);
+    campaign.resumeAfterRestart = false;
+    this._recoverInFlight(campaign);
     campaign.superseded = true;
     if (this.activeCampaignId === campaign.id) {
       this.activeCampaignId = null;
@@ -1084,7 +1158,7 @@ class CampaignEngine {
       // suite, même en pleine pause de sécurité réseau.
       this.networkHealth = new circuitBreaker.CircuitBreakerState();
     }
-    this._persist(campaign);
+    await this._persist(campaign);
     removeSequenceMedia(campaign.options.sequence || []);
     this.resolvedSequences.delete(campaign.id);
   }
@@ -1096,10 +1170,11 @@ class CampaignEngine {
   pauseForShutdown() {
     const campaign = this.activeCampaignId ? this.campaigns.get(this.activeCampaignId) : null;
     if (!campaign || campaign.status !== 'running') return;
-    campaign.userPaused = true;
+    campaign.userPaused = false;
     campaign.paused = true;
     campaign.superseded = true;
     campaign.status = 'paused';
+    campaign.resumeAfterRestart = true;
     this.activeCampaignId = null;
     return this._persist(campaign);
     console.log(`Campagne (tenant "${this.tenantId}"): "${campaign.name}" mise en pause (session libérée) — reprise possible ultérieurement.`);
@@ -1144,8 +1219,11 @@ class CampaignEngine {
 
     try {
       const remote = await this.remoteStore.fetchRemote();
-      const content = await githubStore.fetchRemoteContent(remote);
-      if (!content) return null;
+      const remoteContent = await githubStore.fetchRemoteContent(remote);
+      if (!remoteContent) return null;
+      const decoded = campaignPersistence.decodeText(remoteContent);
+      const content = decoded.text;
+      if (!decoded.encrypted && campaignPersistence.encryptionRequired()) await this.remoteStore.pushRemote(campaignPersistence.encodeText(content));
       fs.writeFileSync(statePath(this.tenantId), content, 'utf8');
       console.log(`Campagne (tenant "${this.tenantId}"): état restauré depuis GitHub (disque local vidé par un redéploiement).`);
       return JSON.parse(content);
@@ -1202,16 +1280,20 @@ class CampaignEngine {
         continue;
       }
 
+      const resumeAfterRestart = saved.status === 'running' || saved.resumeAfterRestart === true;
       const restoredStatus = saved.status === 'queued' ? 'queued' : 'paused';
-      this.campaigns.set(saved.id, {
+      const restored = {
         ...saved,
         results: migratedResults,
         status: restoredStatus,
         paused: true,
-        userPaused: restoredStatus === 'paused',
+        userPaused: restoredStatus === 'paused' && !resumeAfterRestart,
+        resumeAfterRestart,
         stopRequested: false,
         superseded: false,
-      });
+      };
+      this._recoverInFlight(restored);
+      this.campaigns.set(saved.id, restored);
       if (restoredStatus === 'paused') restoredAny = true;
     }
 
@@ -1222,9 +1304,23 @@ class CampaignEngine {
     this.networkHealth = record.networkHealth
       ? circuitBreaker.CircuitBreakerState.fromJSON(record.networkHealth)
       : new circuitBreaker.CircuitBreakerState();
-    this._persist();
+    await this._persist();
 
-    if (restoredAny) {
+    // Un déploiement ou un crash récupère uniquement la campagne qui tournait
+    // réellement. Une pause demandée par l'utilisateur reste une pause.
+    const resumeCandidate = Array.from(this.campaigns.values())
+      .filter((campaign) => campaign.resumeAfterRestart && campaign.status === 'paused')
+      .sort((a, b) => {
+        if (a.id === record.activeCampaignId) return -1;
+        if (b.id === record.activeCampaignId) return 1;
+        return new Date(a.createdAt) - new Date(b.createdAt);
+      })[0];
+    if (resumeCandidate) {
+      try { await this.resume(resumeCandidate.id); }
+      catch (err) { console.error(`Campagne (tenant "${this.tenantId}") : reprise après redémarrage impossible :`, err.message); }
+    }
+
+    if (restoredAny && !resumeCandidate) {
       console.log(`Campagne(s) (tenant "${this.tenantId}"): restaurée(s) en PAUSE après redémarrage/reconnexion — cliquez "Reprendre" sur la campagne voulue.`);
     }
 
@@ -1281,7 +1377,7 @@ async function listTenantsWithPendingCampaigns() {
       const remote = await store.fetchRemote();
       const content = await githubStore.fetchRemoteContent(remote);
       if (!content) continue;
-      const record = JSON.parse(content);
+      const record = JSON.parse(campaignPersistence.decodeText(content).text);
       if (hasPending(record)) {
         tenantsFromRemote.push(tenantId);
       }
@@ -1359,7 +1455,8 @@ function purgeStaleCampaigns(maxAgeMs = DEFAULT_STALE_MS) {
     }
 
     if (githubStore.enabled) {
-      githubStore.createStore(remoteFilePath(tenantId)).pushRemote(JSON.stringify(record, null, 2)).catch((err) => {
+      const remoteContent = campaignPersistence.encodeText(JSON.stringify(record, null, 2));
+      githubStore.createStore(remoteFilePath(tenantId)).pushRemote(remoteContent).catch((err) => {
         console.error(`Purge campagnes WhatsApp (tenant "${tenantId}") : échec de synchronisation GitHub —`, err.message);
       });
     }

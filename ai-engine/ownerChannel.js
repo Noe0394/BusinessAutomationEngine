@@ -329,7 +329,7 @@ async function handleOwnerMessage(input, deps) {
     answer = require('./claimGuard').guard(answer, turnOut, { request: text }).text;
     answer = contactIdentity.scrubTechnicalIds(answer);
     await reply(answer);
-    if (d.history) { try { await d.history.append(tenantId, userTextForHistory || text, answer); } catch (e) { /* non bloquant */ } }
+    if (d.history) { try { await d.history.append(tenantId, userTextForHistory || text, answer, turnOut); } catch (e) { /* non bloquant */ } }
     return { handled: 'CHAT', media: !!mediaInfo };
   };
   // Le self WhatsApp et le self Telegram sont des conversations distinctes.

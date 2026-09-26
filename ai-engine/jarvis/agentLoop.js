@@ -54,7 +54,20 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
   // Le registre sélectionne les outils pertinents à partir de leurs
   // métadonnées. La limite borne le contexte du modèle sans plafonner le
   // catalogue ni le nombre d'outils disponibles.
-  const tools = await toolRegistry.discover(text, ctx, { limit: Number.MAX_SAFE_INTEGER });
+  const contextual = d.contextualToolRequest === true;
+  const recent = contextual && Array.isArray(history) ? history.slice(-8) : [];
+  const previousRequests = recent.filter((item) => item && item.role === 'user').slice(-2).map((item) => item.text || '').join('\n');
+  const previousAssistant = [...recent].reverse().find((item) => item && item.role === 'assistant' && (
+    (item.toolCall && item.toolCall.state === 'SUCCESS' && item.toolCall.result != null)
+    || (Array.isArray(item.steps) && item.steps.some((step) => step && step.state === 'SUCCESS' && step.result != null))
+  ));
+  const previousResults = previousAssistant ? JSON.stringify({
+    toolCall: previousAssistant.toolCall || null,
+    steps: Array.isArray(previousAssistant.steps)
+      ? previousAssistant.steps.filter((step) => step && step.state === 'SUCCESS').map((step) => ({ name: step.name, state: step.state, result: step.result }))
+      : [],
+  }) : '';
+  const tools = await toolRegistry.discover(contextual ? `${text}\n${previousRequests}\n${previousResults}` : text, ctx, { limit: Number.MAX_SAFE_INTEGER });
   const taskId = `agent:${tenantId}:${sessionId || 'x'}:${Date.now()}`;
   const started = Date.now();
   let aiCalls = 0;
@@ -78,6 +91,9 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
       'Tu peux enchaîner plusieurs outils RÉELS pour accomplir la demande. Outils disponibles :',
       describeTools(tools),
       `Demande du vendeur : "${text}"`,
+      contextual && previousRequests ? `Contexte récent de la demande :\n${previousRequests}` : '',
+      contextual && previousResults ? `Résultats backend vérifiés du tour précédent :\n${previousResults.slice(0, 120000)}` : '',
+      contextual ? 'Résous les références naturelles à partir de ces résultats. Garde le sujet actuel et ne réutilise un résultat précédent que si le message le désigne.' : '',
       prior ? `Déjà exécuté (résultats RÉELS) :\n${prior}` : 'Rien n\'a encore été exécuté.',
       'Réponds UNIQUEMENT en JSON : {"tool":"nom_exact","args":{...}} pour l\'étape suivante, {"done":true} si la demande est accomplie, {"tool":null,"impossible":true} si la demande exige une ACTION (créer, modifier, supprimer, envoyer, activer…) qu\'AUCUN outil de la liste ne permet, ou {"tool":null} pour une simple conversation.',
       'Une demande d\'ACTION n\'est accomplie que si l\'outil correspondant a été exécuté avec succès : pour supprimer, utilise un outil de suppression ; pour modifier, un outil de modification. Ne considère JAMAIS une lecture (liste, statut) comme la réalisation d\'une écriture.',

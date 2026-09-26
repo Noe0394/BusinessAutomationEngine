@@ -248,7 +248,7 @@ test('VRAI moteur de campagne : envoi réel via la session, table de destinatair
   t.diagnostic('cadence de protection préservée (délai minimum entre destinataires)');
 });
 
-test('VRAI moteur : reprise après redémarrage — les destinataires déjà envoyés ne sont jamais renvoyés', async () => {
+test('VRAI moteur : reprise après redémarrage — continue au prochain destinataire sans rejouer les succès', async () => {
   const { CampaignEngine } = require('../queues/campaignEngine');
   const sent = [];
   const mkSession = () => ({
@@ -261,7 +261,7 @@ test('VRAI moteur : reprise après redémarrage — les destinataires déjà env
   const deadline = Date.now() + 8000;
   while (!sent.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   assert.equal(sent.length, 1);
-  e1.pauseForShutdown(); // arrêt du processus : l'état est conservé sur disque
+  await e1.pauseForShutdown(); // arrêt du processus : l'état est conservé sur disque
   await new Promise((r) => setTimeout(r, 400));
 
   const e2 = new CampaignEngine(tenantId, mkSession(), () => {}, () => {}); // « redémarrage »
@@ -271,8 +271,33 @@ test('VRAI moteur : reprise après redémarrage — les destinataires déjà env
   assert.ok(rows, 'la campagne a été retrouvée après redémarrage');
   assert.equal(rows[0].status, 'sent', 'le premier destinataire reste « envoyé »');
   assert.equal(sent.filter((t) => t === '22670000951@s.whatsapp.net').length, 1, 'jamais renvoyé');
-  assert.ok(['running', 'paused'].includes(e2.getStatus(st.id).status));
+  assert.equal(sent.filter((t) => t === '22670000952@s.whatsapp.net').length, 1, 'la campagne continue automatiquement au destinataire suivant');
+  assert.equal(e2.getStatus(st.id).status, 'running');
   try { e2.stop(st.id); } catch (e) { /* déjà arrêtée */ }
   await new Promise((r) => setTimeout(r, 300));
+  try { fs.unlinkSync(path.join(__dirname, '..', 'campaigns_state', tenantId + '.json')); } catch (e) { /* absent */ }
+});
+
+test('une pause demandée reste en pause après redémarrage', async () => {
+  const { CampaignEngine } = require('../queues/campaignEngine');
+  const tenantId = 'tManualPause_' + Date.now();
+  let sent = 0;
+  const disconnected = {
+    isConnected: () => false, getContactName: () => '', onIncomingMessage: () => {}, onAccountReset: () => {},
+    sendMessage: async () => { sent += 1; }, sendMedia: async () => ({}),
+  };
+  const connected = { ...disconnected, isConnected: () => true };
+  const first = new CampaignEngine(tenantId, disconnected, () => {}, () => {});
+  const campaign = await first.start([{ telephone: '22670000881' }], {
+    name: 'Pause volontaire', sequence: [{ type: 'text', text: 'Salut' }],
+  });
+  await first.pause(campaign.id);
+
+  const restarted = new CampaignEngine(tenantId, connected, () => {}, () => {});
+  await restarted.resumeIfPending();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(restarted.getStatus(campaign.id).status, 'paused');
+  assert.equal(sent, 0, 'la pause volontaire n’envoie rien après le redémarrage');
+  await restarted.stop(campaign.id);
   try { fs.unlinkSync(path.join(__dirname, '..', 'campaigns_state', tenantId + '.json')); } catch (e) { /* absent */ }
 });

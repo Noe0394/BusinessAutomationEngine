@@ -30,7 +30,11 @@ test('« Cherche le groupe Épicerie » : intention groups (pas la découverte p
   assert.equal(orch.detectIntent('Envoie-moi la liste de mes groupes sur WhatsApp'), 'groups');
   assert.notEqual(orch.detectIntent('Cherche le groupe Épicerie'), 'community');
   const r = await orch.handleGroups ? null : null; // handleGroups n'est pas exporté ; on passe par handle()
-  const out = await orch.handle({ text: 'Cherche le groupe Épicerie', history: [], tenantId: 'gs1', sessionId: 's' }, { runtime: fakeRuntime(groups) });
+  let unnecessaryLlmCalls = 0;
+  const out = await orch.handle({ text: 'Cherche le groupe Épicerie', history: [], tenantId: 'gs1', sessionId: 's' }, {
+    runtime: fakeRuntime(groups), llm: async () => { unnecessaryLlmCalls += 1; return JSON.stringify({ tool: null }); },
+  });
+  assert.equal(unnecessaryLlmCalls, 0, 'une recherche de groupe connue ne repasse pas par une planification IA');
   assert.match(out.text, /Épicerie Awa/); assert.match(out.text, /Épicerie Nord/); assert.doesNotMatch(out.text, /Foot entre amis/);
   assert.doesNotMatch(out.text, /1@g\.us|2@g\.us/, 'jamais l\'identifiant technique à la place du nom');
 });
