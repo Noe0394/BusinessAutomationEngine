@@ -173,7 +173,14 @@ async function get(namespace, docId, defaultValue) {
     if (isEncryptedMirror(namespace)) {
       const envelope = JSON.parse(fetchedContent);
       if (!envelope || envelope._cyrusEncrypted !== 1) {
-        if (isProductionRuntime()) throw new Error('REMOTE_DOCUMENT_NOT_ENCRYPTED');
+        // One-time migration from the previously configured backup branch.
+        // Render now points only at the private repository; read the legacy
+        // JSON once, then replace it with an encrypted snapshot before use.
+        if (process.env.GITHUB_MIRROR_USER_DATA === 'true' && isProductionRuntime()) {
+          const legacy = JSON.parse(fetchedContent);
+          await setDurable(namespace, docId, legacy);
+          return legacy;
+        }
         return defaultValue !== undefined ? defaultValue : null;
       }
       const plaintext = vault().decrypt(envelope.payload);
