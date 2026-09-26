@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
+const secretVault = require('../ai-engine/secretVault');
 const telegram = require('./telegram');
 const sessionRegulator = require('./sessionRegulator');
 const { TelegramCampaignEngine, listTenantsWithPendingCampaigns } = require('../queues/telegramCampaignEngine');
@@ -249,12 +250,12 @@ async function listTenantsWithSavedSession() {
     // Dossier absent (disque éphémère fraîchement démarré) : on tente GitHub.
   }
 
-  if (!githubStore.enabled) return local;
+  if (!githubStore.enabled || !secretVault.isEncryptionConfigured()) return local;
 
   const known = new Set(local);
   const remote = [];
   try {
-    const remoteFiles = await githubStore.listDirectory(GITHUB_TELEGRAM_SESSION_DIR);
+    const remoteFiles = await githubStore.listDirectory(GITHUB_TELEGRAM_SESSION_DIR, { strict: process.env.RENDER === 'true' || !!process.env.RENDER_SERVICE_ID || !!process.env.RENDER_EXTERNAL_URL });
     for (const filename of remoteFiles) {
       if (!/\.(json|txt)$/.test(filename)) continue;
       const tenantId = filename.replace(/\.(json|txt)$/, '');
@@ -310,7 +311,7 @@ function getStorageStatus() {
   }, null);
 
   return {
-    enabled: githubStore.enabled,
+    enabled: githubStore.enabled && secretVault.isEncryptionConfigured(),
     repo: first.repo || null,
     branch: first.branch || null,
     lastPushOk: failing ? false : (list.length > 0 ? true : null),
@@ -319,6 +320,14 @@ function getStorageStatus() {
     activeTenants: list.length,
     tenants: list,
   };
+}
+
+async function flushAuthSnapshots() {
+  const entries = Array.from(tenants.values());
+  const results = await Promise.allSettled(entries.map((entry) => (
+    entry.session && typeof entry.session.persistSession === 'function' ? entry.session.persistSession() : null
+  )));
+  return { tenants: entries.length, failed: results.filter((item) => item.status === 'rejected' || item.value === false).length };
 }
 
 module.exports = {
@@ -330,6 +339,7 @@ module.exports = {
   initAdminSession,
   bootResumePendingCampaigns,
   bootReconnectAllTelegramTenants,
+  flushAuthSnapshots,
   listTenantsWithSavedSession,
   listActiveEntries,
   getStorageStatus,

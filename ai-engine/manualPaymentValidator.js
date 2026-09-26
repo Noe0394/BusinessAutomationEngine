@@ -68,13 +68,13 @@ function looksLikePaymentProof(text, hasAttachment) {
 
 function saveRecord(record) {
   record.updatedAt = new Date().toISOString();
-  return storageAdapter.set(NAMESPACE, keyOf(record), record);
+  return storageAdapter.setDurable(NAMESPACE, keyOf(record), record);
 }
 
 async function allRecords(tenantId) {
   const out = [];
   const prefix = sanitize(tenantId) + '__';
-  for (const id of storageAdapter.listIds(NAMESPACE)) {
+  for (const id of await storageAdapter.listIdsAsync(NAMESPACE)) {
     if (!id.startsWith(prefix)) continue;
     const rec = await storageAdapter.get(NAMESPACE, id, null);
     if (rec) out.push(rec);

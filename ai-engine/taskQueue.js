@@ -182,8 +182,8 @@ async function processTenant(tenant, handlers, opts) {
 }
 
 let tenantProvider = null;
-function listTenants() {
-  const local = storageAdapter.listIds(NAMESPACE);
+async function listTenants() {
+  const local = await storageAdapter.listIdsAsync(NAMESPACE);
   let external = [];
   try { external = typeof tenantProvider === 'function' ? tenantProvider() || [] : []; } catch (_) { external = []; }
   return Array.from(new Set(local.concat(external.map(sanitize))));
@@ -242,7 +242,7 @@ async function runWorker() {
   let processed = 0;
   let tenants = [];
   try {
-    tenants = listTenants();
+    tenants = await listTenants();
     let cursor = 0;
     const drain = async () => {
       while (cursor < tenants.length && !workerStopped) {

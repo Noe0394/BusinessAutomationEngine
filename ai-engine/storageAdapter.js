@@ -48,19 +48,47 @@ const ENCRYPTED_MIRROR_NAMESPACES = new Set([
   'task_queue', 'objective_missions', 'pending_tool_actions', 'campaign_drafts', 'auto_settings', 'community_jobs',
 ]);
 const remoteStores = new Map();
+const pendingWrites = new Set();
+function isProductionRuntime() {
+  return process.env.NODE_ENV === 'production'
+    || process.env.RENDER === 'true'
+    || !!process.env.RENDER_SERVICE_ID
+    || !!process.env.RENDER_EXTERNAL_URL;
+}
 function isMirrored(namespace) {
   if (process.env.GITHUB_MIRROR_USER_DATA === 'true') return true;
   return !LOCAL_ONLY_NAMESPACES.has(String(namespace));
 }
 function isEncryptedMirror(namespace) {
   const name = String(namespace);
-  return ENCRYPTED_MIRROR_NAMESPACES.has(name)
-    || (process.env.GITHUB_MIRROR_USER_DATA === 'true' && LOCAL_ONLY_NAMESPACES.has(name));
+  // The opt-in user-data mirror encrypts every runtime namespace, including
+  // namespaces introduced by future features.
+  return process.env.GITHUB_MIRROR_USER_DATA === 'true' || ENCRYPTED_MIRROR_NAMESPACES.has(name);
 }
 function vault() { return require('./secretVault'); }
 function canMirrorDurably(namespace) {
   const githubStore = require('../githubStore');
   return githubStore.enabled && (isEncryptedMirror(namespace) ? vault().isEncryptionConfigured() : isMirrored(namespace));
+}
+
+function assertProductionStorageReady(namespace) {
+  if (!isProductionRuntime()) return true;
+  const ns = namespace == null ? null : String(namespace);
+  if (!githubStore.enabled) throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${ns || 'startup'}:GITHUB_DATA_STORE_NOT_CONFIGURED`);
+  if (process.env.GITHUB_MIRROR_USER_DATA !== 'true') {
+    throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${ns || 'startup'}:USER_DATA_MIRROR_NOT_ENABLED`);
+  }
+  if (isEncryptedMirror(ns || 'startup') && !vault().isEncryptionConfigured()) {
+    throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${ns || 'startup'}:ENCRYPTION_KEY_NOT_CONFIGURED`);
+  }
+  return true;
+}
+
+async function validateProductionStorage() {
+  assertProductionStorageReady();
+  if (!isProductionRuntime()) return { ok: true, checked: false };
+  const repo = await githubStore.verifyPrivateRepository();
+  return { ok: true, checked: true, privateRepository: repo.private, branch: repo.defaultBranch };
 }
 
 function sanitizeId(rawId) {
@@ -88,7 +116,7 @@ function remoteDocPath(namespace, docId) {
 
 function remoteStore(namespace, docId) {
   const file = remoteDocPath(namespace, docId);
-  if (!remoteStores.has(file)) remoteStores.set(file, { store: githubStore.createStore(file), ready: null, initialized: false });
+  if (!remoteStores.has(file)) remoteStores.set(file, { store: githubStore.createStore(file), ready: null, initialized: false, writeQueue: Promise.resolve() });
   return remoteStores.get(file);
 }
 async function ensureRemoteReady(record) {
@@ -100,11 +128,26 @@ async function ensureRemoteReady(record) {
   catch (err) { record.ready = null; throw err; }
 }
 
+function enqueueRemoteWrite(record, content) {
+  const write = record.writeQueue.catch(() => {}).then(async () => {
+    await ensureRemoteReady(record);
+    await record.store.pushRemote(content);
+    record.initialized = true;
+    record.snapshot = { content };
+    record.ready = Promise.resolve(record.snapshot);
+  });
+  record.writeQueue = write;
+  pendingWrites.add(write);
+  write.finally(() => pendingWrites.delete(write)).catch(() => {});
+  return write;
+}
+
 // Lit un document {namespace}/{docId} — disque local en premier, puis
 // GitHub si absent (redéploiement Render ayant vidé le disque éphémère,
 // même logique que lib/aiStudioStore.js#loadAll). Retourne `defaultValue`
 // (jamais null/undefined) si le document n'existe nulle part.
 async function get(namespace, docId, defaultValue) {
+  assertProductionStorageReady(namespace);
   try {
     const raw = fs.readFileSync(docPath(namespace, docId), 'utf8');
     return JSON.parse(raw);
@@ -113,23 +156,37 @@ async function get(namespace, docId, defaultValue) {
   }
 
   if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) return defaultValue !== undefined ? defaultValue : null;
-  if (isEncryptedMirror(namespace) && !vault().isEncryptionConfigured()) return defaultValue !== undefined ? defaultValue : null;
+  if (isEncryptedMirror(namespace) && !vault().isEncryptionConfigured()) {
+    if (isProductionRuntime()) throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${namespace}:ENCRYPTION_KEY_NOT_CONFIGURED`);
+    return defaultValue !== undefined ? defaultValue : null;
+  }
   const remote = remoteStore(namespace, docId);
-  if (!remote.store.enabled) return defaultValue !== undefined ? defaultValue : null;
+  if (!remote.store.enabled) {
+    if (isProductionRuntime()) throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${namespace}:GITHUB_DATA_STORE_NOT_CONFIGURED`);
+    return defaultValue !== undefined ? defaultValue : null;
+  }
 
   try {
     const fetched = await ensureRemoteReady(remote);
-    if (!fetched || !fetched.content) return defaultValue !== undefined ? defaultValue : null;
+    const fetchedContent = await githubStore.fetchRemoteContent(fetched);
+    if (!fetchedContent) return defaultValue !== undefined ? defaultValue : null;
     if (isEncryptedMirror(namespace)) {
-      const envelope = JSON.parse(fetched.content);
-      if (!envelope || envelope._cyrusEncrypted !== 1) return defaultValue !== undefined ? defaultValue : null;
+      const envelope = JSON.parse(fetchedContent);
+      if (!envelope || envelope._cyrusEncrypted !== 1) {
+        if (isProductionRuntime()) throw new Error('REMOTE_DOCUMENT_NOT_ENCRYPTED');
+        return defaultValue !== undefined ? defaultValue : null;
+      }
       const plaintext = vault().decrypt(envelope.payload);
-      if (plaintext == null) return defaultValue !== undefined ? defaultValue : null;
+      if (plaintext == null) {
+        if (isProductionRuntime()) throw new Error('REMOTE_DOCUMENT_DECRYPT_FAILED');
+        return defaultValue !== undefined ? defaultValue : null;
+      }
       return JSON.parse(plaintext);
     }
-    return JSON.parse(fetched.content);
+    return JSON.parse(fetchedContent);
   } catch (err) {
     console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : échec de restauration depuis GitHub :`, err.message);
+    if (isProductionRuntime()) throw new Error(`DURABLE_STORAGE_READ_FAILED:${namespace}:${err.message}`);
     return defaultValue !== undefined ? defaultValue : null;
   }
 }
@@ -142,7 +199,10 @@ function set(namespace, docId, data) {
   const content = JSON.stringify(data, null, 2);
   fs.writeFileSync(docPath(namespace, docId), content, 'utf8');
   if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) return data;
-  if (!githubStore.enabled) return data;
+  if (!githubStore.enabled) {
+    if (isProductionRuntime()) console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : persistence unavailable (GITHUB_DATA_STORE_NOT_CONFIGURED).`);
+    return data;
+  }
   if (isEncryptedMirror(namespace) && !vault().isEncryptionConfigured()) {
     console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : miroir durable ignoré, clé de chiffrement absente.`);
     return data;
@@ -151,10 +211,7 @@ function set(namespace, docId, data) {
   const remoteContent = isEncryptedMirror(namespace)
     ? JSON.stringify({ _cyrusEncrypted: 1, payload: vault().encrypt(content) }) : content;
   const remote = remoteStore(namespace, docId);
-  ensureRemoteReady(remote).then(async () => {
-    await remote.store.pushRemote(remoteContent);
-    remote.initialized = true; remote.snapshot = { content: remoteContent }; remote.ready = Promise.resolve(remote.snapshot);
-  }).catch((err) => {
+  enqueueRemoteWrite(remote, remoteContent).catch((err) => {
     console.error(`ai-engine/storageAdapter (${namespace}/${docId}) : échec de sauvegarde GitHub :`, err.message);
   });
 
@@ -165,20 +222,29 @@ function set(namespace, docId, data) {
 // Render. Le fichier local est mis a jour d'abord, puis l'appelant attend la
 // confirmation du miroir GitHub chiffre avant de lancer l'effet externe.
 async function setDurable(namespace, docId, data) {
+  assertProductionStorageReady(namespace);
+  if (isProductionRuntime() && !canMirrorDurably(namespace)) {
+    throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${namespace}:REMOTE_MIRROR_NOT_READY`);
+  }
+  if (isEncryptedMirror(namespace) && !vault().isEncryptionConfigured()) {
+    throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${namespace}:ENCRYPTION_KEY_NOT_CONFIGURED`);
+  }
   fs.mkdirSync(baseDir(namespace), { recursive: true });
   const content = JSON.stringify(data, null, 2);
-  fs.writeFileSync(docPath(namespace, docId), content, 'utf8');
-  if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) return data;
-  if (!githubStore.enabled) return data;
-  if (isEncryptedMirror(namespace) && !vault().isEncryptionConfigured()) {
-    throw new Error(`DURABLE_STORAGE_KEY_MISSING:${namespace}`);
+  if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) {
+    fs.writeFileSync(docPath(namespace, docId), content, 'utf8');
+    return data;
+  }
+  if (!githubStore.enabled) {
+    if (isProductionRuntime()) throw new Error(`DURABLE_STORAGE_UNAVAILABLE:${namespace}:GITHUB_DATA_STORE_NOT_CONFIGURED`);
+    fs.writeFileSync(docPath(namespace, docId), content, 'utf8');
+    return data;
   }
   const remoteContent = isEncryptedMirror(namespace)
     ? JSON.stringify({ _cyrusEncrypted: 1, payload: vault().encrypt(content) }) : content;
   const remote = remoteStore(namespace, docId);
-  await ensureRemoteReady(remote);
-  await remote.store.pushRemote(remoteContent);
-  remote.initialized = true; remote.snapshot = { content: remoteContent }; remote.ready = Promise.resolve(remote.snapshot);
+  await enqueueRemoteWrite(remote, remoteContent);
+  fs.writeFileSync(docPath(namespace, docId), content, 'utf8');
   return data;
 }
 
@@ -199,14 +265,29 @@ function listIds(namespace) {
 async function listIdsAsync(namespace) {
   const local = listIds(namespace);
   if (!isMirrored(namespace) && !isEncryptedMirror(namespace)) return local;
-  const names = await githubStore.listDirectory(remoteBaseDir(namespace));
+  const names = await githubStore.listDirectory(remoteBaseDir(namespace), { strict: isProductionRuntime() });
   return Array.from(new Set(local.concat(names.filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -5)))));
 }
 
 function persistenceStatus() {
-  return { githubEnabled: githubStore.enabled,
+  const encryptionConfigured = vault().isEncryptionConfigured();
+  const userDataMirror = process.env.GITHUB_MIRROR_USER_DATA === 'true';
+  return { githubEnabled: githubStore.enabled, userDataMirror, encryptionConfigured,
+    durableAcrossRestarts: githubStore.enabled && (!userDataMirror || encryptionConfigured),
+    encryptedNamespaceCount: userDataMirror ? 'all' : ENCRYPTED_MIRROR_NAMESPACES.size,
     encryptedNamespaces: Array.from(ENCRYPTED_MIRROR_NAMESPACES).map((namespace) => ({ namespace,
-      encryptionConfigured: vault().isEncryptionConfigured(), durableAcrossRestarts: canMirrorDurably(namespace) })) };
+      encryptionConfigured, durableAcrossRestarts: canMirrorDurably(namespace) })) };
+}
+
+async function flushPendingWrites(timeoutMs = 10000) {
+  if (!pendingWrites.size) return { pending: 0, completed: true };
+  let timeout;
+  const result = await Promise.race([
+    Promise.allSettled(Array.from(pendingWrites)).then(() => ({ done: true })),
+    new Promise((resolve) => { timeout = setTimeout(() => resolve({ done: false }), Math.max(0, timeoutMs)); }),
+  ]);
+  if (timeout) clearTimeout(timeout);
+  return { pending: pendingWrites.size, completed: result.done };
 }
 
 // Suppression d'un document (purge des données expirées) — local + miroir GitHub
@@ -222,4 +303,5 @@ function remove(namespace, docId) {
 }
 
 module.exports = { get, set, setDurable, listIds, listIdsAsync, remove, isMirrored, isEncryptedMirror,
-  canMirrorDurably, persistenceStatus, LOCAL_ONLY_NAMESPACES, ENCRYPTED_MIRROR_NAMESPACES };
+  canMirrorDurably, persistenceStatus, assertProductionStorageReady, validateProductionStorage, flushPendingWrites,
+  LOCAL_ONLY_NAMESPACES, ENCRYPTED_MIRROR_NAMESPACES };

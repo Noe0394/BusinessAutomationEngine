@@ -188,7 +188,7 @@ const ACTION_RE = /\b(?:envoi\w*|envoy\w+|cr[ée]e\w*|cr[ée]er|lance\w*|list\w*
 const SPECIALIST_BUDGET_MS = Math.max(0, parseInt(process.env.OWNER_SPECIALIST_BUDGET_MS, 10) || 4000);
 const withSpecialistBudget = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res(null), SPECIALIST_BUDGET_MS))]);
 const ADDITIONAL_ACTION_RE = /\b(?:extrait\w*|inscri\w*|enregistr\w*|suspend\w*|factur\w*|fais\w*|analyse\w*|relie\w*|attribu\w*|tagu\w*)\b/i;
-const COMPOSITE_RE = /\b(?:puis|ensuite|apr[eè]s|d'abord|avant de)\b|\bet\s+(?:envoi|envoy|extrait|ajout|inscri|relanc|cre|cherch|list|recuper|prepare|enregistr|gere|fais)\w*/i;
+const COMPOSITE_RE = /\b(?:puis|ensuite|apr[eè]s|d'abord|avant de|et|ainsi que)\b/i;
 const REGISTRY_READ_INTENTS = new Set(['report', 'inbox', 'crm', 'activityreport', 'actionsreport', 'lifecycle', 'businessinfo', 'payment', 'account']);
 function isQuickChat(text) {
   const t = String(text || '').trim();
@@ -201,6 +201,13 @@ function detectIntent(text, lastAssistantMessage) {
   // Une nouvelle commande ou question repasse d'abord par sa propre intention,
   // afin qu'un ancien scénario ne capture pas un changement de sujet.
   const clarification = String(text || '').trim();
+  // A verbatim message supplied after Cyrus explicitly requested the exact
+  // message is the answer to that pending question, even if its content has
+  // punctuation or imperative verbs.
+  if (lastAssistantMessage && lastAssistantMessage.isPlanningQuestion
+      && lastAssistantMessage.intent === 'adcampaign'
+      && lastAssistantMessage.adDraft && lastAssistantMessage.adDraft.awaiting === 'message'
+      && clarification.length > 0) return 'adcampaign';
   const canContinuePlanning = lastAssistantMessage && lastAssistantMessage.isPlanningQuestion
     && continuation.includes(lastAssistantMessage.intent)
     && clarification.length > 0 && clarification.length <= 160
@@ -1585,7 +1592,14 @@ function isComplexObjective(text) {
 
 function isCompositeAction(text) {
   const value = String(text || '');
-  return COMPOSITE_RE.test(value) && (ACTION_RE.test(value) || ADDITIONAL_ACTION_RE.test(value));
+  const hasAction = (part) => ACTION_RE.test(part) || ADDITIONAL_ACTION_RE.test(part);
+  const connectors = new RegExp(COMPOSITE_RE.source, 'gi');
+  for (const match of value.matchAll(connectors)) {
+    const left = value.slice(0, match.index);
+    const right = value.slice(match.index + match[0].length);
+    if (hasAction(left) && hasAction(right)) return true;
+  }
+  return false;
 }
 
 function missionDeps(d) {
@@ -1629,7 +1643,7 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
       const identity = { tenant: tenantId, userId: principal.userId, role: principal.role, sessionId, conversationId: sessionId };
       const [toolActions, missions] = await Promise.all([
         require('./pendingToolActions').listForIdentity(tenantId, identity).catch(() => []),
-        missionOrchestrator.list(tenantId, 50).catch(() => []),
+        missionOrchestrator.list(tenantId).catch(() => []),
       ]);
       const openActions = toolActions.filter((item) => ['PENDING', 'EXECUTING'].includes(item.status));
       const openMissions = missions.filter((item) => String(item.sessionId || '') === String(sessionId || '')
@@ -1659,7 +1673,7 @@ async function handleInner({ text, history, tenantId, sessionId, lastAssistantMe
   // Une réponse à une question de mission reprend l'état persistant, aussi
   // depuis un autre canal Self rattaché au même compte.
   try {
-    const pendingMissions = await missionOrchestrator.list(tenantId, 20);
+    const pendingMissions = await missionOrchestrator.list(tenantId);
     const principal = authz.currentPrincipal();
     const activeMissions = pendingMissions.filter((m) => String(m.sessionId || '') === String(sessionId || '')
       && (!principal || String(m.userId || '') === String(principal.userId || ''))

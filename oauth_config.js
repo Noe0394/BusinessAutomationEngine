@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const durableFiles = require('./lib/durableJsonFiles');
 
 // Permet à l'exploitant de coller ses identifiants d'application OAuth
 // (Google/Facebook/TikTok) depuis le portail admin plutôt que de devoir les
@@ -28,14 +29,18 @@ function saveConfig(config) {
   fs.writeFileSync(OAUTH_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
 }
 
+async function restore() {
+  return durableFiles.restore(OAUTH_CONFIG_PATH);
+}
+
 function get(platform) {
   return loadConfig()[platform] || null;
 }
 
-function set(platform, credentials) {
+async function set(platform, credentials) {
   const config = loadConfig();
   config[platform] = { ...credentials, updatedAt: new Date().toISOString() };
-  saveConfig(config);
+  await durableFiles.write(OAUTH_CONFIG_PATH, config);
   return config[platform];
 }
 
@@ -48,4 +53,4 @@ function getStatus() {
   };
 }
 
-module.exports = { get, set, getStatus };
+module.exports = { get, set, getStatus, restore };

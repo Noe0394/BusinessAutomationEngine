@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const storageAdapter = require('./storageAdapter');
 const untrusted = require('./untrusted');
+const githubStore = require('../githubStore');
 
 const NAMESPACE = 'chat_uploads';
 const MAX_TEXT_CHARS = 12000; // borne l'extraction pour ne pas gonfler le contexte
@@ -44,7 +45,15 @@ async function save(tenant, file) {
   const { originalname, mimetype, buffer } = file || {};
   const id = uid();
   const dir = baseDir(tenant);
-  try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, id), buffer); } catch (e) { /* disque best-effort */ }
+  fs.mkdirSync(dir, { recursive: true });
+  const localPath = path.join(dir, id);
+  let blobSha = null;
+  if (githubStore.enabled && buffer) {
+    blobSha = await githubStore.pushLargeFile(path.posix.join('ai_engine_data', 'chat_uploads', sanitize(tenant), id), Buffer.from(buffer));
+  } else {
+    if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL) throw new Error('CHAT_UPLOAD_DURABLE_STORE_UNAVAILABLE');
+    if (buffer) fs.writeFileSync(localPath, buffer);
+  }
   const textual = isTextual(mimetype, originalname);
   let text = null;
   if (textual && buffer) { try { text = buffer.toString('utf8').slice(0, MAX_TEXT_CHARS); } catch (e) { text = null; } }
@@ -52,6 +61,7 @@ async function save(tenant, file) {
     id, name: String(originalname || 'fichier').slice(0, 200),
     type: String(mimetype || 'application/octet-stream'),
     size: buffer ? buffer.length : 0,
+    blobSha,
     textual, hasText: !!text, text: text || null,
     at: new Date().toISOString(),
   };
@@ -61,7 +71,7 @@ async function save(tenant, file) {
   // borne : garde les N plus récents
   const ids = Object.keys(doc.files).sort((a, b) => String(doc.files[b].at).localeCompare(String(doc.files[a].at)));
   for (const old of ids.slice(MAX_FILES_PER_TENANT)) delete doc.files[old];
-  storageAdapter.set(NAMESPACE, sanitize(tenant), doc);
+  await storageAdapter.setDurable(NAMESPACE, sanitize(tenant), doc);
   return { id: meta.id, name: meta.name, type: meta.type, size: meta.size, textual: meta.textual, hasText: meta.hasText };
 }
 
@@ -72,7 +82,7 @@ async function setExtraction(tenant, id, extraction) {
   const meta = doc.files && doc.files[id];
   if (!meta) return false;
   meta.extraction = Object.assign({ at: new Date().toISOString() }, extraction, extraction && extraction.text ? { text: String(extraction.text).slice(0, MAX_TEXT_CHARS) } : {});
-  await storageAdapter.set(NAMESPACE, sanitize(tenant), doc);
+  await storageAdapter.setDurable(NAMESPACE, sanitize(tenant), doc);
   return true;
 }
 
@@ -87,7 +97,15 @@ async function readFile(tenant, id) {
   const meta = await get(tenant, id);
   if (!meta) return null;
   try {
-    const buffer = fs.readFileSync(path.join(baseDir(tenant), id));
+    let buffer;
+    try { buffer = fs.readFileSync(path.join(baseDir(tenant), id)); }
+    catch (_) {
+      if (!meta.blobSha || !githubStore.enabled) return null;
+      buffer = await githubStore.fetchLargeFile(meta.blobSha);
+      if (!buffer) return null;
+      fs.mkdirSync(baseDir(tenant), { recursive: true });
+      fs.writeFileSync(path.join(baseDir(tenant), id), buffer);
+    }
     return { meta, buffer };
   } catch (e) { return null; }
 }

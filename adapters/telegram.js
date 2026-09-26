@@ -880,6 +880,7 @@ function createSession(tenantId) {
     getStorageStatus,
     logout,
     dispose,
+    persistSession: () => authStore.pushSnapshot(sessionPath),
     init,
     startLogin,
     submitCode,

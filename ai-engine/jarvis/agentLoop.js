@@ -54,7 +54,7 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
   // Le registre sélectionne les outils pertinents à partir de leurs
   // métadonnées. La limite borne le contexte du modèle sans plafonner le
   // catalogue ni le nombre d'outils disponibles.
-  const tools = await toolRegistry.discover(text, ctx, { limit: 50 });
+  const tools = await toolRegistry.discover(text, ctx, { limit: Number.MAX_SAFE_INTEGER });
   const taskId = `agent:${tenantId}:${sessionId || 'x'}:${Date.now()}`;
   const started = Date.now();
   let aiCalls = 0;
@@ -67,7 +67,7 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
 
   const steps = Array.isArray(d.resumeSteps) ? d.resumeSteps.map((s) => Object.assign({}, s)) : [];
   const seen = new Set(steps.map((s) => sig(s.name, s.args)));
-  let stopReason = 'DONE';
+  let stopReason = steps.length >= limits.maxSteps ? 'MAX_STEPS' : 'DONE';
   let pendingActionId = null;
 
   for (let i = steps.length; i < limits.maxSteps; i += 1) {
@@ -136,6 +136,47 @@ async function runAgentLoop({ text, history, tenantId, sessionId }, deps) {
       break;
     }
     if (i === limits.maxSteps - 1) stopReason = 'MAX_STEPS';
+  }
+
+  // Une demande plus longue que le tour interactif est transférée au moteur
+  // de missions persistant avec ses résultats déjà vérifiés. Le planificateur
+  // reprend ensuite les étapes restantes après chaque lot, sans limite globale.
+  if (['MAX_STEPS', 'TIMEOUT', 'AI_BUDGET'].includes(stopReason) && steps.length
+    && steps.every((step) => step.state === 'SUCCESS')) {
+    const handoffText = d.rawText || text;
+    try {
+      const mission = await require('../missionOrchestrator').start({
+        text: handoffText, tenantId, sessionId, channel: principal && principal.channel,
+        history: history || [], completedSteps: steps,
+      }, {
+        runtime: d.runtime || null, permissions: d.permissions || ['messages:send'],
+        toolContext: d.toolContext || undefined, generateImage: d.generateImage || null,
+        llm: typeof d.llm === 'function' ? d.llm : undefined, background: true,
+      });
+      if (mission && mission.missionId) {
+        return {
+          text: `${steps.length} étape(s) ont été exécutées et vérifiées. Je poursuis la mission ${mission.missionId} en arrière-plan avec leurs résultats, sans les rejouer.`,
+          missionId: mission.missionId, taskId: mission.taskId, state: mission.state || 'planning',
+          stopReason: 'HANDED_OFF_TO_PERSISTENT_MISSION',
+          toolCalls: steps.map((step) => ({ name: step.name, state: step.state, risk: step.risk })),
+          actionLog: [{ icon: '⏳', label: `${steps.length} étape(s) vérifiée(s), suite persistée`, status: 'pending' }],
+        };
+      }
+      return {
+        text: `${steps.length} étape(s) ont été vérifiées, mais je n’ai pas pu enregistrer la suite de la mission. Elle reste incomplète.`,
+        stopReason: 'MISSION_HANDOFF_FAILED',
+        toolCalls: steps.map((step) => ({ name: step.name, state: step.state, risk: step.risk })),
+        actionLog: [{ icon: '⚠️', label: 'Suite non persistée — mission incomplète', status: 'warning' }],
+      };
+    } catch (err) {
+      console.error('agentLoop mission handoff failed:', err.message);
+      return {
+        text: `${steps.length} étape(s) ont été vérifiées, mais je n’ai pas pu enregistrer la suite de la mission. Elle reste incomplète.`,
+        stopReason: 'MISSION_HANDOFF_FAILED',
+        toolCalls: steps.map((step) => ({ name: step.name, state: step.state, risk: step.risk })),
+        actionLog: [{ icon: '⚠️', label: 'Suite non persistée — mission incomplète', status: 'warning' }],
+      };
+    }
   }
 
   const requestText = d.rawText || text;

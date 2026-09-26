@@ -49,7 +49,7 @@ async function runToolAgent({ text, history, tenantId }, deps) {
   const llm = typeof d.llm === 'function' ? d.llm : defaultLlm;
   const ctx = { runtime: d.runtime || null, permissions: d.permissions || ['messages:send'], generateImage: d.generateImage || null };
   ctx.principal = require('./authz').currentPrincipal();
-  const tools = await toolRegistry.discover(text, ctx, { limit: 50 });
+  const tools = await toolRegistry.discover(text, ctx, { limit: Number.MAX_SAFE_INTEGER });
 
   const selPrompt = [
     personaManager.personaSystemPrompt('default'),

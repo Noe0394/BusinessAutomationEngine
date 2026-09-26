@@ -111,8 +111,9 @@ async function initFromRemote() {
 
   try {
     const remote = await githubStore.fetchRemote();
-    if (remote && remote.content) {
-      fs.writeFileSync(LICENSES_PATH, remote.content, 'utf8');
+    const content = await githubStore.fetchRemoteContent(remote);
+    if (content) {
+      fs.writeFileSync(LICENSES_PATH, content, 'utf8');
       console.log('Licences restaurées depuis le repo GitHub dédié.');
     }
   } catch (err) {

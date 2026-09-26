@@ -34,7 +34,7 @@ const DEFAULT_DELAY_HOURS = { POST_DELIVERY: 48, PAYMENT_REMINDER: 24, PROSPECT_
 const load = (tenant) => storageAdapter.get(NS, sanitize(tenant), { tenant: sanitize(tenant), orders: {}, cases: {}, followUps: {}, events: [] });
 const chains = new Map();
 function locked(tenant, fn) { const k = sanitize(tenant); const prev = chains.get(k) || Promise.resolve(); const next = prev.catch(() => {}).then(fn); chains.set(k, next); next.finally(() => { if (chains.get(k) === next) chains.delete(k); }).catch(() => {}); return next; }
-async function save(tenant, doc) { doc.updatedAt = new Date().toISOString(); await storageAdapter.set(NS, sanitize(tenant), doc); }
+async function save(tenant, doc) { doc.updatedAt = new Date().toISOString(); await storageAdapter.setDurable(NS, sanitize(tenant), doc); }
 function log(doc, type, ref, detail) { doc.events.unshift({ ts: Date.now(), type, ref: ref || null, detail: detail || null }); if (doc.events.length > 400) doc.events.length = 400; }
 const err = (code, message) => Object.assign(new Error(message || code), { code });
 const contactOf = (c) => ({ channel: String((c && c.channel) || 'WHATSAPP').toUpperCase(), id: String((c && (c.id || c.identifier || c.number)) || '').replace(/[^A-Za-z0-9_.@:+-]/g, ''), name: String((c && c.name) || '').slice(0, 120) });
@@ -240,7 +240,7 @@ async function candidates(tenant, opts) {
   const idle = [];
   try {
     const prefix = `${sanitize(tenant)}__`;
-    for (const id of storageAdapter.listIds('conversation_state')) {
+    for (const id of await storageAdapter.listIdsAsync('conversation_state')) {
       if (!id.startsWith(prefix)) continue;
       const st = await storageAdapter.get('conversation_state', id, null);
       if (!st || !['INTERESTED', 'DISCOVERY', 'INFORMATION', 'OBJECTION', 'NEGOTIATION', 'WAITING'].includes(st.state) || st.optOut || (st.refusal && st.refusal.active)) continue;

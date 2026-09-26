@@ -443,7 +443,7 @@ const TOOLS = {
     async execute(args, ctx) {
       const store = required(ctx.scheduledMessages, 'SCHEDULED_MESSAGES_UNAVAILABLE');
       const channel = args.channel ? String(args.channel).toLowerCase() : undefined;
-      const items = store.list({ tenantId: ctx.tenant, channel }).filter((item) => scheduledChannelAllowed(item.channel, ctx));
+      const items = (await store.list({ tenantId: ctx.tenant, channel })).filter((item) => scheduledChannelAllowed(item.channel, ctx));
       return { ok: true, result: { count: items.length, messages: items.map((item) => ({
         id: item.id, channel: item.channel, recipientType: item.recipientType || null,
         recipientCount: Array.isArray(item.recipients) ? item.recipients.length : 0,
@@ -482,14 +482,14 @@ const TOOLS = {
         const groups = facebook(ctx).getManagedGroups();
         if (recipients.some((id) => !groups.some((g) => String(g.id) === id))) return { ok: false, error: { code: 'GROUP_NOT_MANAGED' } };
       }
-      const entry = required(ctx.scheduledMessages, 'SCHEDULED_MESSAGES_UNAVAILABLE').create({
+      const entry = await required(ctx.scheduledMessages, 'SCHEDULED_MESSAGES_UNAVAILABLE').create({
         tenantId: ctx.tenant, channel, recipientType: args.recipientType || 'contacts',
         recipients, message: String(args.message || '').trim(), scheduledAt: scheduledAt.toISOString(),
       });
       return { ok: true, result: { id: entry.id, channel: entry.channel, scheduledAt: entry.scheduledAt, status: entry.status, recipientCount: recipients.length } };
     },
     async verify(result, _args, ctx) {
-      const entry = result && required(ctx.scheduledMessages, 'SCHEDULED_MESSAGES_UNAVAILABLE').get(result.id, { tenantId: ctx.tenant });
+      const entry = result && await required(ctx.scheduledMessages, 'SCHEDULED_MESSAGES_UNAVAILABLE').get(result.id, { tenantId: ctx.tenant });
       return { verified: !!(entry && entry.status === 'pending'), id: entry && entry.id || null };
     },
   },
@@ -500,18 +500,18 @@ const TOOLS = {
     risk: 'WRITE', inputSchema: { id: { type: 'string', required: true, description: 'Identifiant retourné par listScheduledMessages.' } },
     async execute(args, ctx) {
       const store = required(ctx.scheduledMessages, 'SCHEDULED_MESSAGES_UNAVAILABLE');
-      const entry = store.get(args.id, { tenantId: ctx.tenant });
+      const entry = await store.get(args.id, { tenantId: ctx.tenant });
       if (!entry) return { ok: false, error: { code: 'SCHEDULE_NOT_FOUND' } };
       if (!scheduledChannelAllowed(entry.channel, ctx)) return { ok: false, error: { code: 'MODULE_NOT_ALLOWED', module: entry.channel } };
       try {
-        const cancelled = store.cancel(args.id, { tenantId: ctx.tenant });
+        const cancelled = await store.cancel(args.id, { tenantId: ctx.tenant });
         return { ok: true, result: { id: cancelled.id, status: cancelled.status } };
       } catch (err) {
         return { ok: false, error: { code: err.message === 'ONLY_PENDING_CAN_BE_CANCELLED' ? err.message : 'CANCEL_FAILED' } };
       }
     },
     async verify(result, _args, ctx) {
-      const entry = result && required(ctx.scheduledMessages, 'SCHEDULED_MESSAGES_UNAVAILABLE').get(result.id, { tenantId: ctx.tenant });
+      const entry = result && await required(ctx.scheduledMessages, 'SCHEDULED_MESSAGES_UNAVAILABLE').get(result.id, { tenantId: ctx.tenant });
       return { verified: !!(entry && entry.status === 'cancelled'), id: entry && entry.id || null };
     },
   },

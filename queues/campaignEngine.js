@@ -176,7 +176,10 @@ async function persistSequenceMedia(tenantId, campaignId, sequence) {
         mediaBlobSha = await githubStore.pushLargeFile(`${MEDIA_REMOTE_DIR}/${mediaFile}`, step.buffer);
       } catch (err) {
         console.error(`Échec de la sauvegarde GitHub de la pièce jointe "${mediaFile}" :`, err.message);
+        if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL) throw err;
       }
+    } else if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL) {
+      throw new Error('CAMPAIGN_MEDIA_DURABLE_STORE_UNAVAILABLE');
     }
 
     result.push({
@@ -282,6 +285,7 @@ class CampaignEngine {
     // bascule d'une campagne à l'autre.
     this.activeCampaignId = null;
     this.remoteStore = githubStore.createStore(remoteFilePath(tenantId));
+    this.persistChain = Promise.resolve();
     // Horodatage (Date.now()) jusqu'auquel la file d'attente doit rester en
     // pause suite à une réponse entrante — 0 tant qu'aucune réponse n'a été
     // reçue. Propriété de l'instance : elle n'a pas besoin de survivre à un
@@ -488,9 +492,12 @@ class CampaignEngine {
     fs.writeFileSync(statePath(this.tenantId), content, 'utf8');
     // Sauvegarde GitHub en fire-and-forget : jamais bloquant pour la boucle
     // d'envoi, un échec ponctuel n'interrompt pas la campagne.
-    this.remoteStore.pushRemote(content).catch((err) => {
+    const persist = this.persistChain.catch(() => {}).then(() => this.remoteStore.pushRemote(content));
+    this.persistChain = persist;
+    persist.catch((err) => {
       console.error(`Échec de la sauvegarde des campagnes sur GitHub pour le tenant "${this.tenantId}" :`, err.message);
     });
+    return persist;
   }
 
   // Élague l'historique des campagnes TERMINALES (completed/stopped/
@@ -1094,7 +1101,7 @@ class CampaignEngine {
     campaign.superseded = true;
     campaign.status = 'paused';
     this.activeCampaignId = null;
-    this._persist(campaign);
+    return this._persist(campaign);
     console.log(`Campagne (tenant "${this.tenantId}"): "${campaign.name}" mise en pause (session libérée) — reprise possible ultérieurement.`);
   }
 
@@ -1137,10 +1144,11 @@ class CampaignEngine {
 
     try {
       const remote = await this.remoteStore.fetchRemote();
-      if (!remote || !remote.content) return null;
-      fs.writeFileSync(statePath(this.tenantId), remote.content, 'utf8');
+      const content = await githubStore.fetchRemoteContent(remote);
+      if (!content) return null;
+      fs.writeFileSync(statePath(this.tenantId), content, 'utf8');
       console.log(`Campagne (tenant "${this.tenantId}"): état restauré depuis GitHub (disque local vidé par un redéploiement).`);
-      return JSON.parse(remote.content);
+      return JSON.parse(content);
     } catch (err) {
       console.error(`Campagne (tenant "${this.tenantId}"): échec de restauration depuis GitHub :`, err.message);
       return null;
@@ -1260,7 +1268,7 @@ async function listTenantsWithPendingCampaigns() {
   }
 
   const knownLocally = new Set(tenantsFromLocal);
-  const remoteFiles = await githubStore.listDirectory(REMOTE_CAMPAIGNS_DIR);
+  const remoteFiles = await githubStore.listDirectory(REMOTE_CAMPAIGNS_DIR, { strict: process.env.RENDER === 'true' || !!process.env.RENDER_SERVICE_ID || !!process.env.RENDER_EXTERNAL_URL });
   const tenantsFromRemote = [];
 
   for (const filename of remoteFiles) {
@@ -1271,8 +1279,9 @@ async function listTenantsWithPendingCampaigns() {
     try {
       const store = githubStore.createStore(`${REMOTE_CAMPAIGNS_DIR}/${filename}`);
       const remote = await store.fetchRemote();
-      if (!remote || !remote.content) continue;
-      const record = JSON.parse(remote.content);
+      const content = await githubStore.fetchRemoteContent(remote);
+      if (!content) continue;
+      const record = JSON.parse(content);
       if (hasPending(record)) {
         tenantsFromRemote.push(tenantId);
       }

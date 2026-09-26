@@ -603,14 +603,60 @@ async function resolveScheduledMediaList(entry) {
 
   const resolved = [];
   for (const item of items) {
-    const media = await resolveMediaReference(item, tenantMediaDirectory(SCHEDULED_MEDIA_DIR, entry.tenantId));
+    let media = null;
+    if (item.mediaBlobSha) {
+      const buffer = await require('./githubStore').fetchLargeFile(item.mediaBlobSha);
+      if (!buffer) throw new Error(`SCHEDULED_MEDIA_MISSING:${item.mediaFilename || item.mediaUrl}`);
+      media = { buffer, mimetype: item.mediaMimetype || 'application/octet-stream', filename: item.mediaFilename || 'fichier' };
+    } else {
+      try { media = await resolveMediaReference(item, tenantMediaDirectory(SCHEDULED_MEDIA_DIR, entry.tenantId)); }
+      catch (err) {
+        if (!item.mediaUrl || !item.mediaUrl.startsWith('local:')) throw err;
+        const name = item.mediaUrl.slice('local:'.length);
+        const hash = require('crypto').createHash('sha256').update(String(entry.tenantId || '__admin__')).digest('hex');
+        const candidates = [
+          `${process.env.GITHUB_SCHEDULED_MEDIA_DIR || 'scheduled_media'}/${hash}/${name}`,
+          `tenant-data/${hash}/scheduled_media/${name}`,
+          `scheduled_media/${name}`,
+        ];
+        for (const remotePath of candidates) {
+          const remote = await require('./githubStore').createStore(remotePath).fetchRemote();
+          if (!remote) continue;
+          const buffer = remote.tooLarge && remote.sha
+            ? await require('./githubStore').fetchLargeFile(remote.sha)
+            : (remote.content ? Buffer.from(remote.content, 'utf8') : null);
+          if (buffer) {
+            media = { buffer, mimetype: item.mediaMimetype || 'application/octet-stream', filename: item.mediaFilename || name };
+            break;
+          }
+        }
+        if (!media) throw err;
+      }
+    }
     if (media) resolved.push({ ...media, forceDocument: Boolean(item.forceDocument) });
   }
   return resolved;
 }
 
 function resolveKeywordRuleMedia(rule) {
-  return resolveMediaReference(rule, tenantMediaDirectory(KEYWORD_MEDIA_DIR, currentTenantId()));
+  return (async () => {
+    if (rule && rule.mediaBlobSha) {
+      const buffer = await require('./githubStore').fetchLargeFile(rule.mediaBlobSha);
+      if (!buffer) throw new Error(`KEYWORD_MEDIA_MISSING:${rule.mediaFilename || rule.mediaUrl}`);
+      return { buffer, mimetype: rule.mediaMimetype || 'application/octet-stream', filename: rule.mediaFilename || 'fichier' };
+    }
+    try { return await resolveMediaReference(rule, tenantMediaDirectory(KEYWORD_MEDIA_DIR, currentTenantId())); }
+    catch (err) {
+      if (!rule || !rule.mediaUrl || !rule.mediaUrl.startsWith('local:')) throw err;
+      const name = rule.mediaUrl.slice('local:'.length);
+      const filePath = path.join(tenantMediaDirectory(KEYWORD_MEDIA_DIR, currentTenantId()), name);
+      const remotePath = require('./lib/durableJsonFiles').remotePath(filePath);
+      const remote = await require('./githubStore').createStore(remotePath).fetchRemote();
+      const buffer = remote && remote.sha ? await require('./githubStore').fetchLargeFile(remote.sha) : null;
+      if (!buffer) throw err;
+      return { buffer, mimetype: rule.mediaMimetype || 'application/octet-stream', filename: rule.mediaFilename || name };
+    }
+  })();
 }
 
 // entry.sequence (tableau, voir queues/scheduled_messages.js et
@@ -769,10 +815,11 @@ async function runScheduledMessagesTick() {
   scheduledMessagesTickRunning = true;
 
   try {
-    const due = scheduledMessages.getDuePending();
+    await scheduledMessages.initialize();
+    const due = await scheduledMessages.getDuePending();
 
     for (const entry of due) {
-      scheduledMessages.update(entry.id, { status: 'sending' });
+      await scheduledMessages.update(entry.id, { status: 'sending' }, { tenantId: entry.tenantId, includeLegacy: true });
 
       try {
         const mediaList = await resolveScheduledMediaList(entry);
@@ -788,21 +835,21 @@ async function runScheduledMessagesTick() {
           throw new Error(`Canal de programmation inconnu : ${entry.channel}`);
         }
 
-        scheduledMessages.update(entry.id, {
+        await scheduledMessages.update(entry.id, {
           status: 'sent',
           sentAt: new Date().toISOString(),
           result,
           lastError: null,
-        });
+        }, { tenantId: entry.tenantId, includeLegacy: true });
         console.log(`Programmation ${entry.id} (${entry.channel}) : envoyée.`);
       } catch (err) {
         const attempts = (entry.attempts || 0) + 1;
         const failed = attempts >= scheduledMessages.MAX_ATTEMPTS;
-        scheduledMessages.update(entry.id, {
+        await scheduledMessages.update(entry.id, {
           status: failed ? 'failed' : 'pending',
           attempts,
           lastError: err.message || String(err),
-        });
+        }, { tenantId: entry.tenantId, includeLegacy: true });
         console.error(
           `Programmation ${entry.id} (${entry.channel}) : échec (tentative ${attempts}/${scheduledMessages.MAX_ATTEMPTS}) —`,
           err.message || err,
@@ -1329,30 +1376,30 @@ app.get('/api/admin/oauth-config', requireAdmin, (req, res) => {
   res.status(200).json(oauthConfig.getStatus());
 });
 
-app.post('/api/admin/oauth-config/google', requireAdmin, (req, res) => {
+app.post('/api/admin/oauth-config/google', requireAdmin, async (req, res) => {
   const { clientId, clientSecret } = req.body || {};
   if (!clientId || !clientSecret) {
     return res.status(400).json({ error: 'Les champs "clientId" et "clientSecret" sont requis.' });
   }
-  oauthConfig.set('google', { clientId, clientSecret });
+  await oauthConfig.set('google', { clientId, clientSecret });
   res.status(200).json({ success: true });
 });
 
-app.post('/api/admin/oauth-config/facebook', requireAdmin, (req, res) => {
+app.post('/api/admin/oauth-config/facebook', requireAdmin, async (req, res) => {
   const { appId, appSecret } = req.body || {};
   if (!appId || !appSecret) {
     return res.status(400).json({ error: 'Les champs "appId" et "appSecret" sont requis.' });
   }
-  oauthConfig.set('facebook', { appId, appSecret });
+  await oauthConfig.set('facebook', { appId, appSecret });
   res.status(200).json({ success: true });
 });
 
-app.post('/api/admin/oauth-config/tiktok', requireAdmin, (req, res) => {
+app.post('/api/admin/oauth-config/tiktok', requireAdmin, async (req, res) => {
   const { clientKey, clientSecret } = req.body || {};
   if (!clientKey || !clientSecret) {
     return res.status(400).json({ error: 'Les champs "clientKey" et "clientSecret" sont requis.' });
   }
-  oauthConfig.set('tiktok', { clientKey, clientSecret });
+  await oauthConfig.set('tiktok', { clientKey, clientSecret });
   res.status(200).json({ success: true });
 });
 
@@ -2261,8 +2308,8 @@ app.get('/api/facebook/status', requireAccess, requireModule('facebook'), async 
 // variable d'environnement sur Render, il reprend le relais automatiquement
 // (envTokenStillActive dans la réponse) — ce bouton ne peut couper qu'un
 // jeton obtenu via OAuth.
-app.post('/api/facebook/logout', requireAccess, requireModule('facebook'), (req, res) => {
-  const result = facebook.disconnect();
+app.post('/api/facebook/logout', requireAccess, requireModule('facebook'), async (req, res) => {
+  const result = await facebook.disconnect();
   res.status(200).json({ status: 'logged_out', ...result });
 });
 
@@ -2564,7 +2611,7 @@ async function autoReplyToComment(rule, contact, commentId, psid) {
       await facebook.sendMedia(psid, media);
     }
   }
-  contactsStore.markAutoReplied(contact.id);
+  await contactsStore.markAutoReplied(contact.id);
   console.log(`Prospect: réponse automatique envoyée (commentaire, mot-clé "${rule.keyword}") à PSID ${psid}.`);
 }
 
@@ -2580,7 +2627,7 @@ async function autoReplyToMessage(rule, contact, psid) {
       await facebook.sendMedia(psid, media);
     }
   }
-  contactsStore.markAutoReplied(contact.id);
+  await contactsStore.markAutoReplied(contact.id);
   console.log(`Prospect: réponse automatique envoyée (message, mot-clé "${rule.keyword}") à PSID ${psid}.`);
 }
 
@@ -2601,7 +2648,7 @@ async function handleFacebookFeedChange(value) {
   const { firstName, lastName } = splitDisplayName(value.from.name);
   const rule = keywordRules.findMatch(commentText);
 
-  const contact = contactsStore.upsertFromLead({
+  const contact = await contactsStore.upsertFromLead({
     psid,
     firstName,
     lastName,
@@ -2634,7 +2681,7 @@ async function handleFacebookMessagingEvent(event) {
   const rule = keywordRules.findMatch(text);
   const profile = await facebook.getUserProfile(psid);
 
-  const contact = contactsStore.upsertFromLead({
+  const contact = await contactsStore.upsertFromLead({
     psid,
     firstName: profile.first_name || null,
     lastName: profile.last_name || null,
@@ -2700,8 +2747,9 @@ app.get('/api/facebook/keyword-rules', requireAccess, requireModule('facebook'),
   res.status(200).json({ rules: keywordRules.list() });
 });
 
-app.post('/api/facebook/keyword-rules', requireAccess, requireModule('facebook'), upload.single('media'), (req, res) => {
+app.post('/api/facebook/keyword-rules', requireAccess, requireModule('facebook'), upload.single('media'), async (req, res) => {
   const { keyword, replyMessage, mediaUrl } = req.body;
+  let mediaBlobSha = null;
   if (!keyword || !keyword.trim()) {
     return res.status(400).json({ error: 'Le champ "keyword" est requis.' });
   }
@@ -2718,23 +2766,25 @@ app.post('/api/facebook/keyword-rules', requireAccess, requireModule('facebook')
     const tenantKeywordMediaDir = tenantMediaDirectory(KEYWORD_MEDIA_DIR, resolveTenantId(req));
     fs.mkdirSync(tenantKeywordMediaDir, { recursive: true });
     fs.writeFileSync(path.join(tenantKeywordMediaDir, safeName), req.file.buffer);
+    mediaBlobSha = await require('./lib/durableJsonFiles').persistBlob(path.join(tenantKeywordMediaDir, safeName), req.file.buffer);
     storedMediaUrl = `local:${safeName}`;
     mediaMimetype = req.file.mimetype;
     mediaFilename = req.file.originalname;
   }
 
-  const rule = keywordRules.create({
+  const rule = await keywordRules.create({
     keyword,
     replyMessage,
     mediaUrl: storedMediaUrl,
     mediaMimetype,
     mediaFilename,
+    mediaBlobSha,
   });
   res.status(201).json({ rule });
 });
 
-app.delete('/api/facebook/keyword-rules/:id', requireAccess, requireModule('facebook'), (req, res) => {
-  const rules = keywordRules.remove(req.params.id);
+app.delete('/api/facebook/keyword-rules/:id', requireAccess, requireModule('facebook'), async (req, res) => {
+  const rules = await keywordRules.remove(req.params.id);
   res.status(200).json({ rules });
 });
 
@@ -2948,17 +2998,17 @@ app.post('/api/facebook/share/prepare-custom-post', requireAccess, requireModule
   }
 });
 
-app.post('/api/facebook/groups', requireAccess, requireModule('facebook'), (req, res) => {
+app.post('/api/facebook/groups', requireAccess, requireModule('facebook'), async (req, res) => {
   const { id, name } = req.body || {};
   if (!id) {
     return res.status(400).json({ error: 'Le champ "id" (identifiant du Groupe Facebook) est requis.' });
   }
-  const groups = facebook.addManagedGroup(id, name);
+  const groups = await facebook.addManagedGroup(id, name);
   res.status(200).json({ groups });
 });
 
-app.delete('/api/facebook/groups/:id', requireAccess, requireModule('facebook'), (req, res) => {
-  const groups = facebook.removeManagedGroup(req.params.id);
+app.delete('/api/facebook/groups/:id', requireAccess, requireModule('facebook'), async (req, res) => {
+  const groups = await facebook.removeManagedGroup(req.params.id);
   res.status(200).json({ groups });
 });
 
@@ -2970,7 +3020,7 @@ app.delete('/api/facebook/groups/:id', requireAccess, requireModule('facebook'),
 // l'onglet Groupes / Partage. Colonnes attendues : "Nom du Groupe" et
 // "Lien du Groupe" (l'identifiant est alors extrait du lien) ou "ID"
 // directement.
-app.post('/api/facebook/groups/upload', requireAccess, requireModule('facebook'), upload.single('file'), (req, res) => {
+app.post('/api/facebook/groups/upload', requireAccess, requireModule('facebook'), upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Aucun fichier fourni (champ "file").' });
   }
@@ -2989,7 +3039,7 @@ app.post('/api/facebook/groups/upload', requireAccess, requireModule('facebook')
   let skipped = 0;
   let groups = facebook.getManagedGroups();
 
-  rows.forEach((row) => {
+  for (const row of rows) {
     const name = String(row['Nom du Groupe'] || row.Nom || row.nom || row.name || row.Name || '').trim();
     const link = String(row['Lien du Groupe'] || row.Lien || row.lien || row.link || row.Link || '').trim();
     const idColumn = String(row.ID || row.Id || row.id || '').trim();
@@ -3002,12 +3052,12 @@ app.post('/api/facebook/groups/upload', requireAccess, requireModule('facebook')
 
     if (!id) {
       skipped += 1;
-      return;
+      continue;
     }
 
-    groups = facebook.addManagedGroup(id, name || id);
+    groups = await facebook.addManagedGroup(id, name || id);
     imported += 1;
-  });
+  }
 
   res.status(200).json({
     groups: groups.map((g) => ({ ...g, link: `https://www.facebook.com/groups/${g.id}` })),
@@ -4097,8 +4147,8 @@ function channelAllowed(req, channel) {
   return Array.isArray(req.allowedModules) && req.allowedModules.includes(channel);
 }
 
-app.get('/api/scheduled-messages', requireAccess, (req, res) => {
-  const all = scheduledMessages.list({ tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
+app.get('/api/scheduled-messages', requireAccess, async (req, res) => {
+  const all = await scheduledMessages.list({ tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
   const visible = req.allowedModules === null || req.allowedModules === undefined
     ? all
     : all.filter((m) => channelAllowed(req, m.channel));
@@ -4119,6 +4169,7 @@ app.post(
       channel, recipientType, message, mediaUrl, scheduledAt,
       sequenceDelayMin, sequenceDelayMax,
     } = req.body;
+    const tenantId = resolveTenantId(req);
     let { recipients, sequence } = req.body;
     const files = req.files || [];
 
@@ -4183,11 +4234,13 @@ app.post(
           const tenantScheduledMediaDir = tenantMediaDirectory(SCHEDULED_MEDIA_DIR, resolveTenantId(req));
           fs.mkdirSync(tenantScheduledMediaDir, { recursive: true });
           fs.writeFileSync(path.join(tenantScheduledMediaDir, safeName), built.buffer);
+          const mediaBlobSha = await scheduledMessages.persistMedia(tenantId, safeName, built.buffer);
           sequenceItems.push({
             type: 'media',
             mediaUrl: `local:${safeName}`,
             mediaMimetype: built.mimetype,
             mediaFilename: built.filename,
+            mediaBlobSha,
             forceDocument: built.forceDocument || false,
           });
         } else {
@@ -4233,10 +4286,12 @@ app.post(
           const tenantScheduledMediaDir = tenantMediaDirectory(SCHEDULED_MEDIA_DIR, resolveTenantId(req));
           fs.mkdirSync(tenantScheduledMediaDir, { recursive: true });
           fs.writeFileSync(path.join(tenantScheduledMediaDir, safeName), buffer);
+          const mediaBlobSha = await scheduledMessages.persistMedia(tenantId, safeName, buffer);
           mediaItems.push({
             mediaUrl: `local:${safeName}`,
             mediaMimetype: mimetype,
             mediaFilename: filename,
+            mediaBlobSha,
             forceDocument: built ? (built.forceDocument || false) : false,
           });
         }
@@ -4245,8 +4300,8 @@ app.post(
       }
     }
 
-    const entry = scheduledMessages.create({
-      tenantId: resolveTenantId(req),
+    const entry = await scheduledMessages.create({
+      tenantId,
       channel,
       recipientType: recipientType || null,
       recipients: Array.isArray(recipients) ? recipients : [],
@@ -4262,8 +4317,8 @@ app.post(
   },
 );
 
-app.delete('/api/scheduled-messages/:id', requireAccess, (req, res) => {
-  const entry = scheduledMessages.get(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
+app.delete('/api/scheduled-messages/:id', requireAccess, async (req, res) => {
+  const entry = await scheduledMessages.get(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
   if (!entry) {
     return res.status(404).json({ error: 'Programmation introuvable.' });
   }
@@ -4272,7 +4327,7 @@ app.delete('/api/scheduled-messages/:id', requireAccess, (req, res) => {
   }
 
   try {
-    const cancelled = scheduledMessages.cancel(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
+    const cancelled = await scheduledMessages.cancel(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
     res.status(200).json({ message: cancelled });
   } catch (err) {
     if (err.message === 'ONLY_PENDING_CAN_BE_CANCELLED') {
@@ -4302,11 +4357,11 @@ app.delete('/api/scheduled-messages/:id', requireAccess, (req, res) => {
 // immédiat que la programmation native. Son intérêt : un tableau
 // récapitulatif unifié, l'étiquette mot-clé, et la diffusion combinée vers
 // des Groupes au même moment que la Page.
-app.get('/api/facebook/schedule-post', requireAccess, requireModule('facebook'), (req, res) => {
-  res.status(200).json({ posts: scheduledMessages.list({ channel: 'facebook_page', tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin }) });
+app.get('/api/facebook/schedule-post', requireAccess, requireModule('facebook'), async (req, res) => {
+  res.status(200).json({ posts: await scheduledMessages.list({ channel: 'facebook_page', tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin }) });
 });
 
-app.post('/api/facebook/schedule-post', requireAccess, requireModule('facebook'), upload.single('media'), (req, res) => {
+app.post('/api/facebook/schedule-post', requireAccess, requireModule('facebook'), upload.single('media'), async (req, res) => {
   const { message, mediaUrl, scheduledAt, keyword } = req.body;
   let { recipients } = req.body;
 
@@ -4334,25 +4389,29 @@ app.post('/api/facebook/schedule-post', requireAccess, requireModule('facebook')
   let storedMediaUrl = mediaUrl || null;
   let mediaMimetype = null;
   let mediaFilename = null;
+  let mediaBlobSha = null;
+  const tenantId = resolveTenantId(req);
 
   if (req.file) {
     const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const tenantScheduledMediaDir = tenantMediaDirectory(SCHEDULED_MEDIA_DIR, resolveTenantId(req));
+    const tenantScheduledMediaDir = tenantMediaDirectory(SCHEDULED_MEDIA_DIR, tenantId);
     fs.mkdirSync(tenantScheduledMediaDir, { recursive: true });
     fs.writeFileSync(path.join(tenantScheduledMediaDir, safeName), req.file.buffer);
+    mediaBlobSha = await scheduledMessages.persistMedia(tenantId, safeName, req.file.buffer);
     storedMediaUrl = `local:${safeName}`;
     mediaMimetype = req.file.mimetype;
     mediaFilename = req.file.originalname;
   }
 
-  const entry = scheduledMessages.create({
-    tenantId: resolveTenantId(req),
+  const entry = await scheduledMessages.create({
+    tenantId,
     channel: 'facebook_page',
     recipients: Array.isArray(recipients) ? recipients : [],
     message,
     mediaUrl: storedMediaUrl,
     mediaMimetype,
     mediaFilename,
+    media: storedMediaUrl && storedMediaUrl.startsWith('local:') ? [{ mediaUrl: storedMediaUrl, mediaMimetype, mediaFilename, mediaBlobSha }] : undefined,
     keyword,
     scheduledAt: new Date(scheduledAt).toISOString(),
   });
@@ -4360,14 +4419,14 @@ app.post('/api/facebook/schedule-post', requireAccess, requireModule('facebook')
   res.status(201).json({ post: entry });
 });
 
-app.delete('/api/facebook/schedule-post/:id', requireAccess, requireModule('facebook'), (req, res) => {
-  const entry = scheduledMessages.get(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
+app.delete('/api/facebook/schedule-post/:id', requireAccess, requireModule('facebook'), async (req, res) => {
+  const entry = await scheduledMessages.get(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
   if (!entry || entry.channel !== 'facebook_page') {
     return res.status(404).json({ error: 'Publication programmée introuvable.' });
   }
 
   try {
-    const cancelled = scheduledMessages.cancel(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
+    const cancelled = await scheduledMessages.cancel(req.params.id, { tenantId: resolveTenantId(req), includeLegacy: !!req.isAdmin });
     res.status(200).json({ post: cancelled });
   } catch (err) {
     if (err.message === 'ONLY_PENDING_CAN_BE_CANCELLED') {
@@ -5374,7 +5433,7 @@ async function runRecurringTasksTick() {
   recurringTickRunning = true;
   try {
     const now = new Date();
-    const tenantIds = recurringTasks.listTenantIds();
+    const tenantIds = await recurringTasks.listTenantIds();
     for (const tenantId of tenantIds) {
       const tasks = await recurringTasks.list(tenantId);
       for (const task of tasks) {
@@ -6600,13 +6659,38 @@ app.use((err, req, res, next) => {
   return next();
 });
 
-licenses
-  .initFromRemote()
+let startupStorageReady = false;
+let startupStateReady = false;
+Promise.resolve()
+  .then(() => require('./ai-engine/storageAdapter').validateProductionStorage())
+  .then(() => {
+    startupStorageReady = true;
+    return licenses.initFromRemote();
+  })
+  .then(async () => {
+    const tenants = licenses.listLicenses().map((license) => license.key).concat(['__admin__']);
+    await Promise.all([
+      oauthConfig.restore(),
+      FacebookMessengerAdapter.restorePersistedFiles(tenants),
+      MediaPublisherAdapter.restorePersistedFiles(tenants),
+      contactsStoreModule.restorePersistedFiles(tenants),
+      keywordRulesModule.restorePersistedFiles(tenants),
+    ]);
+  })
   .then(() => licenses.migrateStudioVideoModule())
+  .then(() => scheduledMessages.initialize())
+  .then(() => require('./ai-engine/alwaysOn').loadFromStorage(require('./ai-engine/storageAdapter'), 'auto_settings'))
+  .then(() => { startupStateReady = true; })
   .catch((err) => {
-    console.error('Erreur lors de la restauration/migration des licences :', err);
+    console.error('Erreur lors de la restauration/migration de l’état persistant :', err.message);
   })
   .finally(() => {
+    const isRenderRuntime = process.env.RENDER === 'true' || !!process.env.RENDER_SERVICE_ID || !!process.env.RENDER_EXTERNAL_URL;
+    if (isRenderRuntime && (!startupStorageReady || !startupStateReady)) {
+      console.error('ArrÃªt du dÃ©marrage : le stockage persistant de production n\'est pas prÃªt.');
+      process.exit(1);
+      return;
+    }
     globalContactSync.init();
     globalContactImport.init().catch((err) => console.error('Reprise import contacts globaux :', err.message));
     app.listen(PORT, () => {
@@ -6697,33 +6781,51 @@ telegramManager
 // gestionnaire ajoute).
 let shuttingDown = false;
 
-function pauseAllActiveCampaignsForShutdown() {
+async function pauseAllActiveCampaignsForShutdown() {
+  const writes = [];
   for (const entry of whatsappManager.listActiveEntries()) {
     try {
-      entry.campaignEngine.pauseForShutdown();
+      writes.push(Promise.resolve(entry.campaignEngine.pauseForShutdown()));
     } catch (err) {
       console.error(`Erreur lors de la mise en pause de la campagne WhatsApp (tenant "${entry.session.tenantId}") à l'arrêt :`, err.message);
     }
   }
   for (const entry of telegramManager.listActiveEntries()) {
     try {
-      entry.campaignEngine.pauseForShutdown();
+      writes.push(Promise.resolve(entry.campaignEngine.pauseForShutdown()));
     } catch (err) {
       console.error(`Erreur lors de la mise en pause de la campagne Telegram (tenant "${entry.session.tenantId}") à l'arrêt :`, err.message);
     }
   }
+  await Promise.allSettled(writes);
 }
 
 function handleShutdownSignal(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`Signal ${signal} reçu : mise en pause des campagnes actives avant l'arrêt...`);
-  pauseAllActiveCampaignsForShutdown();
+  try { require('./ai-engine/taskQueue').stopWorker(); } catch (_) { /* optional */ }
+  const hardStop = setTimeout(() => process.exit(0), 12000);
+  Promise.resolve()
+    .then(() => pauseAllActiveCampaignsForShutdown())
+    .then(() => Promise.allSettled([
+      whatsappManager.flushAuthSnapshots(),
+      telegramManager.flushAuthSnapshots(),
+      require('./ai-engine/storageAdapter').flushPendingWrites(9000),
+      require('./lib/aiStudioStore').flushPendingWrites(9000),
+      require('./lib/durableJsonFiles').flushPendingWrites(9000),
+    ]))
+    .then((results) => {
+      const failed = results.filter((item) => item.status === 'rejected' || (item.value && item.value.failed > 0));
+      if (failed.length) console.error(`Shutdown ${signal}: ${failed.length} persistence flush group(s) failed.`);
+    })
+    .catch((err) => console.error(`Shutdown ${signal} persistence flush failed:`, err.message))
+    .finally(() => { clearTimeout(hardStop); process.exit(0); });
   // Brève fenêtre avant de quitter pour de laisser une chance aux sauvegardes
   // GitHub déclenchées par pauseForShutdown() (fire-and-forget, voir
   // _persist()) de partir — la seule façon de retrouver cette campagne au
   // démarrage du PROCHAIN conteneur si le redéploiement vide le disque local.
-  setTimeout(() => process.exit(0), 3000);
+  // The asynchronous persistence flush above has a 12-second hard deadline.
 }
 
 process.on('SIGTERM', () => handleShutdownSignal('SIGTERM'));

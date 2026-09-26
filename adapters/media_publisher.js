@@ -5,6 +5,7 @@ const { Readable } = require('stream');
 const axios = require('axios');
 const { google } = require('googleapis');
 const oauthConfig = require('../oauth_config');
+const durableFiles = require('../lib/durableJsonFiles');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -18,11 +19,7 @@ function readJsonFile(filePath) {
   }
 }
 
-function writeJsonFile(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
-  try { fs.chmodSync(filePath, 0o600); } catch (err) { /* ACLs can differ on Windows. */ }
-}
+function writeJsonFile(filePath, data) { return durableFiles.write(filePath, data); }
 
 const YOUTUBE_TOKEN_PATH = process.env.YOUTUBE_TOKEN_PATH || path.join(__dirname, '..', 'youtube_token.json');
 const TIKTOK_TOKEN_PATH = process.env.TIKTOK_TOKEN_PATH || path.join(__dirname, '..', 'tiktok_token.json');
@@ -30,6 +27,20 @@ const TIKTOK_TOKEN_PATH = process.env.TIKTOK_TOKEN_PATH || path.join(__dirname, 
 // Facebook (OAuth) déverrouille aussi Instagram Reels, car les deux passent
 // par le même jeton de Page issue de "Se connecter avec Facebook".
 const FACEBOOK_TOKEN_PATH = process.env.FB_TOKEN_PATH || path.join(__dirname, '..', 'facebook_token.json');
+
+async function restorePersistedFiles(tenantIds = []) {
+  const files = [YOUTUBE_TOKEN_PATH, TIKTOK_TOKEN_PATH, FACEBOOK_TOKEN_PATH];
+  for (const tenantId of new Set((tenantIds || []).map(String))) {
+    if (tenantId === '__admin__') continue;
+    const hash = crypto.createHash('sha256').update(tenantId).digest('hex');
+    files.push(
+      path.join(path.dirname(YOUTUBE_TOKEN_PATH), 'tenant-data', hash, 'youtube-token.json'),
+      path.join(path.dirname(TIKTOK_TOKEN_PATH), 'tenant-data', hash, 'tiktok-token.json'),
+      path.join(path.dirname(FACEBOOK_TOKEN_PATH), 'tenant-data', hash, 'facebook-token.json'),
+    );
+  }
+  return durableFiles.restoreMany(files);
+}
 
 /**
  * Adaptateur unifié de publication vidéo (YouTube Shorts, Instagram Reels,
@@ -175,7 +186,7 @@ class MediaPublisherAdapter {
       throw new Error('NO_REFRESH_TOKEN_RETURNED');
     }
     fs.mkdirSync(path.dirname(this.youtubeTokenPath), { recursive: true });
-    writeJsonFile(this.youtubeTokenPath, { refresh_token: tokens.refresh_token, connectedAt: new Date().toISOString() });
+    await writeJsonFile(this.youtubeTokenPath, { refresh_token: tokens.refresh_token, connectedAt: new Date().toISOString() });
   }
 
   // ---------- Connexion TikTok (OAuth officiel Login Kit) ----------
@@ -209,7 +220,7 @@ class MediaPublisherAdapter {
 
     const { access_token: accessToken, refresh_token: refreshToken, expires_in: expiresIn } = res.data;
     fs.mkdirSync(path.dirname(this.tiktokTokenPath), { recursive: true });
-    writeJsonFile(this.tiktokTokenPath, {
+    await writeJsonFile(this.tiktokTokenPath, {
       access_token: accessToken,
       refresh_token: refreshToken,
       expiresAt: Date.now() + (expiresIn || 0) * 1000,
@@ -423,4 +434,5 @@ class MediaPublisherAdapter {
   }
 }
 
+MediaPublisherAdapter.restorePersistedFiles = restorePersistedFiles;
 module.exports = MediaPublisherAdapter;

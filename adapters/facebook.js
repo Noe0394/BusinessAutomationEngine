@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const FormData = require('form-data');
 const oauthConfig = require('../oauth_config');
+const durableFiles = require('../lib/durableJsonFiles');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,14 +22,23 @@ function readJsonFile(filePath) {
   }
 }
 
-function writeJsonFile(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
-  try { fs.chmodSync(filePath, 0o600); } catch (err) { /* ACLs can differ on Windows. */ }
-}
+function writeJsonFile(filePath, data) { return durableFiles.write(filePath, data); }
 
 const FACEBOOK_TOKEN_PATH = process.env.FB_TOKEN_PATH || path.join(__dirname, '..', 'facebook_token.json');
 const FACEBOOK_GROUPS_PATH = process.env.FB_GROUPS_PATH || path.join(__dirname, '..', 'facebook_groups.json');
+
+async function restorePersistedFiles(tenantIds = []) {
+  const files = [FACEBOOK_TOKEN_PATH, FACEBOOK_GROUPS_PATH];
+  for (const tenantId of new Set((tenantIds || []).map(String))) {
+    if (tenantId === '__admin__') continue;
+    const hash = crypto.createHash('sha256').update(tenantId).digest('hex');
+    files.push(
+      path.join(path.dirname(FACEBOOK_TOKEN_PATH), 'tenant-data', hash, 'facebook-token.json'),
+      path.join(path.dirname(FACEBOOK_GROUPS_PATH), 'tenant-data', hash, 'facebook-groups.json'),
+    );
+  }
+  return durableFiles.restoreMany(files);
+}
 
 /**
  * Adaptateur Facebook Messenger basé sur l'API officielle Meta Messenger
@@ -140,12 +150,8 @@ class FacebookMessengerAdapter {
   // en variable d'environnement, il reprend automatiquement le relais (c'est
   // un réglage manuel de l'exploitant, pas une session vivante que ce bouton
   // peut couper) : envTokenStillActive le signale à l'appelant.
-  disconnect() {
-    try {
-      fs.unlinkSync(this.tokenPath);
-    } catch (err) {
-      // déjà absent
-    }
+  async disconnect() {
+    await durableFiles.remove(this.tokenPath);
     this.pageId = null;
     this.pageName = null;
     return {
@@ -259,7 +265,7 @@ class FacebookMessengerAdapter {
     }
 
     fs.mkdirSync(path.dirname(this.tokenPath), { recursive: true });
-    writeJsonFile(this.tokenPath, {
+    await writeJsonFile(this.tokenPath, {
       pageAccessToken: page.access_token,
       pageId: page.id,
       pageName: page.name,
@@ -390,7 +396,7 @@ class FacebookMessengerAdapter {
     return Array.isArray(stored?.groups) ? stored.groups : [];
   }
 
-  addManagedGroup(groupId, name) {
+  async addManagedGroup(groupId, name) {
     const id = String(groupId || '').trim();
     if (!id) {
       throw new Error('GROUP_ID_REQUIRED');
@@ -398,14 +404,14 @@ class FacebookMessengerAdapter {
     const groups = this.getManagedGroups().filter((g) => g.id !== id);
     groups.push({ id, name: String(name || '').trim() || id, addedAt: new Date().toISOString() });
     fs.mkdirSync(path.dirname(this.groupsPath), { recursive: true });
-    writeJsonFile(this.groupsPath, { groups });
+    await writeJsonFile(this.groupsPath, { groups });
     return groups;
   }
 
-  removeManagedGroup(groupId) {
+  async removeManagedGroup(groupId) {
     const groups = this.getManagedGroups().filter((g) => g.id !== String(groupId || '').trim());
     fs.mkdirSync(path.dirname(this.groupsPath), { recursive: true });
-    writeJsonFile(this.groupsPath, { groups });
+    await writeJsonFile(this.groupsPath, { groups });
     return groups;
   }
 
@@ -768,4 +774,5 @@ class FacebookMessengerAdapter {
   }
 }
 
+FacebookMessengerAdapter.restorePersistedFiles = restorePersistedFiles;
 module.exports = FacebookMessengerAdapter;

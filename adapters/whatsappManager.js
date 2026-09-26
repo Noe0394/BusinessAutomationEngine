@@ -4,6 +4,8 @@ const whatsapp = require('./whatsapp');
 const sessionRegulator = require('./sessionRegulator');
 const { CampaignEngine, listTenantsWithPendingCampaigns } = require('../queues/campaignEngine');
 const platformOrchestrator = require('../ai-engine/platformOrchestrator');
+const githubStore = require('../githubStore');
+const secretVault = require('../ai-engine/secretVault');
 
 // Registre des instances WhatsApp par tenant — le cœur de l'isolation
 // stricte demandée : chaque clé de licence obtient sa propre instance
@@ -266,6 +268,31 @@ async function listTenantsWithSavedSession() {
       // No local state exists for this tenant.
     }
   }
+  if (githubStore.enabled && secretVault.isEncryptionConfigured()) {
+    const known = new Set(tenantIds);
+    const remoteDir = process.env.GITHUB_WHATSAPP_AUTH_DIR || 'whatsapp_auth';
+    const remoteFiles = await githubStore.listDirectory(remoteDir, { strict: process.env.RENDER === 'true' || !!process.env.RENDER_SERVICE_ID || !!process.env.RENDER_EXTERNAL_URL });
+    for (const filename of remoteFiles) {
+      if (!filename.endsWith('.json')) continue;
+      const tenantId = filename.replace(/\.json$/, '');
+      if (known.has(tenantId)) continue;
+      try {
+        const remote = await githubStore.createStore(`${remoteDir}/${filename}`).fetchRemote();
+        let content = remote && remote.content;
+        if (!content && remote && remote.tooLarge && remote.sha) {
+          const blob = await githubStore.fetchLargeFile(remote.sha);
+          content = blob ? blob.toString('utf8') : null;
+        }
+        const snapshot = content ? JSON.parse(content) : null;
+        if (snapshot && snapshot._cyrusEncrypted === 1 && snapshot.format === 'baileys-auth-dir-v1') {
+          tenantIds.push(tenantId);
+          known.add(tenantId);
+        }
+      } catch (err) {
+        console.error(`État de session WhatsApp distant illisible pour un tenant :`, err.message);
+      }
+    }
+  }
   return tenantIds;
 }
 
@@ -329,7 +356,7 @@ function getStorageStatus() {
     list.push({ tenantId, ...entry.session.getStorageStatus() });
   }
   return {
-    enabled: false,
+    enabled: githubStore.enabled && secretVault.isEncryptionConfigured(),
     repo: null,
     branch: null,
     lastPushOk: null,
@@ -338,6 +365,14 @@ function getStorageStatus() {
     activeTenants: list.length,
     tenants: list,
   };
+}
+
+async function flushAuthSnapshots() {
+  const entries = Array.from(tenants.values());
+  const results = await Promise.allSettled(entries.map((entry) => (
+    entry.session && typeof entry.session.persistSession === 'function' ? entry.session.persistSession() : null
+  )));
+  return { tenants: entries.length, failed: results.filter((item) => item.status === 'rejected' || item.value === false).length };
 }
 
 // Ce numéro est-il celui d'un AUTRE compte Cyrus connecté sur ce serveur ? (anti-boucle entre deux comptes : voir ai-engine/botSignature.js)
@@ -360,6 +395,7 @@ module.exports = {
   initAdminSession,
   bootResumePendingCampaigns,
   bootReconnectAllPairedTenants,
+  flushAuthSnapshots,
   listActiveEntries,
   peek,
   getStorageStatus,

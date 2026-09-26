@@ -26,12 +26,10 @@ function list() {
 async function loadFromStorage(storageAdapter, namespace) {
   const ns = namespace || 'auto_settings';
   const ids = typeof storageAdapter.listIdsAsync === 'function'
-    ? await storageAdapter.listIdsAsync(ns).catch(() => storageAdapter.listIds(ns)) : storageAdapter.listIds(ns);
+    ? await storageAdapter.listIdsAsync(ns) : storageAdapter.listIds(ns);
   for (const id of ids) {
-    try {
-      const doc = await storageAdapter.get(ns, id, null);
-      if (doc && doc.alwaysOn === true) dynamic.add(sanitize(id));
-    } catch (e) { /* ignoré */ }
+    const doc = await storageAdapter.get(ns, id, null);
+    if (doc && doc.alwaysOn === true) dynamic.add(sanitize(id));
   }
   return list();
 }

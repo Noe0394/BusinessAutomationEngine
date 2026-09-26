@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const durableFiles = require('../lib/durableJsonFiles');
 
 // "Table/Modèle Contact" du module de Capture Automatique de Prospects.
 // Même principe de persistance par fichier JSON que le reste du projet (pas
@@ -27,10 +28,7 @@ function readAll() {
   }
 }
 
-function writeAll(list) {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(list, null, 2), 'utf8');
-}
+function writeAll(list) { return durableFiles.write(storePath, list); }
 
 function list({ keyword, source } = {}) {
   let all = readAll().sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
@@ -54,7 +52,7 @@ function get(id) {
  * déjà qualifié par un mot-clé précédent ne perd pas cette thématique s'il
  * écrit ensuite un message qui n'en contient aucun.
  */
-function upsertFromLead({ psid, firstName, lastName, name, source, sourceText, postId, keyword }) {
+async function upsertFromLead({ psid, firstName, lastName, name, source, sourceText, postId, keyword }) {
   const all = readAll();
   const idx = all.findIndex((c) => c.psid === psid);
   const now = new Date().toISOString();
@@ -76,7 +74,7 @@ function upsertFromLead({ psid, firstName, lastName, name, source, sourceText, p
       updatedAt: now,
     };
     all.push(contact);
-    writeAll(all);
+    await writeAll(all);
     return contact;
   }
 
@@ -92,16 +90,16 @@ function upsertFromLead({ psid, firstName, lastName, name, source, sourceText, p
     updatedAt: now,
   };
   all[idx] = updated;
-  writeAll(all);
+  await writeAll(all);
   return updated;
 }
 
-function markAutoReplied(id) {
+async function markAutoReplied(id) {
   const all = readAll();
   const idx = all.findIndex((c) => c.id === id);
   if (idx === -1) return null;
   all[idx] = { ...all[idx], autoReplied: true };
-  writeAll(all);
+  await writeAll(all);
   return all[idx];
 }
 
@@ -109,4 +107,9 @@ return { list, get, upsertFromLead, markAutoReplied };
 }
 
 const adminStore = createStore('__admin__');
-module.exports = { ...adminStore, forTenant: (tenantId) => createStore(tenantId) };
+async function restorePersistedFiles(tenantIds = []) {
+  const files = [STORE_PATH];
+  for (const tenantId of new Set((tenantIds || []).map(String))) if (tenantId !== '__admin__') files.push(tenantStorePath(tenantId));
+  return durableFiles.restoreMany(files);
+}
+module.exports = { ...adminStore, forTenant: (tenantId) => createStore(tenantId), restorePersistedFiles };

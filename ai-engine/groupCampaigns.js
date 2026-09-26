@@ -39,9 +39,9 @@ function withLock(tenant, fn) {
   return next;
 }
 const loadDoc = (t) => storageAdapter.get(NS, sanitize(t), { tenant: sanitize(t), campaigns: {} });
-const saveDoc = (t, d) => storageAdapter.set(NS, sanitize(t), d);
+const saveDoc = (t, d) => storageAdapter.setDurable(NS, sanitize(t), d);
 const loadLeads = (t) => storageAdapter.get(LEADS_NS, sanitize(t), { tenant: sanitize(t), leads: {}, processed: [] });
-const saveLeads = (t, d) => { d.processed = (d.processed || []).slice(-2000); return storageAdapter.set(LEADS_NS, sanitize(t), d); };
+const saveLeads = (t, d) => { d.processed = (d.processed || []).slice(-2000); return storageAdapter.setDurable(LEADS_NS, sanitize(t), d); };
 
 function pushEvent(c, type, detail) {
   c.events = (c.events || []).concat([{ at: Date.now(), type, detail: detail || null }]).slice(-MAX_EVENTS);
@@ -219,7 +219,7 @@ async function tick(tenant, deps, nowDate) {
 
 async function tickAll(deps, nowDate) {
   const out = [];
-  for (const id of storageAdapter.listIds(NS)) {
+  for (const id of await storageAdapter.listIdsAsync(NS)) {
     try {
       if (!deps || typeof deps.tenantAllowed !== 'function' || !(await deps.tenantAllowed(id))) continue;
       const r = await tick(id, deps, nowDate);

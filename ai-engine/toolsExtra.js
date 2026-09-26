@@ -787,6 +787,19 @@ const TOOLS = {
         newContactsOnly: args.newContactsOnly, createService: args.createService, status: args.status,
       });
     },
+    async verify(result, args, ctx) {
+      const campaignId = result && result.campaignId;
+      if (!campaignId) return { verified: false, source: 'campaign_id_missing' };
+      const campaigns = await require('./adCampaigns').listAll(ctx.tenant);
+      const saved = campaigns.find((item) => item.id === campaignId);
+      return {
+        verified: !!saved
+          && saved.initialMessage === String(args.initialMessage || '').replace(/^\s*\n+|\n+\s*$/g, '')
+          && (!args.serviceName || saved.serviceName === args.serviceName)
+          && (!args.status || saved.status === args.status),
+        source: 'service_campaign_readback',
+      };
+    },
   },
   listFacebookAdCampaigns: {
     description: 'Liste les campagnes Facebook Ads configurées (service, période, statut réel ACTIVE/EXPIRED/INACTIVE, message initial).',
@@ -801,6 +814,12 @@ const TOOLS = {
     description: 'Active ou désactive une campagne Facebook Ads (par nom ou identifiant).',
     permission: null, risk: 'LOW_WRITE', inputSchema: { campaign: { type: 'string', required: true }, active: { type: 'boolean', required: true } },
     async execute(args, ctx) { return require('./adCampaigns').setStatus(ctx.tenant, args.campaign, args.active === true); },
+    async verify(result, args, ctx) {
+      const campaignId = result && result.campaignId;
+      if (!campaignId) return { verified: false, source: 'campaign_id_missing' };
+      const saved = (await require('./adCampaigns').listAll(ctx.tenant)).find((item) => item.id === campaignId);
+      return { verified: !!saved && saved.status === (args.active === true ? 'active' : 'inactive'), source: 'service_campaign_status_readback' };
+    },
   },
 
   // ================= CAMPAGNES DE GROUPES ADMINISTRÉS (Service Métier + scheduler) =================

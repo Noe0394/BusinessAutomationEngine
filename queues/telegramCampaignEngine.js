@@ -124,7 +124,10 @@ async function persistMedia(tenantId, campaignId, media) {
       mediaBlobSha = await githubStore.pushLargeFile(`${MEDIA_REMOTE_DIR}/${mediaFile}`, media.buffer);
     } catch (err) {
       console.error(`Échec de la sauvegarde GitHub de la pièce jointe Telegram "${mediaFile}" :`, err.message);
+      if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL) throw err;
     }
+  } else if (process.env.RENDER === 'true' || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL) {
+    throw new Error('TELEGRAM_CAMPAIGN_MEDIA_DURABLE_STORE_UNAVAILABLE');
   }
 
   return { mediaFile, mediaBlobSha, mimetype: media.mimetype, filename: media.filename };
@@ -186,6 +189,7 @@ class TelegramCampaignEngine {
     this.resolvedMediaById = new Map();
     this.activeCampaignId = null;
     this.remoteStore = githubStore.createStore(remoteFilePath(tenantId));
+    this.persistChain = Promise.resolve();
     this.incomingPauseUntil = 0;
     if (typeof session.onIncomingMessage === 'function') {
       session.onIncomingMessage(() => this._pauseForIncomingReply());
@@ -344,9 +348,12 @@ class TelegramCampaignEngine {
     }
     const content = JSON.stringify(this._buildFileRecord(), null, 2);
     fs.writeFileSync(statePath(this.tenantId), content, 'utf8');
-    this.remoteStore.pushRemote(content).catch((err) => {
+    const persist = this.persistChain.catch(() => {}).then(() => this.remoteStore.pushRemote(content));
+    this.persistChain = persist;
+    persist.catch((err) => {
       console.error(`Échec de la sauvegarde des campagnes Telegram sur GitHub pour le tenant "${this.tenantId}" :`, err.message);
     });
+    return persist;
   }
 
   // Voir queues/campaignEngine.js#_pruneOldCampaigns (même principe).
@@ -900,7 +907,7 @@ class TelegramCampaignEngine {
     campaign.superseded = true;
     campaign.status = 'paused';
     this.activeCampaignId = null;
-    this._persist(campaign);
+    return this._persist(campaign);
     console.log(`Campagne Telegram (tenant "${this.tenantId}"): "${campaign.name}" mise en pause (session libérée) — reprise possible ultérieurement.`);
   }
 
@@ -941,10 +948,11 @@ class TelegramCampaignEngine {
 
     try {
       const remote = await this.remoteStore.fetchRemote();
-      if (!remote || !remote.content) return null;
-      fs.writeFileSync(statePath(this.tenantId), remote.content, 'utf8');
+      const content = await githubStore.fetchRemoteContent(remote);
+      if (!content) return null;
+      fs.writeFileSync(statePath(this.tenantId), content, 'utf8');
       console.log(`Campagne Telegram (tenant "${this.tenantId}"): état restauré depuis GitHub (disque local vidé par un redéploiement).`);
-      return JSON.parse(remote.content);
+      return JSON.parse(content);
     } catch (err) {
       console.error(`Campagne Telegram (tenant "${this.tenantId}"): échec de restauration depuis GitHub :`, err.message);
       return null;
@@ -1050,7 +1058,7 @@ async function listTenantsWithPendingCampaigns() {
   }
 
   const knownLocally = new Set(tenantsFromLocal);
-  const remoteFiles = await githubStore.listDirectory(REMOTE_CAMPAIGNS_DIR);
+  const remoteFiles = await githubStore.listDirectory(REMOTE_CAMPAIGNS_DIR, { strict: process.env.RENDER === 'true' || !!process.env.RENDER_SERVICE_ID || !!process.env.RENDER_EXTERNAL_URL });
   const tenantsFromRemote = [];
 
   for (const filename of remoteFiles) {
@@ -1061,8 +1069,9 @@ async function listTenantsWithPendingCampaigns() {
     try {
       const store = githubStore.createStore(`${REMOTE_CAMPAIGNS_DIR}/${filename}`);
       const remote = await store.fetchRemote();
-      if (!remote || !remote.content) continue;
-      const record = JSON.parse(remote.content);
+      const content = await githubStore.fetchRemoteContent(remote);
+      if (!content) continue;
+      const record = JSON.parse(content);
       if (hasPending(record)) {
         tenantsFromRemote.push(tenantId);
       }

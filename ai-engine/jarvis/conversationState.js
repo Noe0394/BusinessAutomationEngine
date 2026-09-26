@@ -56,14 +56,14 @@ function save(doc) {
   doc.expiresAt = doc.updatedAt + TTL_MS;
   doc.processedIds = (doc.processedIds || []).slice(-MAX_PROCESSED_IDS);
   doc.recentReplies = (doc.recentReplies || []).slice(-MAX_RECENT_REPLIES);
-  return storageAdapter.set(NAMESPACE, doc.conversationId, doc);
+  return storageAdapter.setDurable(NAMESPACE, doc.conversationId, doc);
 }
 
 // Purge : supprime tout document dont la dernière activité sort de la fenêtre 7×24 h.
 async function purgeExpired(now) {
   const t = now == null ? Date.now() : now;
   let removed = 0;
-  for (const id of storageAdapter.listIds(NAMESPACE)) {
+  for (const id of await storageAdapter.listIdsAsync(NAMESPACE)) {
     const doc = await storageAdapter.get(NAMESPACE, id, null);
     if (!doc || isExpired(doc, t)) { storageAdapter.remove(NAMESPACE, id); removed += 1; }
   }

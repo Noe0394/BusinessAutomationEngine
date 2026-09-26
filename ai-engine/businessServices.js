@@ -31,7 +31,7 @@ async function load(tenant) {
 }
 function save(tenant, doc) {
   doc.updatedAt = new Date().toISOString();
-  return storageAdapter.set(NAMESPACE, sanitize(tenant), doc);
+  return storageAdapter.setDurable(NAMESPACE, sanitize(tenant), doc);
 }
 function findIdx(doc, id) { return (doc.services || []).findIndex((s) => s.id === id); }
 
@@ -264,7 +264,7 @@ async function create(tenant, data) {
   addHistory(service, 'Service créé');
   doc.services = Array.isArray(doc.services) ? doc.services : [];
   doc.services.push(service);
-  save(tenant, doc);
+  await save(tenant, doc);
   await syncOffersToProfile(tenant).catch(() => {});
   return publicView(service);
 }
@@ -288,7 +288,7 @@ async function update(tenant, id, patch) {
   }
   addHistory(merged, 'Service modifié');
   doc.services[i] = merged;
-  save(tenant, doc);
+  await save(tenant, doc);
   await syncOffersToProfile(tenant).catch(() => {});
   await syncToConnectors(tenant).catch(() => {});
   return publicView(merged);
@@ -303,7 +303,7 @@ async function remove(tenant, id) {
     await secretVault.revoke(tenant, svc.connection.apiKeyRef).catch(() => {});
   }
   doc.services.splice(i, 1);
-  save(tenant, doc);
+  await save(tenant, doc);
   await syncOffersToProfile(tenant).catch(() => {});
   return { ok: true, removed: id };
 }
@@ -328,7 +328,7 @@ async function connectApi(tenant, id, { apiKey, baseUrl, authHeader, connectorTy
   if (endpoints) svc.connection.endpoints = endpoints;
   svc.status = STATUS.CONFIGURED;
   addHistory(svc, 'API connectée (clé stockée dans le coffre chiffré)');
-  save(tenant, doc);
+  await save(tenant, doc);
   await syncToConnectors(tenant).catch(() => {});
   return { ok: true, hasKey: !!svc.connection.apiKeyRef };
 }
@@ -381,7 +381,7 @@ async function testConnection(tenant, id) {
   svc.status = (result.status === 'CONNECTED' || result.status === 'CONNECTED_LIMITED') ? STATUS.CONNECTED
     : (result.status === 'CONFIGURATION_INCOMPLETE' ? STATUS.CONFIGURED : STATUS.ERROR);
   addHistory(svc, `Test de connexion : ${result.status}`);
-  save(tenant, doc);
+  await save(tenant, doc);
   return { ok: true, result: svc.lastTest, status: svc.status };
 }
 
@@ -618,7 +618,7 @@ async function syncOffersToProfile(tenant) {
     }
   }
   profile.offers = kept.concat(fromServices);
-  storageAdapter.set(PROFILE_NAMESPACE, sanitize(tenant), profile);
+  await storageAdapter.setDurable(PROFILE_NAMESPACE, sanitize(tenant), profile);
   return profile.offers.length;
 }
 
@@ -649,7 +649,7 @@ async function syncToConnectors(tenant) {
       scopes: (s.scopes && s.scopes.length) ? s.scopes : undefined,
     };
   }
-  storageAdapter.set('connectors', sanitize(tenant), override);
+  await storageAdapter.setDurable('connectors', sanitize(tenant), override);
   return override.connectors;
 }
 

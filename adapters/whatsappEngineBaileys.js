@@ -1133,6 +1133,7 @@ function createSession(tenantId) {
     onAccountReset,
     logout,
     dispose,
+    persistSession: () => authStore.pushSnapshot(AUTH_DIR),
     getStorageStatus: authStore.getStatus,
   };
 }

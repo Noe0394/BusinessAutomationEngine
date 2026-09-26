@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const durableFiles = require('../lib/durableJsonFiles');
 
 // Règles "mot-clé détecté → réponse automatique" du module de Capture
 // Automatique de Prospects, configurables depuis l'onglet Contacts /
@@ -26,16 +27,13 @@ function readAll() {
   }
 }
 
-function writeAll(list) {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(list, null, 2), 'utf8');
-}
+function writeAll(list) { return durableFiles.write(storePath, list); }
 
 function list() {
   return readAll();
 }
 
-function create({ keyword, replyMessage, mediaUrl, mediaMimetype, mediaFilename }) {
+async function create({ keyword, replyMessage, mediaUrl, mediaMimetype, mediaFilename, mediaBlobSha }) {
   const rule = {
     id: `rule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     keyword: String(keyword || '').trim().toUpperCase(),
@@ -43,17 +41,18 @@ function create({ keyword, replyMessage, mediaUrl, mediaMimetype, mediaFilename 
     mediaUrl: mediaUrl || null,
     mediaMimetype: mediaMimetype || null,
     mediaFilename: mediaFilename || null,
+    mediaBlobSha: mediaBlobSha || null,
     createdAt: new Date().toISOString(),
   };
   const all = readAll();
   all.push(rule);
-  writeAll(all);
+  await writeAll(all);
   return rule;
 }
 
-function remove(id) {
+async function remove(id) {
   const all = readAll().filter((r) => r.id !== id);
-  writeAll(all);
+  await writeAll(all);
   return all;
 }
 
@@ -70,4 +69,9 @@ return { list, create, remove, findMatch };
 }
 
 const adminStore = createStore('__admin__');
-module.exports = { ...adminStore, forTenant: (tenantId) => createStore(tenantId) };
+async function restorePersistedFiles(tenantIds = []) {
+  const files = [STORE_PATH];
+  for (const tenantId of new Set((tenantIds || []).map(String))) if (tenantId !== '__admin__') files.push(tenantStorePath(tenantId));
+  return durableFiles.restoreMany(files);
+}
+module.exports = { ...adminStore, forTenant: (tenantId) => createStore(tenantId), restorePersistedFiles };

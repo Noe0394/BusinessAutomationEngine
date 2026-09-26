@@ -16,6 +16,34 @@ const BRANCH = process.env.GITHUB_DATA_BRANCH || 'main';
 
 const enabled = Boolean(TOKEN && REPO);
 
+async function verifyPrivateRepository() {
+  if (!enabled) throw new Error('GITHUB_DATA_STORE_NOT_CONFIGURED');
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.github.com',
+      path: `/repos/${REPO}`,
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'BusinessAutomationEngine',
+      },
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        let body = null;
+        try { body = raw ? JSON.parse(raw) : null; } catch (err) { body = null; }
+        if (res.statusCode !== 200 || !body) return reject(new Error(`GITHUB_DATA_REPOSITORY_VERIFY_FAILED:${res.statusCode}`));
+        if (body.private !== true) return reject(new Error('GITHUB_DATA_REPOSITORY_MUST_BE_PRIVATE'));
+        resolve({ private: true, defaultBranch: body.default_branch || null });
+      });
+    });
+    req.on('error', (err) => reject(new Error(`GITHUB_DATA_REPOSITORY_VERIFY_FAILED:${err.code || 'NETWORK'}`)));
+    req.end();
+  });
+}
+
 function createStore(filePath) {
   let cachedSha = null;
 
@@ -132,6 +160,13 @@ function createStore(filePath) {
     if (!enabled) return;
 
     try {
+      if (Buffer.byteLength(contentString, 'utf8') > 850 * 1024) {
+        cachedSha = await pushLargeFile(filePath, Buffer.from(contentString, 'utf8'));
+        status.lastPushAt = new Date().toISOString();
+        status.lastPushOk = true;
+        status.lastPushError = null;
+        return;
+      }
       const payload = {
         message: 'Mise à jour automatique',
         content: Buffer.from(contentString, 'utf8').toString('base64'),
@@ -168,6 +203,32 @@ function createStore(filePath) {
     }
   }
 
+  async function deleteRemote() {
+    if (!enabled) return true;
+    if (!cachedSha) {
+      const remote = await fetchRemote();
+      cachedSha = remote ? remote.sha : null;
+    }
+    if (!cachedSha) return true;
+    const { status: httpStatus, body } = await apiRequest('DELETE', {
+      message: 'Suppression explicite demandée par Cyrus',
+      sha: cachedSha,
+      branch: BRANCH,
+    });
+    if (httpStatus === 200 || httpStatus === 404) {
+      cachedSha = null;
+      return true;
+    }
+    if (httpStatus === 409) {
+      cachedSha = null;
+      const remote = await fetchRemote();
+      if (!remote) return true;
+      cachedSha = remote.sha;
+      return deleteRemote();
+    }
+    throw new Error(`GITHUB_DELETE_FAILED:${httpStatus}:${body && body.message}`);
+  }
+
   function getStatus() {
     return {
       enabled,
@@ -182,6 +243,7 @@ function createStore(filePath) {
     enabled,
     fetchRemote,
     pushRemote,
+    deleteRemote,
     getStatus,
   };
 }
@@ -192,10 +254,11 @@ function createStore(filePath) {
 // en cours sans avoir à connaître leurs clés à l'avance. Retourne un tableau
 // de noms de fichiers (pas de chemins complets), vide si le dossier n'existe
 // pas encore ou si la persistance est désactivée.
-async function listDirectory(dirPath) {
+async function listDirectory(dirPath, options = {}) {
   if (!enabled) return [];
+  const strict = options === true || options.strict === true;
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const req = https.request(
       {
         hostname: 'api.github.com',
@@ -215,14 +278,22 @@ async function listDirectory(dirPath) {
         res.on('end', () => {
           // 404 = dossier pas encore créé (aucun fichier poussé pour l'instant) —
           // pas une erreur, juste "rien à lister".
-          if (res.statusCode !== 200) return resolve([]);
+          if (res.statusCode === 404) return resolve([]);
+          if (res.statusCode !== 200) {
+            if (strict) return reject(new Error(`GITHUB_DIRECTORY_LIST_FAILED:${res.statusCode}`));
+            return resolve([]);
+          }
           let body;
           try {
             body = JSON.parse(raw);
           } catch (err) {
+            if (strict) return reject(new Error('GITHUB_DIRECTORY_LIST_INVALID_RESPONSE'));
             return resolve([]);
           }
-          if (!Array.isArray(body)) return resolve([]);
+          if (!Array.isArray(body)) {
+            if (strict) return reject(new Error('GITHUB_DIRECTORY_LIST_INVALID_RESPONSE'));
+            return resolve([]);
+          }
           resolve(body.filter((item) => item.type === 'file').map((item) => item.name));
         });
       },
@@ -230,7 +301,7 @@ async function listDirectory(dirPath) {
     // Erreur réseau : traitée comme "rien à lister" plutôt que de faire
     // planter l'appelant — le pire cas est de ne pas reprendre une campagne
     // distante, pas un crash au démarrage du serveur.
-    req.on('error', () => resolve([]));
+    req.on('error', (err) => strict ? reject(err) : resolve([]));
     req.end();
   });
 }
@@ -371,6 +442,16 @@ async function fetchLargeFile(sha) {
   return fetchBlobBySha(sha);
 }
 
+async function fetchRemoteContent(remote) {
+  if (!remote) return null;
+  if (typeof remote.content === 'string') return remote.content;
+  if (remote.tooLarge && remote.sha) {
+    const buffer = await fetchLargeFile(remote.sha);
+    return buffer ? buffer.toString('utf8') : null;
+  }
+  return null;
+}
+
 // Instance par défaut : conserve le comportement historique de ce module
 // (un seul fichier, "licenses.json" sauf GITHUB_DATA_PATH personnalisé) pour
 // ne rien casser chez les appelants existants qui font
@@ -383,4 +464,6 @@ module.exports = {
   listDirectory,
   pushLargeFile,
   fetchLargeFile,
+  fetchRemoteContent,
+  verifyPrivateRepository,
 };

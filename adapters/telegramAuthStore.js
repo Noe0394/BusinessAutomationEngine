@@ -1,126 +1,135 @@
+'use strict';
+
 const fs = require('fs');
 const path = require('path');
 const githubStore = require('../githubStore');
+const secretVault = require('../ai-engine/secretVault');
 
-// Isolation stricte par tenant (une clé de licence = un tenant = un compte
-// Telegram indépendant, voir adapters/telegramManager.js) : chaque tenant a
-// son propre fichier distant (REMOTE_DIR/<tenantId>.json) plutôt qu'un
-// unique telegram_session.json partagé par tout le serveur — sans ça,
-// restaurer la session au démarrage écraserait la session de tout le monde
-// avec les identifiants d'un seul compte, exactement le bug corrigé côté
-// WhatsApp par adapters/whatsappAuthStore.js sur le même principe.
-//
-// Une session Telegram (GramJS) tient dans une seule chaîne opaque
-// (StringSession.save()), pas dans plusieurs fichiers de clés — pas de
-// souci de limite de taille de l'API Contents de GitHub ici.
 const REMOTE_DIR = process.env.GITHUB_TELEGRAM_SESSION_DIR || 'telegram_sessions';
+const SNAPSHOT_INTERVAL_MS = 20000;
 
-const SNAPSHOT_INTERVAL_MS = 20_000;
+function safeTenant(tenantId) {
+  return String(tenantId || '').trim().replace(/[^A-Za-z0-9_-]/g, '_') || 'unknown';
+}
 
-// tenantId doit déjà être normalisé/assaini par l'appelant (voir
-// telegramManager.sanitizeTenantId) — ce module ne fait que construire le
-// chemin distant à partir de la valeur reçue.
-function createAuthStore(tenantId) {
+function createAuthStore(rawTenantId) {
+  const tenantId = safeTenant(rawTenantId);
   const remotePath = `${REMOTE_DIR}/${tenantId}.json`;
   const store = githubStore.createStore(remotePath);
-
   let lastPushedContent = null;
   let snapshotTimer = null;
+  let pushQueue = Promise.resolve();
+  const status = { lastPushAt: null, lastPushOk: null, lastPushError: null, lastFetchAt: null, lastFetchOk: null, lastFetchError: null };
+  const enabled = !!store.enabled && secretVault.isEncryptionConfigured();
 
-  // À appeler une seule fois, au tout premier démarrage du processus, avant
-  // le premier init() de ce tenant — restaure la session depuis le repo
-  // GitHub dédié si elle y est présente. Ne doit jamais être appelée après
-  // une perte de session en cours de vie du process (elle écraserait un état
-  // local potentiellement plus récent avec un instantané GitHub plus ancien).
   async function restoreSessionFromRemote(sessionPath) {
-    if (!store.enabled) return false;
-
-    try {
-      const remote = await store.fetchRemote();
-      if (remote && remote.content) {
-        // Sur un conteneur Render fraîchement redéployé, le disque éphémère
-        // ne contient pas encore SESSION_DIR_BASE (voir adapters/telegram.js) :
-        // sans ce mkdirSync, cette écriture levait ENOENT, silencieusement
-        // avalée par le catch ci-dessous — la session restait donc "restaurée
-        // avec succès" en apparence (aucune erreur visible) mais jamais
-        // effectivement écrite sur disque, forçant une réauthentification SMS
-        // à chaque redémarrage malgré la sauvegarde GitHub intacte. Même
-        // correctif que writeCreds() dans whatsappAuthStore.js.
-        fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
-        fs.writeFileSync(sessionPath, remote.content, 'utf8');
-        lastPushedContent = remote.content;
-        console.log(`Session Telegram restaurée depuis GitHub pour le tenant "${tenantId}".`);
-        return true;
-      }
-    } catch (err) {
-      console.error(`Impossible de restaurer la session Telegram depuis GitHub pour le tenant "${tenantId}" :`, err.message);
+    if (!enabled) {
+      status.lastFetchOk = false;
+      status.lastFetchError = store.enabled ? 'SECRET_VAULT_KEY_NOT_CONFIGURED' : 'GITHUB_DATA_STORE_NOT_CONFIGURED';
+      return false;
     }
-    return false;
+    try {
+      if (fs.existsSync(sessionPath) && fs.statSync(sessionPath).size > 0) return false;
+      const remote = await store.fetchRemote();
+      status.lastFetchAt = new Date().toISOString();
+      if (!remote || !remote.content) {
+        status.lastFetchOk = true;
+        status.lastFetchError = null;
+        return false;
+      }
+      const envelope = JSON.parse(remote.content);
+      if (!envelope || envelope._cyrusEncrypted !== 1 || envelope.format !== 'telegram-string-session-v1') {
+        status.lastFetchOk = false;
+        status.lastFetchError = 'LEGACY_UNENCRYPTED_SESSION_UNSUPPORTED';
+        return false;
+      }
+      const session = secretVault.decrypt(envelope.payload);
+      if (session == null || !session.trim()) throw new Error('TELEGRAM_SESSION_DECRYPT_FAILED');
+      fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+      fs.writeFileSync(sessionPath, session, 'utf8');
+      lastPushedContent = session;
+      status.lastFetchOk = true;
+      status.lastFetchError = null;
+      console.log(`Session Telegram restaurée depuis le stockage privé pour le tenant "${tenantId}".`);
+      return true;
+    } catch (err) {
+      status.lastFetchAt = new Date().toISOString();
+      status.lastFetchOk = false;
+      status.lastFetchError = String(err && err.message || err).slice(0, 180);
+      console.error(`Échec de restauration de la session Telegram pour le tenant "${tenantId}" :`, err.message);
+      return false;
+    }
   }
 
   async function pushSnapshot(sessionPath) {
-    if (!store.enabled) return;
-
-    let content;
-    try {
-      content = fs.readFileSync(sessionPath, 'utf8');
-    } catch (err) {
-      return; // pas encore de session locale à sauvegarder
+    if (!enabled) {
+      status.lastPushOk = false;
+      status.lastPushError = store.enabled ? 'SECRET_VAULT_KEY_NOT_CONFIGURED' : 'GITHUB_DATA_STORE_NOT_CONFIGURED';
+      return false;
     }
-    if (!content || content === lastPushedContent) return;
-
-    try {
-      await store.pushRemote(content);
+    const run = pushQueue.catch(() => {}).then(async () => {
+      let content;
+      try { content = fs.readFileSync(sessionPath, 'utf8'); } catch (err) { return false; }
+      if (!content || content === lastPushedContent) return true;
+      const envelope = JSON.stringify({
+        _cyrusEncrypted: 1,
+        format: 'telegram-string-session-v1',
+        payload: secretVault.encrypt(content),
+      });
+      await store.pushRemote(envelope);
       lastPushedContent = content;
-    } catch (err) {
-      console.error(`Échec de la sauvegarde de la session Telegram sur GitHub pour le tenant "${tenantId}" :`, err.message);
+      status.lastPushAt = new Date().toISOString();
+      status.lastPushOk = true;
+      status.lastPushError = null;
+      return true;
+    });
+    pushQueue = run;
+    try { return await run; }
+    catch (err) {
+      status.lastPushAt = new Date().toISOString();
+      status.lastPushOk = false;
+      status.lastPushError = String(err && err.message || err).slice(0, 180);
+      console.error(`Échec de sauvegarde de la session Telegram pour le tenant "${tenantId}" :`, err.message);
+      return false;
     }
   }
 
   function startPeriodicSync(sessionPath) {
-    if (!store.enabled || snapshotTimer) return;
-    snapshotTimer = setInterval(() => {
-      pushSnapshot(sessionPath);
-    }, SNAPSHOT_INTERVAL_MS);
-    // Ne bloque pas l'arrêt du process (ex: redéploiement) en attendant ce timer.
+    if (!enabled || snapshotTimer) return;
+    snapshotTimer = setInterval(() => { pushSnapshot(sessionPath).catch(() => {}); }, SNAPSHOT_INTERVAL_MS);
     if (snapshotTimer.unref) snapshotTimer.unref();
   }
 
-  // À appeler quand le régulateur de sessions (voir sessionRegulator.js)
-  // libère ce tenant par inactivité : sans ça, ce timer garderait la closure
-  // vivante en mémoire même après la suppression du tenant de
-  // telegramManager.tenants.
   function stopPeriodicSync() {
-    if (snapshotTimer) {
-      clearInterval(snapshotTimer);
-      snapshotTimer = null;
-    }
+    if (snapshotTimer) clearInterval(snapshotTimer);
+    snapshotTimer = null;
   }
 
-  // Déconnexion manuelle (voir TelegramAdapter.logout()) : vide le fichier
-  // distant tout de suite, sur le même principe que
-  // whatsappAuthStore.clearRemote().
   async function clearRemote() {
     if (!store.enabled) return;
     try {
+      await store.fetchRemote();
       await store.pushRemote('');
       lastPushedContent = '';
+      status.lastPushAt = new Date().toISOString();
+      status.lastPushOk = true;
+      status.lastPushError = null;
     } catch (err) {
-      console.error(`Échec de la suppression de la session Telegram sur GitHub pour le tenant "${tenantId}" :`, err.message);
+      status.lastPushOk = false;
+      status.lastPushError = String(err && err.message || err).slice(0, 180);
+      console.error(`Échec de suppression de la session Telegram distante pour le tenant "${tenantId}" :`, err.message);
     }
   }
 
   return {
-    enabled: store.enabled,
+    enabled,
     restoreSessionFromRemote,
     pushSnapshot,
     startPeriodicSync,
     stopPeriodicSync,
     clearRemote,
-    getStatus: store.getStatus,
+    getStatus: () => ({ ...store.getStatus(), enabled, storage: 'encrypted-string-session', restoreSupported: enabled, ...status }),
   };
 }
 
-module.exports = {
-  createAuthStore,
-};
+module.exports = { createAuthStore };

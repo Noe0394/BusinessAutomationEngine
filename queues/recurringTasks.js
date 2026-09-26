@@ -43,7 +43,7 @@ async function load(tenantId) {
 }
 function save(tenantId, doc) {
   doc.updatedAt = new Date().toISOString();
-  return storageAdapter.set(NAMESPACE, sanitize(tenantId), doc);
+  return storageAdapter.setDurable(NAMESPACE, sanitize(tenantId), doc);
 }
 
 // Crée une tâche quotidienne. `target` = {kind:'named'|'subject'|'admin'|'all',
@@ -64,7 +64,7 @@ async function create(tenantId, { channel, target, message, hour, minute }) {
   };
   doc.tasks = Array.isArray(doc.tasks) ? doc.tasks : [];
   doc.tasks.push(task);
-  save(tenantId, doc);
+  await save(tenantId, doc);
   return task;
 }
 
@@ -77,7 +77,7 @@ async function stop(tenantId, id) {
   const task = (doc.tasks || []).find((t) => t.id === id);
   if (!task) return false;
   task.active = false;
-  save(tenantId, doc);
+  await save(tenantId, doc);
   return true;
 }
 
@@ -86,7 +86,7 @@ async function stopAll(tenantId) {
   const doc = await load(tenantId);
   const n = (doc.tasks || []).filter((t) => t.active).length;
   (doc.tasks || []).forEach((t) => { t.active = false; });
-  save(tenantId, doc);
+  await save(tenantId, doc);
   return n;
 }
 
@@ -106,12 +106,12 @@ async function markRun(tenantId, id, now) {
   if (!task) return;
   task.lastRunDate = localParts(now || new Date()).dateStr;
   task.lastRunAt = new Date().toISOString();
-  save(tenantId, doc);
+  await save(tenantId, doc);
 }
 
 // Tenants ayant au moins une tâche enregistrée (pour le tick global).
-function listTenantIds() {
-  return storageAdapter.listIds(NAMESPACE);
+async function listTenantIds() {
+  return storageAdapter.listIdsAsync(NAMESPACE);
 }
 
 module.exports = { create, list, stop, stopAll, isDue, markRun, listTenantIds, NAMESPACE, localParts };

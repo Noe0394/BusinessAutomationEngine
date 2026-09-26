@@ -58,7 +58,7 @@ async function setSecret(tenant, ref, value) {
   const doc = await load(tenant);
   doc.secrets = doc.secrets || {};
   doc.secrets[sanitize(ref)] = Object.assign({ updatedAt: new Date().toISOString() }, encrypt(value));
-  storageAdapter.set(NAMESPACE, sanitize(tenant), doc);
+  await storageAdapter.setDurable(NAMESPACE, sanitize(tenant), doc);
   return { ok: true, ref: sanitize(ref), stored: true };
 }
 
@@ -78,7 +78,7 @@ async function revoke(tenant, ref) {
   const doc = await load(tenant);
   if (doc.secrets && doc.secrets[sanitize(ref)]) {
     delete doc.secrets[sanitize(ref)];
-    storageAdapter.set(NAMESPACE, sanitize(tenant), doc);
+    await storageAdapter.setDurable(NAMESPACE, sanitize(tenant), doc);
   }
   return { ok: true, revoked: sanitize(ref) };
 }

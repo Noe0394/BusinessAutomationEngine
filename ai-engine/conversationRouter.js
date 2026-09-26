@@ -339,7 +339,7 @@ async function listAwaitingOwner(tenantId, states) {
   const prefix = `${String(tenantId).replace(/[^A-Za-z0-9_.-]/g, '_')}__`;
   const out = [];
   const now = Date.now();
-  for (const id of storageAdapter.listIds(conversationState.NAMESPACE)) {
+  for (const id of await storageAdapter.listIdsAsync(conversationState.NAMESPACE)) {
     if (!id.startsWith(prefix)) continue;
     const doc = await storageAdapter.get(conversationState.NAMESPACE, id, null);
     if (!doc || conversationState.isExpired(doc)) continue;

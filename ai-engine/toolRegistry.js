@@ -218,6 +218,17 @@ const TOOLS = {
       const report = await contactCrm.importContacts(ctx.tenant, contacts, { source: 'chat_import' });
       return { ok: true, result: report };
     },
+    async verify(res, args, ctx) {
+      if (!res || !Number.isFinite(Number(res.total)) || Number(res.total) < 0) return { verified: false, source: 'invalid_import_report' };
+      const file = await chatUploads.readFile(ctx.tenant, args.fileId);
+      if (!file || !Buffer.isBuffer(file.buffer)) return { verified: false, source: 'source_file_readback_failed' };
+      const entries = require('./contactExtractor').extractFromFile({ buffer: file.buffer, name: file.meta.name, type: file.meta.type }).entries;
+      const expected = new Set(entries.filter((entry) => entry.phone).map((entry) => contactCrm.normalizePhone(entry.phone)).filter(Boolean));
+      const saved = await contactCrm.list(ctx.tenant, { channel: res.channel || 'WHATSAPP' });
+      const actual = new Set(saved.map((contact) => contactCrm.normalizePhone(contact.from || contact.phone || contact.key)).filter(Boolean));
+      const verified = [...expected].every((phone) => actual.has(phone));
+      return { verified, source: 'crm_readback', expected: expected.size, present: [...expected].filter((phone) => actual.has(phone)).length };
+    },
   },
 
   generateImage: {
@@ -234,6 +245,11 @@ const TOOLS = {
       if (!img || !img.buffer) return { ok: false, error: { code: 'GENERATION_FAILED' } };
       const ref = await chatUploads.save(ctx.tenant, { originalname: 'affiche-cyrus.jpg', mimetype: img.mimetype || 'image/jpeg', buffer: img.buffer });
       return { ok: true, result: { fileId: ref.id, name: ref.name, type: ref.type, media: true, download: true } };
+    },
+    async verify(res, args, ctx) {
+      if (!res || !res.fileId || !res.media) return { verified: false, source: 'media_reference_missing' };
+      const file = await chatUploads.readFile(ctx.tenant, res.fileId);
+      return { verified: !!(file && Buffer.isBuffer(file.buffer) && file.buffer.length > 0), source: 'generated_media_readback' };
     },
   },
 
@@ -717,9 +733,17 @@ function rankTools(query, catalog, opts) {
   const stem = (word) => word.replace(/(?:ments?|ations?|ation|euses?|eurs?|trices?|es|s)$/i, '').replace(/(er|ir|re|ez|ons|ent|ant|ait|aient)$/i, '');
   const expand = {
     group: ['community','groupe'], groupe: ['group','community'], commun: ['community','group'], memb: ['member','participant','contact'],
+    membr: ['member','participant','contact','extract'], membre: ['member','participant','contact','extract'], membres: ['member','participant','contact','extract'],
+    numer: ['number','phone','recipient','contact'], numero: ['number','phone','recipient','contact'], numeros: ['number','phone','recipient','contact'],
+    ajout: ['add','member','recipient','contact','group'], ajoute: ['add','member','recipient','contact','group'], ajouter: ['add','member','recipient','contact','group'],
+    extrait: ['extract','member','group','contact'], extraire: ['extract','member','group','contact'], extract: ['read','member','contact','parse'],
+    attach: ['attachment','file','upload','contact','recipient'], attache: ['attachment','file','upload','contact','recipient'], joint: ['attachment','file','upload','contact','recipient'],
+    active: ['activate','enable','status','service'], activ: ['activate','enable','status','service'],
+    lanc: ['launch','campaign','start'], lance: ['launch','campaign','start'], resultat: ['result','status','progress','report'],
+    recu: ['received','inbox','message','history'], recus: ['received','inbox','message','history'],
     cree: ['create','new'], creee: ['create','new'], creer: ['create','new'], creation: ['create','new'],
-    prospect: ['lead','contact','client'], contact: ['recipient','member','prospect'],
-    extract: ['read','member','contact','parse'], exra: ['extract'], list: ['search','find','get'],
+    prospect: ['lead','contact','client'], contact: ['recipient','member','prospect'], liste: ['list','recipient','contact','group'],
+    exra: ['extract'], list: ['search','find','get'],
     cherche: ['search','find','lookup','get'], cherch: ['search','find','lookup','get'],
     ecris: ['send','message','write','text'], ecrire: ['send','message','write','text'],
     envoi: ['send','message'], envoy: ['send','message'],
@@ -750,8 +774,16 @@ function rankTools(query, catalog, opts) {
     return { tool, score };
   }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score);
   if (!ranked.length) return catalog;
-  const limit = Math.max(1, Number(opts && opts.limit) || 50);
-  return ranked.slice(0, limit).map((item) => item.tool);
+  // Discard incidental one-word overlaps (for example, a group tool mentioned
+  // only because its description contains "community"). Keep every tool that
+  // matches the request with meaningful strength; this is relevance filtering,
+  // not a fixed-size cap on the registry or on mission steps.
+  const minimumScore = Math.max(2, Math.ceil(ranked[0].score * 0.2));
+  const focused = ranked.filter((item) => item.score >= minimumScore);
+  const candidates = focused.length ? focused : ranked;
+  const requestedLimit = Number(opts && opts.limit);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : candidates.length;
+  return candidates.slice(0, limit).map((item) => item.tool);
 }
 
 const MAX_STRING = 200000;
